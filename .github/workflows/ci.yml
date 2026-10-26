@@ -29,6 +29,8 @@ jobs:
           python-version: '3.12'
 
       - name: Run canonical full selftest
+        env:
+          HARNESS_SELFTEST_TMP: /dev/shm/harness-selftest
         run: python harness_cli.py selftest
 
       - name: Compile Python sources
@@ -82,6 +84,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path $tmp | Out-Null
           try { Add-MpPreference -ExclusionPath $tmp, $env:GITHUB_WORKSPACE -ErrorAction Stop } catch { Write-Warning "Defender exclusion not applied: $_" }
           "HARNESS_SELFTEST_TMP=$tmp" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Use RAM disk for selftest temp on Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p /dev/shm/harness-selftest
+          echo "HARNESS_SELFTEST_TMP=/dev/shm/harness-selftest" >> "$GITHUB_ENV"
 
       - name: Run quick compatibility selftest
         run: python harness_cli.py selftest --quick

@@ -237,6 +237,80 @@ def _safe_source_whitespace(text: str) -> str | None:
     return "\n".join(result).rstrip("\n")
 
 
+def _tokenize_kotlin_java_body(text: str) -> list[str] | None:
+    """Tokenize Kotlin/Java code preserving literals and comments while ignoring whitespace/line breaks."""
+    tokens: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in " \t\n\r":
+            i += 1
+        elif text.startswith("//", i):
+            end = text.find("\n", i)
+            if end < 0:
+                end = n
+            tokens.append(text[i:end].rstrip(" \t\r"))
+            i = end
+        elif text.startswith("/*", i):
+            depth = 1
+            start = i
+            i += 2
+            while i < n and depth > 0:
+                if text.startswith("/*", i):
+                    depth += 1
+                    i += 2
+                elif text.startswith("*/", i):
+                    depth -= 1
+                    i += 2
+                else:
+                    i += 1
+            if depth > 0:
+                return None
+            tokens.append(text[start:i])
+        elif ch in ('"', "'"):
+            quote = ch
+            start = i
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                elif text[i] == quote:
+                    i += 1
+                    break
+                elif text[i] == "\n":
+                    return None
+                else:
+                    i += 1
+            else:
+                return None
+            tokens.append(text[start:i])
+        elif ch.isalnum() or ch in "_$":
+            start = i
+            i += 1
+            while i < n and (text[i].isalnum() or text[i] in "_$"):
+                i += 1
+            tokens.append(text[start:i])
+        else:
+            tokens.append(ch)
+            i += 1
+    return tokens
+
+
+def _is_unused_import_removal(removed_imports: list[str], body: str) -> bool:
+    """Return True only when every removed import is a simple non-wildcard import unused in body."""
+    if not removed_imports:
+        return False
+    for imp in removed_imports:
+        m = re.match(rf"^import[ \t]+({QUALIFIED})[ \t]*;?$", imp.strip())
+        if not m:
+            return False
+        leaf = m.group(1).rsplit(".", 1)[-1]
+        if not leaf or re.search(rf"\b{re.escape(leaf)}\b", body):
+            return False
+    return True
+
+
 def classify_file_equivalence(verified_bytes: bytes, live_bytes: bytes, rel_path: str) -> tuple[bool, str, str]:
     if verified_bytes == live_bytes:
         return True, "IDENTICAL", "File content is identical."
@@ -259,16 +333,29 @@ def classify_file_equivalence(verified_bytes: bytes, live_bytes: bytes, rel_path
     if suffix in IMPORTS:
         h1, imp1, b1 = _split_kotlin_java(before, suffix)
         h2, imp2, b2 = _split_kotlin_java(after, suffix)
+        unused_removed: list[str] = []
         if sorted(imp1) != sorted(imp2):
             added, removed = sorted(set(imp2) - set(imp1)), sorted(set(imp1) - set(imp2))
-            return False, "IMPORTS_MODIFIED", f"Import set/count modified (added: {added[:3]}; removed: {removed[:3]})."
+            if (
+                not added
+                and removed
+                and all(imp2.count(item) <= imp1.count(item) for item in set(imp2))
+                and _is_unused_import_removal(removed, b2)
+            ):
+                unused_removed = removed
+            else:
+                return False, "IMPORTS_MODIFIED", f"Import set/count modified (added: {added[:3]}; removed: {removed[:3]})."
         for a, b, label in ((h1, h2, "HEADER_MODIFIED"), (b1, b2, "BODY_MODIFIED")):
             clean_a, clean_b = _safe_source_whitespace(a), _safe_source_whitespace(b)
             if clean_a is None or clean_b is None or clean_a != clean_b:
-                return False, label, "Non-import source content changed or syntax is unsupported."
+                tok_a, tok_b = _tokenize_kotlin_java_body(a), _tokenize_kotlin_java_body(b)
+                if tok_a is None or tok_b is None or tok_a != tok_b:
+                    return False, label, "Non-import source content changed or syntax is unsupported."
+        if unused_removed:
+            return True, "UNUSED_IMPORT_REMOVED", f"Unused imports removed ({len(unused_removed)} removed)."
         if imp1 != imp2:
             return True, "IMPORT_REORDER", f"Imports reordered ({len(imp1)} imports preserved in identical set)."
-        return True, "TRAILING_WHITESPACE_OR_FORMATTING", "Source trailing whitespace/EOF newline or import spacing only."
+        return True, "TRAILING_WHITESPACE_OR_FORMATTING", "Source trailing whitespace/EOF newline or formatting only."
     clean_before, clean_after = _safe_source_whitespace(before), _safe_source_whitespace(after)
     if clean_before is not None and clean_after is not None and clean_before == clean_after:
         return True, "TRAILING_WHITESPACE_OR_EOF_NEWLINE", "Source trailing whitespace or EOF newline only."

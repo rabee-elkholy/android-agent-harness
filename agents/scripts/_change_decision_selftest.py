@@ -222,9 +222,11 @@ class ChangeDecisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "FILE_SCOPE_DECISION_REQUIRED"):
             workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", host="antigravity"))
         options = ["--mode", "extend-scope", "--reason", "Supporting layouts for the same onboarding outcome"]
-        for path in paths:
+        # Passing an already-reviewed unchanged file alongside changed files auto-narrows to the changed subset.
+        for path in ["app/src/main/kotlin/com/example/MainActivity.kt", *paths]:
             options += ["--file", path]
         preview = self.command(*options)
+        self.assertEqual(sorted(paths), preview["files"])
         self.command(*options, "--apply", "--expect-preview", preview["preview_sha256"], "--source", "approved-plan")
         fresh = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", host="antigravity"))
         policy = read_json(Path(fresh["policy"]))

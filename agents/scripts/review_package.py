@@ -235,7 +235,12 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
             istr = inst.get("strength", "REQUIREMENT")
             iscope = inst.get("scope", {})
             sc_str = f"{iscope.get('kind', 'GLOBAL')}:{iscope.get('value', '*')}" if isinstance(iscope, dict) else str(iscope)
-            inst_lines.append(f"- **[{iid}]** ({istr}, scope: `{sc_str}`): {itxt}")
+            line = f"- **[{iid}]** ({istr}, scope: `{sc_str}`): {itxt}"
+            if inst.get("rationale"):
+                line += f" | *Rationale*: {inst.get('rationale')}"
+            if inst.get("alternatives_rejected"):
+                line += f" | *Rejected alternatives*: {inst.get('alternatives_rejected')}"
+            inst_lines.append(line)
         inst_lines.append("\n")
         extras.append("\n".join(inst_lines))
 
@@ -358,6 +363,59 @@ REVIEWER_ROLES = {
 }
 
 
+def _is_blind_goldfish_role(reviewer: str, routed: set[str], completeness_owner: str) -> bool:
+    """Non-completeness-owner specialist reviewers operate under Goldfish epistemic independence."""
+    if reviewer in (completeness_owner, "spec-compliance-agent"):
+        return False
+    return True
+
+
+def _scoped_finding_validation_lines(
+    repo: Path,
+    task_id: str,
+    reviewer: str,
+    completeness_owner: str,
+) -> list[str]:
+    """Return role-scoped finding validation claims for adversarial re-verification in the brief."""
+    validations_path = task_dir(repo, task_id) / "finding-validations.json"
+    if not validations_path.is_file():
+        return []
+    try:
+        val_data = read_json(validations_path)
+        items = val_data.get("validations") or []
+    except (OSError, ValueError, ValidationError):
+        return []
+    if not items:
+        return []
+    role_prefix = reviewer.replace("-agent", "").lower()
+    matched: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_rev = str(item.get("reviewer") or "").strip()
+        fid = str(item.get("finding_id") or "").strip().lower()
+        if (
+            reviewer in (completeness_owner, "spec-compliance-agent")
+            or not item_rev
+            or item_rev == reviewer
+            or (role_prefix and fid.startswith(role_prefix))
+        ):
+            matched.append(item)
+    if not matched:
+        return []
+    lines = [
+        "- **Scoped Finding Validation Claims (Adversarial Re-Verification Required)**: "
+        "Treat `FALSE_POSITIVE` claims below as untrusted implementer hypotheses; re-verify the exact file and lines in the diff:",
+    ]
+    for item in matched[:10]:
+        fid = item.get("finding_id", "unspecified")
+        st = item.get("status", "unspecified")
+        re_msg = item.get("reason", "")
+        ref = item.get("evidence_reference", "")
+        lines.append(f"  * `{fid}` -> **{st}**: {re_msg} (Ref: `{ref}`)")
+    return lines
+
+
 def generate_task_brief(
     repo: Path,
     task_id: str,
@@ -429,6 +487,23 @@ def generate_task_brief(
             "diff. An item the diff does not implement is a HIGH finding titled `plan item not implemented`, "
             "naming the item; do not accept a deferral the developer did not approve.",
         ])
+    elif _is_blind_goldfish_role(reviewer, routed, completeness_owner):
+        brief_lines.append(
+            "- **Goldfish Epistemic Independence (Blind Specialist Evaluation)**: "
+            "Treat the Approved Approach and implementer rationale as untrusted hypotheses, not proof of correctness. "
+            "Evaluate the diff strictly on actual runtime behavior, architectural contracts, and objective code evidence within your specialty."
+        )
+    reuse_candidates = plan.get("reuse_candidates") or []
+    if reuse_candidates and reviewer in ("convention-reviewer-agent", "spec-compliance-agent"):
+        brief_lines.append(
+            "- **Graph-Discovered Existing Reuse Candidates (Check for Duplicate Code / YAGNI)**:"
+        )
+        for cand in reuse_candidates[:8]:
+            if isinstance(cand, dict):
+                brief_lines.append(
+                    f"  * New `{cand.get('planned_file', '')}` overlaps existing `{cand.get('symbol', '')}` in `{cand.get('existing_file', '')}` ({cand.get('kind', 'symbol')})"
+                )
+    brief_lines.extend(_scoped_finding_validation_lines(repo, task_id, reviewer, completeness_owner))
     brief_lines.extend([
         "",
         "## 3. Review Package Reference",

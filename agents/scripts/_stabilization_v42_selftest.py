@@ -43,34 +43,44 @@ from final_verifier import verify_task
 from evidence_store import EvidenceStore
 
 
+_V42_TEMPLATE_REPO: Path | None = None
+
+
 def _setup_mock_repo(root: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=root, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+    global _V42_TEMPLATE_REPO
+    if _V42_TEMPLATE_REPO is None or not _V42_TEMPLATE_REPO.is_dir():
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="v42_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        subprocess.run(["git", "init", "-q"], cwd=tpl, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=tpl, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tpl, check=True)
 
-    app_kt = root / "app" / "src" / "main" / "kotlin" / "com" / "example"
-    app_kt.mkdir(parents=True, exist_ok=True)
-    (app_kt / "MainActivity.kt").write_text("package com.example\nclass MainActivity\n", encoding="utf-8")
+        app_kt = tpl / "app" / "src" / "main" / "kotlin" / "com" / "example"
+        app_kt.mkdir(parents=True, exist_ok=True)
+        (app_kt / "MainActivity.kt").write_text("package com.example\nclass MainActivity\n", encoding="utf-8")
 
-    test_kt = root / "app" / "src" / "test" / "kotlin" / "com" / "example"
-    test_kt.mkdir(parents=True, exist_ok=True)
-    (test_kt / "OrderTest.kt").write_text("package com.example\nclass OrderTest\n", encoding="utf-8")
+        test_kt = tpl / "app" / "src" / "test" / "kotlin" / "com" / "example"
+        test_kt.mkdir(parents=True, exist_ok=True)
+        (test_kt / "OrderTest.kt").write_text("package com.example\nclass OrderTest\n", encoding="utf-8")
 
-    (root / "build.gradle").write_text("// top-level\n", encoding="utf-8")
-    (root / "settings.gradle").write_text("include ':app'\n", encoding="utf-8")
-    (root / "gradlew.bat").write_text("@echo off\n", encoding="utf-8")
-    unix_wrapper = root / "gradlew"
-    unix_wrapper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    unix_wrapper.chmod(unix_wrapper.stat().st_mode | 0o111)
+        (tpl / "build.gradle").write_text("// top-level\n", encoding="utf-8")
+        (tpl / "settings.gradle").write_text("include ':app'\n", encoding="utf-8")
+        (tpl / "gradlew.bat").write_text("@echo off\n", encoding="utf-8")
+        unix_wrapper = tpl / "gradlew"
+        unix_wrapper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        unix_wrapper.chmod(unix_wrapper.stat().st_mode | 0o111)
 
-    version_file = SCRIPTS.parent / "VERSION"
-    v_str = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.42"
-    agents_dir = root / ".agents"
-    agents_dir.mkdir(parents=True, exist_ok=True)
-    (agents_dir / "VERSION").write_text(f"{v_str}\n", encoding="utf-8")
+        version_file = SCRIPTS.parent / "VERSION"
+        v_str = version_file.read_text(encoding="utf-8").strip() if version_file.is_file() else "1.0.42"
+        agents_dir = tpl / ".agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+        (agents_dir / "VERSION").write_text(f"{v_str}\n", encoding="utf-8")
 
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=tpl, check=True)
+        subprocess.run(["git", "commit", "-m", "init", "-q"], cwd=tpl, check=True)
+        _V42_TEMPLATE_REPO = tpl
+    shutil.copytree(_V42_TEMPLATE_REPO, root, dirs_exist_ok=True)
 
 
 class RedAuthorityV42Tests(unittest.TestCase):

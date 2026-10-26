@@ -30,10 +30,11 @@ When preparing an architectural plan, settle these points (the selected approach
 
 ## 3. Four-Phase Brainstorming Methodology
 
-### Phase 1: Requirements & Constraints Probing
-1. Identify underspecified requirements, hidden assumptions, and edge cases.
-2. Probe data persistence needs (Room, DataStore, SharedPreferences), network error handling, offline support, and lifecycle boundaries.
-3. Determine backward compatibility constraints with existing models and shared contracts.
+### Phase 1: Requirements, Reuse & Anti-Sycophancy Probing
+1. **Challenge Flawed Premises (Anti-Sycophancy)**: Never blindly validate a proposed design if it violates Android/KMP lifecycle guarantees, introduces race conditions, bypasses ViewModel/Repository boundaries, or adds speculative abstractions. Point out the concrete technical flaw and propose a sound alternative before drafting.
+2. **Graph-Backed Codebase Reuse First**: Query the project graph (`graph --find` / `task-context`) before proposing any new Manager, Helper, UseCase, Repository, or UI component. Reuse or extend existing classes whenever possible.
+3. **YAGNI & Complexity Justification**: Every newly proposed abstraction layer, wrapper interface, or state channel must justify its existence with a concrete multi-caller, platform-boundary (`expect`/`actual`), or unit-testability requirement.
+4. **Underspecified Requirements & Edge Cases**: Probe data persistence needs (Room, DataStore, SharedPreferences), network error handling, offline support, process death restoration, and backward compatibility constraints.
 
 ### Phase 2: Design Space & Trade-off Evaluation
 Formulate and evaluate **2–3 distinct technical approaches**:

@@ -778,6 +778,10 @@ def cmd_context(args: argparse.Namespace) -> int:
             cli_args.extend(["--supersedes", args.supersedes])
         if getattr(args, "remove", None):
             cli_args.extend(["--remove", args.remove])
+        if getattr(args, "rationale", None):
+            cli_args.extend(["--rationale", args.rationale])
+        if getattr(args, "alternatives_rejected", None):
+            cli_args.extend(["--alternatives-rejected", args.alternatives_rejected])
     return run_engine_script(kit, "generate_project_context.py", cli_args, capture=getattr(args, "json", False))
 
 
@@ -1122,13 +1126,19 @@ assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
 
 
 SELFTEST_PASS_MARKER = "harness-selftest-pass.json"
-SELFTEST_MAX_AUTO_JOBS = 4
+SELFTEST_MAX_AUTO_JOBS = 16
 SELFTEST_PROGRESS_SECONDS = 30
 # Suites long enough to dominate a parallel run are split into contiguous shards (parallel mode only).
 SELFTEST_SHARDS = {
-    "_daily_workflow_selftest.py": 4,
-    "_vnext_selftest.py": 2,
-    "_phase_review_v2_selftest.py": 2,
+    "_daily_workflow_selftest.py": 12,
+    "_vnext_selftest.py": 4,
+    "_phase_review_v2_selftest.py": 4,
+    "_worktree_handoff_selftest.py": 2,
+    "_stabilization_v41_selftest.py": 2,
+    "_android_scenarios_selftest.py": 2,
+    "_public_cli_selftest.py": 2,
+    "_task_isolation_selftest.py": 2,
+    "_host_continuation_selftest.py": 2,
 }
 # Measured full-suite seconds on Windows (2026-09-28); only the start order uses them, longest first,
 # so the long suites never begin last. Unlisted suites count as short.
@@ -1136,9 +1146,14 @@ SELFTEST_EXPECTED_SECONDS = {
     "_daily_workflow_selftest.py": 1420,
     "_vnext_selftest.py": 455,
     "_phase_review_v2_selftest.py": 380,
+    "_task_isolation_selftest.py": 205,
+    "_host_continuation_selftest.py": 200,
     "_worktree_handoff_selftest.py": 160,
+    "_review_models_selftest.py": 150,
     "_stabilization_v41_selftest.py": 140,
+    "_verification_value_selftest.py": 130,
     "_android_scenarios_selftest.py": 125,
+    "_change_decision_selftest.py": 115,
     "_public_cli_selftest.py": 100,
     "_security_selftest.py": 80,
     "_hook_selftest.py": 60,
@@ -1148,7 +1163,7 @@ SELFTEST_EXPECTED_SECONDS = {
 
 
 def _selftest_jobs(requested: int | None) -> int:
-    """Worker count: --jobs, then HARNESS_SELFTEST_JOBS, then min(8, CPUs). Suites are independent
+    """Worker count: --jobs, then HARNESS_SELFTEST_JOBS, then min(16, CPUs). Suites are independent
     processes that each work in their own temporary directories."""
     if requested is not None:
         return max(1, int(requested))
@@ -1646,6 +1661,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")
     sp.add_argument("--applies-to", default="ANY", help="Applicable task intents (ANY, PRESERVE, NEW, REFACTOR, MIGRATION).")
     sp.add_argument("--supersedes", default=None, help="Prior instruction ID to supersede.")
+    sp.add_argument("--rationale", default="", help="Optional decision rationale explaining why this instruction exists.")
+    sp.add_argument("--alternatives-rejected", default="", help="Optional alternatives considered and rejected.")
     sp.add_argument("--section", default="Domain Conventions & Context", help="Section header in project-notes.md.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")

@@ -202,6 +202,47 @@ _ACTUAL_DECL_RE = re.compile(
     r"(class|interface|object|typealias|fun|val|var)\s+(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.]+(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
 )
 
+_KMP_FORBIDDEN_COMMON_IMPORT_RE = re.compile(
+    r"(?m)^[ \t]*import[ \t]+((?:android\.(?:content|view|os|util|app|widget|graphics|database|net|provider|webkit)|java\.(?:io|net|sql|awt|nio)|javax\.swing)\.[A-Za-z0-9_.*]+)"
+)
+
+
+def check_kmp_common_main_purity(repo: Path, changed_rel_paths: list[str] | None = None) -> tuple[bool, list[str]]:
+    """Deterministically verify that KMP src/commonMain Kotlin files do not import Android/JVM-only platform APIs."""
+    repo = repo.resolve()
+    target_files: list[Path] = []
+    if changed_rel_paths is not None:
+        for rel in changed_rel_paths:
+            norm = str(rel or "").replace("\\", "/").strip("/")
+            if norm.endswith(".kt") and ("/src/commonMain/" in f"/{norm}"):
+                fpath = repo / norm
+                if fpath.is_file() and not _is_skipped(fpath):
+                    target_files.append(fpath)
+    else:
+        for mod_dir in _discover_kmp_common_modules(repo):
+            common_main = mod_dir / "src" / "commonMain"
+            if common_main.is_dir():
+                for kt_file in sorted(common_main.rglob("*.kt")):
+                    if not _is_skipped(kt_file):
+                        target_files.append(kt_file)
+
+    violations: list[str] = []
+    for kt_file in target_files:
+        try:
+            raw = kt_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        clean = strip_gradle_comments_preserving_strings(raw)
+        try:
+            rel_posix = kt_file.relative_to(repo).as_posix()
+        except ValueError:
+            rel_posix = kt_file.name
+        for match in _KMP_FORBIDDEN_COMMON_IMPORT_RE.finditer(clean):
+            violations.append(
+                f"{rel_posix} imports forbidden platform API '{match.group(1)}' inside commonMain"
+            )
+    return len(violations) == 0, violations
+
 
 def _extract_kmp_declarations(source_dir: Path, pattern: re.Pattern[str]) -> set[str]:
     names: set[str] = set()

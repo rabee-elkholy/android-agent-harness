@@ -247,6 +247,219 @@ class WorkflowInsightTests(unittest.TestCase):
                             patch.object(_repo_files, "changed_paths", return_value=[repo / "gradle.properties"]):
                         self.assertTrue(any(task.startswith(":base:") for task in run_tests_gate.resolve_target_tasks(repo, None)))
 
+    def test_blind_goldfish_brief_isolation_and_reuse_candidates(self):
+        import review_package
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            task_id = "goldfish-task"
+            tdir = repo / ".agents/state/tasks" / task_id
+            tdir.mkdir(parents=True)
+            pkg_dir = tdir / "review-packages/RUN_1"
+            pkg_dir.mkdir(parents=True)
+            plan = {
+                "task_id": task_id,
+                "plan_sha256": "plan123",
+                "outcome": "Validate checkout payment state",
+                "approach": "Add validation helper and update ViewModel",
+                "expected_files": ["app/src/main/kotlin/com/example/CheckoutViewModel.kt"],
+                "non_goals": ["No UI redesign"],
+                "reuse_candidates": [
+                    {
+                        "planned_file": "app/src/main/kotlin/com/example/PaymentValidator.kt",
+                        "symbol": "PaymentValidator",
+                        "existing_file": "core/src/main/kotlin/com/example/core/PaymentValidator.kt",
+                        "kind": "CLASS",
+                    }
+                ],
+            }
+            (tdir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            validations = {
+                "task_id": task_id,
+                "plan_sha256": "plan123",
+                "validations": [
+                    {"finding_id": "F-BUG-1", "reviewer": "bug-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Guarded by null check"},
+                    {"finding_id": "F-SEC-1", "reviewer": "security-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Internal token only"},
+                ],
+            }
+            (tdir / "finding-validations.json").write_text(json.dumps(validations), encoding="utf-8")
+            routed = ["bug-reviewer-agent", "security-reviewer-agent", "convention-reviewer-agent", "spec-compliance-agent"]
+            policy = {"reviewers": routed, "surfaces": ["STATE_ARCH"]}
+            metadata = {
+                "run_id": "RUN_1",
+                "delivery_snapshot_sha256": "snap123",
+                "change_set_sha256": "cs123",
+                "package_sha256": "pkg1234567890",
+            }
+            changes = [{"path": "app/src/main/kotlin/com/example/CheckoutViewModel.kt", "status": "M"}]
+            bug_brief = review_package.generate_task_brief(repo, task_id, "bug-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            sec_brief = review_package.generate_task_brief(repo, task_id, "security-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            conv_brief = review_package.generate_task_brief(repo, task_id, "convention-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            spec_brief = review_package.generate_task_brief(repo, task_id, "spec-compliance-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+
+            self.assertIn("**Approved Approach**:", bug_brief)
+            self.assertIn("**Approved Approach**:", sec_brief)
+            self.assertNotIn("Goldfish Epistemic Independence", bug_brief)
+            self.assertIn("Goldfish Epistemic Independence (Blind Specialist Evaluation)", sec_brief)
+            self.assertIn("Goldfish Epistemic Independence (Blind Specialist Evaluation)", conv_brief)
+            self.assertIn("Graph-Discovered Existing Reuse Candidates", conv_brief)
+            self.assertIn("Graph-Discovered Existing Reuse Candidates", spec_brief)
+            self.assertNotIn("Graph-Discovered Existing Reuse Candidates", sec_brief)
+            self.assertIn("F-SEC-1", sec_brief)
+            self.assertNotIn("F-BUG-1", sec_brief)
+            self.assertIn("F-SEC-1", bug_brief)
+
+    def test_plan_readiness_and_reuse_discovery_without_changing_plan_hash(self):
+        from _graph_core import GraphEngine
+        from _workflow.planning import _discover_reuse_candidates, _evaluate_plan_readiness
+        from workflow import approval_brief, plan_payload
+        from plan_document import render_plan_document
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            existing = repo / "core/src/main/kotlin/com/example/core/PaymentValidator.kt"
+            existing.parent.mkdir(parents=True)
+            existing.write_text("package com.example.core\nclass PaymentValidator {\n    fun validate(): Boolean = true\n}\n", encoding="utf-8")
+            engine = GraphEngine(repo)
+            engine.sync()
+
+            expected = ["app/src/main/kotlin/com/example/PaymentValidator.kt"]
+            candidates = _discover_reuse_candidates(repo, expected)
+            self.assertTrue(any(c["symbol"] == "PaymentValidator" for c in candidates))
+
+            base_plan = {
+                "schema_version": 2,
+                "task_id": "t-readiness",
+                "task_kind": "FEATURE",
+                "requested_outcome": "Add payment validation",
+                "approach": "",
+                "expected_files": expected,
+                "expected_surfaces": ["STATE_ARCH"],
+                "risks": [],
+                "constraints": [],
+            }
+            payload_before = plan_payload(dict(base_plan))
+            policy = {"risk_tier": "T3_HIGH", "gates": ["preflight", "unit_tests"], "reviewers": ["bug-reviewer-agent"]}
+            enriched_plan = dict(base_plan)
+            enriched_plan["reuse_candidates"] = candidates
+            enriched_plan["readiness_assessment"] = _evaluate_plan_readiness(enriched_plan, policy)
+            self.assertEqual(payload_before, plan_payload(enriched_plan))
+            self.assertEqual("ADVISORY_GAPS", enriched_plan["readiness_assessment"]["status"])
+            doc = render_plan_document(repo, enriched_plan, policy=policy)
+            self.assertIn("## Existing codebase reuse candidates", doc)
+            self.assertIn("## Architecture & spec readiness advisories", doc)
+            self.assertIn("Reuse candidates:", approval_brief(enriched_plan))
+
+    def test_kmp_common_main_purity_gate(self):
+        from _modules import check_kmp_common_main_purity
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            common_file = repo / "shared/src/commonMain/kotlin/com/example/shared/SharedLogic.kt"
+            common_file.parent.mkdir(parents=True)
+            common_file.write_text(
+                "package com.example.shared\n// import android.os.Bundle\nimport kotlinx.coroutines.flow.Flow\nclass SharedLogic\n",
+                encoding="utf-8",
+            )
+            ok, msg = check_kmp_common_main_purity(repo, ["shared/src/commonMain/kotlin/com/example/shared/SharedLogic.kt"])
+            self.assertTrue(ok, msg)
+
+            common_file.write_text(
+                "package com.example.shared\nimport android.content.Context\nclass SharedLogic\n",
+                encoding="utf-8",
+            )
+            ok2, violations = check_kmp_common_main_purity(repo, ["shared/src/commonMain/kotlin/com/example/shared/SharedLogic.kt"])
+            self.assertFalse(ok2)
+            self.assertTrue(any("android.content.Context" in v for v in violations))
+
+    def test_clean_layer_ui_to_data_source_bypass_detection(self):
+        import architecture_drift
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            ui_rel = "app/src/main/kotlin/com/example/ui/CheckoutScreen.kt"
+            ui_file = repo / ui_rel
+            ui_file.parent.mkdir(parents=True)
+            ui_content = (
+                "package com.example.ui\nimport androidx.compose.runtime.Composable\nimport androidx.room.Dao\n@Composable\nfun CheckoutScreen() {}\n"
+            )
+            ui_file.write_text(ui_content, encoding="utf-8")
+            contract = {
+                "mode": "PRESERVE",
+                "source_family_id": "COMPOSE_MVVM_UDF",
+                "source_dimensions": {
+                    "ui_toolkit": "compose",
+                    "state_holder_base": "ViewModel",
+                    "state_stream": "StateFlow",
+                },
+            }
+            with patch("architecture_drift._baseline_reader", return_value=lambda rel: ""):
+                ok, reason, violations = architecture_drift.check_architecture_drift(repo, contract, task_id="t-layer", task_changes=[ui_rel])
+                self.assertFalse(ok)
+                self.assertIn("UI_TO_DATA_SOURCE_BYPASS", reason)
+                self.assertTrue(any("UI_TO_DATA_SOURCE_BYPASS" in v for v in violations))
+
+            with patch("architecture_drift._baseline_reader", return_value=lambda rel: ui_content):
+                ok_base, _, _ = architecture_drift.check_architecture_drift(repo, contract, task_id="t-layer", task_changes=[ui_rel])
+                self.assertTrue(ok_base)
+
+    def test_developer_instruction_rationale_and_alternatives_rejected(self):
+        import generate_project_context
+        import task_context
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            target = repo / "app/src/main/kotlin/com/example/CheckoutViewModel.kt"
+            target.parent.mkdir(parents=True)
+            target.write_text("package com.example\nclass CheckoutViewModel {\n    fun submit() {}\n}\n", encoding="utf-8")
+
+            rc = generate_project_context.main([
+                "instruct",
+                "Preserve callback bridge in Checkout",
+                "--repo", str(repo),
+                "--scope", "GLOBAL",
+                "--source", "conversation",
+                "--proof-reference", "keep callback bridge",
+                "--strength", "REQUIREMENT",
+                "--rationale", "Legacy payment SDK requires main-thread callback registration",
+                "--alternatives-rejected", "CallbackFlow wrapper rejected due to SDK re-entrancy bug",
+                "--json",
+            ])
+            self.assertEqual(0, rc)
+
+            resolved = task_context.resolve_task_context(repo, file="app/src/main/kotlin/com/example/CheckoutViewModel.kt")
+            self.assertEqual("RESOLVED", resolved["status"])
+            insts = resolved["developer_instructions"]
+            self.assertEqual(1, len(insts))
+            self.assertEqual("Legacy payment SDK requires main-thread callback registration", insts[0]["rationale"])
+            self.assertEqual("CallbackFlow wrapper rejected due to SDK re-entrancy bug", insts[0]["alternatives_rejected"])
+
+    def test_swift_graph_and_task_context_resolution(self):
+        from _graph_core import GraphEngine
+        import task_context
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "settings.gradle.kts").write_text('include(":shared")\n', encoding="utf-8")
+            swift_rel = "iosApp/iosApp/CheckoutViewModel.swift"
+            swift_file = repo / swift_rel
+            swift_file.parent.mkdir(parents=True)
+            swift_file.write_text(
+                "import SwiftUI\n@MainActor\nfinal class CheckoutViewModel: ObservableObject {\n    func pay() {}\n}\nstruct CheckoutView: View {\n    var body: some View { EmptyView() }\n}\n",
+                encoding="utf-8",
+            )
+            engine = GraphEngine(repo)
+            engine.sync()
+            res = engine.find_symbol("CheckoutViewModel")
+            vm_matches = [m for m in res["matches"] if m["name"] == "CheckoutViewModel"]
+            self.assertEqual(1, len(vm_matches))
+            self.assertEqual(swift_rel, vm_matches[0]["file_path"])
+            self.assertEqual("VIEW_MODEL", vm_matches[0]["kind"])
+
+            resolved = task_context.resolve_task_context(repo, file=swift_rel)
+            self.assertEqual("RESOLVED", resolved["status"])
+            self.assertEqual(swift_rel, resolved["target"]["path"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

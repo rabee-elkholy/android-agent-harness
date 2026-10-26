@@ -82,6 +82,37 @@ def _is_compose_screen(txt: str) -> bool:
     return has_comp_content and not has_xml_binding
 
 
+_DATA_SOURCE_BYPASS_IMPORT_RE = re.compile(
+    r"(?m)^[ \t]*import[ \t]+(androidx\.room\.Dao|android\.database\.sqlite\.SQLiteDatabase|retrofit2\.http\.[A-Za-z0-9_.*]+|okhttp3\.OkHttpClient)\b"
+)
+_DATA_SOURCE_DAO_PROP_RE = re.compile(
+    r"\b(?:val|var)[ \t]+[A-Za-z0-9_]+[ \t]*:[ \t]*[A-Za-z0-9_]+Dao\b"
+)
+
+
+def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
+    """Detect direct data-source (Room DAO / SQLite / Retrofit) usage inside a UI entry file."""
+    lower_stem = stem.lower()
+    if any(tok in lower_stem for tok in ("viewmodel", "repository", "dao", "database", "module", "test", "factory", "worker", "service")):
+        return None
+    is_ui_entry = (
+        "@Composable" in txt
+        or "setContent" in txt
+        or "fragment" in lower_stem
+        or "activity" in lower_stem
+        or "screen" in lower_stem
+    )
+    if not is_ui_entry:
+        return None
+    imp_match = _DATA_SOURCE_BYPASS_IMPORT_RE.search(txt)
+    if imp_match:
+        return f"imports {imp_match.group(1)}"
+    dao_match = _DATA_SOURCE_DAO_PROP_RE.search(txt)
+    if dao_match:
+        return f"declares direct DAO dependency ({dao_match.group(0).strip()})"
+    return None
+
+
 def check_architecture_drift(
     repo: Path,
     contract: dict[str, Any] | None,
@@ -270,6 +301,30 @@ def check_architecture_drift(
                         violations.append(
                             f"Architectural migration in {rel} escapes the approved target scope '{target_scope}'"
                         )
+
+    has_layered_state_holder = bool(
+        source_dims.get("state_holder_base")
+        or source_dims.get("state_stream")
+        or target_dims.get("state_holder_base")
+        or target_dims.get("state_stream")
+        or target_dims.get("ui_toolkit") == "compose"
+        or source_dims.get("ui_toolkit") in ("compose", "xml")
+    )
+    if has_layered_state_holder and mode in ("PRESERVE", "REFACTOR", "NEW"):
+        layer_baseline = _baseline_reader(repo, task_id)
+        for p in modified_kt_files:
+            rel = p.relative_to(repo).as_posix()
+            txt = _safe_read(p)
+            if not txt:
+                continue
+            bypass_reason = _detect_ui_data_source_bypass(p.stem, txt)
+            if bypass_reason:
+                before = layer_baseline(rel)
+                if before is not _UNKNOWN and bool(before) and _detect_ui_data_source_bypass(p.stem, before):
+                    continue
+                violations.append(
+                    f"UI_TO_DATA_SOURCE_BYPASS: UI entry file {rel} directly accesses data-source layer ({bypass_reason}), bypassing ViewModel/Repository boundaries"
+                )
 
     if violations:
         remediation = ""

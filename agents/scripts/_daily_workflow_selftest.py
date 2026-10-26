@@ -164,35 +164,44 @@ class DailyWorkflowSelftest(unittest.TestCase):
                                 input_bytes=(self.repo / relative).read_bytes()).decode().strip()
             self.assertEqual("git:" + expected, identities[relative])
 
-    def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory(prefix="daily_wf_test_")
-        self.repo = Path(self.temp.name).resolve()
-        run_git(self.repo, "init", "-q")
-        run_git(self.repo, "config", "user.name", "Daily Test")
-        run_git(self.repo, "config", "user.email", "daily@example.invalid")
-        run_git(self.repo, "config", "core.autocrlf", "true")
+    _TEMPLATE_REPO: Path | None = None
 
-        # Guarantee consistent state_root
-        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
-
-        # Basic Android fixture
-        write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="daily_wf_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        run_git(tpl, "init", "-q")
+        run_git(tpl, "config", "user.name", "Daily Test")
+        run_git(tpl, "config", "user.email", "daily@example.invalid")
+        run_git(tpl, "config", "core.autocrlf", "true")
+        (tpl / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+        write_file(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
         try:
-            os.chmod(self.repo / "gradlew", 0o755)
+            os.chmod(tpl / "gradlew", 0o755)
         except Exception:
             pass
-        write_file(self.repo / "settings.gradle.kts", 'rootProject.name = "DailyFixture"\ninclude(":app")\n')
-        write_file(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        write_file(tpl / "settings.gradle.kts", 'rootProject.name = "DailyFixture"\ninclude(":app")\n')
+        write_file(tpl / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
         write_file(
-            self.repo / "app/src/main/res/values/strings.xml",
+            tpl / "app/src/main/res/values/strings.xml",
             '<resources>\n    <string name="app_name">DailyFixture</string>\n</resources>\n',
         )
         write_file(
-            self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+            tpl / "app/src/main/kotlin/com/example/MainActivity.kt",
             "package com.example\n\nclass MainActivity\n",
         )
-        run_git(self.repo, "add", ".")
-        run_git(self.repo, "commit", "-qm", "initial fixture")
+        run_git(tpl, "add", ".")
+        run_git(tpl, "commit", "-qm", "initial fixture")
+        cls._TEMPLATE_REPO = tpl
+        return tpl
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="daily_wf_test_")
+        self.repo = Path(self.temp.name).resolve()
+        shutil.copytree(DailyWorkflowSelftest._ensure_template_repo(), self.repo, dirs_exist_ok=True)
 
         self.env = os.environ.copy()
         self.env["HARNESS_REPO"] = str(self.repo)
@@ -8725,13 +8734,13 @@ class GitDeliveryTests(ReviewOrchestrationTests):
     def test_GIT_DELIVERY_010_developer_commit_with_import_deletion_returns_stale(self) -> None:
         """GIT-DELIVERY-010: Developer commit with deleted import returns DELIVERY_STALE_AFTER_COMMIT."""
         task_id = "test-git-010"
-        content_v = "package com.example\n\nimport b.B\nimport a.A\n\nclass MainActivity\n"
+        content_v = "package com.example\n\nimport b.B\nimport a.A\n\nclass MainActivity(val b: B)\n"
         plan, tdir = self._setup_ready_task(task_id, content=content_v)
         from workflow import resolve_next_action, finalize_ready_delivery
 
-        # Delete an import and commit
+        # Delete a used import and commit
         target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
-        write_file(target, "package com.example\n\nimport a.A\n\nclass MainActivity\n")
+        write_file(target, "package com.example\n\nimport a.A\n\nclass MainActivity(val b: B)\n")
         run_git(self.repo, "add", "app/src/main/kotlin/com/example/MainActivity.kt")
         run_git(self.repo, "commit", "-m", "feat: removed import")
 

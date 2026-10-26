@@ -217,6 +217,11 @@ IMPORT_PATTERN = re.compile(r"^\s*import\s+(?:static\s+)?([a-zA-Z0-9_.*]+)", re.
 DECLARATION_PATTERN = re.compile(
     r"\b(?:class|interface|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|value\s+class|annotation\s+class|record)\s+([a-zA-Z0-9_]+)\b"
 )
+SWIFT_DECLARATION_PATTERN = re.compile(
+    r"\b(?:struct|class|enum|protocol|actor)\s+([a-zA-Z0-9_]+)\b"
+)
+SWIFT_FUNC_PATTERN = re.compile(r"\bfunc\s+([a-zA-Z0-9_]+)\s*(?:<[^>]+>)?\s*\(")
+SWIFT_TYPE_REF_PATTERN = re.compile(r"(?::|\b)[ \t]*([A-Z][a-zA-Z0-9_]{2,})\b")
 NAMED_OBJECT_PATTERN = re.compile(r"\bobject\s+([a-zA-Z0-9_]+)\b")
 COMPOSABLE_FUNC_PATTERN = re.compile(
     r"@Composable\s+(?:@[a-zA-Z0-9_.]+\s*(?:\([^)]*\)\s*)?)*(?:(?:public|private|internal|protected|expect|actual|inline|open|override)\s+)*fun\s+(?:<[^>\r\n]+>\s+)?(?:[a-zA-Z0-9_.<>?]+\.)?([a-zA-Z0-9_]+)\s*\("
@@ -890,6 +895,13 @@ def classify_entity_type(name: str, file_path: str, declarations: list[str], tex
     if is_kmp_or_android_test_path(file_path) or lower_name.endswith("test") or lower_name.endswith("tests"):
         return EntityType.TEST
 
+    is_swift = file_path.lower().endswith(".swift")
+    if is_swift:
+        if lower_name.endswith("viewmodel") or "observableobject" in text.lower() or "@observable" in text.lower():
+            return EntityType.VIEW_MODEL
+        if lower_name.endswith("view") or lower_name.endswith("screen") or bool(re.search(r":\s*[^{]*\bView\b", text)):
+            return EntityType.SCREEN
+
     if lower_name.endswith("screen") or "@composable" in text.lower() or "activity" in lower_name or "fragment" in lower_name or "dialog" in lower_name:
         return EntityType.SCREEN
 
@@ -1017,14 +1029,21 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
 
 
 def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
-    """Extract classes, screens, viewmodels, and layers from a Java or Kotlin source file."""
+    """Extract classes, screens, viewmodels, and layers from a Java, Kotlin, or Swift source file."""
     try:
         rel_path = path.relative_to(repo).as_posix()
     except ValueError:
         rel_path = path.as_posix()
 
-    mod_parts = rel_path.split("/src/")[0]
-    module_id = ":" + mod_parts.replace("/", ":") if mod_parts and mod_parts != "." else ":app"
+    is_swift = path.suffix.lower() == ".swift"
+    if "/src/" in rel_path:
+        mod_parts = rel_path.split("/src/")[0]
+        module_id = ":" + mod_parts.replace("/", ":") if mod_parts and mod_parts != "." else ":app"
+    elif is_swift and "/" in rel_path:
+        top_dir = rel_path.split("/", 1)[0]
+        module_id = f":{top_dir}"
+    else:
+        module_id = ":app"
 
     try:
         raw_text = path.read_text(encoding="utf-8", errors="replace")
@@ -1040,25 +1059,33 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
         pkg = pkg_m.group(1).strip()
 
     raw_imports = [m.group(1).strip() for m in IMPORT_PATTERN.finditer(clean_text)]
+    if is_swift:
+        raw_imports.extend(m.group(1).strip() for m in SWIFT_TYPE_REF_PATTERN.finditer(clean_text))
     imports = [
-        imp for imp in raw_imports
+        imp for imp in dict.fromkeys(raw_imports)
         if not imp.endswith(".*") and imp.split(".")[-1].lower() not in KOTLIN_RESERVED_DECLARATIONS
     ]
 
-    raw_decls = [m.group(1).strip() for m in DECLARATION_PATTERN.finditer(clean_text)]
-    for m in NAMED_OBJECT_PATTERN.finditer(clean_text):
-        obj_name = m.group(1).strip()
-        if obj_name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
-            raw_decls.append(obj_name)
+    if is_swift:
+        raw_decls = [m.group(1).strip() for m in SWIFT_DECLARATION_PATTERN.finditer(clean_text)]
+    else:
+        raw_decls = [m.group(1).strip() for m in DECLARATION_PATTERN.finditer(clean_text)]
+        for m in NAMED_OBJECT_PATTERN.finditer(clean_text):
+            obj_name = m.group(1).strip()
+            if obj_name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
+                raw_decls.append(obj_name)
     declared_type_names = set(raw_decls)
 
     is_java = path.suffix.lower() == ".java"
-    lang = "Java" if is_java else "Kotlin"
+    lang = "Swift" if is_swift else ("Java" if is_java else "Kotlin")
 
-    # Extract member and top-level functions (Kotlin & Java)
-    raw_funcs = [m.group(1).strip() for m in FUNCTION_PATTERN.finditer(clean_text)]
-    if is_java:
-        raw_funcs.extend([m.group(1).strip() for m in JAVA_METHOD_PATTERN.finditer(clean_text)])
+    # Extract member and top-level functions (Kotlin, Java & Swift)
+    if is_swift:
+        raw_funcs = [m.group(1).strip() for m in SWIFT_FUNC_PATTERN.finditer(clean_text)]
+    else:
+        raw_funcs = [m.group(1).strip() for m in FUNCTION_PATTERN.finditer(clean_text)]
+        if is_java:
+            raw_funcs.extend([m.group(1).strip() for m in JAVA_METHOD_PATTERN.finditer(clean_text)])
     function_names = set(raw_funcs)
 
     for fn in raw_funcs:
@@ -1395,12 +1422,43 @@ class GraphEngine:
             if node.file_path:
                 self.file_to_node_ids.setdefault(node.file_path, []).append(node_id)
 
+    def ensure_loaded(self) -> bool:
+        """Load the cached project graph or perform an in-memory sync if no cache exists yet."""
+        if self.graph.nodes:
+            return True
+        if self.load_cache() and self.graph.nodes:
+            return True
+        self.sync(persist=False)
+        return bool(self.graph.nodes)
+
+    def find_symbol(self, query: str, limit: int = 10) -> dict[str, Any]:
+        """Find matching graph nodes for a symbol query and return structured match dictionaries."""
+        self.ensure_loaded()
+        nodes = [
+            n for n in self.graph.find_nodes(query, limit=limit)
+            if n.type not in (EntityType.MODULE.value, EntityType.HARNESS_TOOL.value, EntityType.WORKFLOW_PLAYBOOK.value, EntityType.SUBAGENT_ROSTER.value)
+        ]
+        return {
+            "query": query,
+            "matches": [
+                {
+                    "id": n.id,
+                    "name": n.name,
+                    "kind": n.type,
+                    "file_path": n.file_path,
+                    "module": n.module,
+                    "package": n.package,
+                }
+                for n in nodes[:limit]
+            ],
+        }
+
     def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
         if not force_full:
             self.load_cache()
 
-        extensions = {".kt", ".java", ".gradle", ".kts"}
+        extensions = {".kt", ".java", ".swift", ".gradle", ".kts"}
         current_files: dict[str, Path] = {}
 
         from _modules import SKIP_PARTS
@@ -1509,7 +1567,7 @@ class GraphEngine:
                 for nid in existing_nodes:
                     self.graph.remove_node(nid)
 
-                if p.suffix.lower() in (".kt", ".java"):
+                if p.suffix.lower() in (".kt", ".java", ".swift"):
                     nodes = parse_code_file(p, self.repo)
                     for n in nodes:
                         self.graph.add_node(n)

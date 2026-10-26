@@ -355,6 +355,12 @@ def _build_type_file_index(root: Path) -> dict[str, list[Path]]:
     return result
 
 
+GENERIC_MULTI_PURPOSE_DEPENDENCY_RE = re.compile(
+    r"(?i)^(?:user|profile|account|app|main|shared|common|base|sync|local|remote|cache|settings|prefs|preferences|session|data|database|db)"
+    r"(?:[a-z0-9_]*?)(?:repository|repo|datasource|localdatasource|remotedatasource|source|localsource|remotesource|helper|manager|store|prefs|preferences|service|dao)$"
+)
+
+
 def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list[Path]]) -> tuple[str, str] | None:
     """Check if a dependency type maps to a sensitive surface directly or via target source file (1 hop)."""
     if PASSIVE_UI_CONTAINER_RE.search(type_name):
@@ -363,6 +369,11 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
     for surface, pattern in SENSITIVE_DEPENDENCY_PATTERNS:
         if pattern.search(type_name):
             return surface, type_name
+    # Generic multi-purpose repositories/data sources (e.g., UserRepository, ProfileRepository,
+    # SettingsManager) often contain one auth/session helper alongside dozens of non-sensitive
+    # profile or goal methods; do not label every caller sensitive via whole-file 1-hop scanning.
+    if GENERIC_MULTI_PURPOSE_DEPENDENCY_RE.search(type_name):
+        return None
 
     # Check cache
     cache_key = (root, type_name)

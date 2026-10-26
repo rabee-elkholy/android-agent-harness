@@ -21,7 +21,7 @@ from _vnext_common import ValidationError as _ExpectedArtifactError
 
 SCHEMA_VERSION = 1
 RESOLVER_VERSION = "1.0.0"
-SUPPORTED_TARGET_SUFFIXES = {".kt", ".java", ".xml"}
+SUPPORTED_TARGET_SUFFIXES = {".kt", ".java", ".xml", ".swift"}
 DEFAULT_NEIGHBOR_LIMIT = 20
 MAX_NEIGHBOR_LIMIT = 100
 MAX_BATCH_TARGETS = 8
@@ -70,7 +70,7 @@ def _resolve_file(repo: Path, value: str, engine: GraphEngine) -> tuple[str, lis
     if candidate.suffix.lower() in {".class", ".apk", ".aab", ".so", ".jar", ".hprof", ".dex"}:
         return "INVALID_TARGET_PATH", [], "Target binary artifact type is not supported."
 
-    if candidate.suffix.lower() in {".kt", ".java"}:
+    if candidate.suffix.lower() in {".kt", ".java", ".swift"}:
         nodes = [node for node in engine.graph.nodes.values() if node.file_path == rel and node.type not in {"MODULE"}]
         if nodes:
             return "RESOLVED", sorted(nodes, key=lambda item: item.id), None
@@ -585,6 +585,8 @@ def _resolve_task_context(
                     "applies_to": inst.get("applies_to", ["ANY"]),
                     "sha256": inst.get("sha256", ""),
                     "status": inst.get("status", "ACTIVE"),
+                    **({"rationale": inst["rationale"]} if inst.get("rationale") else {}),
+                    **({"alternatives_rejected": inst["alternatives_rejected"]} if inst.get("alternatives_rejected") else {}),
                 }
                 for inst in matched_instructions
             ],
@@ -778,6 +780,8 @@ def _resolve_task_context(
                 "applies_to": inst.get("applies_to", ["ANY"]),
                 "sha256": inst.get("sha256", ""),
                 "status": inst.get("status", "ACTIVE"),
+                **({"rationale": inst["rationale"]} if inst.get("rationale") else {}),
+                **({"alternatives_rejected": inst["alternatives_rejected"]} if inst.get("alternatives_rejected") else {}),
             }
             for inst in matched_instructions
         ],

@@ -324,24 +324,59 @@ def publish_release(tag: str, title: str, notes: str) -> bool:
     return True
 
 
+def _working_tree_id(reset_paths: tuple[str, ...] = ()) -> str:
+    """Git tree id of current tracked/untracked files using a throwaway index."""
+    with tempfile.TemporaryDirectory(prefix="harness-rel-tree-") as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        for argv in (["read-tree", "HEAD"], ["add", "-A"]):
+            proc = subprocess.run(["git", *argv], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+            if proc.returncode != 0:
+                return ""
+        for rel_path in reset_paths:
+            subprocess.run(["git", "reset", "-q", "HEAD", "--", rel_path], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+        proc = subprocess.run(["git", "write-tree"], cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+        return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
 def _selftest_already_passed_tree() -> str:
-    """Tree of a clean HEAD whose full selftest pass harness_cli recorded; empty otherwise."""
+    """Tree of a clean HEAD or working tree whose full selftest pass harness_cli recorded; empty otherwise."""
     def git(*argv: str) -> str:
         proc = subprocess.run(["git", *argv], cwd=ROOT, capture_output=True, text=True, check=False)
         return proc.stdout.strip() if proc.returncode == 0 else ""
 
-    if git("status", "--porcelain", "--untracked-files=normal"):
-        return ""
-    tree = git("rev-parse", "HEAD^{tree}")
     rel = git("rev-parse", "--git-path", "harness-selftest-pass.json")
-    if not tree or not rel:
+    if not rel:
         return ""
     marker = Path(rel) if Path(rel).is_absolute() else ROOT / rel
     try:
         recorded = json.loads(marker.read_text(encoding="utf-8")).get("tree")
     except (OSError, ValueError):
         return ""
-    return tree if recorded == tree else ""
+    if not recorded:
+        return ""
+    if not git("status", "--porcelain", "--untracked-files=normal"):
+        tree = git("rev-parse", "HEAD^{tree}")
+        if tree and recorded == tree:
+            return tree
+    for reset_paths in ((), ("CHANGELOG.md",)):
+        tree = _working_tree_id(reset_paths)
+        if tree and recorded == tree:
+            return tree
+    return ""
+
+
+def _refresh_passed_tree_marker() -> None:
+    """Refresh harness-selftest-pass.json after version-bump/checksum generation on an already-verified tree."""
+    proc = subprocess.run(["git", "rev-parse", "--git-path", "harness-selftest-pass.json"], cwd=ROOT, capture_output=True, text=True, check=False)
+    rel = proc.stdout.strip() if proc.returncode == 0 else ""
+    tree = _working_tree_id()
+    if not rel or not tree:
+        return
+    marker = Path(rel) if Path(rel).is_absolute() else ROOT / rel
+    try:
+        marker.write_text(json.dumps({"tree": tree, "python": sys.version.split()[0]}) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -479,6 +514,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Step 3: Run Tests
     if not args.skip_tests and passed_tree:
+        if not args.dry_run:
+            _refresh_passed_tree_marker()
         print(f"[3/5] Full selftest already passed on tree {passed_tree[:12]}; not repeated (CI still gates the tag).")
         if validate_release and not args.dry_run:
             with step_progress("[3b/5] Running release validation & packaging check"):

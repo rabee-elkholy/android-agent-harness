@@ -99,33 +99,43 @@ def _run_git(repo: Path, *args: str) -> None:
         raise AssertionError(proc.stderr or proc.stdout)
 
 
+_V41_TEMPLATE_REPO: Path | None = None
+
+
 def _setup_mock_repo(root: Path) -> None:
-    _run_git(root, "init", "-q")
-    _run_git(root, "config", "user.name", "Test User")
-    _run_git(root, "config", "user.email", "test@example.com")
-    _run_git(root, "config", "commit.gpgsign", "false")
-    (root / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
-    _write_text(root / "app" / "build.gradle.kts", 'plugins { id("com.android.application") }\n')
-    _write_text(root / "settings.gradle.kts", 'include(":app")\n')
-    _write_text(root / "gradlew", "#!/bin/sh\nexit 0\n")
-    _write_text(root / "gradlew.bat", "@exit /b 0\r\n")
-    _run_git(root, "add", "-A")
-    _run_git(root, "commit", "-qm", "Initial commit")
-    _write_json(root / ".harness-setup" / "answers.json", {
-        "product": "TestApp",
-        "application_id": "com.example.testapp",
-        "launcher": "com.example.testapp.MainActivity",
-        "assemble": ":app:assembleDebug",
-        "unit_test_task": ":app:testDebugUnitTest",
-        "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-        "tools": ["gemini"],
-        "pm_provider": "none",
-        "zoho_mcp": "disable",
-        "backup": True,
-    })
-    install(root, KIT)
-    _run_git(root, "add", "-A")
-    _run_git(root, "commit", "-qm", "Install harness", "--allow-empty")
+    global _V41_TEMPLATE_REPO
+    if _V41_TEMPLATE_REPO is None or not _V41_TEMPLATE_REPO.is_dir():
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="v41_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        _run_git(tpl, "init", "-q")
+        _run_git(tpl, "config", "user.name", "Test User")
+        _run_git(tpl, "config", "user.email", "test@example.com")
+        _run_git(tpl, "config", "commit.gpgsign", "false")
+        (tpl / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
+        _write_text(tpl / "app" / "build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        _write_text(tpl / "settings.gradle.kts", 'include(":app")\n')
+        _write_text(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
+        _write_text(tpl / "gradlew.bat", "@exit /b 0\r\n")
+        _run_git(tpl, "add", "-A")
+        _run_git(tpl, "commit", "-qm", "Initial commit")
+        _write_json(tpl / ".harness-setup" / "answers.json", {
+            "product": "TestApp",
+            "application_id": "com.example.testapp",
+            "launcher": "com.example.testapp.MainActivity",
+            "assemble": ":app:assembleDebug",
+            "unit_test_task": ":app:testDebugUnitTest",
+            "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
+            "tools": ["gemini"],
+            "pm_provider": "none",
+            "zoho_mcp": "disable",
+            "backup": True,
+        })
+        install(tpl, KIT)
+        _run_git(tpl, "add", "-A")
+        _run_git(tpl, "commit", "-qm", "Install harness", "--allow-empty")
+        _V41_TEMPLATE_REPO = tpl
+    shutil.copytree(_V41_TEMPLATE_REPO, root, dirs_exist_ok=True)
 
 
 class ReviewerIndependenceTests(unittest.TestCase):

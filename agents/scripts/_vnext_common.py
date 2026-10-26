@@ -169,14 +169,26 @@ def repository_identity(repo: Path) -> dict[str, str]:
     if not common.is_absolute():
         common = (root / common).resolve()
     head = identity_lines[2]
-    try:
-        proc = subprocess.run(
-            ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
-            cwd=str(root), capture_output=True, text=True, check=False,
-        )
-        branch = proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "DETACHED"
-    except OSError as exc:
-        raise HarnessError(f"cannot execute Git: {exc}") from exc
+    branch: str | None = None
+    head_file = root / ".git" / "HEAD"
+    if head_file.is_file() and not head_file.is_symlink():
+        try:
+            raw_head = head_file.read_text(encoding="utf-8", errors="replace").strip()
+            if raw_head.startswith("ref: refs/heads/"):
+                branch = raw_head[len("ref: refs/heads/"):].strip()
+            elif re.fullmatch(r"[0-9a-fA-F]{40,64}", raw_head):
+                branch = "DETACHED"
+        except OSError:
+            branch = None
+    if not branch:
+        try:
+            proc = subprocess.run(
+                ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+                cwd=str(root), capture_output=True, text=True, check=False,
+            )
+            branch = proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "DETACHED"
+        except OSError as exc:
+            raise HarnessError(f"cannot execute Git: {exc}") from exc
     return {
         "root_sha256": sha256_bytes(_norm_path_str(root).encode("utf-8")),
         "git_common_dir_sha256": sha256_bytes(_norm_path_str(common).encode("utf-8")),

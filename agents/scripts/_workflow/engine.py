@@ -544,6 +544,8 @@ def _applicable_developer_instructions_for_task(
             "strength": inst.get("strength", "REQUIREMENT"),
             "scope": inst.get("scope", {}),
             "applies_to": applies_to,
+            **({"rationale": inst["rationale"]} if inst.get("rationale") else {}),
+            **({"alternatives_rejected": inst["alternatives_rejected"]} if inst.get("alternatives_rejected") else {}),
         })
     return applicable
 
@@ -3301,6 +3303,13 @@ def approval_brief(plan: dict, sensitive_advisory: str | None = None) -> str:
     if names:
         shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
         lines.append(f"Files ({len(names)}): {shown}")
+    reuse_cands = [c for c in (plan.get("reuse_candidates") or []) if isinstance(c, dict)]
+    if reuse_cands:
+        shown_reuse = ", ".join(
+            f"{c.get('symbol')} ({Path(str(c.get('existing_file') or '')).name})"
+            for c in reuse_cands[:4]
+        )
+        lines.append(f"Reuse candidates: {shown_reuse}")
     if attention:
         lines.append(f"Touches: {', '.join(attention)} (reviewed with extra care)")
     if sensitive_advisory:

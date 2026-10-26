@@ -50,10 +50,11 @@ The mechanisms below check these failure modes within the configured host and ve
 
 The harness adds six engineering capabilities around your AI coding assistant:
 
-- **Persistent project knowledge**: Generated project facts plus human project notes and scoped developer instructions give future task sessions durable repo-local context without depending on one chat history.
-- **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph, source-set awareness, and automatic detection of local architecture families in mixed codebases.
-- **Approval-first execution**: Plan-before-mutation flow, plan hashes and approval receipts, with scope drift checks. Conversation-based approval is rule-enforced; a hash binds the recorded plan but does not authenticate the human who approved it.
-- **Adaptive Android verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, and device APIs.
+- **Persistent project knowledge**: Generated project facts plus human project notes and scoped developer instructions (including optional decision `--rationale` and `--alternatives-rejected`) give future task sessions durable repo-local context without depending on one chat history.
+- **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph (across Kotlin, Java, XML, and KMP/iOS Swift files), source-set awareness, and automatic detection of local architecture families in mixed codebases.
+- **Approval-first execution**: Plan-before-mutation flow, graph-backed codebase reuse candidate detection (`reuse_candidates`), plan readiness diagnostics, plan hashes, and approval receipts, with scope drift checks. Conversation-based approval is rule-enforced; a hash binds the recorded plan but does not authenticate the human who approved it.
+- **Adaptive Android & KMP verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, Clean Architecture UI-to-Data-Source layer bypass (`UI_TO_DATA_SOURCE_BYPASS`), KMP `commonMain` platform purity, and device APIs.
+- **Epistemically isolated specialist reviews**: Role-scoped lean briefs enforce Goldfish epistemic independence—one designated reviewer verifies every item of the approved approach, while specialist reviewers evaluate runtime behavior, security, performance, and YAGNI/codebase reuse without being biased by implementer self-justification.
 - **Evidence-bound delivery**: Tests, reviews, assemble, and device verification are cryptographically bound to the final frozen delivery snapshot. Stale or partial evidence fails closed.
 - **Recovery and developer control**: Environment and installation diagnostics (`doctor`), restoration from a checksum-verified pinned kit (`repair`), transactional updates with rollback, and developer authority over Git operations.
 
@@ -160,7 +161,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.46/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.47/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -183,7 +184,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.46 --single-branch \
+git clone --depth 1 --branch v1.1.47 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -489,7 +490,7 @@ We welcome contributions! Please review [CONTRIBUTING.md](https://github.com/rab
 
 1. **Standard Library Only**: All runtime engine code must use Python standard library only.
 2. **Safety Invariants**: Never weaken approval gates, plan nonces, or evidence binding.
-3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 4; the largest suites are split into shards; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
+3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 8; the largest suites are split into shards; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
 
 For security reports, refer to [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
 

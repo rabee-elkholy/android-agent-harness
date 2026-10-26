@@ -104,18 +104,65 @@ class Foo
 import java.util.Locale
 import java.util.Date
 
-class Foo
+class Foo(val d: Date)
 """
         c2 = b"""package com.example
 
 import java.util.Locale
 
-class Foo
+class Foo(val d: Date)
 """
         is_benign, classification, detail = classify_file_equivalence(c1, c2, "Foo.kt")
         self.assertFalse(is_benign)
         self.assertEqual("IMPORTS_MODIFIED", classification)
         self.assertIn("removed", detail)
+
+    def test_unused_import_removed_accepted(self):
+        c1 = b"""package com.example
+
+import java.util.Locale
+import java.util.Date
+
+class Foo {
+    fun bar() = Locale.ENGLISH
+}
+"""
+        c2 = b"""package com.example
+
+import java.util.Locale
+
+class Foo {
+    fun bar() = Locale.ENGLISH
+}
+"""
+        is_benign, classification, detail = classify_file_equivalence(c1, c2, "Foo.kt")
+        self.assertTrue(is_benign)
+        self.assertEqual("UNUSED_IMPORT_REMOVED", classification)
+        self.assertIn("1 removed", detail)
+
+    def test_token_preserving_reformat_accepted(self):
+        c1 = b"""package com.example
+
+class Foo {
+    fun calc(a: Int, b: Int): Int {
+        return a + b
+    }
+}
+"""
+        c2 = b"""package com.example
+
+class Foo {
+    fun calc(
+        a: Int,
+        b: Int
+    ): Int {
+        return a + b
+    }
+}
+"""
+        is_benign, classification, _ = classify_file_equivalence(c1, c2, "Foo.kt")
+        self.assertTrue(is_benign)
+        self.assertEqual("TRAILING_WHITESPACE_OR_FORMATTING", classification)
 
     def test_code_body_modified_rejected(self):
         c1 = b"""package com.example

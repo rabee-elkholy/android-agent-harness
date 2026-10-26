@@ -67,20 +67,33 @@ def write(path: Path, content: str | bytes) -> None:
 
 
 class RepoCase(unittest.TestCase):
+    _TEMPLATE_REPO: Path | None = None
+
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="vnext_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        run_git(tpl, "init", "-q")
+        run_git(tpl, "config", "user.name", "Harness Test")
+        run_git(tpl, "config", "user.email", "harness@example.invalid")
+        run_git(tpl, "config", "core.autocrlf", "true")
+        write(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
+        os.chmod(tpl / "gradlew", 0o755)
+        write(tpl / "settings.gradle.kts", 'rootProject.name = "Fixture"\ninclude(":app")\n')
+        write(tpl / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+        write(tpl / "app/src/main/kotlin/A.kt", "internal class A\n")
+        run_git(tpl, "add", ".")
+        run_git(tpl, "commit", "-qm", "fixture")
+        cls._TEMPLATE_REPO = tpl
+        return tpl
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)
-        run_git(self.repo, "init", "-q")
-        run_git(self.repo, "config", "user.name", "Harness Test")
-        run_git(self.repo, "config", "user.email", "harness@example.invalid")
-        run_git(self.repo, "config", "core.autocrlf", "true")
-        write(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
-        os.chmod(self.repo / "gradlew", 0o755)
-        write(self.repo / "settings.gradle.kts", 'rootProject.name = "Fixture"\ninclude(":app")\n')
-        write(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
-        write(self.repo / "app/src/main/kotlin/A.kt", "internal class A\n")
-        run_git(self.repo, "add", ".")
-        run_git(self.repo, "commit", "-qm", "fixture")
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
 
     def tearDown(self) -> None:
         self.temp.cleanup()

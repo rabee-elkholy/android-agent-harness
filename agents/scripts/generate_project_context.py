@@ -414,6 +414,12 @@ def cmd_instruct(args: argparse.Namespace) -> int:
         "created_at": time.time(),
         "status": "ACTIVE",
     }
+    rationale = str(getattr(args, "rationale", None) or "").strip()
+    if rationale:
+        new_inst["rationale"] = rationale
+    alternatives_rejected = str(getattr(args, "alternatives_rejected", None) or "").strip()
+    if alternatives_rejected:
+        new_inst["alternatives_rejected"] = alternatives_rejected
 
     instructions = [i for i in existing_store["instructions"] if i.get("id") != inst_id]
     instructions.append(new_inst)
@@ -470,6 +476,8 @@ def main(argv: list[str] | None = None) -> int:
     p_inst.add_argument("--applies-to", default="ANY", help="Comma-separated applicable intents (ANY, PRESERVE, NEW, REFACTOR, MIGRATION)")
     p_inst.add_argument("--supersedes", default=None, help="Prior instruction ID to supersede")
     p_inst.add_argument("--remove", default=None, help="Instruction ID or text substring to remove/deactivate")
+    p_inst.add_argument("--rationale", default="", help="Optional decision rationale explaining why this instruction exists")
+    p_inst.add_argument("--alternatives-rejected", default="", help="Optional alternatives considered and rejected")
     p_inst.add_argument("--repo", default=".")
     p_inst.add_argument("--json", action="store_true")
 

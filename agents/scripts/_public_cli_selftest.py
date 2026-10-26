@@ -71,37 +71,35 @@ def _setup_fake_gradlew(repo: Path) -> Path:
 
 
 class PublicCliSelftest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory(prefix="public_cli_test_")
-        self.repo = Path(self.temp_dir.name).resolve()
+    _TEMPLATE_REPO: Path | None = None
 
-        # Git init
-        run_git(self.repo, "init", "-q")
-        run_git(self.repo, "config", "user.name", "Public CLI Test")
-        run_git(self.repo, "config", "user.email", "test@example.invalid")
-        run_git(self.repo, "config", "core.autocrlf", "false")
-
-        # Minimal Android repo layout
-        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
-        (self.repo / "app" / "src" / "main" / "res" / "values").mkdir(parents=True, exist_ok=True)
-        (self.repo / "settings.gradle.kts").write_text('rootProject.name = "TestApp"\ninclude(":app")\n', encoding="utf-8")
-        (self.repo / "app" / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
-        (self.repo / "app" / "src" / "main" / "res" / "values" / "strings.xml").write_text(
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="public_cli_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        run_git(tpl, "init", "-q")
+        run_git(tpl, "config", "user.name", "Public CLI Test")
+        run_git(tpl, "config", "user.email", "test@example.invalid")
+        run_git(tpl, "config", "core.autocrlf", "false")
+        (tpl / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
+        (tpl / "app" / "src" / "main" / "res" / "values").mkdir(parents=True, exist_ok=True)
+        (tpl / "settings.gradle.kts").write_text('rootProject.name = "TestApp"\ninclude(":app")\n', encoding="utf-8")
+        (tpl / "app" / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+        (tpl / "app" / "src" / "main" / "res" / "values" / "strings.xml").write_text(
             '<resources>\n    <string name="app_name">TestApp</string>\n</resources>\n',
             encoding="utf-8",
         )
-        (self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt").write_text(
+        (tpl / "app" / "src" / "main" / "kotlin" / "com" / "example" / "MainActivity.kt").write_text(
             "package com.example\n\nclass MainActivity\n",
             encoding="utf-8",
         )
-        (self.repo / "agents").mkdir(parents=True, exist_ok=True)
-        (self.repo / "agents" / "VERSION").write_text("1.0.48\n", encoding="utf-8")
-
-        # Initial commit
-        run_git(self.repo, "add", ".")
-        run_git(self.repo, "commit", "-qm", "initial commit")
-
-        # Setup ownership manifest
+        (tpl / "agents").mkdir(parents=True, exist_ok=True)
+        (tpl / "agents" / "VERSION").write_text("1.0.48\n", encoding="utf-8")
+        run_git(tpl, "add", ".")
+        run_git(tpl, "commit", "-qm", "initial commit")
         from lifecycle import SCHEMA_VERSION, ARCHITECTURE_MAJOR, OWNERSHIP_RELATIVE, EXCLUDE_BEGIN, EXCLUDE_END
         manifest = {
             "schema_version": SCHEMA_VERSION,
@@ -114,15 +112,20 @@ class PublicCliSelftest(unittest.TestCase):
             "entries": [],
         }
         manifest["ownership_sha256"] = canonical_sha256({k: v for k, v in manifest.items() if k != "ownership_sha256"})
-        atomic_write_json(self.repo / OWNERSHIP_RELATIVE, manifest)
-        answers_path = self.repo / ".harness-setup" / "answers.json"
+        atomic_write_json(tpl / OWNERSHIP_RELATIVE, manifest)
+        answers_path = tpl / ".harness-setup" / "answers.json"
         answers_path.parent.mkdir(parents=True, exist_ok=True)
         answers_path.write_text(json.dumps({"confirm_installation": True, "target_branch": "main"}), encoding="utf-8")
-
-        # Copy skills from kit if available
         kit_skills = KIT / "agents" / "skills"
         if kit_skills.is_dir():
-            shutil.copytree(kit_skills, self.repo / ".agents" / "skills", dirs_exist_ok=True)
+            shutil.copytree(kit_skills, tpl / ".agents" / "skills", dirs_exist_ok=True)
+        cls._TEMPLATE_REPO = tpl
+        return tpl
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory(prefix="public_cli_test_")
+        self.repo = Path(self.temp_dir.name).resolve()
+        shutil.copytree(PublicCliSelftest._ensure_template_repo(), self.repo, dirs_exist_ok=True)
 
         self.env = dict(os.environ)
         self.env["HARNESS_REPO"] = str(self.repo)

@@ -99,12 +99,44 @@ def is_delivery_relevant(relative: str) -> bool:
     return False
 
 
+_OBJECT_FORMAT_CACHE: dict[tuple[str, int], str] = {}
+_FILEMODE_CACHE: dict[tuple[str, int], bool] = {}
+
+
+def _git_config_mtime_ns(repo: Path) -> int:
+    try:
+        cfg = repo / ".git" / "config"
+        if cfg.is_file():
+            return cfg.stat().st_mtime_ns
+    except OSError:
+        pass
+    return -1
+
+
 def _object_format(repo: Path) -> str:
+    mtime = _git_config_mtime_ns(repo)
+    key = (str(repo.resolve()), mtime)
+    if mtime >= 0 and key in _OBJECT_FORMAT_CACHE:
+        return _OBJECT_FORMAT_CACHE[key]
     try:
         value = git_text(repo, "rev-parse", "--show-object-format")
     except HarnessError:
         return "sha1"
-    return value if value in ("sha1", "sha256") else "sha1"
+    fmt = value if value in ("sha1", "sha256") else "sha1"
+    if mtime >= 0:
+        _OBJECT_FORMAT_CACHE[key] = fmt
+    return fmt
+
+
+def _trust_executable_bit(repo: Path) -> bool:
+    mtime = _git_config_mtime_ns(repo)
+    key = (str(repo.resolve()), mtime)
+    if mtime >= 0 and key in _FILEMODE_CACHE:
+        return _FILEMODE_CACHE[key]
+    val = git_text(repo, "config", "--bool", "--default", "true", "--get", "core.filemode") != "false"
+    if mtime >= 0:
+        _FILEMODE_CACHE[key] = val
+    return val
 
 
 def _working_tree_oid(repo: Path, relative: str, path: Path, algorithm: str) -> str:
@@ -248,7 +280,7 @@ def _porcelain_changes(
                 git_mode = worktree_mode
             else:
                 if trust_executable_bit is None:
-                    trust_executable_bit = git_text(repo, "config", "--bool", "--default", "true", "--get", "core.filemode") != "false"
+                    trust_executable_bit = _trust_executable_bit(repo)
                 git_mode = _working_tree_mode(path, trust_executable_bit=trust_executable_bit)
             if worktree_mode != "000000" and worktree_mode != git_mode:
                 # Bind both staged intent and the actual tree used by gates.

@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.47] - 2026-10-26
+
+### Elephant-Goldfish Model (EGM) context & review enhancements, Android Studio commit compatibility, false-positive surface suppression, and parallel selftests
+
+- **EGM Intent Audit & Contract-Boundary Delta**: Add `--intent-audit "<requirement>"` to `task draft` and `task revise` (`agents/scripts/_workflow/planning.py`), compute deterministic Kotlin/Java public API signatures (`added_symbols`, `removed_symbols`, `modified_signatures`) as `contract_boundary_delta` in `agents/scripts/review_package.py` and `agents/scripts/phase_review.py`, and render `## Intent vs. Implementation Audit` and `## Contract-Boundary Delta` sections in `review-package.md` and `phase-review-package.md` (`ADR-019`).
+- **Focused Task Context & Reviewer-Relevance Ordering**: Extend `python .agents/harness.py task-context` (`agents/scripts/task_context.py`) with `--feature <name>` and `--diff` modes for bounded 1-hop context and git-diff symbol slices, validate `project-graph.json` and `task-context` artifact freshness in `agents/scripts/validate_project_context.py`, and order `review-package.md` changed-file sections by specialist reviewer relevance (`agents/scripts/review_package.py`, `agents/scripts/reviewer_brief.py`).
+- **Android Studio Commit Compatibility (`delivery_equivalence.py` & `change_decision.py`)**: Accept IDE `Optimize imports` removal of unused non-wildcard imports (`UNUSED_IMPORT_REMOVED`) and token-preserving Kotlin/Java `Reformat code` line wrapping in `agents/scripts/delivery_equivalence.py` so Android Studio pre-commit actions do not trigger `DELIVERY_STALE_AFTER_COMMIT`. Automatically narrow `task change-decision --file` in `agents/scripts/change_decision.py` to the actually changed or unlisted file subset when unchanged/already-planned files are passed alongside delta files.
+- **False-Positive `AUTH` Surface Suppression & Multi-Revision Phase Preservation**: Exclude generic multi-purpose data/profile/settings dependencies (`UserRepository`, `UserLocalDataSource`, `ProfileRepository`, `SettingsManager`, etc.) from 1-hop whole-file surface propagation in `agents/scripts/change_classifier.py` so ViewModels injecting `UserRepository` do not falsely inherit `AUTH` surface and trigger late `SURFACE_EXPANSION` or `security-privacy-reviewer` loops. Preserve completed phases across multiple `task revise` rounds in `agents/scripts/phase_review.py` and `agents/scripts/_workflow/planning.py`.
+- **Parallel Selftest Execution & Template Repo Caching**: Run independent selftest modules in parallel via `ThreadPoolExecutor` in `harness_cli.py` (with `--sequential` fallback and per-suite timing telemetry) and cache initialized fixture template repositories in `agents/scripts/_daily_workflow_selftest.py` and `agents/scripts/_vnext_selftest.py`, cutting full selftest and CI runtime by over 75%.
+
 ## [1.1.46] - 2026-10-26
 
 ### Integration corrections preserve completed phases (`ADR-018`), `task plan-note`, and structured English context notes (`--replace` / `--remove`)

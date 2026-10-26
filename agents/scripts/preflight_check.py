@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                 exported_ok, exported_msg = False, f"EXPORTED_COMPONENT_CHECK_ERROR: {exc}"
         sublog(f"[{'OK' if exported_ok else 'FAIL'}] {exported_msg}")
 
-    from _modules import check_kmp_expect_actual_pairs, has_kmp_common_main
+    from _modules import check_kmp_common_main_purity, check_kmp_expect_actual_pairs, has_kmp_common_main
     try:
         has_kmp_common = has_kmp_common_main(repo_target)
         kmp_detection_error = ""
@@ -252,8 +252,15 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValidationError(kmp_detection_error)
                 kmp_paths = task_change_paths if task_change_paths is not None else modified
                 expect_ok, expect_msg = check_kmp_expect_actual_pairs(repo_target, kmp_paths)
+                purity_ok, purity_violations = check_kmp_common_main_purity(repo_target, kmp_paths)
+                if not purity_ok:
+                    purity_msg = "KMP_COMMON_MAIN_PURITY_VIOLATION: " + "; ".join(purity_violations)
+                    expect_msg = f"{purity_msg} | {expect_msg}" if not expect_ok else purity_msg
+                    expect_ok = False
             except Exception as exc:
                 expect_ok, expect_msg = False, f"KMP_EXPECT_ACTUAL_CHECK_ERROR: {exc}"
+            if not expect_ok:
+                diagnostics["KMP expect/actual"] = expect_msg
             sublog(f"[{'OK' if expect_ok else 'FAIL'}] {expect_msg}")
 
     live_print("\n==================================================")

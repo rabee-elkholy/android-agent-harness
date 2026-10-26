@@ -141,8 +141,15 @@ def _record_locked(args):
         validate_id(source_run, "run id")
     previous = read_json(directory / f"manifest-{source_run}.json") if source_run else {}
     before = _file_identities(previous) if previous else {item["path"]: item for item in plan.get("base_file_identities") or []}
-    if args.mode != "extend-scope" and any(before.get(p) == identities.get(p) for p in files):
-        raise ValidationError("select only files changed since the frozen run; use extend-scope for planned support files")
+    if args.mode != "extend-scope":
+        changed_subset = [p for p in files if before.get(p) != identities.get(p)]
+        if not changed_subset:
+            raise ValidationError("select only files changed since the frozen run; use extend-scope for planned support files")
+        files = changed_subset
+    else:
+        unlisted_subset = [p for p in files if p not in set(plan.get("expected_files") or [])]
+        if unlisted_subset:
+            files = unlisted_subset
     proposed = {**plan, "expected_files": sorted(set(plan.get("expected_files") or []) | additional_files(plan) | set(files))}
     assert_disjoint_task_scope(repo, args.task_id, proposed)
     classification = classify(repo, task_changes=[{"path": p} for p in files], candidate_paths=files, progress=False)

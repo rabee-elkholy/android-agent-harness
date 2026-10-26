@@ -88,6 +88,8 @@ and pass in full; a bare path is not a valid Prompt. V1 fallback is unchanged. T
 retry actions never authorize redispatch; trusted completion and same-model
 inheritance remain governed by the existing host contract.
 
+Each generated lean brief applies role-scoped epistemic isolation: one completeness owner (`bug-reviewer-agent` or `regression-impact-reviewer-agent`) verifies every item of the `Approved Approach`, while specialist reviewers evaluate the diff under Goldfish epistemic independence (treating implementer prose and `FALSE_POSITIVE` finding validations as untrusted hypotheses to be re-verified against the code). `convention-reviewer-agent` also checks `reuse_candidates` to prevent duplicate utilities and speculative YAGNI abstractions. See [ADR-019](adr/019-egm-selective-integration.md).
+
 ## Gradle progress and daemon investigation
 
 The Gradle runner uses one quiet-output heartbeat, owned by `run_streaming`; its

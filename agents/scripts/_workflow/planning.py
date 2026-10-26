@@ -7,6 +7,92 @@ from typing import Any
 
 from . import engine as _engine
 
+_REUSE_ROLE_SUFFIXES = (
+    "Helper", "Manager", "Util", "Utils", "Impl", "Wrapper", "Service", "Handler", "Coordinator",
+)
+
+
+def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[dict[str, Any]]:
+    """Query the project graph for existing symbols overlapping newly planned code files."""
+    code_suffixes = {".kt", ".java", ".swift"}
+    new_code_files: list[str] = []
+    for rel in expected_files or []:
+        rel_norm = str(rel).replace("\\", "/").strip("/")
+        if not rel_norm or _engine.Path(rel_norm).suffix.lower() not in code_suffixes:
+            continue
+        if not (repo / rel_norm).exists():
+            new_code_files.append(rel_norm)
+    if not new_code_files:
+        return []
+    try:
+        from _graph_core import GraphEngine
+        g_engine = GraphEngine(repo)
+        if not g_engine.ensure_loaded():
+            return []
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for rel_norm in new_code_files[:10]:
+            stem = _engine.Path(rel_norm).stem
+            queries = [stem]
+            for suffix in _REUSE_ROLE_SUFFIXES:
+                if stem.endswith(suffix) and len(stem) - len(suffix) >= 4:
+                    queries.append(stem[: -len(suffix)])
+            for q in queries:
+                if len(q) < 4:
+                    continue
+                res = g_engine.find_symbol(q, limit=4)
+                for match in res.get("matches") or []:
+                    existing_file = str(match.get("file_path") or "").replace("\\", "/").strip("/")
+                    sym_name = str(match.get("name") or "")
+                    sym_kind = str(match.get("kind") or "symbol")
+                    if not existing_file or existing_file == rel_norm or not sym_name:
+                        continue
+                    key = (rel_norm, sym_name, existing_file)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    candidates.append({
+                        "planned_file": rel_norm,
+                        "symbol": sym_name,
+                        "existing_file": existing_file,
+                        "kind": sym_kind,
+                    })
+                    if len(candidates) >= 8:
+                        return candidates
+        return candidates
+    except Exception:
+        return []
+
+
+def _evaluate_plan_readiness(plan: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+    """Compute advisory architecture & specification readiness diagnostics for a plan."""
+    risk_tier = str((policy or {}).get("risk_tier") or "T1_LOW")
+    is_high_risk = risk_tier in {"T3_HIGH", "T4_SENSITIVE", "T5_CRITICAL"}
+    has_approach = bool(str(plan.get("approach") or "").strip())
+    has_risks = bool(plan.get("risks"))
+    has_discovery_provenance = bool(plan.get("discovery_provenance") or plan.get("task_context_id"))
+    has_verification_contract = bool(plan.get("verification_contract"))
+    reuse_count = len(plan.get("reuse_candidates") or [])
+    advisories: list[str] = []
+    if is_high_risk and not has_approach:
+        advisories.append("High-risk task is missing an explicit implementation approach (--approach).")
+    if is_high_risk and not has_risks:
+        advisories.append("High-risk task has no documented failure modes or risks (--risks).")
+    if reuse_count > 0:
+        advisories.append(
+            f"Plan introduces new file(s) overlapping {reuse_count} existing symbol(s); verify reuse vs. duplication."
+        )
+    return {
+        "status": "ADVISORY_GAPS" if advisories else "READY",
+        "risk_tier": risk_tier,
+        "has_approach": has_approach,
+        "has_risks": has_risks,
+        "has_discovery_provenance": has_discovery_provenance,
+        "has_verification_contract": has_verification_contract,
+        "reuse_candidates_count": reuse_count,
+        "advisories": advisories,
+    }
+
 
 def _build_and_save_plan(
     repo: Path,
@@ -273,6 +359,10 @@ def _build_and_save_plan(
         elif task_context_id:
             plan["task_context_id"] = task_context_id
         plan["developer_instructions"] = _engine._applicable_developer_instructions_for_task(repo, cached_ctx, inferred_target_scope, arch_intent)
+        reuse_cands = _discover_reuse_candidates(repo, norm_expected_files)
+        if reuse_cands:
+            plan["reuse_candidates"] = reuse_cands
+        plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy)
         # Reject non-material revisions before touching phase progress or baselines.
         if (old_plan or {}).get("approval") and _engine._same_plan(old_plan, plan):
             return old_plan
@@ -306,13 +396,15 @@ def _build_and_save_plan(
             from phase_review import phase_path_states, validate_completed_phase_review_proof
             # Once every phase completed, final integration gates own later
             # corrections. Keep historical proof; never re-label it as live PASS.
-            historical = bool(old_phases) and old_phases == parsed_phases and all(
-                phase["id"] in (old_state.get("completed_phases") or []) for phase in old_phases
+            historical = (
+                bool(old_phases)
+                and [phase.get("id") for phase in old_phases] == [phase.get("id") for phase in parsed_phases]
+                and all(phase["id"] in (old_state.get("completed_phases") or []) for phase in old_phases)
             )
 
             for old_phase, new_phase in zip(old_phases, parsed_phases):
                 phase_id = new_phase["id"]
-                if old_phase != new_phase or phase_id not in (old_state.get("completed_phases") or []):
+                if (not historical and old_phase != new_phase) or phase_id not in (old_state.get("completed_phases") or []):
                     break
                 checkpoint_file = directory / "phases" / phase_id / "checkpoint.json"
                 try:
@@ -424,6 +516,11 @@ def _build_and_save_plan(
             "graph_fingerprint": str(disc_receipt.get("graph_fingerprint") or ""),
             "primary_target": str((disc_receipt.get("query") or {}).get("value") or ""),
         }
+
+    reuse_cands = _discover_reuse_candidates(repo, norm_expected_files)
+    if reuse_cands:
+        plan["reuse_candidates"] = reuse_cands
+    plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy)
 
     _engine.assert_disjoint_task_scope(repo, task_id, plan, exclude_task_ids=scope_exclusions)
     _engine.save_plan(directory / "plan.json", plan)

@@ -132,6 +132,20 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     ]
     files = plan.get("expected_files") or []
     lines += [f"- {_file_link(repo, item)}" for item in files] or ["- not stated"]
+    reuse_cands = [c for c in (plan.get("reuse_candidates") or []) if isinstance(c, dict)]
+    if reuse_cands:
+        lines += ["", "## Existing codebase reuse candidates", ""]
+        for cand in reuse_cands[:8]:
+            existing_rel = str(cand.get("existing_file") or "")
+            link = _file_link(repo, existing_rel) if existing_rel else "unknown"
+            lines.append(
+                f"- Planned `{cand.get('planned_file', '')}` overlaps existing `{cand.get('symbol', '')}` in {link} ({cand.get('kind', 'symbol')})"
+            )
+    readiness = plan.get("readiness_assessment") or {}
+    if isinstance(readiness, dict) and readiness.get("advisories"):
+        lines += ["", "## Architecture & spec readiness advisories", ""]
+        for adv in readiness.get("advisories") or []:
+            lines.append(f"- {redact(adv)}")
     phases = plan.get("phases") or []
     if phases:
         lines += ["", "## Phases", ""]

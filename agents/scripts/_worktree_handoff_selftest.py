@@ -85,23 +85,34 @@ def setup_ownership(repo: Path) -> None:
 
 
 class WorktreeHandoffSelftest(unittest.TestCase):
+    _TEMPLATE_REPO: Path | None = None
+
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="handoff_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        run_git(tpl, "init", "-q")
+        run_git(tpl, "config", "user.name", "Handoff Test")
+        run_git(tpl, "config", "user.email", "handoff@example.invalid")
+        setup_ownership(tpl)
+        write_file(tpl / ".gitignore", ".agents/\n")
+        write_file(tpl / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
+        write_file(tpl / "app" / "build.gradle.kts", "plugins { kotlin('jvm') }\n")
+        write_file(tpl / "README.md", "# Base Repo\n")
+        write_file(tpl / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\nclass App\n")
+        run_git(tpl, "add", "-A")
+        run_git(tpl, "commit", "-m", "chore: initial commit")
+        run_git(tpl, "checkout", "-B", "main")
+        cls._TEMPLATE_REPO = tpl
+        return tpl
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="handoff_test_")
         self.repo = Path(self.temp.name).resolve()
-        run_git(self.repo, "init", "-q")
-        run_git(self.repo, "config", "user.name", "Handoff Test")
-        run_git(self.repo, "config", "user.email", "handoff@example.invalid")
-        setup_ownership(self.repo)
-
-        # Initial commit
-        write_file(self.repo / ".gitignore", ".agents/\n")
-        write_file(self.repo / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
-        write_file(self.repo / "app" / "build.gradle.kts", "plugins { kotlin('jvm') }\n")
-        write_file(self.repo / "README.md", "# Base Repo\n")
-        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\nclass App\n")
-        run_git(self.repo, "add", "-A")
-        run_git(self.repo, "commit", "-m", "chore: initial commit")
-        run_git(self.repo, "checkout", "-B", "main")
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
 
     def tearDown(self) -> None:
         try:

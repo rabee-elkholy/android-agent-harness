@@ -5,7 +5,7 @@
 | Dimension | Supported shape | Behavior outside the boundary |
 |---|---|---|
 | Build | Gradle Wrapper; Kotlin/Groovy DSL | Non-Gradle Android builds are refused |
-| Code | Kotlin, Java, mixed, Compose, XML, hybrid | Unknown material surfaces require a developer decision |
+| Code | Kotlin, Java, mixed, Compose, XML, hybrid, KMP (`commonMain`/`androidMain`/`iosMain`), iOS Swift (`.swift` graph & task-context) | Unknown material surfaces require a developer decision |
 | Modules | Application, library-only, multi-module, dynamic feature, Android/KMP target | Library-only projects disable APK/device gates |
 | Variants | Default debug, discovered flavor, or exact combined variant entered during setup | Missing/ambiguous variant is a setup blocker |
 | Architecture | Existing project architecture, DI, persistence, and conventions | The harness does not convert architecture implicitly |

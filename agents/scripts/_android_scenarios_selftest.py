@@ -68,21 +68,25 @@ def _write_file(path: Path, content: str) -> None:
 
 
 class AndroidScenariosSelftest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = tempfile.TemporaryDirectory()
-        self.repo = Path(self.temp_dir.name).resolve()
-        _run_git(self.repo, "init", "-q")
-        _run_git(self.repo, "config", "user.name", "Scenario Test")
-        _run_git(self.repo, "config", "user.email", "scenario@example.invalid")
-        _run_git(self.repo, "config", "core.autocrlf", "true")
+    _TEMPLATE_REPO: Path | None = None
 
-        # Basic Android fixture structure
-        _write_file(self.repo / "gradlew", "#!/bin/sh\nexit 0\n")
-        os.chmod(self.repo / "gradlew", 0o755)
-        _write_file(self.repo / "settings.gradle.kts", 'rootProject.name = "ScenarioApp"\ninclude(":app")\n')
-        _write_file(self.repo / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="scenario_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        _run_git(tpl, "init", "-q")
+        _run_git(tpl, "config", "user.name", "Scenario Test")
+        _run_git(tpl, "config", "user.email", "scenario@example.invalid")
+        _run_git(tpl, "config", "core.autocrlf", "true")
+        _write_file(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
+        os.chmod(tpl / "gradlew", 0o755)
+        _write_file(tpl / "settings.gradle.kts", 'rootProject.name = "ScenarioApp"\ninclude(":app")\n')
+        _write_file(tpl / "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
         _write_file(
-            self.repo / "app/src/main/AndroidManifest.xml",
+            tpl / "app/src/main/AndroidManifest.xml",
             '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n'
             '    <application android:label="ScenarioApp">\n'
             '        <activity android:name=".MainActivity" android:exported="true">\n'
@@ -95,14 +99,20 @@ class AndroidScenariosSelftest(unittest.TestCase):
             '</manifest>\n',
         )
         _write_file(
-            self.repo / "app/src/main/kotlin/com/example/MainActivity.kt",
+            tpl / "app/src/main/kotlin/com/example/MainActivity.kt",
             "package com.example\n\nclass MainActivity\n",
         )
-        _run_git(self.repo, "add", ".")
-        _run_git(self.repo, "commit", "-qm", "initial commit")
+        _run_git(tpl, "add", ".")
+        _run_git(tpl, "commit", "-qm", "initial commit")
+        (tpl / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+        cls._TEMPLATE_REPO = tpl
+        return tpl
 
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name).resolve()
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
         self.skills_root = KIT / "agents" / "skills"
-        (self.repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()

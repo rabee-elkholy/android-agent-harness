@@ -335,7 +335,7 @@ def phase_review_freshness(
     plan_f = tdir / "plan.json"
     if plan_f.is_file():
         plan = read_json(plan_f)
-        if run_meta.get("plan_sha256") and plan.get("plan_sha256") != run_meta.get("plan_sha256"):
+        if not reviewed_paths_only and run_meta.get("plan_sha256") and plan.get("plan_sha256") != run_meta.get("plan_sha256"):
             return False, "task plan modified since phase review package creation"
 
     try:
@@ -732,6 +732,7 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             f"- **Phase**: {target_phase.get('name', phase_id)}",
             f"- **Description**: {target_phase.get('description', '')}",
             f"- **Focus**: {r_info['focus']}",
+            "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
             "",
             "## 2. Review Package Reference",
             f"`{package_path}`",

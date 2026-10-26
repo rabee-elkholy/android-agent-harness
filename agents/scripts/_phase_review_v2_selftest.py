@@ -101,22 +101,34 @@ def setup_ownership(repo: Path) -> None:
 
 
 class PhaseReviewV2Selftest(unittest.TestCase):
+    _TEMPLATE_REPO: Path | None = None
+
+    @classmethod
+    def _ensure_template_repo(cls) -> Path:
+        if cls._TEMPLATE_REPO is not None and cls._TEMPLATE_REPO.is_dir():
+            return cls._TEMPLATE_REPO
+        import atexit
+        tpl = Path(tempfile.mkdtemp(prefix="phase_v2_tpl_")).resolve()
+        atexit.register(shutil.rmtree, tpl, True)
+        run_git(tpl, "init", "-q")
+        run_git(tpl, "config", "user.name", "Phase Test")
+        run_git(tpl, "config", "user.email", "phase@example.invalid")
+        run_git(tpl, "config", "core.autocrlf", "true")
+        setup_ownership(tpl)
+        write_file(tpl / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
+        write_file(tpl / "app" / "build.gradle.kts", "plugins { kotlin('jvm') }\n")
+        write_file(tpl / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\nclass App\n")
+        run_git(tpl, "add", "-A")
+        run_git(tpl, "commit", "-m", "chore: baseline commit", "-q")
+        cls._TEMPLATE_REPO = tpl
+        return tpl
+
     def setUp(self) -> None:
         if phase_review is None:
             self.fail("phase_review module not yet implemented")
         self.temp = tempfile.TemporaryDirectory(prefix="phase_v2_test_")
         self.repo = Path(self.temp.name).resolve()
-        run_git(self.repo, "init", "-q")
-        run_git(self.repo, "config", "user.name", "Phase Test")
-        run_git(self.repo, "config", "user.email", "phase@example.invalid")
-        run_git(self.repo, "config", "core.autocrlf", "true")
-
-        setup_ownership(self.repo)
-        write_file(self.repo / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
-        write_file(self.repo / "app" / "build.gradle.kts", "plugins { kotlin('jvm') }\n")
-        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "App.kt", "package com.example\nclass App\n")
-        run_git(self.repo, "add", "-A")
-        run_git(self.repo, "commit", "-m", "chore: baseline commit", "-q")
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
         from review_models import set_policy
         set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=None,
                    host="antigravity", source="conversation", proof_reference="Use chat model for phase lifecycle fixtures")
@@ -1127,6 +1139,17 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual(["p1"], phase_state["completed_phases"])
         self.assertEqual("p2", phase_state["current_phase_id"])
         self.assertEqual(1, read_json(task_dir(self.repo, task_id) / "plan.json")["active_phase_index"])
+        # A second revision (after plan_sha256 already changed once) must also keep p1 complete.
+        revised2 = subprocess.run(
+            [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id,
+             "--expected-files", "app/src/main/java/com/example/Auth.kt,app/src/main/java/com/example/UI.kt,"
+             "app/src/main/res/values/strings.xml,app/src/main/res/values/colors.xml"],
+            cwd=self.repo, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, revised2.returncode, revised2.stderr)
+        phase_state2 = read_json(task_dir(self.repo, task_id) / "phase-state.json")
+        self.assertEqual(["p1"], phase_state2["completed_phases"])
+        self.assertEqual("p2", phase_state2["current_phase_id"])
 
     def _revise_files(self, task_id: str, files: str) -> None:
         public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
