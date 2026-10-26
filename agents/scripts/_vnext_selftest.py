@@ -80,6 +80,8 @@ class RepoCase(unittest.TestCase):
         run_git(tpl, "config", "user.name", "Harness Test")
         run_git(tpl, "config", "user.email", "harness@example.invalid")
         run_git(tpl, "config", "core.autocrlf", "true")
+        run_git(tpl, "config", "maintenance.auto", "false")
+        run_git(tpl, "config", "gc.auto", "0")
         write(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
         os.chmod(tpl / "gradlew", 0o755)
         write(tpl / "settings.gradle.kts", 'rootProject.name = "Fixture"\ninclude(":app")\n')
@@ -93,7 +95,12 @@ class RepoCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp.name)
-        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(
+            self._ensure_template_repo(),
+            self.repo,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.lock"),
+        )
 
     def tearDown(self) -> None:
         self.temp.cleanup()

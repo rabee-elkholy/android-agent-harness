@@ -177,6 +177,8 @@ class DailyWorkflowSelftest(unittest.TestCase):
         run_git(tpl, "config", "user.name", "Daily Test")
         run_git(tpl, "config", "user.email", "daily@example.invalid")
         run_git(tpl, "config", "core.autocrlf", "true")
+        run_git(tpl, "config", "maintenance.auto", "false")
+        run_git(tpl, "config", "gc.auto", "0")
         (tpl / ".agents" / "state").mkdir(parents=True, exist_ok=True)
         write_file(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
         try:
@@ -201,7 +203,12 @@ class DailyWorkflowSelftest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="daily_wf_test_")
         self.repo = Path(self.temp.name).resolve()
-        shutil.copytree(DailyWorkflowSelftest._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(
+            DailyWorkflowSelftest._ensure_template_repo(),
+            self.repo,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("*.lock"),
+        )
 
         self.env = os.environ.copy()
         self.env["HARNESS_REPO"] = str(self.repo)
