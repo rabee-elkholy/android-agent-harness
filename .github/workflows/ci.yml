@@ -31,6 +31,7 @@ jobs:
       - name: Run canonical full selftest
         env:
           HARNESS_SELFTEST_TMP: /dev/shm/harness-selftest
+          HARNESS_SELFTEST_JOBS: '8'
         run: python harness_cli.py selftest
 
       - name: Compile Python sources
@@ -92,6 +93,8 @@ jobs:
           echo "HARNESS_SELFTEST_TMP=/dev/shm/harness-selftest" >> "$GITHUB_ENV"
 
       - name: Run quick compatibility selftest
+        env:
+          HARNESS_SELFTEST_JOBS: '6'
         run: python harness_cli.py selftest --quick
 
       - name: Compile Python sources

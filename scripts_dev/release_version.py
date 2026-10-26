@@ -275,7 +275,7 @@ def wait_for_workflow(
             print(f"[FAIL] Timed out waiting for {workflow} on {sha}.")
             return False
         print(f"[WAIT] {workflow} for {sha[:12]} is pending.", flush=True)
-        time.sleep(min(15, max(0, deadline - time.monotonic())))
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
 def verify_packaging() -> bool:
