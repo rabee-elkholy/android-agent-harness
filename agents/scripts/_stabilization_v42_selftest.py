@@ -350,6 +350,51 @@ class RedAuthorityV42Tests(unittest.TestCase):
         self.assertEqual("FAIL", red_chk["status"])
         self.assertIn("missing executable RED test failure evidence", red_chk["detail"])
 
+    def test_RED42_006_co_authored_regression_test_satisfies_bug_verification(self) -> None:
+        """RED42-006: Co-authored regression test in task scope executed in passing unit_tests satisfies BUG verification."""
+        task_id = "TASK-RED-006"
+        draft(argparse.Namespace(
+            repo=str(self.tmp),
+            task_id=task_id,
+            outcome="Fix defect 6 with regression test",
+            kind="BUG",
+            expected_surfaces="BUSINESS_LOGIC,TEST_ONLY",
+            expected_modules=":",
+            expected_files="app/src/main/kotlin/com/example/Fix.kt,app/src/test/kotlin/com/example/FixTest.kt",
+            test_strategy="unit tests",
+            device_strategy="none",
+            risks="",
+            rollback="",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(repo=str(self.tmp), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
+        begin_task(argparse.Namespace(repo=str(self.tmp), task_id=task_id))
+
+        (self.tmp / "app" / "src" / "main" / "kotlin" / "com" / "example" / "Fix.kt").write_text("package com.example\nclass Fix\n", encoding="utf-8")
+        test_file = self.tmp / "app" / "src" / "test" / "kotlin" / "com" / "example" / "FixTest.kt"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("package com.example\nclass FixTest\n", encoding="utf-8")
+        prep = prepare_verification(argparse.Namespace(repo=str(self.tmp), task_id=task_id))
+
+        store = EvidenceStore(state_root(self.tmp))
+        v_str = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
+        store.write(
+            snapshot=prep["delivery_snapshot_sha256"],
+            run_id=prep["run_id"],
+            name="unit_tests",
+            producer="run_tests_gate",
+            harness_version=v_str,
+            change_set=prep["change_set_sha256"],
+            status="PASS",
+            evidence={"executed": 1, "failed": 0, "new_regressions": [], "executed_tests": ["com.example.FixTest#verifiesFix"]},
+        )
+        res = verify_task(self.tmp, task_id)
+        red_chk = next((c for c in res["checks"] if c["name"] == "red_evidence"), None)
+        self.assertIsNotNone(red_chk)
+        self.assertEqual("PASS", red_chk["status"])
+        self.assertIn("co-authored regression unit test", red_chk["detail"])
+
 
 class ReviewerProofV42Tests(unittest.TestCase):
     def setUp(self) -> None:

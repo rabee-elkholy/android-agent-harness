@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.48] - 2026-10-27
+
+### Co-authored regression test verification for `BUG` tasks, outcome-acknowledged skill alignment, and later-round policy determinism
+
+- **Prevent Retroactive `CAPTURE_RED_EVIDENCE` Edit/Revert Loops & Accept Co-Authored Regression Tests**: Suppress retroactive `CAPTURE_RED_EVIDENCE` router prompts once production code changes have already been written in `IMPLEMENTING` (`agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/router.py`), and accept a co-authored regression unit test modified/added in the task change-set and executed in a passing `unit_tests` gate run as valid defect verification evidence in `agents/scripts/final_verifier.py` and `agents/scripts/_workflow/verification.py`.
+- **Outcome-Acknowledged Mandatory Skill Alignment**: Align `unplanned_mandatory_skills` (`agents/scripts/final_verifier.py`) with `OUTCOME_SURFACE_KEYWORDS` (`plan_authority.py`) so surfaces explicitly acknowledged by the approved task outcome (such as `Login` -> `AUTH` or `payment` -> `BILLING`) do not trigger false-positive `PLAN_APPROVAL_REQUIRED: material drift detected: skill:android-security-billing` blocks at `prepare-verification`.
+- **Later-Round Policy Artifact Determinism (`decide_later_round`)**: Ensure `review_scope` and `followup_basis` in `decide_later_round` (`agents/scripts/review_policy.py`) and `prepare_verification` (`agents/scripts/_workflow/engine.py`) match `validate_policy_artifact` when `current_change_set == source_change_set` (no code changes between review rounds), eliminating `policy artifact does not match deterministic policy evaluation` during `device install-start` and `workflow.py complete`.
+
 ## [1.1.47] - 2026-10-26
 
 ### Elephant-Goldfish Model (EGM) context & review enhancements, Android Studio commit compatibility, false-positive surface suppression, and parallel selftests

@@ -63,6 +63,35 @@ def alternate_reproduction_recorded(task_directory: Path) -> bool:
     return any(str((e or {}).get("kind") or "").lower() in ALTERNATE_REPRODUCTION_KINDS for e in entries if isinstance(e, dict))
 
 
+def co_authored_regression_test_verified(recorded_manifest: dict, store: EvidenceStore, snapshot: str, change_set: str, run_id: str, harness_version: str) -> bool:
+    """True when a BUG task modified/added a test file alongside the fix and executed it in a passing unit_tests run."""
+    from _modules import is_kmp_or_android_test_path
+
+    raw_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else recorded_manifest.get("changes")
+    test_paths = []
+    for item in raw_changes or []:
+        path = str((item or {}).get("path") if isinstance(item, dict) else item or "").replace("\\", "/")
+        if path and is_kmp_or_android_test_path(path):
+            test_paths.append(path)
+    if not test_paths:
+        return False
+    unit_test_rec, ut_err = _validate_artifact(store, snapshot, change_set, run_id, "unit_tests", harness_version)
+    if not unit_test_rec or ut_err is not None or str(unit_test_rec.get("status") or "").upper() != "PASS":
+        return False
+    ut_ev = unit_test_rec.get("evidence") or {}
+    if ut_ev.get("new_regressions"):
+        return False
+    executed_tests = ut_ev.get("executed_tests")
+    if not isinstance(executed_tests, list) or not executed_tests:
+        return False
+    stems = {Path(p).stem for p in test_paths if Path(p).stem}
+    for executed in executed_tests:
+        clean = str(executed or "").replace("#", ".").strip()
+        if any(stem == clean or f".{stem}." in f".{clean}." or clean.startswith(f"{stem}.") for stem in stems):
+            return True
+    return False
+
+
 def red_plan_hashes(task_directory: Path, plan: dict, plan_hash: str) -> set[str]:
     """Plan hashes a RED reproduction may be bound to: the current plan and every approved plan it revised.
 
@@ -479,10 +508,19 @@ def review_override_errors(policy: dict, evidence: dict) -> list[str]:
 
 def unplanned_mandatory_skills(plan: dict, policy: dict) -> list[str]:
     """Skills the verification policy makes mandatory that the approved plan did not name."""
+    from plan_authority import OUTCOME_SURFACE_KEYWORDS
+    from skill_router import ROUTES
+
     planned_skills = {(item.get("id"), item.get("sha256")) for item in plan.get("skills") or []}
     planned_ids = {item.get("id") for item in plan.get("skills") or []}
     selected_skills = {(item.get("id"), item.get("sha256")) for item in (policy.get("skills") or {}).get("skills") or []}
     benign_skills = {"android-harness", "test-driven-development", "kotlin-coroutines-expert"}
+    outcome = str(plan.get("requested_outcome") or plan.get("outcome") or "").lower()
+    if outcome:
+        policy_surfaces = set(policy.get("surfaces") or [])
+        for surface, keywords in OUTCOME_SURFACE_KEYWORDS.items():
+            if surface in policy_surfaces and any(kw in outcome for kw in keywords):
+                benign_skills.update(ROUTES.get(surface, ()))
     missing_skills = set()
     for skill_id, sha in selected_skills:
         if (skill_id, sha) in planned_skills:
@@ -790,6 +828,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "bound RED reproduction evidence present and resolved for BUG task"})
         elif not bug_requires_executable_red(plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction):
             checks.append({"name": "red_evidence", "status": "PASS", "detail": "executable test-bound RED reproduction exempted (non-code surface or alternate reproduction declared)"})
+        elif co_authored_regression_test_verified(recorded_manifest, store, snapshot, change_set, run_id, harness_version):
+            checks.append({"name": "red_evidence", "status": "PASS", "detail": "co-authored regression unit test modified in task scope and verified PASS in unit_tests gate"})
         else:
             err_msg = "missing executable RED test failure evidence: applicable BUG task requires bound RED reproduction/failing-test evidence before fix"
             checks.append({"name": "red_evidence", "status": "FAIL", "detail": err_msg})

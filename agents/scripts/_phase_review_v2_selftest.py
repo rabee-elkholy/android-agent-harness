@@ -1265,6 +1265,30 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         except ValidationError as exc:
             self.assertNotIn("skill:", str(exc))
 
+    def test_N12b_outcome_acknowledged_surface_does_not_trigger_skill_drift(self) -> None:
+        """When requested_outcome explicitly names an OUTCOME_SURFACE_KEYWORDS term (e.g. 'Login' -> AUTH),
+        check_material_drift allows AUTH, and unplanned_mandatory_skills must also allow its routed skill."""
+        from final_verifier import unplanned_mandatory_skills
+        plan = {
+            "requested_outcome": "Sync diet preferences across Login and SyncData",
+            "skills": [{"id": "android-harness", "sha256": "abc"}],
+        }
+        policy = {
+            "surfaces": ["BUSINESS_LOGIC", "AUTH"],
+            "skills": {
+                "skills": [
+                    {"id": "android-harness", "sha256": "abc"},
+                    {"id": "android-security-billing", "sha256": "def"},
+                ]
+            },
+        }
+        self.assertEqual([], unplanned_mandatory_skills(plan, policy))
+        plan_unrelated = {
+            "requested_outcome": "Show diet preferences on home screen",
+            "skills": [{"id": "android-harness", "sha256": "abc"}],
+        }
+        self.assertEqual(["android-security-billing"], unplanned_mandatory_skills(plan_unrelated, policy))
+
     def test_N2_phase_files_become_the_plan_scope(self) -> None:
         # Certification N2 (T8): a draft with --phases and no --expected-files took the task
         # context's single target file as the whole plan scope, so the write guard denied the

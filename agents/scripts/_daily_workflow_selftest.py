@@ -3715,6 +3715,11 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
         self.assertNotIn("before_first_edit", act, "after the first edit nothing can be recorded as older")
+        # Once production code has already been edited, the router must not demand CAPTURE_RED_EVIDENCE
+        # retroactively (which caused models to revert their own production edits in a loop).
+        write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\nclass MainActivity { val fixed = true }\n")
+        act_after_prod = resolve_next_action(self.repo, task_id, plan)
+        self.assertNotEqual("CAPTURE_RED_EVIDENCE", act_after_prod["code"])
 
     def test_ROUTE_CMD_011d_red_captured_before_a_revision_still_binds(self) -> None:
         """Real app: RED captured under the approved plan, then a re-approved revision added the missing half;

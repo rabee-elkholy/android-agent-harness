@@ -1171,6 +1171,26 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             plan=plan,
             fix_delta=_fix_delta(repo, args.task_id, str(previous_current["run_id"]), manifest, plan),
         )
+        # Recompute later-round policy when fix_delta is omitted in the persisted artifact
+        # (for example when current_change_set == source_change_set) so the persisted policy
+        # is 100% identical to validate_policy_artifact's deterministic re-evaluation.
+        if policy.get("fix_delta") is None:
+            policy = decide_later_round(
+                classification,
+                skills_root(repo),
+                previous_policy=previous_policy,
+                finding_owners=finding_owners,
+                passed_reviewers=passed_reviewers,
+                source_snapshot=str(previous_current["delivery_snapshot_sha256"]),
+                source_change_set=str(previous_current["change_set_sha256"]),
+                source_run_id=str(previous_current["run_id"]),
+                round_number=completed_rounds + 1,
+                project_kind=project_kind(repo),
+                task_kind=str(plan.get("task_kind") or "FEATURE"),
+                current_change_set=str(manifest["change_set_sha256"]),
+                plan=plan,
+                fix_delta=None,
+            )
     else:
         policy = decide(classification, skills_root(repo), project_kind=project_kind(repo), task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan)
     calls_used = int(plan.get("review_calls_used") or 0)
@@ -3210,6 +3230,22 @@ def _task_has_changes(repo: Path, task_id: str, plan: dict) -> bool:
     except Exception:
         return True
     return bool(manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes"))
+
+
+def _task_has_production_changes(repo: Path, task_id: str, plan: dict) -> bool:
+    """True when the task has already modified production source code (.kt/.java outside tests)."""
+    try:
+        from mutation_guard import _is_production_code
+
+        manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"))
+        changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes")
+        for item in changes or []:
+            path = str((item or {}).get("path") if isinstance(item, dict) else item or "").replace("\\", "/")
+            if path and _is_production_code(path):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _task_was_approved_before(repo: Path, task_id: str) -> bool:

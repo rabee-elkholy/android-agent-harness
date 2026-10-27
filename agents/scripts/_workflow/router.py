@@ -160,8 +160,12 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             }
     from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
     red_evidence_file = tdir / "red-evidence.json"
-    if not red_evidence_file.is_file() and bug_requires_executable_red(
-        plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(tdir),
+    if (
+        not red_evidence_file.is_file()
+        and bug_requires_executable_red(
+            plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(tdir),
+        )
+        and not _engine._task_has_production_changes(repo, task_id, plan)
     ):
         capture = {
             "code": "CAPTURE_RED_EVIDENCE",

@@ -764,6 +764,9 @@ def completion_action(context: VerificationContext) -> dict | None:
     current_run = context.current_run
     run_id = context.run_id
     policy = context.policy
+    manifest = context.manifest
+    snapshot = context.snapshot
+    change_set = context.change_set
     store = context.store
     sensitive_touched = context.sensitive_touched
     sensitive_pending = context.sensitive_pending
@@ -783,11 +786,21 @@ def completion_action(context: VerificationContext) -> dict | None:
             "expected": {"success_statuses": ["PASS"]},
         }
 
-    # 8. A BUG task that skipped CAPTURE_RED cannot complete; the final verifier applies this rule.
-    from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
+    # 8. A BUG task that skipped CAPTURE_RED cannot complete unless a co-authored regression test passed.
+    from final_verifier import (
+        alternate_reproduction_recorded,
+        bug_requires_executable_red,
+        co_authored_regression_test_verified,
+    )
     red_dir = _engine.task_dir(repo, task_id)
-    if not (red_dir / "red-evidence.json").is_file() and bug_requires_executable_red(
-        plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(red_dir),
+    if (
+        not (red_dir / "red-evidence.json").is_file()
+        and bug_requires_executable_red(
+            plan, policy.get("surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(red_dir),
+        )
+        and not co_authored_regression_test_verified(
+            manifest, store, snapshot, change_set, run_id, str(current_run.get("harness_version") or "1.0.0")
+        )
     ):
         return {
             "code": "RED_EVIDENCE_MISSING",

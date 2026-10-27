@@ -470,6 +470,7 @@ def decide_later_round(
     # invalidates prior required reviewer PASS coverage.
     prod_surfaces = set(result.get("surfaces") or []) - {"TEST_ONLY", "DOCS"}
     current_cs = current_change_set or classification.get("change_set_sha256")
+    effective_fix_delta = fix_delta if (current_cs and current_cs != source_change_set and (prod_surfaces or fix_delta is not None)) else None
     if current_cs and current_cs != source_change_set and (prod_surfaces or fix_delta is not None):
         if fix_delta is None:
             carried = []
@@ -530,10 +531,10 @@ def decide_later_round(
                      ({"FINDING_OWNER"} if name in owners else set())) for name in sorted(rerun)
     }
     result["explanation"]["carried_reviewers"] = sorted(by_reviewer)
-    result["explanation"]["review_scope"] = "FOLLOWUP_DELTA" if fix_delta is not None else "CONSERVATIVE_FALLBACK"
+    result["explanation"]["review_scope"] = "FOLLOWUP_DELTA" if effective_fix_delta is not None else "CONSERVATIVE_FALLBACK"
     result["explanation"]["followup_basis"] = (
         "Rerun directly affected specialists, unresolved finding owners and uncovered responsibilities; retain bound unaffected PASS coverage."
-        if fix_delta is not None else
+        if effective_fix_delta is not None else
         "A trustworthy fix delta is unavailable; previous coverage cannot be narrowed safely."
     )
     if fix_delta and fix_delta.get("developer_accepted_files"):
