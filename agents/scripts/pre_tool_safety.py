@@ -42,6 +42,7 @@ COMMON_REASONING_KEYS = {
 
 MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
+AUDIT_ROTATE_BYTES = 1024 * 1024
 WRITE_TOOLS = {
     "write_to_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit",
     "create_file", "delete_file", "move_file", "rename_file",
@@ -304,20 +305,20 @@ def _audit(
             record["task_id"] = task_id
         if mcp_fingerprint:
             record["mcp_fingerprint"] = mcp_fingerprint
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True) + "\n")
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if len(lines) > AUDIT_MAX_RECORDS:
-            fd, temp_name = tempfile.mkstemp(prefix=".audit-", suffix=".tmp", dir=str(path.parent))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write("\n".join(lines[-AUDIT_MAX_RECORDS:]) + "\n")
-                os.replace(temp_name, path)
-            except Exception:
-                try:
-                    os.unlink(temp_name)
-                except OSError:
-                    pass
+        from evidence_store import StateLock
+        # Separate from the task lock: audit may be called while task state is
+        # locked. Serialize append/rotation so concurrent reviewers lose no rows.
+        with StateLock(path.parent / ".audit-lock"):
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, sort_keys=True) + "\n")
+            if path.stat().st_size > AUDIT_ROTATE_BYTES:
+                # Read only a bounded tail, and amortize rotation across calls.
+                with path.open("rb") as handle:
+                    handle.seek(max(0, path.stat().st_size - AUDIT_ROTATE_BYTES // 2))
+                    handle.readline()  # discard the possibly partial first row
+                    tail = handle.read().splitlines()[-AUDIT_MAX_RECORDS:]
+                from _vnext_common import atomic_write_bytes
+                atomic_write_bytes(path, b"\n".join(tail) + b"\n")
     except (OSError, ValueError, ImportError, ValidationError):
         pass
 
@@ -378,8 +379,12 @@ def _extract_all_targets(args: dict) -> list[str]:
 
 def _is_ide_artifact(resolved: Path) -> bool:
     try:
-        from antigravity_runtime import is_trusted_antigravity_path
-        return is_trusted_antigravity_path(resolved)
+        from antigravity_runtime import candidate_brain_roots
+        for root in candidate_brain_roots():
+            if resolved.is_relative_to(root):
+                parts = resolved.relative_to(root).parts
+                return len(parts) == 2 and parts[1] in {"implementation_plan.md", "task.md", "walkthrough.md"}
+        return False
     except Exception:
         return False
 
@@ -393,6 +398,13 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
     user_harness = (Path.home() / ".android-harness").resolve()
     if resolved == user_harness or user_harness in resolved.parents:
         return False, "User-level Android Harness configuration and model routes are developer-owned and immutable to model file tools.", False
+    # Check native evidence BEFORE the generic temporary JSON exception: test
+    # and custom host roots may themselves live under the temporary directory.
+    from antigravity_runtime import candidate_runtime_roots
+    if any(resolved == native or native in resolved.parents for native in candidate_runtime_roots()):
+        if _is_ide_artifact(resolved):
+            return True, str(resolved), True
+        return False, "Antigravity native transcripts, metadata and runtime evidence are immutable to agent file tools.", False
     try:
         relative = resolved.relative_to(root).as_posix()
     except ValueError:

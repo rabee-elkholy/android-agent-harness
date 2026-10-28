@@ -7530,6 +7530,12 @@ class ReviewOrchestrationTests(unittest.TestCase):
         (self.repo / ".agents" / "hooks.json").write_text("{}", encoding="utf-8")
         from _enforcement import detect
         enf = detect(self.repo, ["antigravity"])
+        self.assertEqual("RULE_ENFORCED", enf["mutation_boundary_by_host"].get("antigravity"))
+        # Empty JSON is no longer sufficient evidence of installed interception.
+        shutil.copyfile(KIT / "agents/hooks.json", self.repo / ".agents/hooks.json")
+        (self.repo / ".agents/scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(KIT / "agents/scripts/pre_tool_safety.py", self.repo / ".agents/scripts/pre_tool_safety.py")
+        enf = detect(self.repo, ["antigravity"])
         self.assertEqual("HARD_ENFORCED", enf["mutation_boundary_by_host"].get("antigravity"))
 
     def test_P1_05_budget_correction_does_not_charge_new_call(self) -> None:

@@ -35,6 +35,59 @@ SECRET_PATH_MARKERS = (".env", "keystore", "jks", "secret", "token", "credential
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4", ".jar", ".aar", ".so", ".apk"}
 
 
+def review_reading_guide(content: str, reviewer: str, policy: dict, changes: list[dict]) -> dict | None:
+    """Advisory initial reading order, never a smaller review/proof boundary.
+
+    Reuse the central surface routing vocabulary. Integration/completeness
+    owners and sensitive or ambiguous inputs always receive the full package.
+    Quoted/ambiguous diff paths and new-file extras conservatively fall back.
+    """
+    from review_policy import ROUTING
+    from change_classifier import CRITICAL_SURFACES
+    if reviewer not in {"security-reviewer-agent", "perf-anr-guardian-agent", "convention-reviewer-agent"}:
+        return None
+    surfaces = set(policy.get("surfaces") or [])
+    if surfaces & (set(CRITICAL_SURFACES) | {"AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO", "UNKNOWN"}):
+        return None
+    details = (policy.get("explanation") or {}).get("classification") or {}
+    paths = {str(item.get("path") or "") for item in changes}
+    paths.discard("")
+    known, focus = set(), set()
+    for surface, info in details.items():
+        if surface not in ROUTING or not isinstance(info, dict):
+            return None
+        files = set(info.get("files") or []) & paths
+        known.update(files)
+        if reviewer in ROUTING[surface]:
+            focus.update(files)
+    if not paths or not paths <= known or not focus or focus == paths:
+        return None
+    marker = "## Git diff\n```diff\n"
+    if content.count(marker) != 1 or "## NEW UNTRACKED FILE " in content:
+        return None
+    lines = content.splitlines()
+    start = len(content.split(marker, 1)[0].splitlines()) + 2
+    end = next((i for i in range(start, len(lines)) if lines[i] == "```"), None)
+    if end is None:
+        return None
+    blocks = []
+    for i in range(start, end):
+        if lines[i].startswith("diff --git "):
+            match = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', lines[i])
+            if not match:
+                return None
+            blocks.append((i, {match[1], match[2]}))
+    if not blocks or not paths <= set().union(*(names for _, names in blocks)):
+        return None
+    ranges = [[1, blocks[0][0]]]
+    for index, (offset, names) in enumerate(blocks):
+        stop = blocks[index + 1][0] if index + 1 < len(blocks) else end
+        if names & focus:
+            ranges.append([offset + 1, stop])
+    ranges.append([end + 1, len(lines)])
+    return {"focus_files": sorted(focus), "line_ranges": ranges}
+
+
 def _git_diff(repo: Path, paths: list[str]) -> str:
     if not paths:
         return ""
@@ -310,6 +363,14 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     metadata["package_path"] = str(package_path)
     metadata["package_sha256"] = sha256_file(package_path)
 
+    if current.get("review_host") == "antigravity":
+        guides = {}
+        for role in metadata["required_reviewers"]:
+            guide = review_reading_guide(content, role, policy, changes)
+            if guide:
+                guides[role] = guide
+        metadata["reading_guides"] = guides
+
     briefs = {}
     for rev in metadata["required_reviewers"]:
         b_path = generate_task_brief(repo, task_id, rev, package_dir, metadata, plan, policy, changes)
@@ -433,6 +494,7 @@ def generate_task_brief(
         "focus": "Comprehensive code and architecture evaluation within your domain.",
     })
     changed_paths = [str(item.get("path") or "") for item in changes if item.get("path")]
+    reading_guide = (metadata.get("reading_guides") or {}).get(reviewer)
 
     req_outcome = plan.get('requested_outcome') or plan.get('outcome') or 'Approved implementation changes'
     task_kind = str(plan.get('task_kind') or plan.get('kind') or 'FEATURE').upper()
@@ -472,10 +534,17 @@ def generate_task_brief(
         f"- **Role Focus**: {role_info['focus']}",
         "- **Target Changed Paths**:",
     ])
-    for p in changed_paths[:20]:
+    focus_paths = reading_guide["focus_files"] if reading_guide else changed_paths
+    for p in focus_paths[:20]:
         brief_lines.append(f"  * `{p}`")
-    if len(changed_paths) > 20:
-        brief_lines.append(f"  * *(and {len(changed_paths) - 20} more files; see complete package)*")
+    if len(focus_paths) > 20:
+        brief_lines.append(f"  * *(and {len(focus_paths) - 20} more files; see complete package)*")
+    if reading_guide:
+        brief_lines.extend([
+            "- **Initial reading guide (inclusive package line ranges)**: " + ", ".join(f"{a}-{b}" for a, b in reading_guide["line_ranges"]),
+            "- Read these shared-context and specialty ranges first using bounded file reads. The complete package remains the canonical evidence. "
+            "This is an initial reading order, not a reduced review scope: inspect other changes and callers whenever a contract, finding or integration concern requires them.",
+        ])
 
     routed = set(policy.get("reviewers") or [])
     completeness_owner = "bug-reviewer-agent" if "bug-reviewer-agent" in routed else "regression-impact-reviewer-agent"
@@ -565,7 +634,7 @@ def generate_task_brief(
     ])
 
     brief_path = package_dir / f"brief-{reviewer}.md"
-    atomic_write_bytes(brief_path, "\n".join(brief_lines).encode("utf-8"))
+    atomic_write_bytes(brief_path, redact_text("\n".join(brief_lines)).encode("utf-8"))
     return brief_path
 
 

@@ -86,57 +86,85 @@ def _load_ledger(run: dict, path: Path) -> dict:
     return ledger
 
 
+def identity_messages(path: Path):
+    """Stream native dispatch messages; callers stop at the bound identity.
+
+    No persistent identity cache: replacement/truncation is observed on every
+    call. Full result and cancellation validation still use complete transcripts.
+    """
+    if path.stat().st_size > 32 * 1024 * 1024:
+        raise ValidationError("reviewer transcript exceeds bounded inspection size")
+    count = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                if not line.endswith("\n"):
+                    return
+                raise ValidationError("invalid reviewer host transcript")
+            if not isinstance(row, dict):
+                raise ValidationError("invalid reviewer host transcript")
+            if row.get("source") == "SYSTEM_SDK" and row.get("type") == "SYSTEM_MESSAGE":
+                yield str(row.get("content") or "")
+                count += 1
+                if count >= 8:
+                    return
+
+
 def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> dict | None:
     transcript = resolve_transcript(execution_id)
     head = _head_steps(transcript, limit=8) if transcript is not None else []
-    if head and any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in head):
+    if any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in head):
         return None
-    rows = _steps(transcript) if transcript is not None else []
-    messages = [str(r.get("content") or "") for r in rows
-                if r.get("source") == "SYSTEM_SDK" and r.get("type") == "SYSTEM_MESSAGE"][:8]
     pending_review = False
+    candidates = []
     from review_execution import pointer_matches
     for run, ledger_path in active_reviews(repo):
         if run.get("review_host") != "antigravity" or not ledger_path.is_file():
             continue
         ledger = _load_ledger(run, ledger_path)
-        pending_review = pending_review or any(e.get("state") in {"DISPATCHED", "PROTOCOL_RETRY_REQUIRED"} for e in ledger.get("reviewers", {}).values())
         for role, entry in ledger.get("reviewers", {}).items():
             if entry.get("state") not in {"DISPATCHED", "PROTOCOL_RETRY_REQUIRED"}:
                 continue
+            pending_review = True
             brief_path = (run.get("briefs") or {}).get(role) or entry.get("brief")
             if not brief_path and run.get("run_id"):
-                # Final briefs live in the execution profile, rather than the run metadata.
                 from review_execution import resolve_execution_profile
                 brief_path = resolve_execution_profile(repo, run["task_id"], "antigravity")["reviewers"][role]["brief_path"]
-            if not brief_path or not Path(brief_path).is_file():
-                continue
-            expected = Path(brief_path).read_text(encoding="utf-8").replace("\r\n", "\n").strip()
+            if brief_path and Path(brief_path).is_file():
+                expected = Path(brief_path).read_text(encoding="utf-8").replace("\r\n", "\n").strip()
+                candidates.append((run, ledger_path, role, entry, brief_path, expected))
+    if candidates and transcript is not None:
+        from contextlib import closing
+        with closing(identity_messages(transcript)) as messages:
             for content in messages:
                 message = re.search(r'sender=([A-Za-z0-9_-]+) priority=MESSAGE_PRIORITY_HIGH content=([\s\S]+?)\n</SYSTEM_MESSAGE>', content)
                 if not message:
                     continue
                 prompt = message[2].replace("\r\n", "\n").strip()
-                if prompt != expected and not pointer_matches(prompt, role, str(brief_path), expected):
-                    continue
-                if entry.get("execution_id") not in (None, "", execution_id):
-                    raise ValidationError("reviewer execution identity conflicts with its bound receipt")
-                context = {"run": run, "ledger_path": ledger_path, "role": role,
-                           "execution_id": execution_id, "parent_execution_id": message[1]}
-                if bind:
-                    with StateLock(state_root(repo)):
-                        current = _load_ledger(run, ledger_path)
-                        current_entry = current["reviewers"][role]
-                        if current_entry.get("execution_id") not in (None, "", execution_id):
-                            raise ValidationError("reviewer execution is already bound")
-                        if current_entry.get("execution_id") != execution_id or current_entry.get("parent_execution_id") != message[1]:
+                for run, ledger_path, role, entry, brief_path, expected in candidates:
+                    if prompt != expected and not pointer_matches(prompt, role, str(brief_path), expected):
+                        continue
+                    if entry.get("execution_id") not in (None, "", execution_id):
+                        raise ValidationError("reviewer execution identity conflicts with its bound receipt")
+                    context = {"run": run, "ledger_path": ledger_path, "role": role,
+                               "execution_id": execution_id, "parent_execution_id": message[1]}
+                    if bind and (entry.get("execution_id") != execution_id or entry.get("parent_execution_id") != message[1]):
+                        with StateLock(state_root(repo)):
+                            current = _load_ledger(run, ledger_path)
+                            current_entry = current["reviewers"][role]
+                            if current_entry.get("state") not in {"DISPATCHED", "PROTOCOL_RETRY_REQUIRED"}:
+                                raise ValidationError("reviewer execution is no longer pending")
+                            if current_entry.get("execution_id") not in (None, "", execution_id):
+                                raise ValidationError("reviewer execution is already bound")
                             current_entry.update(execution_id=execution_id, parent_execution_id=message[1])
                             _save_ledger(ledger_path, current)
-                return context
-    if pending_review and not any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in rows[:8]):
-        # Missing or stale reviewer transcripts cannot grant a general shell.
-        # Main conversations have a native explicit-user origin; unbound child
-        # actors stay read-only until their exact dispatched brief can be proved.
+                    return context
+    if pending_review:
+        # Unknown children must never acquire implementation authority.
         return {"unverified_reviewer": True}
     return None
 

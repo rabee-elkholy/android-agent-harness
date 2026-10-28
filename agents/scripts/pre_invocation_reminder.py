@@ -25,67 +25,11 @@ def _project_notes_reminder() -> str:
 
 
 def _message() -> str:
-    try:
-        from mutation_guard import active_plan
-        plan = active_plan(REPO)
-    except Exception:
-        plan = {}
-    notes_rem = _project_notes_reminder()
-    if not plan:
-        return (
-            "Android Harness: Idle (no active task). "
-            "Discovery should start with targeted context (`python .agents/harness.py task-context --file <path> --json`) "
-            "or the project graph (`python .agents/harness.py graph --feature <name>` / `--find <Symbol>`). "
-            "Search only inside the scope that graph or task-context query returned; for anything wider, query the graph again. "
-            "Pre-planning clarification: When asked to explore edge cases, study scenarios, or validate architecture first, present and discuss them directly in plain chat before drafting any plan. Guessing edge cases or missing business logic is strictly prohibited. "
-            "Clarify ambiguous requirements via `ask_question` or plain chat BEFORE drafting the plan. "
-            "For a design, migration, backward-compatibility or security decision (Room schema, exported component, permission), "
-            "ask the developer about it with `ask_question` before you draft (for Room: an existing destructive fallback, "
-            "users on older schema versions, downgrade). "
-            "Draft with --approach, --risks and --device-strategy so the developer can review the plan. "
-            "To update the harness itself, run `python .agents/harness.py update-info` and follow it. "
-            "Verification plan must use strict 6-step headings."
-            + notes_rem
-        )
-    status = str(plan.get("status") or "UNKNOWN")
-    task_id = str(plan.get("task_id") or "unknown")
-    try:
-        from workflow import resolve_next_action
-        act = resolve_next_action(REPO, task_id, plan)
-        act_cmd = f" -> `{act['command']}`" if act.get("command") else ""
-        next_step = f"Next action: {act.get('code')} ({act.get('kind')}){act_cmd}. Reason: {act.get('reason')}."
-    except Exception:
-        if status == "AWAITING_DEVELOPER_APPROVAL":
-            next_step = "Wait for explicit approval; do not edit files or run mutating commands."
-        elif status == "IMPLEMENTING":
-            next_step = (
-                "Implement approved scope. Multi-phase execution is fully autonomous: single intake approval covers all phases; "
-                "never pause, demand 'Proceed', or ask developer between phases. Self-heal compile errors. Do NOT poll background tasks."
-            )
-        elif status == "VERIFYING":
-            next_step = (
-                "Strict verification order: 1. preflight -> 2. unit tests -> 3. routed reviewers (parallel) -> 4. device install (ONLY after all reviewers pass) -> 5. ask_question device check -> 6. verify. "
-                "Reviewer dispatch is 100% autonomous via subagents; never pause, ask developer, or demand 'Proceed'. Never assemble or install on device while reviewers are still executing. "
-                "Passing gates bridge automatically into evidence. If fixes needed, run workflow.py resume; never stall on new plans or demand 'Proceed'."
-            )
-        elif status == "BLOCKED":
-            blocked = plan.get("blocked_reviewers", [])
-            blocked_str = f" from: {', '.join(blocked)}" if blocked else ""
-            next_step = f"Task is BLOCKED due to findings{blocked_str}. Fix code issues, then resume via: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`."
-        elif status == "READY_FOR_DELIVERY":
-            next_step = "Commit changes with Conventional Commit, or run 'python .agents/scripts/workflow.py deliver' to complete delivery. Do not mutate the delivery."
-        else:
-            next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
-    return (
-        f"Android Harness task {task_id}: {status}. {next_step} "
-        "Match the developer's active conversation language dynamically (never hardcode a language) and use the canonical Markdown card layouts (Plan Approval, Reviewer Dispatch Table, Review Verdict Table, 3-Section Mobile Walkthrough Table, Commit Card); in RTL languages start lines with a word in that language and put code/file names in backticks. "
-        "Up to 3 concurrent live tasks with disjoint `--expected-files` may share one worktree "
-        "(draft a separate task with `workflow.py draft --task-id <new-id> --expected-files <disjoint-paths>` "
-        "or switch focus with `python .agents/harness.py task switch --task-id <id>`; "
-        "editing tracked files while another task is in VERIFYING stales its frozen verification snapshot). "
-        f"Only when the developer explicitly asks to cancel (or before updating the harness), run `workflow.py cancel --repo . --task-id {task_id} --source conversation --proof-reference \"<their words>\"`; never demand cancelling a disjoint task. "
-        f"Zoho mutates only after explicit `update zoho`.{notes_rem}"
-    )
+    # Keep this hook read-only and independent of the evidence router. Native
+    # ephemeral messages need a current reminder, not a second policy document.
+    return (_compact_message() +
+            " Use the canonical language-adaptive task cards in .agents/rules/harness-rules.md. Follow the returned NEXT_ACTION; query task status only when it is missing. "
+            "For an unresolved material decision, ask the developer about it with `ask_question` before you draft.")
 
 
 def _compact_message() -> str:
@@ -106,9 +50,9 @@ def _compact_message() -> str:
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""
-        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Fix issues and run: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
+        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Resume before fixing issues: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
-        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Commit changes with Conventional Commit, or run 'workflow.py deliver' to close.{notes_rem}"
+        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Follow the returned delivery action.{notes_rem}"
     return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. Up to 3 disjoint tasks may coexist (`task draft` / `task switch --task-id <id>`); only cancel when explicitly asked (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
 
 
@@ -125,9 +69,10 @@ def main() -> None:
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
-        invocation = int(payload.get("invocationNum") or 0) if isinstance(payload, dict) else 0
-        msg = _message() if invocation in (0, 1) else _compact_message()
-        if invocation in (0, 1):
+        invocation = payload.get("invocationNum") if isinstance(payload, dict) else None
+        initial = type(invocation) is int and invocation in (0, 1)
+        msg = _message() if initial else _compact_message()
+        if initial:
             msg = f"{msg} {_update_notice()}".strip()
         print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
     except Exception:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import os
+import shutil
+import sys
 from pathlib import Path
 
 from _vnext_common import ValidationError, read_json
@@ -96,6 +98,22 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
     if not tokens:
         return "", []
     executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if "/" in tokens[0] or "\\" in tokens[0]:
+        # A familiar basename is not proof of executable identity. Only the
+        # actual interpreter or an installed PATH executable outside this repo
+        # may be addressed by path; repo-local lookalikes remain untrusted.
+        candidate = Path(tokens[0]).expanduser()
+        candidate = (candidate if candidate.is_absolute() else Path(repo) / candidate).resolve()
+        installed = shutil.which(executable)
+        trusted = {Path(sys.executable).resolve()}
+        if installed:
+            resolved = Path(installed).resolve()
+            if not resolved.is_relative_to(Path(repo).resolve()):
+                trusted.add(resolved)
+        if candidate not in trusted:
+            return "", []
+    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb"}:
+        executable = executable[:-4]
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
         if len(tokens) < 2:
             return "", []
@@ -834,6 +852,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         operator_text = GIT_REV_EXCLUSION.sub("", operator_text)
     if SHELL_LAUNDERING.search(operator_text):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
+    if re.search(r"[(){}]", operator_text):
+        return False, "shell expressions and script blocks are outside the audited command boundary; quote literal arguments"
     segments = _split_segments(normalized)
     if segments is None:
         return False, "unterminated quote in command"

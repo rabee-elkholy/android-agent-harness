@@ -1387,5 +1387,143 @@ class StartupEvidenceTests(unittest.TestCase):
                 self.assertIsNotNone(final_verifier._validate_artifact(store, 's', 'c', 'r', name, 'v')[1])
 
 
+class AntigravityAuditRegressionTests(unittest.TestCase):
+    def hook(self, repo, name, args, **environment):
+        import subprocess
+        script = Path(__file__).with_name("pre_tool_safety.py")
+        result = subprocess.run([sys.executable, str(script)],
+            input=json.dumps({"toolCall": {"name": name, "args": args}}),
+            capture_output=True, text=True, timeout=20,
+            env={**os.environ, "HARNESS_REPO": str(repo), "HARNESS_HOOK_HOST": "antigravity",
+                 "HARNESS_HOOK_STATE": str(repo / "audit/hook.json"), **environment})
+        self.assertEqual(0, result.returncode, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_antigravity_shell_expressions_and_local_impersonators_are_denied(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for command in (
+                "Get-Content (Set-Content -Path probe.txt -Value changed -PassThru)",
+                "Get-Item @(New-Item -Path probe.txt)",
+                "Get-ChildItem -Path . -Filter {Set-Content probe.txt changed}",
+                "./tools/git status", "./tools/rg pattern .", "./tools/python -m compileall .",
+            ):
+                with self.subTest(command=command):
+                    self.assertEqual("deny", self.hook(repo, "run_command", {"CommandLine": command})["decision"])
+            for command in ("git status --short", 'Get-Content "file (copy).txt"', 'rg "fun (foo)" app'):
+                with self.subTest(command=command):
+                    self.assertEqual("allow", self.hook(repo, "run_command", {"CommandLine": command})["decision"])
+
+    def test_antigravity_native_proof_is_not_an_editable_artifact(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            runtime = Path(td) / "runtime"
+            for name in ("transcript.jsonl", ".system_generated/logs/transcript.jsonl", "metadata.json", "nested/plan.md"):
+                target = runtime / "brain/conversation" / name
+                with self.subTest(name=name):
+                    self.assertEqual("deny", self.hook(repo, "write_to_file", {"TargetFile": str(target)},
+                        ANTIGRAVITY_APP_DATA=str(runtime))["decision"])
+            self.assertEqual("allow", self.hook(repo, "write_to_file",
+                {"TargetFile": str(runtime / "brain/conversation/implementation_plan.md")},
+                ANTIGRAVITY_APP_DATA=str(runtime))["decision"])
+
+    def test_antigravity_empty_disabled_or_incomplete_hooks_do_not_claim_hard_enforcement(self):
+        from _enforcement import detect
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            hooks = root / ".agents/hooks.json"
+            hooks.parent.mkdir()
+            for body in ("{}", "invalid", '[]', '{"adb-and-git-safety":{"enabled":false}}'):
+                hooks.write_text(body, encoding="utf-8")
+                self.assertEqual("RULE_ENFORCED", detect(root, ["antigravity"])["by_host"]["antigravity"])
+
+    def test_antigravity_fingerprint_tracks_nested_code_and_reuses_unchanged_file_hashes(self):
+        import ensure_hook_selftest as checker
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            scripts = root / "scripts"
+            (scripts / "nested").mkdir(parents=True)
+            source = scripts / "nested/engine.py"
+            source.write_text("old", encoding="utf-8")
+            with mock.patch.multiple(checker, AGENTS=root, SCRIPTS=scripts, CACHE=root / "state/cache.json"):
+                first = checker.harness_fingerprint()
+                checker._write_cache(first, True)
+                with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("unchanged source reread")):
+                    self.assertEqual(first, checker.harness_fingerprint())
+                source.write_text("new", encoding="utf-8")
+                self.assertNotEqual(first, checker.harness_fingerprint())
+                source.unlink()
+                self.assertNotEqual(first, checker.harness_fingerprint())
+
+    def test_antigravity_identity_scan_does_not_read_tool_history_after_dispatch(self):
+        import reviewer_host
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "transcript.jsonl"
+            first = {"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "content": "dispatch"}
+            path.write_text(json.dumps(first) + "\n" + "invalid history\n", encoding="utf-8")
+            messages = reviewer_host.identity_messages(path)
+            self.assertEqual("dispatch", next(messages))
+            messages.close()
+
+    def test_antigravity_bound_reviewer_rechecks_identity_without_reading_history_or_relocking(self):
+        import reviewer_host as host
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            transcript, brief, ledger = root / "transcript.jsonl", root / "brief.md", root / "ledger.json"
+            brief.write_text("exact brief", encoding="utf-8")
+            ledger.write_text("{}", encoding="utf-8")
+            first = {"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
+                     "content": "sender=parent priority=MESSAGE_PRIORITY_HIGH content=exact brief\n</SYSTEM_MESSAGE>"}
+            transcript.write_text(json.dumps(first) + "\n" + '{}\n' * 7 + "unrelated malformed tail\n", encoding="utf-8")
+            run = {"review_host": "antigravity", "briefs": {"bug-reviewer-agent": str(brief)}}
+            data = {"reviewers": {"bug-reviewer-agent": {"state": "DISPATCHED", "execution_id": "child", "parent_execution_id": "parent"}}}
+            with mock.patch.object(host, "resolve_transcript", return_value=transcript), \
+                    mock.patch.object(host, "active_reviews", return_value=[(run, ledger)]), \
+                    mock.patch.object(host, "_load_ledger", return_value=data), \
+                    mock.patch.object(host, "StateLock", side_effect=AssertionError("already bound")):
+                self.assertEqual("bug-reviewer-agent", host.reviewer_context(root, "child", bind=True)["role"])
+                with self.assertRaises(ValidationError):
+                    host.reviewer_context(root, "different-child", bind=True)
+                transcript.write_text('{}\n', encoding="utf-8")
+                self.assertEqual({"unverified_reviewer": True}, host.reviewer_context(root, "child", bind=True))
+
+    def test_antigravity_reading_guide_preserves_shared_context_and_falls_back(self):
+        from review_package import review_reading_guide
+        content = "header\n## Git diff\n```diff\ndiff --git a/A.kt b/A.kt\n+x\ndiff --git a/B.kt b/B.kt\n+y\n```\n## Acceptance\nall criteria\n"
+        changes = [{"path": "A.kt"}, {"path": "B.kt"}]
+        policy = {"surfaces": ["COROUTINES", "BUSINESS_LOGIC"], "explanation": {"classification": {
+            "COROUTINES": {"files": ["A.kt"]}, "BUSINESS_LOGIC": {"files": ["B.kt"]}}}}
+        guide = review_reading_guide(content, "perf-anr-guardian-agent", policy, changes)
+        self.assertEqual(["A.kt"], guide["focus_files"])
+        self.assertEqual([[1, 3], [4, 5], [8, 10]], guide["line_ranges"])
+        self.assertIsNone(review_reading_guide(content, "bug-reviewer-agent", policy, changes))
+        self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", {**policy, "surfaces": ["AUTH"]}, changes))
+        self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", policy, changes + [{"path": "missing.kt"}]))
+
+    def test_antigravity_unknown_invocation_uses_small_read_only_reminder(self):
+        import pre_invocation_reminder as reminder
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO('{}')), mock.patch.object(reminder, "_compact_message", return_value="compact"), \
+                mock.patch.object(reminder, "_message", side_effect=AssertionError("full reminder")), \
+                mock.patch.object(reminder, "_update_notice", side_effect=AssertionError("network check")), contextlib.redirect_stdout(out):
+            reminder.main()
+        self.assertEqual("compact", json.loads(out.getvalue())["injectSteps"][0]["ephemeralMessage"])
+
+    def test_antigravity_audit_rotates_by_bytes_and_keeps_latest_record(self):
+        import pre_tool_safety as hook
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "audit.jsonl"
+            with mock.patch.object(hook, "_audit_path", return_value=path), mock.patch.object(hook, "AUDIT_ROTATE_BYTES", 4096):
+                for index in range(40):
+                    hook._audit("allow", "safe inspection", "view_file", "", reason_code=f"ROW_{index}")
+                rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual("ROW_39", rows[-1]["reason_code"])
+                self.assertLess(path.stat().st_size, 4096)
+                with mock.patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as read:
+                    hook._audit("allow", "safe", "view_file", "")
+                self.assertFalse(any(call.args and call.args[0] == path for call in read.call_args_list))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

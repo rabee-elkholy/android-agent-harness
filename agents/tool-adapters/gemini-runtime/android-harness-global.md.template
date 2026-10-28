@@ -9,7 +9,7 @@ MANDATORY:
 3. Quality over tokens. Never skip or serialize routed reviewers to save resources.
 4. Device policy & Run/Skip: Follow this checkout’s device policy from setup (physical only, emulator allowed, or either if they skipped). Device is automatically resolved by `run_device.py`. Never hardcode a serial. When device verification is required, execute `run_device.py install-start` or, upon explicit developer request, record honest skip via `device skip-validation --source conversation --proof-reference "<phrase>"`. When installation succeeds, run `device signoff --verdict PASS --source conversation --proof-reference "<phrase>"` upon explicit developer sign-off.
 5. Git policy: follow `.agents/rules/harness-rules.md` for this checkout (do not assume the source project's "never commit" rule).
-6. Zero chat clutter & Unified Chat UI/UX: Never echo raw `<SYSTEM_MESSAGE>` or Gradle dumps. Dynamically match the developer's active conversation language (never hardcode a fixed language) and present the 5 canonical Markdown cards consistently across every task: (1) Plan Approval Card, (2) Reviewer Dispatch Table (`| Reviewer | Model | Status |`), (3) Review Verdict Table (`| Reviewer | Model | Verdict | Findings |`), (4) 3-Section Mobile Walkthrough (`Navigation & Preconditions`, `| # | Action | Expected Result |` table, `Edge Cases`), and (5) Commit & Delivery Card (verified file list + fenced Conventional Commit block). In any right-to-left (RTL) language, start every line/bullet with a word in that language and wrap every code symbol, file name, command, and English term in `` `backticks` ``.
+6. Zero chat clutter & Unified Chat UI/UX: Never echo raw `<SYSTEM_MESSAGE>` or Gradle dumps. Dynamically match the developer's active conversation language (never hardcode a fixed language) and present the 5 canonical Markdown cards consistently across every task: (1) Plan Approval Card, (2) Reviewer Dispatch Table (`| Reviewer | Model | Status |` with only the role name in `Reviewer` and the active model in `Model` — never duplicate `[<model>]` in `Reviewer`), (3) Review Verdict Table (`| Reviewer | Model | Verdict | Findings |`), (4) 3-Section Mobile Walkthrough (`Navigation & Preconditions`, `| # | Action | Expected Result |` table, `Edge Cases`), and (5) Commit & Delivery Card (verified file list + fenced Conventional Commit block). On partial reviewer completion (`WAIT_FOR_REVIEWERS`), output at most one short progress line (e.g. `1/6`) without listing pending reviewer names in prose. In any right-to-left (RTL) language, start every line/bullet with a word in that language and wrap every code symbol, file name, command, and English term in `` `backticks` ``.
 7. Discovery & execution efficiency: Discovery MUST start with `python .agents/harness.py task-context --file <path> --json` or `python .agents/scripts/project_graph.py --feature <name>` (or `--find <Symbol>`); unanchored grep cascades are forbidden. Zero-Polling Invariant: never poll or loop on `manage_task status`, `manage_subagents list`, or `schedule` during background tasks or subagents; wait for reactive notifications. When code fixes are needed during verification, run `python .agents/scripts/workflow.py resume` to return to `IMPLEMENTING`. Harness scripts under `.agents/**` are immutable engine code; never edit them.
 8. Linked Zoho Sprints sync & Project Notes: Always follow `.agents/project-context/project-notes.md` across discovery, planning, implementation, review, and Zoho mutations. When adding, updating, or removing a project note or instruction (`context note` / `context instruct`), never dump the developer's raw conversational words verbatim: clarify any ambiguity first, then organize, detail, and translate the rule into clear, self-contained English before saving (`--replace "<old>"` / `--remove "<old>"`). When task plan includes an approved `zoho_link`, sync task start with `python .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery report with `python .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit. All Zoho descriptions and comments must obey the formatting/HTML template rules in `.agents/project-context/project-notes.md`.
 9. Review Host Binding:
@@ -17,7 +17,7 @@ MANDATORY:
   `python .agents/scripts/workflow.py prepare-verification --repo . --task-id <id> --host antigravity`
 - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
 10. Exact Reviewer Dispatch Procedure (Antigravity):
-1. Run status --next.
+1. Use the returned next_action inputs; query status --next only when they are missing.
 2. If code == DISPATCH_REVIEWERS:
    - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the 5 choices (`flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) and execute its `command_template` before dispatch;
    - use exactly the returned reviewer set;
@@ -29,9 +29,9 @@ MANDATORY:
        Workspace = inherit (or omit if host default is used consistently)
        Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
    - do not invent reasoning fields;
-   - in chat, list each dispatched/completed reviewer with its active model from `reviewer_models` (`<role> [<model>]`).
+   - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
 3. Yield; do not poll.
-4. On reactive completion, run review complete with all ready `--reviewer <role> --execution-id <convId>` pairs in one call.
+4. On reactive completion, run review complete with all ready `--reviewer <role> --execution-id <convId>` pairs in one call. When other reviewers are still running (`WAIT_FOR_REVIEWERS`), output at most one concise progress line with the completed count without listing pending reviewer names in prose.
 5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
 6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
 7. After all completed, review finalize (if not already auto-finalized).
@@ -41,9 +41,9 @@ No legacy PASS token. No EVIDENCE footer. No self-certification.
 2. On DISPATCH_PHASE_REVIEWERS:
    - use exactly the returned reviewer set;
    - one invoke_subagent call with exact Role/TypeName/Prompt (pass `Model="flash"` if `reviewer_models[role]` starts with `gemini-3.8-flash-`, otherwise omit `model`/`Model`; no reasoning fields);
-   - in chat, list each dispatched/completed phase reviewer with its active model from `reviewer_models` (`<role> [<model>]`);
+   - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`);
    - yield execution without polling.
-3. On reactive completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` when multiple finish together).
+3. On reactive completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` when multiple finish together). When other phase reviewers are still running, output at most one concise progress line with the completed count without listing pending reviewer names in prose.
 4. On RETRY_PHASE_REVIEW_PROTOCOL, execute router-provided send_message to exact recipient.
 5. When all phase reviewers complete, run `python .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>`.
 6. Advance to next phase via `python .agents/harness.py task begin-next-phase --task-id <id>` (no second approval needed).

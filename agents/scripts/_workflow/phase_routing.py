@@ -356,12 +356,18 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 run_meta_wait = _engine.read_json(prun_f) if prun_f.is_file() else {}
                 pending_models = reviewer_model_map(run_meta_wait, sorted(dispatched))
                 pending_with_models = format_reviewers_with_models(run_meta_wait, sorted(dispatched))
+                done_cnt = len(revs) - len(dispatched)
                 return {
                     "code": "WAIT_FOR_PHASE_REVIEWERS",
                     "kind": "HOST_ACTION",
                     "command": "",
                     "blocking": True,
-                    "reason": f"Waiting for phase reviewer subagents: {', '.join(sorted(dispatched))} (models: {pending_with_models}).",
+                    "reason": (
+                        f"Waiting for phase reviewer subagents ({done_cnt}/{len(revs)} finished; "
+                        f"remaining: {', '.join(sorted(dispatched))}; models: {pending_with_models}). "
+                        "Yield immediately; in chat output at most one short progress line (e.g. "
+                        f"`{done_cnt}/{len(revs)}`) without listing pending reviewer names in prose."
+                    ),
                     "pending_reviewers": sorted(dispatched),
                     "reviewer_models": pending_models,
                     "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id, "pending_reviewers": sorted(dispatched), "reviewer_models": pending_models},

@@ -2800,6 +2800,9 @@ def status(args: argparse.Namespace) -> dict:
         last = ("task_state", "next_actions", "next_action")
         compact = {key: _compact_for_host(plan[key]) for key in last}
         plan = {**{k: v for k, v in plan.items() if k not in last}, **compact}
+        # Strip heavy baseline/history arrays when querying --next so output never balloons to 40,000+ lines
+        for heavy_key in ("baseline", "plan_history", "history", "verification_recipes"):
+            plan.pop(heavy_key, None)
     if bool(getattr(args, "brief", False)):
         keys = ("task_id", "status", "plan_sha256", "review_rounds", "review_calls_used", "verification_run_id", "next_action")
         plan = {key: plan[key] for key in keys if key in plan}

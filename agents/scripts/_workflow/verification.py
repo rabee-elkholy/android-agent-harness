@@ -365,12 +365,18 @@ def review_action(context: VerificationContext) -> dict | None:
                     from review_models import format_reviewers_with_models, reviewer_model_map
                     pending_models = reviewer_model_map(exec_profile, sorted(dispatched))
                     pending_with_models = format_reviewers_with_models(exec_profile, sorted(dispatched))
+                    done_cnt = len(required_reviewers) - len(dispatched)
                     return {
                         "code": "WAIT_FOR_REVIEWERS",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
-                        "reason": f"Waiting for independent reviewer subagents to complete: {', '.join(sorted(dispatched))} (models: {pending_with_models}).",
+                        "reason": (
+                            f"Waiting for independent reviewer subagents to complete ({done_cnt}/{len(required_reviewers)} finished; "
+                            f"remaining: {', '.join(sorted(dispatched))}; models: {pending_with_models}). "
+                            "Yield immediately; in chat output at most one short progress line (e.g. "
+                            f"`{done_cnt}/{len(required_reviewers)}`) without listing pending reviewer names in prose."
+                        ),
                         "reviewers": required_reviewers,
                         "pending_reviewers": sorted(dispatched),
                         "reviewer_models": pending_models,
@@ -751,7 +757,8 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "Present the complete mobile verification walkthrough in chat using the canonical 3-section structure "
                         "(translated into the developer's active conversation language; never hardcode a language): "
                         "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |`), "
-                        "and (3) Edge Cases. Then invoke `ask_question` with a concise summary and await the developer's selected response. "
+                        "and (3) Edge Cases, AND in the SAME response turn immediately invoke `ask_question` with a concise summary "
+                        "(never end the turn after printing the walkthrough without calling `ask_question`). "
                         "Do not run automatic validation before selection."
                     ),
                     "accepted_responses": accepted_responses,

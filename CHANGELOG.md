@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Harden Antigravity native evidence against model file writes; allow only named conversation planning artifacts.
+- Reject shell expressions hidden inside inspection commands and repo-local executable lookalikes.
+- Validate enabled hook coverage and executable/script availability before reporting configured hard mutation interception.
+- Stream reviewer dispatch identity without reparsing subsequent tool history; retain complete final-result validation.
+- Reuse unchanged file hashes in the advisory hook-selftest cache, including nested runtime modules.
+- Rotate bounded audit logs by size under a separate writer lock and keep reminders read-only and compact.
+- Add conservative, policy-derived initial reading ranges to Antigravity reviewer briefs without narrowing review scope, roster, or immutable evidence.
+- Remove redundant status-query instructions from Antigravity adapters and preserve developer-owned Git authority.
+
+## [1.1.51] - 2026-10-28
+
+### Antigravity hook & audit hardening, bounded reviewer reading guides, clean dispatch tables, and compact `status --next`
+
+- **Antigravity Hook Verification, Audit Log Rotation, and Identity Scanning**: Validate active Antigravity `PreToolUse` hook coverage and target scripts in `agents/scripts/_enforcement.py`, enforce trusted executable path resolution in `agents/scripts/mutation_guard.py`, rotate `pre-tool-safety.jsonl` by byte budget and protect native runtime transcripts/metadata from tool writes in `agents/scripts/pre_tool_safety.py`, cache nested script mtime/size fingerprints in `agents/scripts/ensure_hook_selftest.py`, and scan only bounded dispatch messages without rereading full tool history in `agents/scripts/reviewer_host.py`.
+- **Bounded Initial Package Reading Guides for Specialist Reviewers**: Compute shared-context and specialty diff line ranges per reviewer in `agents/scripts/review_package.py` and update `agents/subagents/convention-reviewer-agent.json`, `agents/subagents/perf-anr-guardian-agent.json`, and `agents/subagents/security-reviewer-agent.json` to prioritize guided initial reading ranges while preserving full review obligations.
+- **Deduplicate Reviewer & Model Table Columns & Same-Turn Walkthrough Sign-Off**: Remove the legacy `<role> [<model>]` inline requirement from `agents/rules/harness-rules.md`, `GEMINI.md`, `agents/tool-adapters/GEMINI.md.template`, `agents/tool-adapters/CLAUDE.md.template`, `agents/tool-adapters/AGENTS.md.template`, and `agents/tool-adapters/gemini-runtime/android-harness-global.md.template` so `| Reviewer | Model | Status |` keeps the role name in `Reviewer` and the model in `Model`, and require invoking `ask_question` in the same turn as the 3-section mobile walkthrough.
+- **Eliminate Partial-Completion Pending-Reviewer Prose Spam & Compact `task status --next`**: Update router instructions in `agents/scripts/_workflow/verification.py` and `agents/scripts/_workflow/phase_routing.py` so partial reviewer completions output at most one short progress line (e.g., `1/6`) without listing pending reviewer names in prose, and strip heavy `baseline`/history arrays from `task status --next` in `agents/scripts/_workflow/engine.py`.
+
 ## [1.1.50] - 2026-10-28
 
 ### Language-adaptive unified chat & question UI/UX across the 6 canonical task cards

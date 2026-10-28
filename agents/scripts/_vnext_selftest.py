@@ -333,7 +333,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
     def test_pre_invocation_reminder_anti_stalling_directives(self) -> None:
         reminder_script = (KIT / "agents" / "scripts" / "pre_invocation_reminder.py").read_text(encoding="utf-8")
         self.assertIn("Do not create new plans or ask for Proceed", reminder_script)
-        self.assertIn("never stall on new plans or demand 'Proceed'", reminder_script)
+        self.assertNotIn("resolve_next_action", reminder_script)
         self.assertIn("do not stall on follow-ups", reminder_script)
 
     def test_pre_invocation_reminder_idle_state(self) -> None:

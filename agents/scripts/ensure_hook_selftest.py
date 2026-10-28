@@ -27,25 +27,43 @@ AGENTS = Path(__file__).resolve().parent.parent
 SCRIPTS = AGENTS / "scripts"
 SELFTEST = SCRIPTS / "_hook_selftest.py"
 CACHE = AGENTS / "state" / "hook_selftest.json"
+_fingerprint_files: dict = {}
 
 
 def _iter_watched() -> list[Path]:
     files: list[Path] = []
-    files.extend(sorted(SCRIPTS.glob("*.py")))
+    files.extend(sorted(SCRIPTS.rglob("*.py")))
+    files.extend(sorted((AGENTS / "harness_shared").rglob("*.py")))
     files.extend(sorted((AGENTS / "subagents").glob("*.json")))
-    for extra in (AGENTS / "hooks.json",):
+    for extra in (AGENTS / "hooks.json", AGENTS / "harness.py"):
         if extra.is_file():
             files.append(extra)
     return [p for p in files if p.is_file()]
 
 
 def harness_fingerprint() -> str:
+    # This is an advisory selftest scheduling cache, never verification proof.
+    # Include ctime/inode to detect replacement and same-size restored-mtime edits.
+    global _fingerprint_files
+    previous = _read_cache().get("files") or {}
+    if not isinstance(previous, dict):
+        previous = {}
+    current = {}
     digest = hashlib.sha256()
     for path in _iter_watched():
+        stat = path.stat()
+        signature = [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_dev, stat.st_ino]
+        key = path.as_posix()
+        cached = previous.get(key) or {}
+        content_hash = cached.get("sha256") if isinstance(cached, dict) and cached.get("signature") == signature else None
+        if not isinstance(content_hash, str) or len(content_hash) != 64 or any(c not in "0123456789abcdef" for c in content_hash):
+            content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        current[key] = {"signature": signature, "sha256": content_hash}
         digest.update(path.as_posix().encode("utf-8"))
         digest.update(b"\0")
-        digest.update(path.read_bytes())
+        digest.update(content_hash.encode("ascii"))
         digest.update(b"\0")
+    _fingerprint_files = current
     return digest.hexdigest()
 
 
@@ -60,11 +78,8 @@ def _read_cache() -> dict:
 
 
 def _write_cache(fingerprint: str, ok: bool) -> None:
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    CACHE.write_text(
-        json.dumps({"fingerprint": fingerprint, "ok": ok}, indent=2),
-        encoding="utf-8",
-    )
+    from _vnext_common import atomic_write_json
+    atomic_write_json(CACHE, {"fingerprint": fingerprint, "ok": ok, "files": _fingerprint_files})
 
 
 def cache_is_fresh(fingerprint: str) -> bool:
