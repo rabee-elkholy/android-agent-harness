@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.49] - 2026-10-28
+
+### Structured, scannable `plan.md` layout with executive summary table, layer-classified file table, and collapsible JSON payload
+
+- **Executive Summary Table & Callout Alerts (`plan_document.py`)**: Add a top-level Markdown summary table to `plan.md` showing `Task Kind / Depth`, `Risk Tier`, `Planned Files` across modules, `Phases`, and `Sensitive Surfaces`, alongside GitHub-style callout alerts (`> [!IMPORTANT]`, `> [!WARNING]`, `> [!CAUTION]`) for revision deltas, merged-task notices, and sensitive surface warnings.
+- **Auto-Structured `Approach`, `Risks`, and `Phone checks` Checklists**: Automatically split inline numbered paragraphs (`1. ... 2. ... 3. ...`) in `Approach` and `Risks` into clean multi-line items, and render `Phone checks` and `What needs you` as interactive Markdown checklists (`- [ ]`) with separated `**Action**` and `**Expected**` sub-bullets.
+- **Layer-Classified File Table & Collapsible Approval Payload**: Render planned files in a numbered Markdown table with automatic architectural layer classification (`Data / Domain`, `Presentation / State`, `UI / Screen`, `Navigation`, `Localization`, `Resources / XML`, `Build / Config`, `Test`) and clickable file links, and wrap the raw JSON approval payload in a collapsible `<details>` block so `plan.md` remains clean and scannable while preserving full `plan_sha256` verification.
+
 ## [1.1.48] - 2026-10-27
 
 ### Co-authored regression test verification for `BUG` tasks, outcome-acknowledged skill alignment, and later-round policy determinism

@@ -7,6 +7,7 @@ never hand-authored: the plan hash it shows is the plan's own hash.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,79 @@ def _file_link(repo: Path, relative: str) -> str:
     return f"[{relative}]({target.as_uri()})"
 
 
+def _classify_file_layer(rel_path: str) -> str:
+    norm = rel_path.replace("\\", "/").lower()
+    if "/test/" in norm or "/androidtest/" in norm or norm.endswith("test.kt") or norm.endswith("test.java"):
+        return "Test"
+    if "/res/values" in norm and "strings.xml" in norm:
+        return "Localization"
+    if "/res/navigation/" in norm:
+        return "Navigation"
+    if "/res/" in norm or norm.endswith(".xml"):
+        return "Resources / XML"
+    if norm.endswith(("build.gradle", "build.gradle.kts", "libs.versions.toml", "settings.gradle", "settings.gradle.kts")):
+        return "Build / Config"
+    if "viewmodel" in norm or "presenter" in norm or "state" in norm:
+        return "Presentation / State"
+    if "/ui/" in norm or "fragment" in norm or "activity" in norm or "screen" in norm or "sheet" in norm or "dialog" in norm:
+        return "UI / Screen"
+    if "/data/" in norm or "repo" in norm or "datasource" in norm or "dao" in norm or "entity" in norm or "model" in norm:
+        return "Data / Domain"
+    return "Source"
+
+
+def _split_inline_numbered_steps(raw: str) -> list[str]:
+    text = raw.strip()
+    if not text:
+        return []
+    # Split inline "1. ... 2. ... 3. ..." while preserving single-sentence text when not numbered
+    parts = [p.strip() for p in re.split(r"(?:^|\s+)(?=\d+\.\s+)", text) if p.strip()]
+    if len(parts) > 1 and all(re.match(r"^\d+\.\s+", p) for p in parts):
+        return parts
+    # Also support newline-separated steps
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) > 1:
+        return lines
+    return [text]
+
+
+def _format_structured_block(value: Any, *, default: str = "not stated", checklist: bool = False) -> list[str]:
+    text = _text(value, default=default)
+    if text == default:
+        return [text]
+    steps = _split_inline_numbered_steps(text)
+    if len(steps) == 1 and not checklist and not re.match(r"^\d+\.\s+", steps[0]):
+        return [steps[0]]
+    out: list[str] = []
+    for step in steps:
+        if checklist:
+            body = re.sub(r"^\d+\.\s+", "", step).strip()
+            if "->" in body:
+                action_part, expected_part = body.split("->", 1)
+                expected_clean = re.sub(r"^expected\s*:\s*", "", expected_part.strip(), flags=re.IGNORECASE)
+                out.append(f"- [ ] {step}")
+                out.append(f"  - **Action**: {action_part.strip()}")
+                out.append(f"  - **Expected**: {expected_clean}")
+            else:
+                out.append(f"- [ ] {step}")
+        else:
+            out.append(step if re.match(r"^\d+\.\s+", step) else f"- {step}")
+    return out
+
+
+def _render_files_section(repo: Path, files: list[str]) -> list[str]:
+    if not files:
+        return ["- not stated"]
+    rows = [
+        "| # | Layer | File (Full Path Link) |",
+        "| :---: | :--- | :--- |",
+    ]
+    for idx, item in enumerate(files, 1):
+        layer = _classify_file_layer(str(item))
+        rows.append(f"| {idx} | `{layer}` | {_file_link(repo, str(item))} |")
+    return rows
+
+
 def _changes(old: dict | None, new: dict) -> list[str]:
     if not old:
         return []
@@ -97,21 +171,47 @@ def _changes(old: dict | None, new: dict) -> list[str]:
 def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, previous: dict | None = None) -> str:
     from plan_authority import plan_payload
 
+    SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+
     policy = policy or {}
     plan_hash = str(plan.get("plan_sha256") or "")
+    files = plan.get("expected_files") or []
+    phases = plan.get("phases") or []
+    surfaces = plan.get("expected_surfaces") or []
+    sensitive = sorted(set(surfaces) & SENSITIVE_SURFACES)
+    modules_str = ", ".join(plan.get("expected_modules") or []) or "not stated"
+    risk_tier = str(policy.get("risk_tier") or "evaluated at verification")
+    task_kind = str(plan.get("task_kind") or "AUTO")
+    planning_depth = str(plan.get("planning_depth") or "BOUNDED")
+
     lines = [
         f"# Plan: {plan.get('task_id')}",
         "",
         f"Plan hash: `{plan_hash[:12]}` (the hash the approval is bound to). Generated from `plan.json`; do not edit.",
         "",
+        "| Field | Value |",
+        "| :--- | :--- |",
+        f"| **Task Kind / Depth** | `{task_kind}` (`{planning_depth}`) |",
+        f"| **Risk Tier** | `{risk_tier}` |",
+        f"| **Planned Files** | `{len(files)}` file(s) across `{modules_str}` |",
+        f"| **Phases** | `{len(phases) if phases else 1}` phase(s) |",
+        f"| **Sensitive Surfaces** | {', '.join(f'`{s}`' for s in sensitive) if sensitive else 'None'} |",
+        "",
     ]
     if plan.get("merge", {}).get("merged_into"):
-        lines += [f"This source task is CANCELLED after consolidation into `{plan['merge']['merged_into']}`. This document preserves its original plan; it grants no execution authority.", ""]
+        lines += [
+            "> [!WARNING]",
+            f"> This source task is CANCELLED after consolidation into `{plan['merge']['merged_into']}`. This document preserves its original plan; it grants no execution authority.",
+            "",
+        ]
     if plan.get("merged_from"):
         lines += ["Source plans (execution order): " + ", ".join(f"`{p['task_id']}` (`{p['plan_sha256'][:12]}`)" for p in plan["merged_from"]), ""]
     if previous:
         lines += [
             f"## What changed from the previous plan (`{str(previous.get('plan_sha256') or '')[:12]}`)",
+            "",
+            "> [!IMPORTANT]",
+            "> Review the delta below against the previous plan version.",
             "",
             *_changes(previous, plan),
             "",
@@ -121,17 +221,16 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     lines += [
         "## Outcome",
         "",
-        _text(plan.get("requested_outcome")),
+        f"> **Goal:** {_text(plan.get('requested_outcome'))}",
         "",
         "## Approach",
         "",
-        _text(plan.get("approach")),
+        *_format_structured_block(plan.get("approach")),
         "",
-        "## Files",
+        f"## Files ({len(files)})",
         "",
+        *_render_files_section(repo, files),
     ]
-    files = plan.get("expected_files") or []
-    lines += [f"- {_file_link(repo, item)}" for item in files] or ["- not stated"]
     reuse_cands = [c for c in (plan.get("reuse_candidates") or []) if isinstance(c, dict)]
     if reuse_cands:
         lines += ["", "## Existing codebase reuse candidates", ""]
@@ -146,13 +245,12 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         lines += ["", "## Architecture & spec readiness advisories", ""]
         for adv in readiness.get("advisories") or []:
             lines.append(f"- {redact(adv)}")
-    phases = plan.get("phases") or []
     if phases:
         lines += ["", "## Phases", ""]
         for index, phase in enumerate(phases, 1):
             if isinstance(phase, dict):
                 title = phase.get("title") or phase.get("description") or ""
-                lines.append(f"{index}. `{phase.get('id')}`: {_text(title, '')}")
+                lines.append(f"{index}. **`{phase.get('id')}`** — {_text(title, '')}")
                 for item in phase.get("expected_files") or []:
                     lines.append(f"   - {_file_link(repo, item)}")
     if "verification_contract" in plan:
@@ -168,16 +266,22 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
                          f"{_text(journey['purpose'])}; prerequisites: {_text(journey['prerequisites'])}; "
                          f"effects: {_text(journey['effects'], 'none')}")
         lines.append("Evidence association records provenance; reviewers still assess semantic relevance.")
-    surfaces = plan.get("expected_surfaces") or []
     lines += [
         "",
         "## Risks",
         "",
     ]
-    lines += [f"- {redact(item)}" for item in plan.get("risks") or []] or ["- None stated in the plan."]
+    raw_risks = plan.get("risks") or []
+    if raw_risks:
+        for item in raw_risks:
+            for r_line in _split_inline_numbered_steps(str(redact(item))):
+                clean_r = re.sub(r"^\d+\.\s+", "", r_line).strip()
+                lines.append(f"- {clean_r}")
+    else:
+        lines.append("- None stated in the plan.")
     notes = [SURFACE_NOTES[s] for s in surfaces if s in SURFACE_NOTES]
     if notes:
-        lines += ["", "Harness notes for this kind of change:", ""] + [f"- {note}" for note in notes]
+        lines += ["", "> [!CAUTION]", "> **Harness notes for this kind of change:**"] + [f"> - {note}" for note in notes]
     try:
         from project_context import load_project_notes
         notes_info = load_project_notes(repo)
@@ -192,14 +296,14 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         "",
         "## Tests",
         "",
-        _text(plan.get("test_strategy")),
+        f"- {_text(plan.get('test_strategy'))}",
         "",
         "## Phone checks",
         "",
     ]
     device = str(plan.get("device_strategy") or "")
     if device and device != DEFAULT_DEVICE_STRATEGY:
-        lines.append(_text(device))
+        lines += _format_structured_block(device, checklist=True)
     elif policy.get("device_required"):
         lines.append("Not stated yet: the plan does not list the steps the developer will check on the phone.")
     else:
@@ -209,7 +313,7 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
     lines += ["", "## What the harness will check", ""]
     lines += [f"- {GATE_TEXT.get(g, g)}" for g in gates] or ["- Decided when verification starts."]
     if reviewers:
-        lines.append(f"- Reviewers: {', '.join(reviewers)}.")
+        lines.append(f"- **Reviewers ({len(reviewers)})**: " + ", ".join(f"`{r}`" for r in reviewers) + ".")
     from review_models import model_choice_summary
     lines.append("- " + model_choice_summary(repo, str(plan.get("task_id") or "")))
     if plan.get("review_budget_forecast"):
@@ -219,14 +323,14 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         "",
         "## What needs you",
         "",
-        "- Approve this plan (or ask for changes).",
+        "- [ ] Approve this plan (or ask for changes).",
     ]
     if "device" in gates:
-        lines.append("- Check the phone steps above and sign off Pass or Fail.")
+        lines.append("- [ ] Check the phone steps above and sign off Pass or Fail.")
     if "verification_contract" in plan:
-        lines.append("- Approve the listed criteria and selected journey effects with this plan. Manual checks must name the checked criteria at sign-off.")
+        lines.append("- [ ] Approve the listed criteria and selected journey effects with this plan. Manual checks must name the checked criteria at sign-off.")
     lines += [
-        "- Commit the changes yourself; the agent never commits or pushes.",
+        "- [ ] Commit the changes yourself; the agent never commits or pushes.",
         "",
         "## Rollback",
         "",
@@ -234,17 +338,21 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         "",
         "## Modules and surfaces",
         "",
-        f"- Modules: {', '.join(plan.get('expected_modules') or []) or 'not stated'}",
-        f"- Surfaces: {', '.join(surfaces) or 'not stated'}",
-        f"- External writes: {', '.join(plan.get('external_writes') or []) or 'none'}",
+        f"- **Modules**: {modules_str}",
+        f"- **Surfaces**: {', '.join(f'`{s}`' for s in surfaces) or 'not stated'}",
+        f"- **External writes**: {', '.join(plan.get('external_writes') or []) or 'none'}",
         "",
         "## Full approval payload (redacted)",
+        "",
+        "<details>",
+        "<summary>Click to expand raw JSON payload (covered by plan hash)</summary>",
         "",
         "Everything below is covered by the plan hash.",
         "",
         "```json",
         json.dumps(redact(plan_payload(plan)), ensure_ascii=False, sort_keys=True, indent=2),
         "```",
+        "</details>",
         "",
     ]
     return "\n".join(lines)
