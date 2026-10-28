@@ -576,6 +576,10 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
                 + f"Suggested commit: {suggested_commit}\n"
+                "Format the commit card consistently in the developer's active conversation language: "
+                "(1) a clean Markdown table or bullet list of the verified files (with file names in backticks and noting any pre-existing edits), "
+                "(2) the suggested Conventional Commit message inside a fenced `text` code block for easy copying, and "
+                "(3) ask with `ask_question` using options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task'.\n"
                 "Tip: Commit files as-is without reformatting or reordering imports.\n"
                 "The model must NOT run git commit commands. Await developer commit."
             ),

@@ -747,7 +747,13 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "application_id": app_id,
                         "device_target_identity": serial_hash,
                     },
-                    "instructions": "Present the complete mobile verification walkthrough and await the developer's selected response. Do not run automatic validation before selection.",
+                    "instructions": (
+                        "Present the complete mobile verification walkthrough in chat using the canonical 3-section structure "
+                        "(translated into the developer's active conversation language; never hardcode a language): "
+                        "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |`), "
+                        "and (3) Edge Cases. Then invoke `ask_question` with a concise summary and await the developer's selected response. "
+                        "Do not run automatic validation before selection."
+                    ),
                     "accepted_responses": accepted_responses,
                     **({"choices": response_choices, "automation_setup": automation_setup} if automation_setup else {}),
                     **({"choices": response_choices, "walkthrough": plan["verification_contract"]["journeys"]} if validation_choice else {}),

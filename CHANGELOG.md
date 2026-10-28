@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.50] - 2026-10-28
+
+### Language-adaptive unified chat & question UI/UX across the 6 canonical task cards
+
+- **Language-Adaptive Unified Chat & Question Design System**: Standardize 6 canonical Markdown card layouts across `agents/rules/harness-rules.md`, `GEMINI.md`, `agents/tool-adapters/GEMINI.md.template`, `agents/tool-adapters/CLAUDE.md.template`, `agents/tool-adapters/AGENTS.md.template`, `agents/tool-adapters/gemini-runtime/android-harness-global.md.template`, and `agents/scripts/pre_invocation_reminder.py`: (1) Plan Approval Card, (2) Reviewer Dispatch Table (`| Reviewer | Model | Status |`), (3) Review Verdict Table (`| Reviewer | Model | Verdict | Findings |`), (4) 3-Section Mobile Verification Walkthrough (`Navigation & Preconditions`, `| # | Action | Expected Result |` table, `Edge Cases`), (5) Ready for Delivery & Commit Card (verified file list + fenced Conventional Commit block), and (6) Decision & Escalation Modal (`ask_question`).
+- **Dynamic Conversation Language & RTL Hygiene**: Enforce dynamic adaptation to the developer's active conversation language without hardcoding a fixed language, and enforce strict right-to-left (RTL) bidirectional hygiene (every line/bullet starts with a word in the active language and wraps all code symbols, file names, paths, commands, and English technical terms in `` `backticks` ``) in `agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/verification.py`, and `agents/scripts/_workflow/router.py`.
+- **Machine-Emitted Review Verdict Tables**: Emit ready-to-render `| Reviewer | Model | Verdict | Findings |` Markdown summary tables directly from `review finalize` (`agents/scripts/review_orchestrator.py`), `phase-review finalize` (`agents/scripts/phase_review.py`), and `record_review.py` (`agents/scripts/record_review.py`).
+
 ## [1.1.49] - 2026-10-28
 
 ### Structured, scannable `plan.md` layout with executive summary table, layer-classified file table, and collapsible JSON payload

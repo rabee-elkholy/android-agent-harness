@@ -981,6 +981,25 @@ def main(argv: list[str] | None = None) -> int:
 
         path = ingest(repo, args.task, staged_files)
         print(f"REVIEW_EVIDENCE={path}")
+        try:
+            ev_data = (read_json(path).get("evidence") or {})
+            from review_models import effective_reviewer_model
+            findings_by_rev: dict[str, int] = {}
+            for f_item in (ev_data.get("findings") or []):
+                r_key = str(f_item.get("reviewer") or "")
+                findings_by_rev[r_key] = findings_by_rev.get(r_key, 0) + 1
+            print("REVIEW_SUMMARY_TABLE_BEGIN")
+            print("| Reviewer | Model | Verdict | Findings |")
+            print("| :--- | :--- | :--- | :---: |")
+            for rep in (ev_data.get("reports") or []):
+                r_name = str(rep.get("reviewer") or "")
+                m_name = effective_reviewer_model(rep.get("model_selection"))
+                v_name = str(rep.get("verdict") or "PASS")
+                f_cnt = findings_by_rev.get(r_name, 0)
+                print(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
+            print("REVIEW_SUMMARY_TABLE_END")
+        except (OSError, ValueError, KeyError, ImportError, ValidationError):
+            pass
         return 0
     except (ValidationError, OSError) as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)

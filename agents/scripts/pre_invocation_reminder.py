@@ -78,6 +78,7 @@ def _message() -> str:
             next_step = "Follow the central task lifecycle; do not infer authorization from this reminder."
     return (
         f"Android Harness task {task_id}: {status}. {next_step} "
+        "Match the developer's active conversation language dynamically (never hardcode a language) and use the canonical Markdown card layouts (Plan Approval, Reviewer Dispatch Table, Review Verdict Table, 3-Section Mobile Walkthrough Table, Commit Card); in RTL languages start lines with a word in that language and put code/file names in backticks. "
         "Up to 3 concurrent live tasks with disjoint `--expected-files` may share one worktree "
         "(draft a separate task with `workflow.py draft --task-id <new-id> --expected-files <disjoint-paths>` "
         "or switch focus with `python .agents/harness.py task switch --task-id <id>`; "

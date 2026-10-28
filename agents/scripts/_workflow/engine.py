@@ -3291,6 +3291,7 @@ def pre_existing_changes_line(repo: Path, plan: dict) -> str:
 QUESTION_FORMAT = (
     "a short bold heading, then one bullet per line starting with a bold label (what changes, files, sensitive "
     "areas or outside writes, phone checks, risks); numbered sub-steps for phone checks; no emoji. "
+    "Translate all headings and labels into the developer's active conversation language (never hardcode a fixed language). "
     "For a right-to-left language, start every line with a word in that language, never with a code name, and put "
     "every code name, file name, value and English term in backticks so it keeps its place in the sentence."
 )

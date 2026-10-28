@@ -1386,6 +1386,16 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
     aggregate_verdict = "FINDINGS" if has_findings else "PASS"
     from review_models import reviewer_model_map
     models_by_role = reviewer_model_map(run_meta, sorted(reviewers.keys()))
+    summary_lines = [
+        "| Reviewer | Model | Verdict | Findings |",
+        "| :--- | :--- | :--- | :---: |",
+    ]
+    for r_name in sorted(reviewers.keys()):
+        d_info = reviewers[r_name]
+        m_name = models_by_role.get(r_name, "inherit")
+        v_name = str(d_info.get("verdict") or "PASS")
+        f_cnt = len(d_info.get("findings") or [])
+        summary_lines.append(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
     res = {
         "schema_version": 2,
         "task_id": task_id,
@@ -1393,6 +1403,7 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
         "verdict": aggregate_verdict,
         "findings": all_findings,
         "reviewer_models": models_by_role,
+        "summary_table": "\n".join(summary_lines),
         "reviewers": {
             r: {
                 "verdict": d.get("verdict"),

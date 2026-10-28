@@ -1160,6 +1160,20 @@ def main(argv: list[str] | None = None) -> int:
             ]
             rep_suffix = f" ({', '.join(rep_summaries)})" if rep_summaries else ""
             print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings{rep_suffix}")
+            print("REVIEW_SUMMARY_TABLE_BEGIN")
+            print("| Reviewer | Model | Verdict | Findings |")
+            print("| :--- | :--- | :--- | :---: |")
+            findings_by_rev: dict[str, int] = {}
+            for f_item in (res.get("findings") or []):
+                r_key = str(f_item.get("reviewer") or "")
+                findings_by_rev[r_key] = findings_by_rev.get(r_key, 0) + 1
+            for rep in (res.get("reports") or []):
+                r_name = str(rep.get("reviewer") or "")
+                m_name = effective_reviewer_model(rep.get("model_selection"))
+                v_name = str(rep.get("verdict") or "PASS")
+                f_cnt = findings_by_rev.get(r_name, 0)
+                print(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
+            print("REVIEW_SUMMARY_TABLE_END")
             return 0
         elif args.subcommand in ("dispatch", "dispatch-batch", "dispatch_batch") and _run_uses_native_dispatch(repo, args.task):
             raise ValidationError(
