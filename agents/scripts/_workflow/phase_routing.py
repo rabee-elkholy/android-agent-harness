@@ -1,6 +1,8 @@
 """Implementation routing for sequential, checkpointed task phases."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from . import engine as _engine
 
 
@@ -281,13 +283,27 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         f"python .agents/harness.py phase-review dispatch --repo . --task-id {task_id} "
                         f"--phase-id {phase_id} --host {phase_host} {roster_args}"
                     )
+                from review_execution import brief_pointer_prompt
+                phase_reviewer_entries: dict[str, dict[str, Any]] = {}
+                for r in not_dispatched:
+                    b_file = str(briefs.get(r, "") or "")
+                    b_text = ""
+                    if b_file and Path(b_file).is_file():
+                        try:
+                            b_text = Path(b_file).read_text(encoding="utf-8")
+                        except OSError:
+                            b_text = ""
+                    phase_reviewer_entries[r] = {
+                        "role": r,
+                        "type_name": r,
+                        "brief_path": b_file,
+                        "brief_content": b_text,
+                        **({"brief_pointer_prompt": brief_pointer_prompt(r, b_file, b_text)} if b_text and b_file else {}),
+                    }
                 exec_profile = {
                     "model_policy": "INHERIT_PARENT_BY_OMISSION" if _engine.has_trusted_review_source(str(run_meta.get("review_host") or "")) else "HOST_MANAGED_UNVERIFIED",
                     "workspace": "inherit",
-                    "reviewers": {
-                        r: {"role": r, "type_name": r, "brief_path": briefs.get(r, "")}
-                        for r in not_dispatched
-                    },
+                    "reviewers": phase_reviewer_entries,
                 }
 
                 from review_models import effective_reviewer_model, format_reviewers_with_models, frozen_models, reviewer_model_map
@@ -303,6 +319,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     r_info["effective_model"] = effective_reviewer_model(r_info)
                 dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
                 dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
+                prompts = _engine._reviewer_prompts(exec_profile, sorted(not_dispatched))
                 exec_profile["reviewer_models"] = dispatch_models
                 if any(r.get("model_policy") == "DEVELOPER_SELECTED_NATIVE" for r in exec_profile["reviewers"].values()):
                     exec_profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
@@ -329,13 +346,14 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "blocking": True,
                     "phase_id": phase_id,
                     "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models})."),
+                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}).{_engine._prompt_hint(prompts)}"),
                     **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
                     "reviewer_models": dispatch_models,
                     "package_path": run_meta.get("package_path", ""),
                     "briefs": briefs,
                     "review_execution_profile": exec_profile,
+                    **({"reviewer_prompts": prompts} if prompts else {}),
                     "inputs": {
                         "repo": ".",
                         "task_id": task_id,
@@ -345,6 +363,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         "reviewer_models": dispatch_models,
                         "briefs": briefs,
                         "review_execution_profile": exec_profile,
+                        **({"reviewer_prompts": prompts} if prompts else {}),
                     },
                     "expected": {"success_statuses": ["PASS"]},
                 }

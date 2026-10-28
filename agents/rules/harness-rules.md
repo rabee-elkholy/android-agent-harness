@@ -98,6 +98,7 @@ Use the policy computed by `draft`/`revise` before approval and by `prepare-veri
 ## 6. Android and environment safety
 
 - Run Gradle through `run_gradle_task.py` and ADB through harness device scripts. Resolve module, variant, app id, launcher, locale, and device; never assume `:app` or a serial.
+- Antigravity may use the audited `android-ui` adapter for optional Compose compilation/rendering and physical Device Hub under `.agents/workflows/android-ui.md`. Preview is diagnostic only; Hub requires fresh install/launch binding. Neither changes policy, produces delivery PASS, or authorizes direct Android CLI build/device bypasses.
 - Exit `30`/`[ENV-FAILURE]` is an environment blocker. Never alter application code to hide it.
 - Device work requires VERIFYING plus selected prerequisite evidence. Never pair Wireless ADB, reconnect-loop, grant all permissions, uninstall/clear data, downgrade, or make a real purchase automatically.
 - **Device verification & mobile walkthrough timing**: wait for `run_device.py install-start` exit code 0, then present a numbered **Mobile Test Execution Walkthrough** covering navigation, preconditions, actions, expected results, and edge cases before sign-off. Never claim failed or unfinished device runs.
@@ -138,4 +139,5 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Resume | `python .agents/harness.py task resume --task-id <id>` |
 | Assemble | `python .agents/harness.py assemble` |
 | Device | `python .agents/harness.py device install-start` |
+| Antigravity UI diagnostics | `python .agents/harness.py android-ui capabilities` (then `list`, `render --fqn <exact-name>`, or `hub`) |
 | Verify | `python .agents/harness.py verify --task-id <id>` |

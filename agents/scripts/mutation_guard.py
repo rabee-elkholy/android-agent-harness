@@ -16,7 +16,7 @@ VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
-    "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps",
+    "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps", "android_ui",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -869,6 +869,18 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if raw_entry in {"adb", "gradlew", "gradlew.bat", "gradle"}:
         return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
     entry, model_args = _entry(normalized, repo)
+    if entry == "android_ui" or (entry in {"harness_cli", "android-harness"} and model_args[:1] == ["android-ui"]):
+        ui_args = model_args[1:] if entry != "android_ui" else model_args
+        if ui_args[:1] == ["capabilities"]:
+            return True, "Android UI capability probe; adapter validates host and executable"
+        try:
+            from android_ui import authorize
+            if not ui_args or ui_args[0] not in {"list", "render", "hub"}:
+                return False, "Unknown Android UI action"
+            authorize(Path(repo), ui_args[0])
+            return True, "Android UI adapter validates task, snapshot and physical-device binding"
+        except ValidationError as exc:
+            return False, str(exc)
     if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "resume"]:
         if "--source" in model_args and model_args[model_args.index("--source") + 1:model_args.index("--source") + 2] == ["conversation"] and "--proof-reference" in model_args:
             return True, "explicit developer reviewer resume; command validates native cancellation and execution"

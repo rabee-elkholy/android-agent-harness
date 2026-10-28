@@ -190,11 +190,13 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|journey|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|journey|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
     command = args.pop(0)
+    if command == "android-ui":
+        return _run("android_ui.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "policy":
         return _run("review_policy.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "verify-steps":

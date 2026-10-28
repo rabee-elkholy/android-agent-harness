@@ -5,6 +5,18 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {"command": "android-ui capabilities", "read_only": False, "valid_states": ["ANY"],
+     "required_inputs": [], "model_facing": True,
+     "description": "Antigravity-only cached Android CLI capability probe; never installs or updates tools."},
+    {"command": "android-ui list", "read_only": False, "valid_states": ["IMPLEMENTING", "VERIFYING"],
+     "required_inputs": [], "model_facing": True,
+     "description": "Compile and discover previews in the resolved module; diagnostic only, shares the build lock."},
+    {"command": "android-ui render", "read_only": False, "valid_states": ["IMPLEMENTING", "VERIFYING"],
+     "required_inputs": ["fqn"], "model_facing": True,
+     "description": "Batch selected previews; component trees by default, --image for visual review. Snapshot-bound advisory reuse."},
+    {"command": "android-ui hub", "read_only": False, "valid_states": ["VERIFYING"],
+     "required_inputs": [], "model_facing": True,
+     "description": "Open the physical phone bound to current install/launch evidence; no emulator fallback or test PASS."},
     {"command": "task plan-note", "read_only": False,
      "valid_states": ["IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"],
      "required_inputs": ["task_id", "text", "source", "proof_reference"], "model_facing": True,

@@ -450,6 +450,86 @@ def _receipt_graph_fingerprint(engine: GraphEngine, sync: dict[str, Any]) -> str
     return str(getattr(engine, "graph_fingerprint", "") or sync.get("graph_fingerprint") or "")
 
 
+def lightweight_target_probe(
+    repo: Path,
+    *,
+    file: str | None = None,
+    symbol: str | None = None,
+    module: str | None = None,
+    source_set: str | None = None,
+) -> str:
+    """Fast pre-tool hook probe: validates target existence/resolution and publishes a receipt
+    when the hook simulates command execution without running full classification or test scans."""
+    root = repo.resolve()
+    engine = GraphEngine(root)
+    loaded = engine.load_cache() and bool(engine.graph.nodes)
+    sync: dict[str, Any] = {}
+    if not loaded:
+        sync = engine.sync(persist=False)
+
+    if file:
+        status, candidates, _ = _resolve_file(root, file, engine)
+        if status == "NOT_FOUND" and loaded:
+            sync = engine.sync(persist=False)
+            status, candidates, _ = _resolve_file(root, file, engine)
+        query = file
+    elif symbol:
+        status, candidates, _ = _resolve_symbol(symbol, engine, module=module, source_set=source_set)
+        if status == "NOT_FOUND" and loaded:
+            sync = engine.sync(persist=False)
+            status, candidates, _ = _resolve_symbol(symbol, engine, module=module, source_set=source_set)
+        query = symbol
+    else:
+        return "INVALID_TARGET_PATH"
+
+    if status in {"AMBIGUOUS", "NOT_FOUND", "INVALID_TARGET_PATH"}:
+        return status
+
+    try:
+        from discovery_receipt import create_discovery_receipt, save_discovery_receipt
+        graph_fp = _receipt_graph_fingerprint(engine, sync)
+        if status == "FILE_FALLBACK":
+            rel_posix = str(candidates[0])
+            target_module = ":app" if rel_posix.startswith("app/") else ":"
+            receipt = create_discovery_receipt(
+                mode="TARGETED_GRAPH_CONTEXT",
+                query_kind="file",
+                query_value=query,
+                graph_fingerprint=graph_fp,
+                resolved_modules=[target_module],
+                resolved_paths=[rel_posix],
+                resolved_symbols=[],
+            )
+            save_discovery_receipt(root, receipt)
+        else:
+            target_nodes = candidates
+            primary = target_nodes[0]
+            target_ids = {node.id for node in target_nodes}
+            dependency_ids: set[str] = set()
+            dependent_ids: set[str] = set()
+            for node_id in target_ids:
+                dependency_ids.update(engine.graph.get_targets(node_id))
+                dependent_ids.update(engine.graph.get_sources(node_id))
+            dependencies = [engine.graph.nodes[item] for item in dependency_ids if item in engine.graph.nodes and item not in target_ids]
+            dependents = [engine.graph.nodes[item] for item in dependent_ids if item in engine.graph.nodes and item not in target_ids]
+            participating_modules = sorted({n.module for n in target_nodes + dependencies + dependents if n.module})
+            res_paths = sorted({primary.file_path} | {node.file_path for node in dependencies + dependents if node.file_path})
+            res_symbols = sorted({node.name for node in target_nodes + dependencies[:10] + dependents[:10] if node.name})
+            receipt = create_discovery_receipt(
+                mode="TARGETED_GRAPH_CONTEXT",
+                query_kind="file" if file else "symbol",
+                query_value=query,
+                graph_fingerprint=graph_fp,
+                resolved_modules=participating_modules,
+                resolved_paths=res_paths,
+                resolved_symbols=res_symbols,
+            )
+            save_discovery_receipt(root, receipt)
+    except (OSError, ValueError, ImportError, _ExpectedArtifactError):
+        pass
+    return "RESOLVED"
+
+
 def resolve_task_context(
     repo: Path,
     *,
@@ -840,6 +920,9 @@ def resolve_task_contexts(
                                     file=target if files else None, symbol=target if symbols else None,
                                     module=module, source_set=source_set, limit=limit, publish=False)
                for target in dict.fromkeys(targets)]
+    for row in results:
+        if isinstance(row.get("project_notes"), dict) and "content" in row["project_notes"]:
+            row["project_notes"] = {k: v for k, v in row["project_notes"].items() if k != "content"}
     successful = [row for row in results if row["status"] in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}]
     result = {
         "schema_version": SCHEMA_VERSION,
@@ -928,6 +1011,40 @@ def _add_line_numbers(root: Path, result: dict[str, Any], target_nodes: list[Gra
         result["read_ranges"] = read_ranges
 
 
+def _deduplicate_cli_context_notes(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Emit full project_notes content on the first CLI invocation or when sha256 changes;
+    subsequent consecutive CLI calls within 30 minutes receive compact metadata + sections."""
+    import time
+    from _vnext_common import atomic_write_json
+    notes = payload.get("project_notes")
+    if not isinstance(notes, dict) or not notes.get("has_custom_notes") or not notes.get("content"):
+        return payload
+    sha = str(notes.get("sha256") or "")
+    if not sha:
+        return payload
+    marker = repo.resolve() / ".agents" / "cache" / "task-context" / "last-emitted-notes.json"
+    now = time.time()
+    already_emitted = False
+    if marker.is_file():
+        try:
+            seen = json.loads(marker.read_text(encoding="utf-8"))
+            if isinstance(seen, dict) and seen.get("sha256") == sha and 0 <= now - float(seen.get("at", 0)) < 1800:
+                already_emitted = True
+        except Exception:
+            already_emitted = False
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(marker, {"sha256": sha, "at": now})
+    except (OSError, ValueError):
+        pass
+    if already_emitted:
+        compact_notes = {k: v for k, v in notes.items() if k != "content"}
+        compact_notes["content_omitted"] = True
+        compact_notes["note"] = "Unchanged project_notes content already loaded in session; see .agents/project-context/project-notes.md."
+        return {**payload, "project_notes": compact_notes}
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
@@ -942,16 +1059,18 @@ def main(argv: list[str] | None = None) -> int:
     targets = args.file or args.symbol
     if len(targets) > MAX_BATCH_TARGETS:
         parser.error("A task-context batch accepts at most 8 targets.")
+    repo_path = Path(args.repo)
     if len(targets) > 1:
-        result = resolve_task_contexts(Path(args.repo), files=args.file, symbols=args.symbol,
+        result = resolve_task_contexts(repo_path, files=args.file, symbols=args.symbol,
                                        module=args.module, source_set=args.source_set, limit=args.limit)
     else:
-        result = resolve_task_context(Path(args.repo), file=args.file[0] if args.file else None,
+        result = resolve_task_context(repo_path, file=args.file[0] if args.file else None,
                                       symbol=args.symbol[0] if args.symbol else None,
                                       module=args.module, source_set=args.source_set, limit=args.limit)
     if args.json:
+        out_payload = _deduplicate_cli_context_notes(repo_path, result)
         # ASCII JSON preserves every Unicode code point on legacy Windows pipes.
-        print(json.dumps(result, ensure_ascii=True, indent=2))
+        print(json.dumps(out_payload, ensure_ascii=True, indent=2))
     else:
         from _live_process import enable_line_buffered_stdio
         enable_line_buffered_stdio()

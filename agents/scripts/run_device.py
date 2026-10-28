@@ -52,10 +52,34 @@ from _verification_recipes import (  # noqa: E402
 )
 
 DEFAULT_ACTIVITY = LAUNCHER
+TEMPLATE_PLACEHOLDER_ACTIVITY = "com.example.app/.MainActivity"
 ADB_ERROR_MARKERS = (
     "error type", "activity class", "does not exist", "securityexception",
     "exception occurred", "failure [",
 )
+
+
+def _resolve_repo_launcher_activity(repo: Path, actual_application_id: str) -> str:
+    """Resolve the real launcher component from setup answers or AndroidManifest.xml when _product.py is unconfigured."""
+    answers_file = repo / ".harness-setup" / "answers.json"
+    if answers_file.is_file():
+        try:
+            answers = read_json(answers_file)
+            ans_launcher = str((answers or {}).get("launcher") or "").strip()
+            if ans_launcher and ans_launcher != TEMPLATE_PLACEHOLDER_ACTIVITY:
+                return ans_launcher
+        except (OSError, ValueError, ValidationError):
+            pass
+    try:
+        from wizard.discovery import discover_launchers
+
+        app_ids = [actual_application_id] if actual_application_id and actual_application_id != "com.example.app" else None
+        discovered = discover_launchers(repo, application_ids=app_ids)
+        if discovered:
+            return discovered[0]
+    except (OSError, ValueError, ImportError):
+        pass
+    return ""
 
 
 def adb_result_ok(code: int, log: str) -> bool:
@@ -896,7 +920,20 @@ def main() -> int:
     target_activity = ""
     if args.action in ("start", "install-start"):
         target_activity = args.activity
-        if target_activity == DEFAULT_ACTIVITY and "/" in target_activity:
+        effective_default = DEFAULT_ACTIVITY
+        if target_activity == DEFAULT_ACTIVITY and (
+            DEFAULT_ACTIVITY == TEMPLATE_PLACEHOLDER_ACTIVITY
+            or (
+                DEFAULT_ACTIVITY.startswith("com.example.app/")
+                and actual_application_id
+                and actual_application_id != "com.example.app"
+            )
+        ):
+            discovered_launcher = _resolve_repo_launcher_activity(REPO, actual_application_id)
+            if discovered_launcher:
+                target_activity = discovered_launcher
+                effective_default = discovered_launcher
+        if target_activity == effective_default and "/" in target_activity:
             original_package, activity_class = target_activity.split("/", 1)
             if activity_class.startswith("."):
                 activity_class = original_package + activity_class

@@ -351,6 +351,16 @@ def validate_reviewer_precondition_before_assemble(
 
 
 def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None) -> int:
+    from build_execution import build_lock
+    try:
+        with build_lock(Path(cwd).resolve() if cwd else REPO_ROOT):
+            return _run_gradle_locked(task_args, outcome=outcome, cwd=cwd)
+    except _ExpectedArtifactError as exc:
+        live_print(f"[FAIL] Build execution unavailable: {exc}", err=True)
+        return EXIT_ENV
+
+
+def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None) -> int:
     enable_line_buffered_stdio()
     if outcome is not None:
         outcome.clear()

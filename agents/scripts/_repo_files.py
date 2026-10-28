@@ -62,12 +62,15 @@ class ChangedFile:
     content_sha256: str | None = None
 
 
-def changed_files(repo: Path | None = None, *, include_untracked: bool = True) -> list[ChangedFile]:
+def changed_files(repo: Path | None = None, *, include_untracked: bool = True, paths: list[str] | None = None) -> list[ChangedFile]:
     """Parse git status --porcelain=v2 -z to discover working-tree changes precisely."""
     r = repo or REPO
+    cmd = ["git", "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all"]
+    if paths:
+        cmd.extend(["--", *paths])
     try:
         proc = subprocess.run(
-            ["git", "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all"],
+            cmd,
             cwd=r,
             capture_output=True,
             check=False,

@@ -40,7 +40,7 @@ def review_reading_guide(content: str, reviewer: str, policy: dict, changes: lis
 
     Reuse the central surface routing vocabulary. Integration/completeness
     owners and sensitive or ambiguous inputs always receive the full package.
-    Quoted/ambiguous diff paths and new-file extras conservatively fall back.
+    Quoted/ambiguous diff paths conservatively fall back.
     """
     from review_policy import ROUTING
     from change_classifier import CRITICAL_SURFACES
@@ -50,20 +50,23 @@ def review_reading_guide(content: str, reviewer: str, policy: dict, changes: lis
     if surfaces & (set(CRITICAL_SURFACES) | {"AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO", "UNKNOWN"}):
         return None
     details = (policy.get("explanation") or {}).get("classification") or {}
+    passive_surfaces = {"DOCS", "LOCALIZATION", "TEST_ONLY"}
     paths = {str(item.get("path") or "") for item in changes}
     paths.discard("")
     known, focus = set(), set()
     for surface, info in details.items():
-        if surface not in ROUTING or not isinstance(info, dict):
+        if not isinstance(info, dict):
+            return None
+        if surface not in ROUTING and surface not in passive_surfaces:
             return None
         files = set(info.get("files") or []) & paths
         known.update(files)
-        if reviewer in ROUTING[surface]:
+        if surface in ROUTING and reviewer in ROUTING[surface]:
             focus.update(files)
     if not paths or not paths <= known or not focus or focus == paths:
         return None
     marker = "## Git diff\n```diff\n"
-    if content.count(marker) != 1 or "## NEW UNTRACKED FILE " in content:
+    if content.count(marker) != 1:
         return None
     lines = content.splitlines()
     start = len(content.split(marker, 1)[0].splitlines()) + 2
@@ -73,11 +76,22 @@ def review_reading_guide(content: str, reviewer: str, policy: dict, changes: lis
     blocks = []
     for i in range(start, end):
         if lines[i].startswith("diff --git "):
-            match = re.fullmatch(r'diff --git a/([^\s"\\]+) b/([^\s"\\]+)', lines[i])
+            match = re.fullmatch(r'diff --git (?:"a/([^"\\]+)"|a/([^\s"\\]+)) (?:"b/([^"\\]+)"|b/([^\s"\\]+))', lines[i])
             if not match:
                 return None
-            blocks.append((i, {match[1], match[2]}))
-    if not blocks or not paths <= set().union(*(names for _, names in blocks)):
+            a_path = match[1] or match[2]
+            b_path = match[3] or match[4]
+            blocks.append((i, {a_path, b_path}))
+    untracked_names = {
+        lines[i][len("## NEW UNTRACKED FILE "):].strip()
+        for i in range(end + 1, len(lines))
+        if lines[i].startswith("## NEW UNTRACKED FILE ")
+    }
+    represented = set().union(*(names for _, names in blocks)) if blocks else set()
+    represented |= untracked_names
+    if not paths <= represented:
+        return None
+    if not blocks:
         return None
     ranges = [[1, blocks[0][0]]]
     for index, (offset, names) in enumerate(blocks):

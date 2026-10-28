@@ -15,17 +15,73 @@ from evidence_store import StateLock
 
 def active_reviews(repo: Path):
     from phase_review import phase_run_file, phase_ledger_file
-    for plan_file in (state_root(repo) / "tasks").glob("*/plan.json"):
-        plan = read_json(plan_file)
-        tdir = plan_file.parent
-        if plan.get("status") == "VERIFYING" and (tdir / "current-run.json").is_file():
-            run = read_json(tdir / "current-run.json")
-            yield run, tdir / "review-execution" / str(run["run_id"]) / "ledger.json"
-        elif plan.get("status") == "IMPLEMENTING" and (tdir / "phase-state.json").is_file():
-            phase = str(read_json(tdir / "phase-state.json").get("current_phase_id") or "")
-            path = phase_run_file(tdir, phase)
+    root = state_root(repo)
+    tasks_dir = root / "tasks"
+    if not tasks_dir.is_dir():
+        return
+    cache_path = root / "cache" / "active-reviews-index.json"
+    cached_mtimes: dict[str, tuple[int, str]] = {}
+    if cache_path.is_file():
+        try:
+            raw_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(raw_cache, dict) and raw_cache.get("version") == 1 and isinstance(raw_cache.get("plans"), dict):
+                cached_mtimes = {
+                    k: (int(v.get("mtime_ns", 0)), str(v.get("status", "")))
+                    for k, v in raw_cache["plans"].items()
+                    if isinstance(v, dict)
+                }
+        except Exception:
+            cached_mtimes = {}
+
+    next_cache: dict[str, dict[str, int | str]] = {}
+    cache_dirty = False
+    active_entries: list[tuple[Path, str, bool, bool]] = []
+
+    for entry in tasks_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        has_run = (entry / "current-run.json").is_file()
+        has_phase = (entry / "phase-state.json").is_file()
+        if not has_run and not has_phase:
+            continue
+        plan_file = entry / "plan.json"
+        if not plan_file.is_file():
+            continue
+        try:
+            mtime_ns = getattr(plan_file.stat(), "st_mtime_ns", 0)
+        except OSError:
+            continue
+        cached = cached_mtimes.get(entry.name)
+        if cached and cached[0] == mtime_ns and cached[1]:
+            status = cached[1]
+            next_cache[entry.name] = {"mtime_ns": mtime_ns, "status": status}
+        else:
+            try:
+                plan = read_json(plan_file)
+                status = str(plan.get("status") or "")
+            except (OSError, ValueError, ValidationError):
+                continue
+            cache_dirty = True
+            next_cache[entry.name] = {"mtime_ns": mtime_ns, "status": status}
+        if status in {"VERIFYING", "IMPLEMENTING"}:
+            active_entries.append((entry, status, has_run, has_phase))
+
+    if cache_dirty or len(next_cache) != len(cached_mtimes):
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(cache_path, {"version": 1, "plans": next_cache})
+        except (OSError, ValueError, ValidationError):
+            pass
+
+    for entry, status, has_run, has_phase in active_entries:
+        if status == "VERIFYING" and has_run:
+            run = read_json(entry / "current-run.json")
+            yield run, entry / "review-execution" / str(run["run_id"]) / "ledger.json"
+        elif status == "IMPLEMENTING" and has_phase:
+            phase = str(read_json(entry / "phase-state.json").get("current_phase_id") or "")
+            path = phase_run_file(entry, phase)
             if path.is_file():
-                yield read_json(path), phase_ledger_file(tdir, phase)
+                yield read_json(path), phase_ledger_file(entry, phase)
 
 
 def _head_steps(path: Path, limit: int = 8) -> list[dict]:

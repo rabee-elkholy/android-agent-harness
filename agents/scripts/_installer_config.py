@@ -32,7 +32,18 @@ def product_values(repo: Path, answers: dict) -> dict:
         application_id = app_ids[0] if app_ids else f"com.{clean_name}.app"
 
     project_kind = answers.get("project_kind") or "application"
-    launcher = answers.get("launcher") or (f"{application_id}/.MainActivity" if project_kind == "application" else "")
+    launcher = str(answers.get("launcher") or "").strip()
+    if (not launcher or launcher == "com.example.app/.MainActivity") and project_kind == "application":
+        try:
+            from wizard.discovery import discover_launchers
+
+            discovered_launchers = discover_launchers(repo, application_ids=[application_id] if application_id else None)
+            if discovered_launchers:
+                launcher = discovered_launchers[0]
+        except (OSError, ValueError, ImportError):
+            pass
+    if not launcher and project_kind == "application":
+        launcher = f"{application_id}/.MainActivity"
     assemble_task = answers.get("assemble") or ":app:assembleDebug"
     unit_test_task = answers.get("unit_test_task") or assemble_task.replace("assemble", "test") + "UnitTest"
     if "assemble" not in assemble_task:

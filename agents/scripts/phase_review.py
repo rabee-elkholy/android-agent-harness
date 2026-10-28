@@ -624,6 +624,124 @@ def is_phase_review_needed(
     return True, selected[:2]
 
 
+def _narrow_phase_review_roster(
+    repo: Path,
+    task_id: str,
+    phase_id: str,
+    selected_reviewers: list[str],
+    live_states: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Narrow re-review roster in a phase when a prior run had findings and a focused fix."""
+    tdir = task_dir(repo, task_id)
+    hist_dir = phase_dir(tdir, phase_id) / "review-history"
+    if not hist_dir.is_dir():
+        return selected_reviewers, []
+
+    latest_run_dir = None
+    latest_ts = ""
+    for child in sorted(hist_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        run_f = child / "current-phase-run.json"
+        res_f = child / "phase_review_result.json"
+        if not run_f.is_file() or not res_f.is_file():
+            continue
+        try:
+            r_meta = read_json(run_f)
+            ts = str(r_meta.get("created_at") or "")
+            if ts >= latest_ts:
+                latest_ts = ts
+                latest_run_dir = child
+        except Exception:
+            continue
+
+    if latest_run_dir is None:
+        return selected_reviewers, []
+
+    try:
+        prev_run = read_json(latest_run_dir / "current-phase-run.json")
+        prev_res = read_json(latest_run_dir / "phase_review_result.json")
+    except Exception:
+        return selected_reviewers, []
+
+    if prev_res.get("verdict") != "FINDINGS":
+        return selected_reviewers, []
+
+    prev_revs = prev_res.get("reviewers") or {}
+    finding_owners = {
+        r for r, d in prev_revs.items()
+        if isinstance(d, dict) and (d.get("verdict") == "FINDINGS" or d.get("findings"))
+    }
+    passed_reviewers = {
+        r for r, d in prev_revs.items()
+        if isinstance(d, dict) and d.get("verdict") == "PASS" and not d.get("findings")
+    }
+    if not finding_owners or not passed_reviewers:
+        return selected_reviewers, []
+
+    prev_states = prev_run.get("phase_path_states") or {}
+    if not isinstance(prev_states, dict) or not prev_states:
+        return selected_reviewers, []
+
+    all_paths = set(prev_states.keys()) | set(live_states.keys())
+    modified_since_prev = sorted(p for p in all_paths if prev_states.get(p) != live_states.get(p))
+    if not modified_since_prev:
+        return selected_reviewers, []
+
+    try:
+        from change_classifier import classify
+        from review_policy import ROUTING
+        delta_class = classify(repo, task_changes=[{"path": p} for p in modified_since_prev], candidate_paths=modified_since_prev)
+        delta_surfaces = set(delta_class.get("surfaces") or [])
+    except Exception:
+        return selected_reviewers, []
+
+    # Check if any modified file directly routes a passed specialist (excluding baseline bug/regression)
+    specialty_surfaces = {
+        "security-reviewer-agent": {"SECURITY", "AUTH", "CRYPTO", "SENSITIVE_DATA", "BILLING"},
+        "perf-anr-guardian-agent": {"PERFORMANCE", "COROUTINES", "THREADING", "DEVICE_API", "NATIVE_CODE"},
+        "convention-reviewer-agent": {"CONVENTIONS", "ARCHITECTURE"},
+        "test-quality-reviewer-agent": {"TEST_ONLY", "TESTS", "TESTING"},
+    }
+    mod_paths_lower = " ".join(p.lower() for p in modified_since_prev)
+    rerun: list[str] = []
+    carried: list[dict[str, Any]] = []
+    for r in selected_reviewers:
+        if r in finding_owners or r not in passed_reviewers:
+            rerun.append(r)
+            continue
+        spec_surfs = specialty_surfaces.get(r)
+        if spec_surfs is not None:
+            touched_specialty = bool(delta_surfaces & spec_surfs)
+            if r == "security-reviewer-agent" and any(k in mod_paths_lower for k in ("auth", "security", "crypto", "token", "keystore", "billing")):
+                touched_specialty = True
+            if not touched_specialty:
+                carried.append({
+                    "reviewer": r,
+                    "source_run_id": str(prev_run.get("phase_review_run_id") or ""),
+                    "source_package_sha256": str(prev_run.get("package_sha256") or ""),
+                    "verdict": "PASS",
+                })
+                continue
+        else:
+            routed_for_delta: set[str] = set()
+            for s in delta_surfaces:
+                routed_for_delta |= set(ROUTING.get(s, set()))
+            if r not in routed_for_delta:
+                carried.append({
+                    "reviewer": r,
+                    "source_run_id": str(prev_run.get("phase_review_run_id") or ""),
+                    "source_package_sha256": str(prev_run.get("package_sha256") or ""),
+                    "verdict": "PASS",
+                })
+                continue
+        rerun.append(r)
+
+    if not rerun:
+        return selected_reviewers, []
+    return rerun, carried
+
+
 def derive_final_review_reserve(repo: Path, plan: dict[str, Any], phase_policy: dict[str, Any]) -> dict[str, Any]:
     """Reserve the central policy's likely final roster using all declared task surfaces."""
     surfaces = set(plan.get("expected_surfaces") or []) | set(phase_policy.get("surfaces") or [])
@@ -818,6 +936,10 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | Non
     if not needed or not selected_reviewers:
         raise ValidationError(f"phase review is not required for phase '{phase_id}'")
 
+    selected_reviewers, carried_phase_reviews = _narrow_phase_review_roster(
+        repo, task_id, phase_id, selected_reviewers, live_states,
+    )
+
     diff = _compute_phase_diff(repo, paths)
     diff_stats = compute_phase_diff_stats(diff, paths)
     phase_delta_sha256 = ckpt.get("phase_delta_sha256") or compute_phase_delta_sha256(phase_id, phase_changes)
@@ -849,6 +971,7 @@ def build_phase_package(repo: Path, task_id: str, phase_id: str, host: str | Non
         "delivery_snapshot_sha256": ckpt.get("delivery_snapshot_sha256"),
         "task_change_set_sha256": ckpt.get("task_change_set_sha256"),
         "selected_reviewers": selected_reviewers,
+        **({"carried_reviews": carried_phase_reviews} if carried_phase_reviews else {}),
         "changed_files": len(paths),
         "phase_file_hashes": file_hashes,
         "phase_path_states": live_states,
@@ -1615,9 +1738,36 @@ def _main(argv: list[str] | None = None) -> int:
                 response_source=response_source,
             )
             results.append(res)
+        try:
+            tdir = task_dir(repo, args.task_id)
+            run_meta = read_json(run_file) if run_file.is_file() else {}
+            ok, _, ledger = load_phase_ledger(tdir, args.phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
+            ledger_revs = (ledger or {}).get("reviewers") or {}
+            if ok and ledger_revs and all(d.get("state") == REVIEW_COMPLETED for d in ledger_revs.values()):
+                finalize_phase_review(repo, args.task_id, args.phase_id)
+        except (OSError, ValueError, KeyError, HarnessError):
+            pass
         print(json.dumps(results[0] if len(results) == 1 else {"completed": results}, indent=2))
         return 0
     elif args.subcommand == "finalize":
+        tdir = task_dir(repo, args.task_id)
+        res_file = phase_review_dir(tdir, args.phase_id) / "phase_review_result.json"
+        prun_f = phase_run_file(tdir, args.phase_id)
+        if res_file.is_file() and prun_f.is_file():
+            try:
+                existing_res = read_json(res_file)
+                run_meta = read_json(prun_f)
+                fresh, _ = phase_review_freshness(repo, args.task_id, args.phase_id, run_meta)
+                if (
+                    fresh
+                    and isinstance(existing_res, dict)
+                    and existing_res.get("task_id") == args.task_id
+                    and existing_res.get("phase_id") == args.phase_id
+                ):
+                    print(json.dumps(existing_res, indent=2))
+                    return 0
+            except (OSError, ValueError, KeyError, HarnessError):
+                pass
         res = finalize_phase_review(repo, args.task_id, args.phase_id)
         print(json.dumps(res, indent=2))
         return 0

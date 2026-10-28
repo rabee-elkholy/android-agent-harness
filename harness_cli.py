@@ -1064,6 +1064,13 @@ def cmd_device(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_device.py", forward)
 
 
+def cmd_android_ui(args: argparse.Namespace) -> int:
+    forward = list(args.ui_args)
+    if forward[:1] == ["--"]:
+        forward = forward[1:]
+    return _dispatch_pipeline_script(args, "android_ui.py", forward)
+
+
 def cmd_phase_review(args: argparse.Namespace) -> int:
     """Build, dispatch, complete, or finalize scoped phase reviews."""
     forward = list(args.phase_review_args)
@@ -1073,6 +1080,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 
 FULL_SELFTEST_SUITES = (
+    "_android_ui_selftest.py",
     "_change_decision_selftest.py",
     "_review_models_selftest.py",
     "_portability_selftest.py",
@@ -1636,6 +1644,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("journey_args", nargs=argparse.REMAINDER)
     sp.set_defaults(func=cmd_journey)
+
+    sp = sub.add_parser("android-ui", help="Antigravity Compose previews and verified physical Device Hub.")
+    sp.add_argument("--repo", help="Android project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("ui_args", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_android_ui)
 
     sp = sub.add_parser("device", help="Deploy or inspect device via run_device.py.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")

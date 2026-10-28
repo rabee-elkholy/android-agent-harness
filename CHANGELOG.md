@@ -1,15 +1,13 @@
 # Changelog
 
-## Unreleased
+## [1.1.52] - 2026-10-28
 
-- Harden Antigravity native evidence against model file writes; allow only named conversation planning artifacts.
-- Reject shell expressions hidden inside inspection commands and repo-local executable lookalikes.
-- Validate enabled hook coverage and executable/script availability before reporting configured hard mutation interception.
-- Stream reviewer dispatch identity without reparsing subsequent tool history; retain complete final-result validation.
-- Reuse unchanged file hashes in the advisory hook-selftest cache, including nested runtime modules.
-- Rotate bounded audit logs by size under a separate writer lock and keep reminders read-only and compact.
-- Add conservative, policy-derived initial reading ranges to Antigravity reviewer briefs without narrowing review scope, roster, or immutable evidence.
-- Remove redundant status-query instructions from Antigravity adapters and preserve developer-owned Git authority.
+### Antigravity `android-ui` (`Compose Preview` & `Device Hub`) adapter, Round-2 performance & token optimizations, scoped phase-review parity, and launcher activity fallback
+
+- **Antigravity Android CLI (`Compose Preview` & `Device Hub`) Adapter**: Add optional Antigravity Android CLI Compose diagnostics (`agents/scripts/android_ui.py`, `agents/workflows/android-ui.md`, `agents/scripts/_android_ui_selftest.py`) with selected batched previews, tree-first output, daemon opt-out, bounded retention, and snapshot-bound advisory reuse; open Android Device Hub only on the physical phone bound to fresh install/launch evidence; and serialize preview compilation and Gradle runners through a shared per-worktree build lease (`agents/scripts/build_execution.py`, `agents/scripts/run_gradle_task.py`).
+- **Round-2 Antigravity Performance & Token Optimizations**: Accelerate `task-context` and `change_classifier` via a lightweight pre-tool hook target probe (`lightweight_target_probe` in `agents/scripts/task_context.py`), shared incremental source-type/Room-database index cache (`agents/scripts/change_classifier.py`), path-scoped `changed_files` (`agents/scripts/_repo_files.py`), and CLI `project_notes` session deduplication; fast-path `active_reviews` via `.agents/state/cache/active-reviews-index.json` (`agents/scripts/reviewer_host.py`); expand `review_reading_guide` to handle passive surfaces (`DOCS`, `LOCALIZATION`, `TEST_ONLY`), quoted diff paths, and untracked files (`agents/scripts/review_package.py`); and bound `list_dir` audit log tail reads (`agents/scripts/pre_tool_safety.py`).
+- **Scoped Phase-Review (`phase-review`) Parity & Narrowing**: Narrow phase-review reruns after `FINDINGS` in `agents/scripts/phase_review.py` (`_narrow_phase_review_roster`) so passing specialists whose surfaces were not modified by the fix delta are carried forward (`carried_reviews`) instead of re-dispatched; auto-finalize `phase-review complete` when all phase reviewers complete; include `brief_content` and `reviewer_prompts` pointers in `DISPATCH_PHASE_REVIEWERS` (`agents/scripts/_workflow/phase_routing.py`, `agents/scripts/pre_tool_safety.py`); and enforce concise progress counts (`1/2`) on partial phase-reviewer completion (`agents/scripts/pre_invocation_reminder.py`, `GEMINI.md`, `agents/tool-adapters/GEMINI.md.template`).
+- **Launcher Activity Fallback & Drift Detection**: Resolve the real launcher activity dynamically from `.harness-setup/answers.json` or `AndroidManifest.xml` in `agents/scripts/run_device.py` and `agents/scripts/_installer_config.py` when `_product.py` carries the raw kit template placeholder (`com.example.app/.MainActivity`), preventing `am start` failures with `com.<app>/com.example.app.MainActivity`, and add `APPLICATION_ID` / `LAUNCHER` drift checks in `agents/scripts/doctor/engine.py`.
 
 ## [1.1.51] - 2026-10-28
 

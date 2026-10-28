@@ -540,6 +540,22 @@ class HarnessDoctor:
                 f"_product.py DEVICE_TARGET_POLICY '{target_policy}'."
             )
 
+        answers_app_id = str(answers.get("application_id") or "").strip()
+        product_app_id = str(getattr(_product, "APPLICATION_ID", "")).strip()
+        if answers_app_id and product_app_id and answers_app_id != product_app_id:
+            drift.append(
+                f"application_id mismatch: answers.json '{answers_app_id}' vs "
+                f"_product.py APPLICATION_ID '{product_app_id}'."
+            )
+
+        answers_launcher = str(answers.get("launcher") or "").strip()
+        product_launcher = str(getattr(_product, "LAUNCHER", "")).strip()
+        if answers_launcher and product_launcher and answers_launcher != product_launcher:
+            drift.append(
+                f"launcher mismatch: answers.json '{answers_launcher}' vs "
+                f"_product.py LAUNCHER '{product_launcher}'."
+            )
+
         answers_assemble = str(answers.get("assemble") or "").strip()
         product_assemble = str(getattr(_product, "ASSEMBLE_TASK", "")).strip()
         if answers_assemble and product_assemble and answers_assemble != product_assemble:

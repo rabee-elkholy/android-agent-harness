@@ -252,15 +252,23 @@ def _head_text(repo: Path, relative: str, base_ref: str = "HEAD") -> str:
     return proc.stdout if proc.returncode == 0 and len(proc.stdout) <= 2 * 1024 * 1024 else ""
 
 
-def _room_schema_types(repo: Path) -> set[str]:
+def _room_schema_types(repo: Path, source_index: dict[str, list[Path]] | None = None) -> set[str]:
     types: set[str] = set()
     try:
         from room_guard import build_source_type_index, iter_database_files, parse_database_source
-        source_index = build_source_type_index(repo)
-        for db_path in iter_database_files(repo):
+        if source_index is not None and "__room_database_files__" in source_index:
+            db_files = list(source_index.get("__room_database_files__") or [])
+        elif source_index is not None and source_index:
+            db_files = []
+        else:
+            db_files = list(iter_database_files(repo))
+        if not db_files:
+            return types
+        idx = source_index if source_index is not None else build_source_type_index(repo)
+        for db_path in db_files:
             try:
                 text = db_path.read_text(encoding="utf-8", errors="replace")
-                decl = parse_database_source(text, db_path.relative_to(repo).as_posix(), repo, source_index)
+                decl = parse_database_source(text, db_path.relative_to(repo).as_posix(), repo, idx)
                 types.update(decl.entity_names)
             except Exception:
                 continue
@@ -342,16 +350,70 @@ _TYPE_SURFACE_CACHE: dict[tuple[Path, str], str | None] = {}
 
 
 def _build_type_file_index(root: Path) -> dict[str, list[Path]]:
-    """Enumerate source files once for dependency propagation lookups."""
-    ignored = {".git", "build", ".gradle", ".agents", ".idea", "node_modules", "__pycache__"}
+    """Enumerate source files once for dependency propagation and Room lookups, using incremental cache."""
+    ignored = {".git", "build", ".gradle", ".agents", ".idea", ".harness-backup", ".harness-setup", "node_modules", "__pycache__", "bin", "out"}
+    cache_path = root / (".agents" if (root / ".agents").is_dir() else "agents") / "cache" / "source_type_index.json"
+    cached_files: dict[str, dict[str, Any]] = {}
+    if cache_path.is_file():
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("version") == 1 and isinstance(data.get("files"), dict):
+                cached_files = data["files"]
+        except Exception:
+            cached_files = {}
+
+    from room_guard import declared_type_names
+    next_files: dict[str, dict[str, Any]] = {}
     result: dict[str, list[Path]] = {}
+    dirty = False
+
     for current, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in ignored]
+        dirs[:] = [name for name in dirs if name not in ignored and not name.startswith(".")]
         for filename in files:
-            path = Path(filename)
-            if path.suffix.lower() not in {".kt", ".java"}:
+            if not filename.endswith((".kt", ".java")):
                 continue
-            result.setdefault(path.stem, []).append(Path(current) / filename)
+            full_path = Path(current) / filename
+            try:
+                rel = full_path.relative_to(root).as_posix()
+                st = full_path.stat()
+                mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+                size = st.st_size
+            except OSError:
+                continue
+
+            entry = cached_files.get(rel)
+            if entry and entry.get("mtime_ns") == mtime_ns and entry.get("size") == size and isinstance(entry.get("names"), list) and "is_db" in entry:
+                names = entry["names"]
+                next_files[rel] = entry
+            else:
+                dirty = True
+                names_set = {Path(filename).stem}
+                is_db = False
+                try:
+                    if size <= 2 * 1024 * 1024:
+                        content_str = full_path.read_text(encoding="utf-8", errors="replace")
+                        names_set.update(declared_type_names(content_str))
+                        head_sample = content_str[:4000]
+                        if "@Database" in head_sample or "androidx.room.Database" in head_sample:
+                            is_db = True
+                except OSError:
+                    pass
+                names = sorted(names_set)
+                next_files[rel] = {"mtime_ns": mtime_ns, "size": size, "names": names, "is_db": is_db}
+
+            for name in names:
+                result.setdefault(name, []).append(full_path)
+            if next_files[rel].get("is_db"):
+                result.setdefault("__room_database_files__", []).append(full_path)
+
+    if dirty or len(next_files) != len(cached_files):
+        try:
+            from _vnext_common import atomic_write_json
+            if (root / ".agents").is_dir() or (root / "agents" / "cache").is_dir():
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(cache_path, {"version": 1, "files": next_files})
+        except (OSError, ValueError, ImportError):
+            pass
     return result
 
 
@@ -758,7 +820,19 @@ def classify(
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
     comparison_changed_lines = 0
-    all_changes = changed_files(root, include_untracked=True)
+    scoped_query_paths: list[str] | None = None
+    if task_changes is not None and not task_id:
+        def _extract_early_path(c: Any) -> str:
+            if isinstance(c, dict):
+                return str(c.get("path") or "")
+            if hasattr(c, "rel_posix"):
+                return str(c.rel_posix or "")
+            return str(c or "")
+        extracted = [_extract_early_path(c) for c in task_changes if _extract_early_path(c)]
+        if candidate_paths:
+            extracted.extend(str(p) for p in candidate_paths if p)
+        scoped_query_paths = sorted(set(extracted)) if extracted else None
+    all_changes = changed_files(root, include_untracked=True, paths=scoped_query_paths)
     task_base_ref = "HEAD"
     task_baseline: dict | None = None
     if task_id:
@@ -830,8 +904,8 @@ def classify(
         sublog(f"Evaluating surface patterns across {len(changes)} changed file(s)...")
 
     has_source_files = any(c.rel_posix.lower().endswith((".kt", ".java")) for c in changes)
-    room_types = _room_schema_types(root) if has_source_files else set()
     type_index = _build_type_file_index(root) if has_source_files else {}
+    room_types = _room_schema_types(root, type_index) if has_source_files else set()
     for changed in changes:
         rel = changed.rel_posix
         if not is_delivery_relevant(rel) and not (changed.old_rel_posix and is_delivery_relevant(changed.old_rel_posix)):

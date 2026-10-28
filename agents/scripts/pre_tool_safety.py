@@ -542,16 +542,15 @@ def _handle_command(command: str) -> None:
             def option(name: str) -> str | None:
                 return command_args[command_args.index(name) + 1] if name in command_args and command_args.index(name) + 1 < len(command_args) else None
 
-            from task_context import resolve_task_context
-            probe = resolve_task_context(
+            from task_context import lightweight_target_probe
+            probe_status = lightweight_target_probe(
                 REPO,
                 file=option("--file"),
                 symbol=option("--symbol"),
                 module=option("--module"),
                 source_set=option("--source-set"),
-                limit=1,
             )
-            if probe.get("status") in {"RESOLVED", "AMBIGUOUS"}:
+            if probe_status in {"RESOLVED", "AMBIGUOUS"}:
                 reason = f"targeted task_context executed: {reason}"
         except (OSError, ValueError, ImportError, ValidationError):
             pass
@@ -739,7 +738,10 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             emit("deny", f"Reviewer brief missing or unreadable for '{r_role}'.", tool=tool_name, reason_code="REVIEW_PROFILE_BLOCKED")
             return
 
-        if supplied_prompt != expected_prompt:
+        from review_execution import pointer_matches
+        if supplied_prompt != expected_prompt and not pointer_matches(
+            supplied_prompt, r_role, str(brief_val), expected_prompt,
+        ):
             emit(
                 "deny",
                 f"Reviewer prompt for '{r_role}' does not match the generated reviewer brief.",
@@ -1804,7 +1806,12 @@ def _handle_list_dir(name: str, args: dict) -> None:
     try:
         audit_file = _audit_path()
         if audit_file.exists():
-            lines = audit_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            with audit_file.open("rb") as handle:
+                size = audit_file.stat().st_size
+                handle.seek(max(0, size - 16384))
+                if size > 16384:
+                    handle.readline()
+                lines = handle.read().decode("utf-8", errors="replace").splitlines()
             records = [json.loads(line) for line in lines if line.strip()]
             for rec in reversed(records[-10:]):
                 t = rec.get("tool", "")

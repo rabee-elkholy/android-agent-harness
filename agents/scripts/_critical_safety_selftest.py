@@ -843,6 +843,23 @@ class CriticalSafetyTests(unittest.TestCase):
                 self.assertEqual(0, run_device.main())
                 install_cmd = [call.args[1] for call in adb.call_args_list][0]
                 self.assertEqual(["install", "-r", "-d", "--user", "10"], install_cmd[:5])
+            # Real app: if _product.py was overwritten with the raw kit template (com.example.app/.MainActivity),
+            # run_device resolves the real launcher activity from .harness-setup/answers.json or AndroidManifest.xml
+            # instead of launching com.madarsoft.fitness/com.example.app.MainActivity.
+            answers_dir = root / ".harness-setup"
+            answers_dir.mkdir(parents=True, exist_ok=True)
+            (answers_dir / "answers.json").write_text(
+                json.dumps({"launcher": "com.example/.features.splash.SplashActivity"}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(sys, "argv", ["run_device.py", "install-start"]), mock.patch.object(run_device, "DEFAULT_ACTIVITY", "com.example.app/.MainActivity"), mock.patch.object(run_device.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="10\n")):
+                adb.reset_mock()
+                self.assertEqual(0, run_device.main())
+                commands = [call.args[1] for call in adb.call_args_list]
+                self.assertEqual(
+                    ["shell", "am", "start", "--user", "10", "-n", "com.example.debug/com.example.features.splash.SplashActivity"],
+                    commands[1],
+                )
 
     def test_unclassified_delivery_file_not_masked_by_docs(self):
         fixture = fixtures.RepoCase()
@@ -1500,6 +1517,102 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         self.assertIsNone(review_reading_guide(content, "bug-reviewer-agent", policy, changes))
         self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", {**policy, "surfaces": ["AUTH"]}, changes))
         self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", policy, changes + [{"path": "missing.kt"}]))
+        # Passive surfaces (DOCS, LOCALIZATION, TEST_ONLY) and quoted/untracked paths are supported.
+        mixed_content = (
+            'header\n## Git diff\n```diff\ndiff --git "a/dir with space/A.kt" "b/dir with space/A.kt"\n+x\n'
+            'diff --git a/README.md b/README.md\n+doc\n```\n## NEW UNTRACKED FILE B.kt\nclass B\n'
+        )
+        mixed_changes = [{"path": "dir with space/A.kt"}, {"path": "README.md"}, {"path": "B.kt"}]
+        mixed_policy = {"surfaces": ["COROUTINES", "DOCS", "BUSINESS_LOGIC"], "explanation": {"classification": {
+            "COROUTINES": {"files": ["dir with space/A.kt"]},
+            "DOCS": {"files": ["README.md"]},
+            "BUSINESS_LOGIC": {"files": ["B.kt"]},
+        }}}
+        mixed_guide = review_reading_guide(mixed_content, "perf-anr-guardian-agent", mixed_policy, mixed_changes)
+        self.assertEqual(["dir with space/A.kt"], mixed_guide["focus_files"])
+
+    def test_active_reviews_skips_historical_plans_without_run_or_phase_markers(self):
+        import reviewer_host as host
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tasks = root / ".agents/state/tasks"
+            for idx in range(5):
+                d = tasks / f"old-{idx}"
+                d.mkdir(parents=True)
+                (d / "plan.json").write_text(json.dumps({"task_id": f"old-{idx}", "status": "DELIVERED"}), encoding="utf-8")
+            with mock.patch.object(host, "read_json", wraps=host.read_json) as rj:
+                self.assertEqual([], list(host.active_reviews(root)))
+                self.assertEqual(0, rj.call_count)
+
+    def test_incremental_type_index_and_cli_notes_deduplication(self):
+        import change_classifier as cc
+        import task_context as tc
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".agents/cache").mkdir(parents=True)
+            src = root / "app/src/main/kotlin/com/example/Item.kt"
+            src.parent.mkdir(parents=True)
+            src.write_text("package com.example\nclass Item\n", encoding="utf-8")
+            idx1 = cc._build_type_file_index(root)
+            self.assertIn("Item", idx1)
+            self.assertTrue((root / ".agents/cache/source_type_index.json").is_file())
+            with mock.patch.object(Path, "read_text", autospec=True, side_effect=Path.read_text) as rt:
+                idx2 = cc._build_type_file_index(root)
+                self.assertIn("Item", idx2)
+                self.assertFalse(any(call.args and call.args[0] == src for call in rt.call_args_list))
+            payload = {"project_notes": {"has_custom_notes": True, "sha256": "abc123", "sections": ["Sec1"], "content": "Long notes"}}
+            first_out = tc._deduplicate_cli_context_notes(root, payload)
+            self.assertEqual("Long notes", first_out["project_notes"].get("content"))
+            second_out = tc._deduplicate_cli_context_notes(root, payload)
+            self.assertNotIn("content", second_out["project_notes"])
+            self.assertTrue(second_out["project_notes"].get("content_omitted"))
+            changed_out = tc._deduplicate_cli_context_notes(root, {"project_notes": {**payload["project_notes"], "sha256": "def456"}})
+            self.assertEqual("Long notes", changed_out["project_notes"].get("content"))
+
+    def test_phase_review_narrows_unaffected_passing_specialist_on_rerun(self):
+        import phase_review as pr
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tdir = root / ".agents/state/tasks/t1"
+            hist_dir = tdir / "phases/p1/review-history/phase-p1-11111111"
+            hist_dir.mkdir(parents=True)
+            weight_p = root / "app/src/main/java/com/example/WeightUseCase.kt"
+            auth_p = root / "app/src/main/java/com/example/AuthUseCase.kt"
+            weight_p.parent.mkdir(parents=True)
+            auth_p.write_text("package com.example\nclass AuthUseCase { fun login() {} }\n", encoding="utf-8")
+            weight_p.write_text("package com.example\nclass WeightUseCase { suspend fun save() { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {} } }\n", encoding="utf-8")
+            prev_states = {
+                "app/src/main/java/com/example/AuthUseCase.kt": {"exists": True, "sha256": "same-auth"},
+                "app/src/main/java/com/example/WeightUseCase.kt": {"exists": True, "sha256": "old-weight"},
+            }
+            live_states = {
+                "app/src/main/java/com/example/AuthUseCase.kt": {"exists": True, "sha256": "same-auth"},
+                "app/src/main/java/com/example/WeightUseCase.kt": {"exists": True, "sha256": "new-weight"},
+            }
+            (hist_dir / "current-phase-run.json").write_text(json.dumps({
+                "task_id": "t1",
+                "phase_id": "p1",
+                "phase_review_run_id": "phase-p1-11111111",
+                "package_sha256": "pkg-sha-1",
+                "phase_path_states": prev_states,
+                "created_at": "2026-10-28T12:00:00Z",
+            }), encoding="utf-8")
+            (hist_dir / "phase_review_result.json").write_text(json.dumps({
+                "schema_version": 2,
+                "task_id": "t1",
+                "phase_id": "p1",
+                "verdict": "FINDINGS",
+                "reviewers": {
+                    "perf-anr-guardian-agent": {"verdict": "FINDINGS", "findings": [{"id": "perf-001"}]},
+                    "security-reviewer-agent": {"verdict": "PASS", "findings": []},
+                },
+            }), encoding="utf-8")
+            rerun, carried = pr._narrow_phase_review_roster(
+                root, "t1", "p1", ["perf-anr-guardian-agent", "security-reviewer-agent"], live_states,
+            )
+            self.assertEqual(["perf-anr-guardian-agent"], rerun)
+            self.assertEqual(1, len(carried))
+            self.assertEqual("security-reviewer-agent", carried[0]["reviewer"])
 
     def test_antigravity_unknown_invocation_uses_small_read_only_reminder(self):
         import pre_invocation_reminder as reminder
