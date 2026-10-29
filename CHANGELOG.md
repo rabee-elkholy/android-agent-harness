@@ -1,12 +1,17 @@
 # Changelog
 
+## [1.1.54] - 2026-10-29
+
+### Same-turn walkthrough `ask_question` enforcement in `run_device.py` and `pre_invocation_reminder.py`
+
+- **Same-Turn Walkthrough `ask_question` Enforcement (`run_device.py`, `pre_invocation_reminder.py`)**: Update post-launch stdout instructions in `agents/scripts/run_device.py` and the `VERIFYING` reminder in `agents/scripts/pre_invocation_reminder.py` to emit `NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED` with the 3-section mobile walkthrough format and explicitly require calling `ask_question` in the same response turn instead of ending the turn after printing walkthrough text.
+
 ## [1.1.53] - 2026-10-29
 
-### Content-validated incremental graph sync, lightweight probe freshness, native same-package type resolution, and same-turn walkthrough `ask_question` enforcement
+### Content-validated incremental graph sync, lightweight probe freshness, and native same-package type resolution
 
 - **Content-Validated Incremental Graph Sync & Index Freshness**: Hash discovered sources on every `GraphEngine.sync` in `agents/scripts/_graph_core.py` while keeping parsing incremental so timestamp-preserving same-size edits invalidate stale nodes; synchronize the source inventory in `lightweight_target_probe` (`agents/scripts/task_context.py`) before accepting cached hits so newly added duplicate symbols are reported as `AMBIGUOUS`; refresh in-memory symbol/file indexes on deletions during read-only syncs; and clear in-memory graph state on `force_full=True`.
 - **Zero-Dependency Same-Package Type Dependency Resolution**: Resolve unambiguous same-package Kotlin and Java type references directly in `parse_code_file` and `GraphEngine.sync` (`agents/scripts/_graph_core.py`, `agents/scripts/_project_intelligence_selftest.py`) without requiring explicit `import` statements or external graph providers.
-- **Same-Turn Walkthrough `ask_question` Enforcement in `run_device.py` & `pre_invocation_reminder.py`**: Update post-launch stdout instructions in `agents/scripts/run_device.py` and the `VERIFYING` reminder in `agents/scripts/pre_invocation_reminder.py` to emit `NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED` with the 3-section mobile walkthrough format and explicitly require calling `ask_question` in the same response turn.
 
 ## [1.1.52] - 2026-10-28
 
