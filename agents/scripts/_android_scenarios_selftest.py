@@ -81,6 +81,8 @@ class AndroidScenariosSelftest(unittest.TestCase):
         _run_git(tpl, "config", "user.name", "Scenario Test")
         _run_git(tpl, "config", "user.email", "scenario@example.invalid")
         _run_git(tpl, "config", "core.autocrlf", "true")
+        _run_git(tpl, "config", "maintenance.auto", "false")
+        _run_git(tpl, "config", "gc.auto", "0")
         _write_file(tpl / "gradlew", "#!/bin/sh\nexit 0\n")
         os.chmod(tpl / "gradlew", 0o755)
         _write_file(tpl / "settings.gradle.kts", 'rootProject.name = "ScenarioApp"\ninclude(":app")\n')
@@ -111,7 +113,7 @@ class AndroidScenariosSelftest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp_dir.name).resolve()
-        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.lock"))
         self.skills_root = KIT / "agents" / "skills"
 
     def tearDown(self) -> None:

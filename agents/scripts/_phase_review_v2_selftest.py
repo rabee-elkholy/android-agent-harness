@@ -114,6 +114,8 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         run_git(tpl, "config", "user.name", "Phase Test")
         run_git(tpl, "config", "user.email", "phase@example.invalid")
         run_git(tpl, "config", "core.autocrlf", "true")
+        run_git(tpl, "config", "maintenance.auto", "false")
+        run_git(tpl, "config", "gc.auto", "0")
         setup_ownership(tpl)
         write_file(tpl / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
         write_file(tpl / "app" / "build.gradle.kts", "plugins { kotlin('jvm') }\n")
@@ -128,7 +130,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             self.fail("phase_review module not yet implemented")
         self.temp = tempfile.TemporaryDirectory(prefix="phase_v2_test_")
         self.repo = Path(self.temp.name).resolve()
-        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.lock"))
         from review_models import set_policy
         set_policy(self.repo, {"schema_version": 1, "default": "inherit", "overrides": {}}, task_id=None,
                    host="antigravity", source="conversation", proof_reference="Use chat model for phase lifecycle fixtures")

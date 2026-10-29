@@ -84,6 +84,8 @@ class PublicCliSelftest(unittest.TestCase):
         run_git(tpl, "config", "user.name", "Public CLI Test")
         run_git(tpl, "config", "user.email", "test@example.invalid")
         run_git(tpl, "config", "core.autocrlf", "false")
+        run_git(tpl, "config", "maintenance.auto", "false")
+        run_git(tpl, "config", "gc.auto", "0")
         (tpl / "app" / "src" / "main" / "kotlin" / "com" / "example").mkdir(parents=True, exist_ok=True)
         (tpl / "app" / "src" / "main" / "res" / "values").mkdir(parents=True, exist_ok=True)
         (tpl / "settings.gradle.kts").write_text('rootProject.name = "TestApp"\ninclude(":app")\n', encoding="utf-8")
@@ -125,7 +127,7 @@ class PublicCliSelftest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory(prefix="public_cli_test_")
         self.repo = Path(self.temp_dir.name).resolve()
-        shutil.copytree(PublicCliSelftest._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(PublicCliSelftest._ensure_template_repo(), self.repo, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.lock"))
 
         self.env = dict(os.environ)
         self.env["HARNESS_REPO"] = str(self.repo)

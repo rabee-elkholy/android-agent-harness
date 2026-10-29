@@ -2,9 +2,10 @@
 
 ## [1.1.54] - 2026-10-29
 
-### Same-turn walkthrough `ask_question` enforcement in `run_device.py` and `pre_invocation_reminder.py`
+### Same-turn walkthrough `ask_question` enforcement, Git maintenance lock race fix in selftests, and XERJ Corpus Hub badge
 
 - **Same-Turn Walkthrough `ask_question` Enforcement (`run_device.py`, `pre_invocation_reminder.py`)**: Update post-launch stdout instructions in `agents/scripts/run_device.py` and the `VERIFYING` reminder in `agents/scripts/pre_invocation_reminder.py` to emit `NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED` with the 3-section mobile walkthrough format and explicitly require calling `ask_question` in the same response turn instead of ending the turn after printing walkthrough text.
+- **Template Repository Git Maintenance Lock Race Fix**: Disable background `maintenance.auto` / `gc.auto` and ignore transient `*.lock` files during `shutil.copytree` across `_phase_review_v2_selftest.py`, `_android_scenarios_selftest.py`, `_public_cli_selftest.py`, and `_worktree_handoff_selftest.py` (matching `_daily_workflow_selftest.py` and `_vnext_selftest.py`), and add the XERJ Corpus Hub contributor badge to `README.md`.
 
 ## [1.1.53] - 2026-10-29
 

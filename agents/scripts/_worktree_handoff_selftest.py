@@ -97,6 +97,8 @@ class WorktreeHandoffSelftest(unittest.TestCase):
         run_git(tpl, "init", "-q")
         run_git(tpl, "config", "user.name", "Handoff Test")
         run_git(tpl, "config", "user.email", "handoff@example.invalid")
+        run_git(tpl, "config", "maintenance.auto", "false")
+        run_git(tpl, "config", "gc.auto", "0")
         setup_ownership(tpl)
         write_file(tpl / ".gitignore", ".agents/\n")
         write_file(tpl / "settings.gradle.kts", "rootProject.name = 'sample'\ninclude(':app')\n")
@@ -112,7 +114,7 @@ class WorktreeHandoffSelftest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="handoff_test_")
         self.repo = Path(self.temp.name).resolve()
-        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True)
+        shutil.copytree(self._ensure_template_repo(), self.repo, dirs_exist_ok=True, ignore=shutil.ignore_patterns("*.lock"))
 
     def tearDown(self) -> None:
         try:
