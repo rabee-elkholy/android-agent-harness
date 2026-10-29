@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.53] - 2026-10-29
+
+### Content-validated incremental graph sync, lightweight probe freshness, and native same-package type resolution
+
+- **Content-Validated Incremental Graph Sync & Index Freshness**: Hash discovered sources on every `GraphEngine.sync` in `agents/scripts/_graph_core.py` while keeping parsing incremental so timestamp-preserving same-size edits invalidate stale nodes; synchronize the source inventory in `lightweight_target_probe` (`agents/scripts/task_context.py`) before accepting cached hits so newly added duplicate symbols are reported as `AMBIGUOUS`; refresh in-memory symbol/file indexes on deletions during read-only syncs; and clear in-memory graph state on `force_full=True`.
+- **Zero-Dependency Same-Package Type Dependency Resolution**: Resolve unambiguous same-package Kotlin and Java type references directly in `parse_code_file` and `GraphEngine.sync` (`agents/scripts/_graph_core.py`, `agents/scripts/_project_intelligence_selftest.py`) without requiring explicit `import` statements or external graph providers.
+
 ## [1.1.52] - 2026-10-28
 
 ### Antigravity `android-ui` (`Compose Preview` & `Device Hub`) adapter, Round-2 performance & token optimizations, scoped phase-review parity, and launcher activity fallback

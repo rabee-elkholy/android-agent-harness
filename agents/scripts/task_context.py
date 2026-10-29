@@ -462,22 +462,15 @@ def lightweight_target_probe(
     when the hook simulates command execution without running full classification or test scans."""
     root = repo.resolve()
     engine = GraphEngine(root)
-    loaded = engine.load_cache() and bool(engine.graph.nodes)
-    sync: dict[str, Any] = {}
-    if not loaded:
-        sync = engine.sync(persist=False)
+    # A cached hit can be stale or become ambiguous after an addition. Validate
+    # the complete inventory before allowing discovery to publish a receipt.
+    sync = engine.sync(persist=False)
 
     if file:
         status, candidates, _ = _resolve_file(root, file, engine)
-        if status == "NOT_FOUND" and loaded:
-            sync = engine.sync(persist=False)
-            status, candidates, _ = _resolve_file(root, file, engine)
         query = file
     elif symbol:
         status, candidates, _ = _resolve_symbol(symbol, engine, module=module, source_set=source_set)
-        if status == "NOT_FOUND" and loaded:
-            sync = engine.sync(persist=False)
-            status, candidates, _ = _resolve_symbol(symbol, engine, module=module, source_set=source_set)
         query = symbol
     else:
         return "INVALID_TARGET_PATH"

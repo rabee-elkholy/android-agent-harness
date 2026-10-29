@@ -5,7 +5,7 @@ Supports:
 - Multi-Module Gradle DAG (Groovy, Kotlin DSL, Version Catalogs, Type-Safe Accessors)
 - Universal Android Components (Java & Kotlin, XML Layouts & Nav, Compose Screens)
 - Clean Architecture Layer Classification (UI -> VM/Presenter -> UseCase -> Repo -> DataSource -> Tests)
-- Incremental SHA-256 / mtime Cache
+- Content-validated incremental SHA-256 cache
 - Self-Healing & Heuristic Path Resolution
 - Multi-Format Serializers: Compact (LLM-optimized), Mermaid, Graphviz DOT, JSON
 - Optional Graphviz CLI (dot) image rendering (SVG/PNG)
@@ -214,6 +214,7 @@ def strip_comments_and_strings(text: str) -> str:
 # Regex patterns for static parsing
 PACKAGE_PATTERN = re.compile(r"^\s*package\s+([a-zA-Z0-9_.]+)", re.MULTILINE)
 IMPORT_PATTERN = re.compile(r"^\s*import\s+(?:static\s+)?([a-zA-Z0-9_.*]+)", re.MULTILINE)
+TYPE_TOKEN_PATTERN = re.compile(r"\b([A-Z][a-zA-Z0-9_]{1,})\b")
 DECLARATION_PATTERN = re.compile(
     r"\b(?:class|interface|enum\s+class|sealed\s+class|sealed\s+interface|data\s+class|value\s+class|annotation\s+class|record)\s+([a-zA-Z0-9_]+)\b"
 )
@@ -1078,6 +1079,14 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
 
     is_java = path.suffix.lower() == ".java"
     lang = "Swift" if is_swift else ("Java" if is_java else "Kotlin")
+    same_package_refs: list[str] = []
+    if pkg and not is_swift:
+        same_package_refs = [
+            tok for tok in dict.fromkeys(m.group(1) for m in TYPE_TOKEN_PATTERN.finditer(clean_text))
+            if tok not in declared_type_names
+            and tok not in FRAMEWORK_ROOT_TYPES
+            and tok.lower() not in KOTLIN_RESERVED_DECLARATIONS
+        ]
 
     # Extract member and top-level functions (Kotlin, Java & Swift)
     if is_swift:
@@ -1123,7 +1132,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                     package=pkg,
                     declarations=[fn] + [f for f in declarations if f != fn],
                     imports=imports,
-                    metadata={"composable": True, "language": lang},
+                    metadata={"composable": True, "language": lang, "same_package_refs": same_package_refs},
                 )
             )
 
@@ -1142,7 +1151,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                 package=pkg,
                 declarations=declarations,
                 imports=imports,
-                metadata={"language": lang},
+                metadata={"language": lang, "same_package_refs": same_package_refs},
             )
         )
 
@@ -1161,7 +1170,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                     package=pkg,
                     declarations=[name],
                     imports=imports,
-                    metadata={"language": lang},
+                    metadata={"language": lang, "same_package_refs": same_package_refs},
                 )
             )
 
@@ -1455,7 +1464,13 @@ class GraphEngine:
 
     def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
-        if not force_full:
+        if force_full:
+            self.graph = DependencyGraph()
+            self.file_hashes.clear()
+            self.file_metadata.clear()
+            self._rebuild_symbol_index()
+            self._rebuild_file_index()
+        else:
             self.load_cache()
 
         extensions = {".kt", ".java", ".swift", ".gradle", ".kts"}
@@ -1518,15 +1533,13 @@ class GraphEngine:
                 mtime_ns = 0
                 size = 0
 
-            meta = self.file_metadata.get(rel)
             cached_hash = self.file_hashes.get(rel)
-
-            if meta and meta.get("size") == size and meta.get("mtime_ns") == mtime_ns and cached_hash:
-                curr_hash = cached_hash
-            else:
-                curr_hash = self.compute_file_hash(path)
-                files_hashed += 1
-                self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
+            # Restored timestamps and same-size edits are common after source
+            # replacement. Metadata is diagnostic, never proof of unchanged bytes.
+            # Hash every source, but keep expensive parsing incremental.
+            curr_hash = self.compute_file_hash(path)
+            files_hashed += 1
+            self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
 
             if cached_hash is None:
                 added.append(rel)
@@ -1606,6 +1619,14 @@ class GraphEngine:
                     if target_id and target_id != node.id:
                         self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
 
+                if node.package:
+                    for ref in node.metadata.get("same_package_refs") or []:
+                        target_id = self.fqn_to_node_id.get(f"{node.package}.{ref}")
+                        if target_id and target_id != node.id:
+                            target_node = self.graph.nodes.get(target_id)
+                            if target_node and target_node.file_path != node.file_path:
+                                self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
+
             for xnode, refs in xml_connections:
                 for ref in refs:
                     if ref in self.symbol_to_node_id:
@@ -1615,11 +1636,12 @@ class GraphEngine:
 
             if persist:
                 self.save_cache()
-        elif deleted and persist:
+        elif deleted:
             # Only deletions: the fingerprint changed too, so the saved graph must follow.
             self._rebuild_symbol_index()
             self._rebuild_file_index()
-            self.save_cache()
+            if persist:
+                self.save_cache()
 
         return {
             "added": len(added),
