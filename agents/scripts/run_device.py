@@ -1082,24 +1082,26 @@ def main() -> int:
             )
 
             live_print("\n" + "=" * 60)
-            live_print("[MANDATORY MOBILE TEST WALKTHROUGH REQUIRED IN CHAT]")
-            live_print("The agent MUST now output the 4-section bounded walkthrough in chat:")
-            live_print("1. Preconditions:")
+            live_print("[MANDATORY MOBILE TEST WALKTHROUGH & SAME-TURN ASK_QUESTION]")
+            live_print("The agent MUST now output the canonical 3-section mobile walkthrough in chat (in the developer's active conversation language):")
+            live_print("1. Navigation & Preconditions:")
             for p in walkthrough["preconditions"]:
                 live_print(f"   - {p}")
-            live_print("2. Main Happy Path:")
+            live_print("2. Walkthrough Steps (`| # | Action | Expected Result |` table):")
             for h in walkthrough["happy_path"]:
                 live_print(f"   - {h}")
-            live_print("3. Important Edge Cases:")
-            for e in walkthrough["edge_cases"]:
+            live_print("3. Edge Cases & Regression Checks:")
+            for e in walkthrough["edge_cases"] + walkthrough["regression_checks"]:
                 live_print(f"   - {e}")
-            live_print("4. Regression Checks:")
-            for r in walkthrough["regression_checks"]:
-                live_print(f"   - {r}")
             live_print("=" * 60)
-            live_print("[!] CRITICAL: DO NOT simply ask 'Did it pass' without first explaining the 4 test sections above in chat!\n")
+            live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED")
+            live_print(
+                "[!] CRITICAL: In the SAME response turn that you print the walkthrough above, you MUST immediately invoke `ask_question` "
+                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Prepare phone E2E'). "
+                "NEVER end your turn after printing the walkthrough text without calling `ask_question`!\n"
+            )
             if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
-                live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
+                live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
         except (OSError, ValueError, ImportError, ValidationError):
             pass
 

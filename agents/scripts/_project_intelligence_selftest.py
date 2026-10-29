@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ from project_context import (  # noqa: E402
     validate_advisory_knowledge,
     write_project_context,
 )
-from task_context import resolve_task_context  # noqa: E402
+from task_context import lightweight_target_probe, resolve_task_context  # noqa: E402
 
 
 class ProjectIntelligenceTests(unittest.TestCase):
@@ -165,6 +166,80 @@ class ProjectIntelligenceTests(unittest.TestCase):
         engine = GraphEngine(self.repo)
         engine.sync()
         self.assertTrue(engine.cache_file.is_file())
+
+    def test_same_size_edit_with_restored_mtime_refreshes_discovery(self) -> None:
+        path = self.write("app/src/main/kotlin/com/example/Target.kt", "package com.example\nclass Alpha {}")
+        engine = GraphEngine(self.repo)
+        engine.sync()
+        before = engine.graph_fingerprint
+        metadata = path.stat()
+        path.write_text("package com.example\nclass Bravo {}", encoding="utf-8")
+        os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+        self.assertEqual(metadata.st_size, path.stat().st_size)
+        self.assertEqual("NOT_FOUND", lightweight_target_probe(self.repo, symbol="Alpha"))
+        result = resolve_task_context(self.repo, symbol="Bravo")
+        self.assertEqual("RESOLVED", result["status"])
+        self.assertNotEqual(before, result["graph_sync"]["graph_fingerprint"])
+
+    def test_probe_detects_new_ambiguous_symbol(self) -> None:
+        source = "package com.example\nclass Shared {}"
+        self.write("app/src/main/kotlin/com/example/Shared.kt", source)
+        GraphEngine(self.repo).sync()
+        self.write("feature/profile/src/main/kotlin/com/example/Shared.kt", source)
+        self.assertEqual("AMBIGUOUS", lightweight_target_probe(self.repo, symbol="Shared"))
+
+    def test_deleted_symbol_is_removed_from_read_only_indexes(self) -> None:
+        path = self.write("app/src/main/kotlin/com/example/Gone.kt", "package com.example\nclass Gone {}")
+        engine = GraphEngine(self.repo)
+        engine.sync()
+        path.unlink()
+        engine.sync(persist=False)
+        self.assertNotIn("Gone", engine.symbol_to_node_ids)
+        self.assertEqual("NOT_FOUND", resolve_task_context(self.repo, symbol="Gone")["status"])
+
+    def test_force_full_reparses_existing_engine(self) -> None:
+        self.write("app/src/main/kotlin/com/example/Stable.kt", "package com.example\nclass Stable {}")
+        engine = GraphEngine(self.repo)
+        first = engine.sync()
+        rebuilt = engine.sync(force_full=True, persist=False)
+        self.assertEqual(first["files_parsed"], rebuilt["files_parsed"])
+        self.assertEqual(first["graph_fingerprint"], rebuilt["graph_fingerprint"])
+
+    def test_same_package_references_link_without_explicit_imports(self) -> None:
+        self.write(
+            "app/src/main/kotlin/com/example/local/LocalRepository.kt",
+            "package com.example.local\nclass LocalRepository { fun login(): Boolean = true }\n",
+        )
+        self.write(
+            "app/src/main/kotlin/com/example/local/LocalScreen.kt",
+            "package com.example.local\nclass LocalScreen { fun open(): Boolean = LocalRepository().login() }\n",
+        )
+        self.write(
+            "app/src/main/java/com/example/jlocal/LocalStore.java",
+            "package com.example.jlocal;\npublic class LocalStore { public int get() { return 1; } }\n",
+        )
+        self.write(
+            "app/src/main/java/com/example/jlocal/LocalClient.java",
+            "package com.example.jlocal;\npublic class LocalClient { public int run() { return new LocalStore().get(); } }\n",
+        )
+        self.write(
+            "app/src/main/kotlin/com/example/other/OtherScreen.kt",
+            "package com.example.other\nclass LocalRepository { fun login(): Boolean = false }\nclass OtherScreen { fun open(): Boolean = LocalRepository().login() }\n",
+        )
+
+        kt_ctx = resolve_task_context(self.repo, symbol="LocalRepository", module=":app")
+        # Both packages define LocalRepository; target by file to check exact package-scoped neighbors
+        kt_file_ctx = resolve_task_context(self.repo, file="app/src/main/kotlin/com/example/local/LocalRepository.kt")
+        self.assertEqual("RESOLVED", kt_file_ctx["status"])
+        kt_dependents = [item["path"] for item in kt_file_ctx["direct_dependents"]]
+        self.assertIn("app/src/main/kotlin/com/example/local/LocalScreen.kt", kt_dependents)
+        self.assertNotIn("app/src/main/kotlin/com/example/other/OtherScreen.kt", kt_dependents)
+
+        java_file_ctx = resolve_task_context(self.repo, file="app/src/main/java/com/example/jlocal/LocalStore.java")
+        self.assertEqual("RESOLVED", java_file_ctx["status"])
+        java_dependents = [item["path"] for item in java_file_ctx["direct_dependents"]]
+        self.assertIn("app/src/main/java/com/example/jlocal/LocalClient.java", java_dependents)
+        self.assertEqual("AMBIGUOUS", kt_ctx["status"])
 
     def test_warm_resolution_processes_less_than_quarter_of_full_fixture(self) -> None:
         for index in range(24):
