@@ -1081,23 +1081,58 @@ def main() -> int:
                 activity=target_activity,
             )
 
+            walkthrough_uri = ""
+            if task_id:
+                try:
+                    task_dir = state / "tasks" / task_id
+                    if task_dir.is_dir():
+                        wt_path = task_dir / "walkthrough.md"
+                        wt_lines = [
+                            f"# Mobile Verification Walkthrough — `{task_id}`",
+                            "",
+                            f"- **Launched Activity**: `{target_activity}`",
+                            f"- **Requested Outcome**: {requested_outcome or 'N/A'}",
+                            "",
+                            "## 1. Navigation & Preconditions",
+                            *[f"- {p}" for p in walkthrough["preconditions"]],
+                            "",
+                            "## 2. Walkthrough Steps",
+                            *[f"{idx}. {h}" for idx, h in enumerate(walkthrough["happy_path"], 1)],
+                        ]
+                        device_strategy = str((active.get("device_strategy") or "")).strip()
+                        if device_strategy:
+                            wt_lines.extend(["", "## Planned Phone Checks (`device_strategy`)", device_strategy])
+                        wt_lines.extend([
+                            "",
+                            "## 3. Edge Cases & Regression Checks",
+                            *[f"- {e}" for e in walkthrough["edge_cases"] + walkthrough["regression_checks"]],
+                            "",
+                        ])
+                        wt_path.write_text("\n".join(wt_lines), encoding="utf-8")
+                        walkthrough_uri = wt_path.resolve().as_uri()
+                except OSError:
+                    pass
+
             live_print("\n" + "=" * 60)
             live_print("[MANDATORY MOBILE TEST WALKTHROUGH & SAME-TURN ASK_QUESTION]")
-            live_print("The agent MUST now output the canonical 3-section mobile walkthrough in chat (in the developer's active conversation language):")
+            if walkthrough_uri:
+                live_print(f"WALKTHROUGH_URI={walkthrough_uri}")
+            live_print("The agent MUST now output a COMPACT 3-section mobile walkthrough in chat (in the developer's active conversation language; <= 5 table rows; NO file-summary wall after the walkthrough):")
             live_print("1. Navigation & Preconditions:")
             for p in walkthrough["preconditions"]:
                 live_print(f"   - {p}")
-            live_print("2. Walkthrough Steps (`| # | Action | Expected Result |` table):")
+            live_print("2. Walkthrough Steps (`| # | Action | Expected Result |` table, at most 5 core rows):")
             for h in walkthrough["happy_path"]:
                 live_print(f"   - {h}")
             live_print("3. Edge Cases & Regression Checks:")
             for e in walkthrough["edge_cases"] + walkthrough["regression_checks"]:
                 live_print(f"   - {e}")
             live_print("=" * 60)
-            live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED")
+            live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
+            live_print("TOOL_CALL_REQUIRED=ask_question")
             live_print(
-                "[!] CRITICAL: In the SAME response turn that you print the walkthrough above, you MUST immediately invoke `ask_question` "
-                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Prepare phone E2E'). "
+                "[!] CRITICAL: Keep the chat walkthrough concise (<= 5 table rows, no file-change summary dump) AND in the SAME response turn immediately invoke `ask_question` "
+                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise). "
                 "NEVER end your turn after printing the walkthrough text without calling `ask_question`!\n"
             )
             if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":

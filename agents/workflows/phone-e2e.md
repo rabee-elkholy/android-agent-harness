@@ -1,14 +1,45 @@
 ---
-description: Prepare and execute approved phone E2E journeys without substituting JVM tests.
+description: Run live agent-driven phone E2E on the installed build; persisted journeys are optional.
 ---
 
 # Phone E2E verification
 
-During UI/navigation planning, offer bounded automatic phone verification and
-explain which checks still require human judgment. Use the existing task approval;
-do not add a setup-wizard question or silently change device policy.
+## Default: live session (choice "Run phone E2E")
 
-When the developer explicitly requests phone E2E, or selects **Prepare phone E2E**:
+When the developer selects **Run phone E2E** at sign-off, or asks for phone E2E
+after install, run it immediately on the installed build. **Never revise the plan,
+never rerun preflight, tests, reviewers or assemble for it.**
+
+1. `python .agents/harness.py e2e start --task-id <id>` binds the phone from the
+   current install/launch evidence and lists scenarios (plan phone checks,
+   walkthrough, surface recipes). On Antigravity it returns the Device Hub pill;
+   show it once so the developer can watch the phone live.
+2. Add scenarios you derive from the changed code: `e2e add --title "..."`
+   (happy path, back navigation, invalid/empty input, re-entry, process restart).
+3. For every scenario: `e2e observe` (add `--screenshot` and view the PNG when
+   visuals matter), act (`e2e tap --text|--resource-id|--desc|--x --y`,
+   `e2e type --value "..."`, `e2e key --name BACK|ENTER|DEL|TAB`,
+   `e2e swipe --direction up|down|left|right`, `e2e wait --seconds N|--until-text T`,
+   `e2e restart`), observe again, then
+   `e2e step --scenario S# --status PASS|FAIL|BLOCKED|SKIPPED --observed "..."`.
+4. Human-only steps (Google/Facebook sign-in, OTP, payment, Wi-Fi off, account
+   state, Arabic text entry, a physical action):
+   `e2e need-developer --scenario S# --ask "<exact action>"`, ask with
+   `ask_question` in the same turn (`Done - continue` / `Skip this scenario` /
+   `Stop E2E`), then `e2e resume --scenario S#` and retry. `ENV_BLOCKED` (locked
+   screen, disconnected phone) is handled the same way: ask, then retry once.
+5. `e2e finish` writes an advisory report. Show a compact table (failures first)
+   and ask for sign-off; record it with `device signoff --source conversation`
+   quoting the report hash. A FAIL scenario is reported as FAIL; resume the task
+   to fix it. Sensitive approval stays human-owned.
+
+No uninstall, data clear, permission grant via adb, downgrade, system setting
+change or purchase is ever performed by the session.
+
+## Optional: persisted replayable journeys
+
+Only when the developer explicitly wants a reusable journey contract for future
+runs:
 
 1. Read the approved plan and routed next action. Keep the same task, spending
    limits, counters, application work and evidence. Prepare is not PASS or final
@@ -51,11 +82,15 @@ When the developer explicitly requests phone E2E, or selects **Prepare phone E2E
    at least one observable assertion. Validate journey files with
    `python .agents/harness.py journey validate --file <journey-json> --json`.
 4. Embed the contract when drafting, or revise the existing task with
-   `python .agents/harness.py task revise --task-id <id> --verification-contract '<inline-json>'`.
-   A repository-relative JSON file is also accepted. Use the host shell's proper
-   argument quoting. A reusable new file can be saved later if it is in approved
+   `python .agents/harness.py task revise --task-id <id> --verification-contract <path-to-file.json>`.
+   Write the JSON with your file tool first (any folder; Windows PowerShell strips
+   double quotes from inline JSON). A reusable new file can be saved later if it is in approved
    scope. A changed plan hash needs its own approval and, where applicable, an
    explicit review-limit decision; the task's consumed calls/rounds never reset.
+   When only the contract or phone checks change and the code is untouched, the
+   approved revision reuses the frozen verification run: prepare-verification keeps
+   preflight, unit tests, reviews, build and install, and routes straight to the
+   journeys. Never rerun those steps manually.
    Present the changed effects/criteria for explicit approval through the normal
    revision flow. Do not edit internal plan or evidence files. A partial journey
    retains manual walkthrough sign-off. Add device_validation

@@ -803,9 +803,138 @@ def revise(args: argparse.Namespace) -> dict:
             "to approve and nothing was changed. Do not ask the developer. Continue with: "
             f"python .agents/harness.py task status --task-id {task_id} --next"
         )
-    parked_run_file.unlink(missing_ok=True)
+    carry_path = directory / "verification-carry.json"
+    if old_status == "VERIFYING" and parked_run_file.is_file() and _verification_only_revision(old_plan, result):
+        # Real app: adding a phone E2E contract to an unchanged build dropped the verification run and
+        # re-ran preflight, unit tests, all six reviewers and assemble. Only the verification contract or
+        # phone checks changed, so the frozen run stays available; prepare-verification reuses it after
+        # approval when the repository is still byte-identical.
+        parked = read_json(parked_run_file)
+        os.replace(parked_run_file, current_run_file)
+        atomic_write_json(carry_path, {
+            "schema_version": 1,
+            "task_id": task_id,
+            "run_id": parked.get("run_id"),
+            "from_plan_sha256": old_plan_sha,
+            "to_plan_sha256": result.get("plan_sha256"),
+            "delivery_snapshot_sha256": parked.get("delivery_snapshot_sha256"),
+            "change_set_sha256": parked.get("change_set_sha256"),
+            "created_at": utc_now(),
+        })
+    else:
+        parked_run_file.unlink(missing_ok=True)
+        carry_path.unlink(missing_ok=True)
     _write_plan_document(repo, task_id, result, previous=old_plan)
+    if carry_path.is_file():
+        result = {**result, "verification_carry": {
+            "run_id": read_json(carry_path).get("run_id"),
+            "note": "Only verification fields changed: after approval, prepare-verification reuses the existing "
+                    "preflight, unit-test, review, build and install evidence when the code is unchanged.",
+        }}
     return result
+
+
+VERIFICATION_ONLY_FIELDS = frozenset({"verification_contract", "device_strategy"})
+_REVISION_LINEAGE_FIELDS = frozenset({
+    "supersedes_plan_sha256", "plan_id", "base_delivery_snapshot_sha256", "base_change_set_sha256",
+    "base_file_identities", "base_change_identities", "base_external_inputs_sha256",
+})
+
+
+def _verification_only_revision(old: dict, new: dict) -> bool:
+    """True when a revision changes only how the build is verified, never what is built or reviewed."""
+    if old.get("task_baseline") != new.get("task_baseline"):
+        return False
+    try:
+        before, after = plan_payload(old), plan_payload(new)
+    except Exception:
+        return False
+    ignored = _REVISION_LINEAGE_FIELDS | VERIFICATION_ONLY_FIELDS
+    if {k: v for k, v in before.items() if k not in ignored} != {k: v for k, v in after.items() if k not in ignored}:
+        return False
+    return any(before.get(key) != after.get(key) for key in VERIFICATION_ONLY_FIELDS)
+
+
+def _carry_verification_run(repo: Path, task_id: str, plan: dict, manifest: dict, classification: dict) -> dict | None:
+    """Reuse the frozen run after an approved verification-only revision of an unchanged build.
+
+    Every gate, review, build and install record stays bound to the same snapshot, change set and run;
+    only the policy is re-derived deterministically for the revised plan. Any doubt falls back to a
+    normal fresh run (with later-round review carry), never to unverified reuse.
+    """
+    directory = task_dir(repo, task_id)
+    marker_path = directory / "verification-carry.json"
+    if not marker_path.is_file():
+        return None
+
+    def give_up(reason: str) -> None:
+        marker_path.unlink(missing_ok=True)
+        sublog(f"Previous verification run not reused: {reason}")
+        return None
+
+    try:
+        marker = read_json(marker_path)
+        current_path = directory / "current-run.json"
+        if not current_path.is_file():
+            return give_up("frozen run is missing")
+        current = read_json(current_path)
+        run_id = validate_id(str(current.get("run_id") or ""), "run_id")
+        if marker.get("to_plan_sha256") != plan.get("plan_sha256") \
+                or str(plan.get("supersedes_plan_sha256") or "") != str(marker.get("from_plan_sha256") or "") \
+                or marker.get("run_id") != run_id or current.get("task_id") != task_id:
+            return give_up("the plan or run changed after the verification-only revision")
+        archived = read_json(directory / "plan-history" / f"{validate_id(str(marker['from_plan_sha256']), 'plan hash')}.json")
+        if not _verification_only_revision(archived, plan):
+            return give_up("the approved revision changes more than verification fields")
+        if not verification_engine_freshness(repo, task_id, current).get("fresh"):
+            return give_up("the harness version changed")
+        for key in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256", "task_change_set_sha256"):
+            if str(current.get(key) or "") != str(manifest.get(key) or ""):
+                return give_up(f"{key} changed")
+        frozen_repo, live_repo = current.get("repository") or {}, manifest.get("repository") or {}
+        for field in ("root_sha256", "git_common_dir_sha256", "branch", "head"):
+            if frozen_repo.get(field) != live_repo.get(field):
+                return give_up(f"repository {field} changed")
+        old_policy_path = Path(str(current.get("policy") or ""))
+        old_policy = read_json(old_policy_path)
+        from final_verifier import expected_policy_for, unplanned_mandatory_skills
+        new_policy = expected_policy_for(
+            repo, plan, old_policy, state_root(repo), old_policy_path,
+            current_change_set=str(manifest.get("change_set_sha256") or ""),
+            task_changes=manifest.get("task_changes"), current_classification=classification,
+        )
+        if new_policy.get("status") != "PASS":
+            return give_up(f"revised policy status is {new_policy.get('status')}")
+        if not set(new_policy.get("reviewers") or []) <= set(old_policy.get("reviewers") or []) \
+                or [c.get("reviewer") for c in new_policy.get("carried_reviews") or []] \
+                != [c.get("reviewer") for c in old_policy.get("carried_reviews") or []]:
+            return give_up("the revised policy needs reviewers the frozen run did not cover")
+        drift = check_material_drift(plan, new_policy.get("surfaces") or [], changed_modules(repo, manifest),
+                                     actual_files=changed_file_paths(manifest), repo=repo)
+        if drift or unplanned_mandatory_skills(plan, new_policy):
+            return give_up("material drift")
+    except (OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
+        return give_up(str(exc))
+
+    if new_policy != old_policy:
+        atomic_write_json(directory / f"policy-{run_id}.superseded-{str(old_policy.get('policy_sha256') or '')[:12]}.json", old_policy)
+        atomic_write_json(old_policy_path, new_policy)
+    current["plan_revision_carry"] = {
+        "from_plan_sha256": marker["from_plan_sha256"],
+        "to_plan_sha256": plan.get("plan_sha256"),
+        "previous_policy_sha256": old_policy.get("policy_sha256"),
+        "policy_sha256": new_policy.get("policy_sha256"),
+        "carried_at": utc_now(),
+    }
+    atomic_write_json(directory / "current-run.json", current)
+    plan["status"] = "VERIFYING"
+    plan.pop("review_budget_blocked", None)
+    plan["verification_run_id"] = run_id
+    atomic_write_json(state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(_plan_path(repo, task_id)), "updated_at": utc_now()})
+    save_plan(_plan_path(repo, task_id), plan)
+    marker_path.unlink(missing_ok=True)
+    sublog(f"Reused verification run {run_id}: code unchanged, only verification fields were revised")
+    return {**current, "verification_carried": True}
 
 
 def _same_plan(old: dict, new: dict) -> bool:
@@ -1088,6 +1217,9 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         sublog("Classifying task changes...")
         classification = classify(repo, task_id=args.task_id, task_changes=manifest.get("task_changes"))
         sublog(f"Surfaces: {', '.join(classification.get('surfaces') or []) or 'none'}")
+    carried_run = _carry_verification_run(repo, args.task_id, plan, manifest, classification)
+    if carried_run is not None:
+        return carried_run
     completed_rounds = int(plan.get("review_rounds") or 0)
     previous_run_file = task_dir(repo, args.task_id) / "current-run.json"
     if completed_rounds and not previous_run_file.is_file():
@@ -1110,6 +1242,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 "delivery_snapshot_sha256": previous_manifest["delivery_snapshot_sha256"],
                 "change_set_sha256": previous_manifest["change_set_sha256"],
             }
+    if completed_rounds:
         previous_policy = read_json(Path(previous_current["policy"]))
         # Real app: a later round stopped before its reviews (its unit tests failed and the agent resumed),
         # and the next prepare read reviews.json from that run and failed on every retry. A run that never
@@ -2762,7 +2895,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    for k in ("choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "reviewer_models", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+    for k in ("tool", "instructions", "choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "reviewer_models", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
         if k in act:
             res_entry[k] = act[k]
     return [res_entry]
@@ -2791,6 +2924,8 @@ def status(args: argparse.Namespace) -> dict:
                 "blocking": next_act.get("blocking", True),
                 "inputs": next_act.get("inputs", {}),
                 "expected": next_act.get("expected", {}),
+                **({"tool": next_act["tool"]} if "tool" in next_act else {}),
+                **({"instructions": next_act["instructions"]} if "instructions" in next_act else {}),
                 **({"reviewer_models": next_act["reviewer_models"]} if "reviewer_models" in next_act else {}),
             }
         ]
@@ -2831,8 +2966,9 @@ def _compact_for_host(value: Any, prompts: dict | None = None) -> Any:
             }
             continue
         out[key] = _compact_for_host(item, prompts)
-    if "reviewer_prompts" in out:
-        out["reviewer_prompts"] = out.pop("reviewer_prompts")
+    for tail_key in ("reviewers", "reviewer_models", "reviewer_prompts"):
+        if tail_key in out:
+            out[tail_key] = out.pop(tail_key)
     return out
 
 
@@ -3414,6 +3550,14 @@ def revision_changes(old: dict, new: dict) -> list[str]:
             lines.append(f"{label}: changed (see plan.md)")
     if len(old.get("phases") or []) != len(new.get("phases") or []):
         lines.append(f"Phases: {len(old.get('phases') or [])} -> {len(new.get('phases') or [])}")
+    if old.get("verification_contract") != new.get("verification_contract"):
+        # Real app: adding a phone E2E contract was presented as "no scope change".
+        contract = new.get("verification_contract") or {}
+        lines.append(
+            f"Verification contract: {len(contract.get('criteria') or [])} criteria, "
+            f"{len(contract.get('journeys') or [])} phone journeys (see plan.md)"
+            if contract else "Verification contract: removed"
+        )
     return lines
 
 
@@ -3607,6 +3751,15 @@ def main(argv: list[str] | None = None) -> int:
     configure_utf8_output()
     enable_line_buffered_stdio()
     parser = build_parser()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if any(str(item).startswith("--verification-contract") for item in raw_argv):
+        _, unknown = parser.parse_known_args(raw_argv)
+        if unknown:
+            # Windows PowerShell 5 split an inline JSON contract at its spaces (real app, two failures).
+            print("[FAIL] the --verification-contract value was split into several arguments (Windows PowerShell "
+                  "strips double quotes from native arguments). Write the JSON to a .json file with your file tool "
+                  "(any folder) and pass its path: --verification-contract <path-to-file.json>", file=sys.stderr)
+            return 2
     args = parser.parse_args(argv)
     try:
         if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge"}:
@@ -3719,8 +3872,13 @@ def main(argv: list[str] | None = None) -> int:
             if upcoming.get("reason"):
                 print(f"NEXT_REASON={upcoming['reason']}")
         for item in result.get("next_actions") or []:
-            print(f"NEXT_ACTION={item.get('action')}: {item.get('command')}")
+            item_cmd = item.get("command")
+            if not item_cmd and item.get("tool") == "ask_question":
+                item_cmd = "invoke ask_question tool in this turn (DEVELOPER_ACTION)"
+            print(f"NEXT_ACTION={item.get('action')}: {item_cmd}")
             print(f"NEXT_REASON={item.get('reason')}")
+            if item.get("tool") == "ask_question" and item.get("instructions"):
+                print(f"NEXT_INSTRUCTIONS={item.get('instructions')}")
             if item.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"}:
                 # Preserve the router's exact payload once, including current briefs.
                 print("NEXT_ACTION_INPUTS=" + json.dumps(item.get("inputs", {}), ensure_ascii=False))

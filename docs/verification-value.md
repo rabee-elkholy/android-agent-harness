@@ -2,11 +2,14 @@
 
 These features are optional. Existing tasks and installations retain their established behavior. They use the same router, risk policy, approval hash, and append-only evidence store as the rest of the harness.
 
-UI/navigation planning now proactively offers phone E2E preparation. A manual-only
-task offers **Prepare phone E2E** alongside manual PASS/FAIL after installation;
-this is a setup choice, not test success or sensitive approval. Follow the installed
-`.agents/workflows/phone-e2e.md` to prepare selectors, safe effects and assertions.
+UI/navigation planning now proactively offers phone E2E. A manual-only task offers
+**Run phone E2E** alongside manual PASS/FAIL after installation: the agent drives
+the installed build live (`python .agents/harness.py e2e start`, then observe/act/
+record per scenario, asking the developer only for human-only steps). It never
+revises the plan or reruns gates/reviewers, and its report is advisory, not test
+success or sensitive approval. Follow the installed `.agents/workflows/phone-e2e.md`.
 An explicit request to test on the phone must not be replaced by JVM tests or AI reviews.
+For persisted replayable journeys (optional, explicit request only),
 `--verification-contract` accepts an existing repository-relative JSON file or
 bounded inline JSON, so approval does not require first writing an out-of-scope
 configuration file. Revision preserves consumed review calls/rounds; a new plan

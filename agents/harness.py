@@ -122,9 +122,13 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
             command = "follow NEXT_ACTION_INPUTS below"
         else:
             command = f"python .agents/harness.py task status --task-id {task_id} --next --brief --json (for the exact payload)"
+    elif not command and action.get("tool") == "ask_question":
+        command = "invoke ask_question tool in this turn (DEVELOPER_ACTION)"
     print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
     if action.get("reason"):
         print(f"NEXT_REASON={action['reason']}", flush=True)
+    if action.get("tool") == "ask_question" and action.get("instructions"):
+        print(f"NEXT_INSTRUCTIONS={action['instructions']}", flush=True)
     if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
         try:
             compact_inputs = _compact_for_host(action["inputs"])
@@ -190,7 +194,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|journey|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|journey|e2e|verify|zoho|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -205,6 +209,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("workflow.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "journey":
         return _run("journey_runner.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "e2e":
+        return _run("phone_e2e.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "version":
         version_file = AGENTS_ROOT / "VERSION"
         if not version_file.is_file():

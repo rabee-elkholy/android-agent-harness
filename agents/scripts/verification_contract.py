@@ -28,22 +28,19 @@ def phone_e2e_setup(plan, *, device_required=False):
         return None
     task_id = str(plan.get("task_id") or "<task_id>")
     return {
-        "status": "SETUP_REQUIRED",
-        "summary": "Offer phone E2E setup: prepare an approved executable journey contract; automatic execution is not enabled for this walkthrough.",
+        "status": "LIVE_SESSION_AVAILABLE",
+        "summary": "Offer Run phone E2E: after install the agent drives the phone live through executable scenarios; no plan revision or gate rerun.",
+        "start_command": f"python .agents/harness.py e2e start --task-id {task_id}",
         "revise_command": f"python .agents/harness.py task revise --task-id {task_id} --verification-contract <json-file-or-inline-json>",
         "instructions": (
-            "If the developer requests phone E2E or chooses Prepare phone E2E, prepare concrete device journeys with safe "
-            "preconditions, available resource/text/content-description selectors and observable assertions. Draft "
-            "the contract in chat and pass inline JSON to revision when no approved definition file exists; do not "
-            "write a new out-of-scope config just to obtain approval. Unit tests "
-            "and AI reviews do not execute the phone UI and cannot substitute for this request. If VERIFYING/BLOCKED, "
-            "resume the same task before approved source edits; preserve counters and evidence. Use task revise with "
-            "--verification-contract and present the changed contract for explicit approval; do not edit plan/evidence "
-            "manually. Use manual_or_automatic only for a complete executable walkthrough. Partial journeys or "
-            "human-only checks keep manual sign-off. Explain selector, device or environment limitations concretely. "
-            "Run Automatically is offered only after approved setup and successful current-run install/start. "
-            "Never treat a setup choice as PASS, sensitive approval, permission to skip gates, or permission to launch "
-            "an unapproved device replay. Follow .agents/workflows/phone-e2e.md for setup and bounded journey actions."
+            "If the developer requests phone E2E or chooses Run phone E2E, do NOT revise the plan and do NOT rerun "
+            f"preflight, tests, reviewers or assemble: run `python .agents/harness.py e2e start --task-id {task_id}` on the "
+            "already installed build and follow its protocol (observe, act, observe, record every scenario; add scenarios "
+            "from the changed code; use e2e need-developer plus ask_question for human-only steps, then e2e resume). "
+            "Unit tests and AI reviews do not execute the phone UI and cannot substitute for this request. "
+            "The E2E report is advisory: finish with e2e finish and ask the developer for the sign-off; never treat the "
+            "session as PASS, sensitive approval, or permission to skip gates. Revising with --verification-contract "
+            "(revise_command) is only for a developer who explicitly wants a persisted, replayable journey contract for future runs."
         ),
     }
 
@@ -69,15 +66,29 @@ def text(value, label: str, limit: int = 2000) -> str:
 
 
 def load_definition(repo: Path, relative: str) -> dict:
-    if relative.lstrip().startswith("{"):
-        if len(relative.encode("utf-8")) > MAX_CONTRACT_BYTES:
+    value = str(relative or "").strip()
+    if value.startswith("@"):
+        value = value[1:].strip().strip("\"'")
+    if value.startswith("{"):
+        if len(value.encode("utf-8")) > MAX_CONTRACT_BYTES:
             raise ValidationError("inline definition is too large")
         try:
-            return json.loads(relative)
+            return json.loads(value)
         except (ValueError, RecursionError) as exc:
-            raise ValidationError("invalid inline JSON definition") from exc
-    path = bounded_path(repo, relative)
-    if path.is_symlink() or not path.is_file() or path.suffix != ".json" or path.stat().st_size > MAX_CONTRACT_BYTES:
+            # Real app: Windows PowerShell 5 strips the double quotes from native arguments and splits
+            # values at spaces, so three inline attempts failed. A file has no quoting problem.
+            raise ValidationError(
+                "invalid inline JSON definition (Windows PowerShell strips double quotes from native "
+                "arguments). Write the JSON to a .json file with your file tool (any folder, e.g. the "
+                "conversation scratch folder) and pass its path: --verification-contract <path-to-file.json>"
+            ) from exc
+    candidate = Path(value).expanduser()
+    if candidate.is_absolute() and not candidate.resolve().is_relative_to(repo.resolve()):
+        # A file outside the repository is only read; it never becomes project configuration.
+        path = candidate.resolve()
+    else:
+        path = bounded_path(repo, value)
+    if path.is_symlink() or not path.is_file() or path.suffix.lower() != ".json" or path.stat().st_size > MAX_CONTRACT_BYTES:
         raise ValidationError("definition must be a bounded regular JSON file")
     return read_json(path)
 

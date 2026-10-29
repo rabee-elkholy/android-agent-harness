@@ -27,14 +27,21 @@ MAX_OUTPUT = 6000
 FQN = re.compile(r"[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+", re.ASCII)
 
 
-def invoke(executable: str, args: list[str], repo: Path, timeout: int = 120) -> tuple[int, str]:
+def invoke(executable: str, args: list[str], repo: Path, timeout: int = 120, *, detach: bool = False) -> tuple[int, str]:
     # Disk-backed capture bounds Python memory even with very noisy build tools.
     # No shell interpolation; public inputs are separately allowlisted.
+    if os.name == "nt" and Path(executable).suffix.lower() in {".bat", ".cmd"}:
+        if any(re.search(r'[&|<>^%!\r\n"]', value) for value in [executable, *args]):
+            raise ValidationError("Unsafe batch launcher path/argument; use an Android CLI path without shell metacharacters.")
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    if detach:
+        process = subprocess.Popen([executable, *args], cwd=repo, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, **options)
+        try:
+            return process.wait(timeout=timeout), ""
+        except subprocess.TimeoutExpired:
+            return 0, ""  # still running: the hub window/server is up
     with tempfile.TemporaryFile() as output:
-        if os.name == "nt" and Path(executable).suffix.lower() in {".bat", ".cmd"}:
-            if any(re.search(r'[&|<>^%!\r\n"]', value) for value in [executable, *args]):
-                raise ValidationError("Unsafe batch launcher path/argument; use an Android CLI path without shell metacharacters.")
-        options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
         process = subprocess.Popen([executable, *args], cwd=repo, stdout=output,
                                    stderr=subprocess.STDOUT, **options)
         try:
@@ -313,11 +320,14 @@ def main(argv=None) -> int:
             with StateLock(state_root(repo) / "device-validation-execution", timeout_seconds=0):
                 plan = authorize(repo, args.action)
                 serial = bound_phone(repo, plan, args.serial)
-                code, _ = invoke(executable, ["device", "hub", "--device=" + serial], repo, 60)
+                # `android device hub` keeps serving its window; waiting for it to exit hung for 60 s and
+                # reported a failure while the mirror was actually open. Detach and check it started.
+                code, _ = invoke(executable, ["device", "hub", "--device=" + serial], repo, 8, detach=True)
                 if code:
                     raise ValidationError("ENV_BLOCKED: Device Hub failed to open; use the physical phone directly.")
                 result = {"status": "OPEN_REQUESTED", "delivery_evidence": False,
-                          "note": "Reuse this window. Opening is not a test PASS; complete the routed walkthrough."}
+                          "pill": "[Android Device Hub](sidecar://android-cli-plugin/device-hub/)",
+                          "note": "Reuse this window. Opening is not a test PASS; complete the routed walkthrough or e2e session."}
         if "files" in result:
             result = {**result, "file_count": len(result["files"]), "files": result["files"][:8],
                       "receipt": str(Path(result["directory"]) / "receipt.json")}

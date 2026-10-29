@@ -8975,13 +8975,15 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         from workflow import _compact_for_host
         action = {
             "code": "DISPATCH_REVIEWERS", "reviewer_prompts": {"bug-reviewer-agent": "Review ..."},
+            "reviewers": ["bug-reviewer-agent"], "reviewer_models": {"bug-reviewer-agent": "gemini-3.8-flash-high"},
             "briefs": {"bug-reviewer-agent": "# Brief\nlong text"},
             "inputs": {"review_execution_profile": {"reviewers": {"bug-reviewer-agent": {
                 "brief_path": "b.md", "brief_content": "# Brief\nlong text", "brief_pointer_prompt": "Review ..."}}}},
             "expected": {},
         }
         compact = _compact_for_host(action)
-        self.assertEqual("reviewer_prompts", list(compact)[-1], "the prompts are the last thing the host shows")
+        self.assertEqual(["reviewers", "reviewer_models", "reviewer_prompts"], list(compact)[-3:],
+                         "reviewers, models, and prompts are the last things the host shows")
         self.assertEqual({"bug-reviewer-agent": "see brief_path"}, compact["briefs"])
         route = compact["inputs"]["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]
         self.assertNotIn("brief_content", route)

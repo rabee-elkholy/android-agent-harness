@@ -318,7 +318,7 @@ def review_action(context: VerificationContext) -> dict | None:
                         "command": "",
                         "blocking": True,
                         "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}).{_engine._prompt_hint(prompts)}"),
+                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{_engine._prompt_hint(prompts)}"),
                         **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
                         "reviewer_models": dispatch_models,
@@ -700,7 +700,12 @@ def build_device_action(context: VerificationContext) -> dict | None:
                     pass
                 app_id = str(inst_ev.get("application_id") or "")
                 serial_hash = str(inst_ev.get("serial_sha256") or inst_ev.get("serial_hash") or "")[:12]
-                signoff_reason = "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off."
+                signoff_reason = (
+                    "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off. "
+                    "Keep the 3-section walkthrough concise (at most 5 core rows in the `| # | Action | Expected Result |` table, "
+                    "with no file-summary prose wall after the walkthrough) and immediately invoke the `ask_question` tool in this SAME turn "
+                    "(never end the turn with text only)."
+                )
                 if sensitive_pending:
                     # One question instead of two: the final approval of sensitive changes rides on the sign-off.
                     signoff_reason += (
@@ -714,12 +719,15 @@ def build_device_action(context: VerificationContext) -> dict | None:
                 from verification_contract import phone_e2e_setup
                 automation_setup = phone_e2e_setup(plan, device_required=True) if not validation_choice else None
                 if automation_setup:
-                    accepted_responses.append("PREPARE_E2E")
-                    signoff_reason += " Offer Prepare phone E2E alongside manual PASS/FAIL. " + automation_setup["instructions"]
+                    accepted_responses.append("RUN_E2E")
+                    signoff_reason += (" Offer Run phone E2E alongside manual PASS/FAIL; on that choice run "
+                                       f"`{automation_setup['start_command']}` immediately (no revise, no gate rerun). "
+                                       + automation_setup["instructions"])
                     response_choices = [
                         {"id": "PASS", "label": "Works - approve the changes" if sensitive_pending else "PASS - I tested manually"},
                         {"id": "FAIL", "label": "FAIL - Manual validation failed"},
-                        {"id": "PREPARE_E2E", "label": "Prepare phone E2E"},
+                        {"id": "RUN_E2E", "label": "Run phone E2E (agent tests on the phone)",
+                         "command": automation_setup["start_command"]},
                     ]
                 if validation_choice:
                     journey_criteria = sorted({c for j in plan["verification_contract"]["journeys"] for c in j["criteria"]})
@@ -743,6 +751,7 @@ def build_device_action(context: VerificationContext) -> dict | None:
                 return {
                     "code": "DEVICE_SIGNOFF_REQUIRED",
                     "kind": "DEVELOPER_ACTION",
+                    "tool": "ask_question",
                     "command": "",
                     "blocking": True,
                     "reason": signoff_reason,
@@ -754,10 +763,11 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "device_target_identity": serial_hash,
                     },
                     "instructions": (
-                        "Present the complete mobile verification walkthrough in chat using the canonical 3-section structure "
+                        "Present a concise 3-section mobile verification walkthrough in chat "
                         "(translated into the developer's active conversation language; never hardcode a language): "
-                        "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |`), "
-                        "and (3) Edge Cases, AND in the SAME response turn immediately invoke `ask_question` with a concise summary "
+                        "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |` with at most 5 core rows), "
+                        "and (3) Edge Cases — with NO file-change summary wall after the walkthrough — "
+                        "AND in the SAME response turn immediately invoke `ask_question` with a concise summary "
                         "(never end the turn after printing the walkthrough without calling `ask_question`). "
                         "Do not run automatic validation before selection."
                     ),

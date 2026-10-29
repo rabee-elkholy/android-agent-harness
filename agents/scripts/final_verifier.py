@@ -384,10 +384,38 @@ def validate_policy_artifact(
     current_classification = classify(repo, task_id=plan.get("task_id"), task_changes=task_changes)
     if current_classification.get("classification_sha256") != policy.get("classification_sha256"):
         return None, "current classification does not match the run policy", "STALE"
-    agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
     configured_kind = _configured_project_kind()
     if policy.get("project_kind") != configured_kind:
         return None, "policy project kind does not match installed configuration", "BLOCKED"
+    try:
+        expected_policy = expected_policy_for(
+            repo, plan, policy, state_root, policy_path, current_change_set=current_change_set,
+            task_changes=task_changes, current_classification=current_classification,
+        )
+    except ValidationError as exc:
+        if not str(exc).startswith("later-round policy source is invalid"):
+            raise
+        return None, str(exc), "BLOCKED"
+    if expected_policy != policy:
+        return None, "policy artifact does not match deterministic policy evaluation", "BLOCKED"
+    return expected_policy, None, "PASS"
+
+
+def expected_policy_for(
+    repo: Path,
+    plan: dict,
+    policy: dict,
+    state_root: Path,
+    policy_path: Path,
+    current_change_set: str | None = None,
+    task_changes: list[dict] | None = None,
+    current_classification: dict | None = None,
+) -> dict:
+    """Deterministic policy of ``plan`` on the same basis (first or later round) as ``policy``."""
+    if current_classification is None:
+        current_classification = classify(repo, task_id=plan.get("task_id"), task_changes=task_changes)
+    agents_root = repo / ".agents" if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1]
+    configured_kind = _configured_project_kind()
     task_kind = str(plan.get("task_kind") or "FEATURE")
     expected_policy = decide(
         current_classification, agents_root / "skills", project_kind=configured_kind, task_kind=task_kind, plan=plan
@@ -455,10 +483,8 @@ def validate_policy_artifact(
                 fix_delta=fix_delta,
             )
         except (ValidationError, OSError, ValueError, TypeError) as exc:
-            return None, f"later-round policy source is invalid: {exc}", "BLOCKED"
-    if expected_policy != policy:
-        return None, "policy artifact does not match deterministic policy evaluation", "BLOCKED"
-    return expected_policy, None, "PASS"
+            raise ValidationError(f"later-round policy source is invalid: {exc}") from exc
+    return expected_policy
 
 
 def device_chain_errors(assemble: dict | None, install: dict | None, launch: dict | None) -> list[str]:

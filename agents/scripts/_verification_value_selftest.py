@@ -7,6 +7,7 @@ import subprocess
 import json
 import io
 import contextlib
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -464,11 +465,150 @@ class PublicWorkflowContracts(unittest.TestCase):
         before = (self.repo / ".agents/state/tasks/feature/plan.json").read_bytes()
         action = resolve_next_action(self.repo, "feature")
         self.assertEqual("DEVICE_SIGNOFF_REQUIRED", action["code"])
-        self.assertIn("PREPARE_E2E", action["accepted_responses"])
+        self.assertIn("RUN_E2E", action["accepted_responses"])
         self.assertNotIn("AUTOMATIC", action["accepted_responses"])
         self.assertIn("--verification-contract", action["automation_setup"]["revise_command"])
         self.assertIn("Unit tests", action["automation_setup"]["instructions"])
         self.assertEqual(before, (self.repo / ".agents/state/tasks/feature/plan.json").read_bytes())
+
+    def test_run_phone_e2e_is_a_live_session_without_revision_or_rerun(self):
+        """Real app: choosing phone E2E revised the plan, dropped the run and re-ran all six reviewers."""
+        self.start(opt_in=False)
+        from _vnext_common import read_json, atomic_write_json
+        from workflow import resolve_next_action
+        policy_file = Path(self.current["policy"])
+        policy = read_json(policy_file)
+        policy.update(device_required=True, assemble_required=True)
+        policy["policy_sha256"] = canonical_sha256({k: v for k, v in policy.items() if k != "policy_sha256"})
+        atomic_write_json(policy_file, policy)
+        self.install_choice_fixture()
+        directory = self.repo / ".agents/state/tasks/feature"
+        plan_before = (directory / "plan.json").read_bytes()
+        run_before = (directory / "current-run.json").read_bytes()
+        action = resolve_next_action(self.repo, "feature")
+        self.assertEqual("ask_question", action.get("tool"))
+        run_choice = next(choice for choice in action["choices"] if choice["id"] == "RUN_E2E")
+        self.assertIn("e2e start", run_choice["command"])
+        self.assertNotIn("revise", run_choice["command"])
+        import phone_e2e
+        from unittest.mock import patch
+        xml = ('<?xml version="1.0"?><hierarchy rotation="0"><node index="0" text="Continue" '
+               'resource-id="com.example:id/next" class="android.widget.Button" package="com.example" content-desc="" '
+               'checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" '
+               'scrollable="false" long-clickable="false" password="false" selected="false" bounds="[0,0][200,100]" />'
+               '</hierarchy>')
+        calls = []
+
+        class FakePhone:
+            def __init__(self, serial, package, user="0"):
+                self.serial, self.package, self.user = serial, package, user
+
+            def call(self, args, timeout=15, binary=False):
+                calls.append(list(args))
+                return b"" if binary else ""
+
+            def foreground(self):
+                return "com.example/.Main"
+
+            def nodes(self):
+                from _adb_core import parse_ui_hierarchy
+                return parse_ui_hierarchy(xml)
+
+        def run(*args):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = phone_e2e.main([*args, "--repo", str(self.repo), "--task-id", "feature"])
+            return code, json.loads(out.getvalue())
+
+        with patch.object(phone_e2e, "Phone", FakePhone), patch("_repo_files.matching_adb_serials", return_value=["fixture"]), \
+                patch("phone_e2e.time.sleep"):
+            code, started = run("start")
+            self.assertEqual(0, code, started)
+            self.assertEqual("RUNNING", started["status"])
+            self.assertIn("revise", started["protocol"])  # only as a prohibition
+            code, observed = run("observe")
+            self.assertEqual(0, code, observed)
+            self.assertTrue(any(item["text"] == "Continue" for item in observed["elements"]))
+            self.assertEqual(0, run("add", "--title", "Continue opens the next screen")[0])
+            scenario = run("status")[1]["scenarios"][-1]["id"]
+            self.assertEqual(0, run("tap", "--text", "Continue")[0])
+            self.assertIn(["shell", "input", "tap", "100", "50"], calls)
+            self.assertEqual(0, run("need-developer", "--scenario", scenario, "--ask", "Sign in with Google")[0])
+            blocked_code, blocked = run("tap", "--text", "Continue")
+            self.assertEqual(1, blocked_code)
+            self.assertIn("WAITING_FOR_DEVELOPER", blocked["reason"])
+            self.assertEqual(0, run("resume", "--scenario", scenario)[0])
+            for item in run("status")[1]["scenarios"]:
+                self.assertEqual(0, run("step", "--scenario", item["id"], "--status", "PASS", "--observed", "next screen shown")[0])
+            code, finished = run("finish")
+            self.assertEqual(0, code, finished)
+            self.assertEqual("PASS", finished["status"])
+            self.assertTrue(Path(finished["report"]).is_file())
+        self.assertFalse(any("pm" in c or "clear" in c or "uninstall" in c for c in calls))
+        self.assertEqual(plan_before, (directory / "plan.json").read_bytes())
+        self.assertEqual(run_before, (directory / "current-run.json").read_bytes())
+        self.assertEqual("DEVICE_SIGNOFF_REQUIRED", resolve_next_action(self.repo, "feature")["code"])
+
+    def _revise_with_outside_contract(self):
+        from _vnext_common import read_json
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside, True)
+        contract_file = outside / "contract.json"
+        contract_file.write_text(json.dumps(contract("manual")), encoding="utf-8")
+        self.call("revise", "--verification-contract", str(contract_file))
+        directory = self.repo / ".agents/state/tasks/feature"
+        revised = read_json(directory / "plan.json")
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", revised["status"])
+        self.call("approve", "--source", "conversation", "--proof-reference", "approve contract",
+                  "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", revised["plan_sha256"][:12])
+        return directory
+
+    def test_verification_only_revision_reuses_the_frozen_run(self):
+        """Real app: adding a phone contract to an unchanged build re-ran tests, six reviewers and assemble."""
+        self.start(opt_in=False)
+        self.install_choice_fixture()
+        from _vnext_common import read_json
+        from workflow import resolve_next_action, revision_changes
+        from final_verifier import verify_task
+        run_id = self.current["run_id"]
+        directory = self._revise_with_outside_contract()
+        self.assertTrue((directory / "verification-carry.json").is_file())
+        self.call("prepare-verification")
+        current = read_json(directory / "current-run.json")
+        self.assertEqual(run_id, current["run_id"])
+        self.assertIn("plan_revision_carry", current)
+        self.assertFalse((directory / "verification-carry.json").exists())
+        plan = read_json(directory / "plan.json")
+        self.assertEqual("VERIFYING", plan["status"])
+        self.assertEqual("DEVICE_SIGNOFF_REQUIRED", resolve_next_action(self.repo, "feature")["code"])
+        blocked = verify_task(self.repo, "feature").get("blocked_by") or []
+        self.assertFalse([r for r in blocked if "policy" in r or "preflight" in r or "assemble" in r
+                          or "device_install" in r or "device_launch" in r], blocked)
+        archived = read_json(directory / "plan-history" / f"{plan['supersedes_plan_sha256']}.json")
+        self.assertTrue(any(line.startswith("Verification contract:") for line in revision_changes(archived, plan)))
+
+    def test_verification_only_revision_with_code_change_starts_a_fresh_run(self):
+        self.start(opt_in=False)
+        self.install_choice_fixture()
+        from _vnext_common import read_json
+        run_id = self.current["run_id"]
+        directory = self._revise_with_outside_contract()
+        (self.repo / "README.md").write_text("Changed again after the revision\n")
+        self.call("prepare-verification")
+        current = read_json(directory / "current-run.json")
+        self.assertNotEqual(run_id, current["run_id"])
+        self.assertNotIn("plan_revision_carry", current)
+
+    def test_powershell_mangled_inline_contract_explains_the_file_route(self):
+        self.start(opt_in=False)
+        import workflow
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = workflow.main(["revise", "--repo", str(self.repo), "--task-id", "feature",
+                                  "--verification-contract", "{schema_version:1,criteria:[{id:refresh,expected:Refresh",
+                                  "shows", "data}]}"])
+        self.assertEqual(2, code)
+        self.assertIn("path-to-file.json", err.getvalue())
 
     def test_ui_approval_material_proactively_proposes_phone_e2e(self):
         self.start(opt_in=False)

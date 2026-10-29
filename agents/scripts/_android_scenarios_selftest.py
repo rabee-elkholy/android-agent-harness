@@ -2145,7 +2145,7 @@ class DeviceFlowTests(MobileValidationTests):
         self.assertEqual("DEVELOPER_ACTION", act["kind"])
         self.assertEqual("", act["command"])
         self.assertTrue(act["blocking"])
-        self.assertEqual(["PASS", "FAIL", "PREPARE_E2E"], act.get("accepted_responses"))
+        self.assertEqual(["PASS", "FAIL", "RUN_E2E"], act.get("accepted_responses"))
         self.assertNotIn("AUTOMATIC", act["accepted_responses"], "setup is not an executable approved journey")
         self.assertNotIn("approve-sensitive", act["reason"])
 

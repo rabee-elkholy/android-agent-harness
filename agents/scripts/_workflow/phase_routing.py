@@ -346,7 +346,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "blocking": True,
                     "phase_id": phase_id,
                     "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}).{_engine._prompt_hint(prompts)}"),
+                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{_engine._prompt_hint(prompts)}"),
                     **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
                     "reviewer_models": dispatch_models,

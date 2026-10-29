@@ -44,7 +44,17 @@ successful fresh install and launch, run `python .agents/harness.py android-ui h
 The adapter selects the connected physical phone whose serial hash matches both
 install and launch evidence. `--serial` can assert that choice, never override it.
 Disconnect, wrong phone, changed APK/snapshot, mismatched Android user, or stale
-proof blocks opening. There is no emulator or alternate-phone fallback.
+proof blocks opening. There is no emulator or alternate-phone fallback. The command
+returns within seconds (the hub keeps serving in the background) together with the
+`[Android Device Hub](sidecar://android-cli-plugin/device-hub/)` pill; if the
+Device Hub pane is already mirroring the phone, show the pill instead of reopening.
+
+To inspect or drive the screen during verification, never call `android layout`,
+`android screen` or `adb` directly (they are not bound to the verified build and
+the guard refuses them). Use `python .agents/harness.py e2e observe` (compact
+element list), `e2e screenshot` (PNG to view), and `e2e tap/type/key/swipe/wait/restart`
+inside a phone E2E session (`.agents/workflows/phone-e2e.md`). `observe` and
+`screenshot` bind the verified phone on demand.
 
 Reuse the open Hub window for the walkthrough. Do not repeatedly launch windows or
 stream screenshots into the model. Capture only relevant milestones/failures using

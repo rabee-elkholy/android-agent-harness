@@ -17,6 +17,7 @@ VERIFICATION_SCRIPTS = {
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
     "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps", "android_ui",
+    "phone_e2e",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -979,7 +980,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete", "bind-evidence"}
-        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"]))
+        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
@@ -992,5 +993,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return False, (
             f"Task {task_id} is BLOCKED{blocked_str}. "
             f"Fix the reported issues, then resume the plan via: python .agents/scripts/workflow.py resume --repo . --task-id {task_id}"
+        )
+    if status == "VERIFYING" and re.match(r"""^\s*["']?(?:[^\s"']*[\\/])?android(?:\.cmd|\.exe|\.bat)?["']?\s+(?:layout|screen|run|device|emulator)\b""", normalized, re.I):
+        # Real app: the Device Hub skill suggested `android layout`, which was refused with no way forward.
+        return False, (
+            "Direct Android CLI device commands are not bound to the verified build. Use the harness equivalents: "
+            "`python .agents/harness.py e2e start --task-id <id>` then `e2e observe` (element list), "
+            "`e2e screenshot`, `e2e tap/type/key/swipe/wait/restart`; to mirror the phone use "
+            "`python .agents/harness.py android-ui hub` or the Android Device Hub pane."
         )
     return False, f"command is not allowed while plan status is {status or 'missing'}"
