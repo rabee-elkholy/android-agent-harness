@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.56] - 2026-11-01
+
+### Bounded Android inspection and scoped Antigravity guidance
+
+- Add project-bound Android Studio declaration/usages lookup and file analysis, plus official Android documentation search/fetch through the read-only `android-inspect` facade. Probe installed capabilities, cap output and timeouts, and retain native discovery and verification fallbacks.
+- Correct Antigravity kernel activation to `always_on`; add scoped Compose, KMP and Gradle guides and doctor validation without changing approval, review or delivery authority.
+- Extend Compose preview discovery with dependency support and local name filtering, retaining existing build locks, freshness, Device Hub behavior and non-evidence semantics.
+- Bound live Gradle output and final diagnostics while retaining complete logs and process-derived verdicts. Preserve late noncompiler failure context and avoid log filename collisions.
+- Cover conflicting repository environment settings, exact CLI option matching, truncated preview names and timeout cleanup failures with regression tests. Diagnostic success never replaces required gates.
+
 ## [1.1.55] - 2026-10-29
 
 ### Live agent-driven phone E2E (`harness.py e2e`), verification-only revision run reuse, detached Device Hub startup, compact walkthrough `ask_question` enforcement, and truncation-proof reviewer dispatch
