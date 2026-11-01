@@ -118,6 +118,55 @@ class TestAgentYaml(unittest.TestCase):
         with self.assertRaises((ValueError, RuntimeError)):
             antigravity_agent_markdown({"name": "bug-reviewer-agent", "description": "desc", "system_prompt": ""})
 
+    def test_AG_YAML_006_in_place_engine_sync_preserves_agents_directory(self):
+        from lifecycle import IN_PLACE_KEEP, _sync_tree_in_place
+        self.assertIn("agents", IN_PLACE_KEEP)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "staging"
+            dst = root / "repo_agents"
+            (src / "subagents").mkdir(parents=True)
+            (src / "subagents" / "bug-reviewer-agent.json").write_text('{"name":"bug-reviewer-agent"}', encoding="utf-8")
+            agent_dir = dst / "agents" / "bug-reviewer-agent"
+            agent_dir.mkdir(parents=True)
+            agent_md = agent_dir / "agent.md"
+            agent_md.write_text("# existing custom agent\n", encoding="utf-8")
+            _sync_tree_in_place(src, dst, keep=IN_PLACE_KEEP)
+            self.assertTrue(agent_md.is_file(), "in-place sync must keep .agents/agents/<role>/agent.md intact")
+            self.assertEqual("# existing custom agent\n", agent_md.read_text(encoding="utf-8"))
+
+    def test_AG_YAML_007_doctor_checks_vscode_watcher_exclusions(self):
+        from doctor.engine import HarnessDoctor
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents").mkdir(parents=True)
+            (repo / ".vscode").mkdir(parents=True)
+            (repo / ".vscode" / "settings.json").write_text('{"files.watcherExclude": {"**/build/**": true}}', encoding="utf-8")
+            doc = HarnessDoctor(repo, run_selftest=False)
+            doc.is_raw_kit = False
+            doc._check_watcher_exclusions("13. Antigravity & Review V2 Foundation", is_ag=True)
+            chk = next(r for r in doc.results if r.name == "File Watcher Exclusions")
+            self.assertEqual("WARN", chk.status)
+            self.assertTrue(any("**/.gradle/**" in d for d in (chk.details or [])))
+
+            (repo / ".vscode" / "settings.json").write_text(
+                json.dumps({
+                    "files.watcherExclude": {
+                        "**/build/**": True,
+                        "**/.gradle/**": True,
+                        "**/.kotlin/**": True,
+                        "**/.cxx/**": True,
+                        "**/.agents/cache/**": True,
+                    }
+                }),
+                encoding="utf-8",
+            )
+            doc2 = HarnessDoctor(repo, run_selftest=False)
+            doc2.is_raw_kit = False
+            doc2._check_watcher_exclusions("13. Antigravity & Review V2 Foundation", is_ag=True)
+            chk2 = next(r for r in doc2.results if r.name == "File Watcher Exclusions")
+            self.assertEqual("PASS", chk2.status)
+
 
 class TestBatchDispatchContract(unittest.TestCase):
     """P0: Exact batch and invocation identity checks."""
@@ -585,11 +634,10 @@ class TestDefaultsAndTerminology(unittest.TestCase):
             self.assertIn("MODEL_CALL_BUDGET = 20", content)
 
     def test_DOCS_001_antigravity_instructions(self):
-        gemini_md = (REPO_ROOT / "GEMINI.md").read_text(encoding="utf-8")
         gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         global_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
 
-        for name, content in [("GEMINI.md", gemini_md), ("GEMINI.md.template", gemini_tpl), ("android-harness-global.md.template", global_tpl)]:
+        for name, content in [("GEMINI.md.template", gemini_tpl), ("android-harness-global.md.template", global_tpl)]:
             self.assertIn("INHERIT_PARENT_BY_OMISSION", content, f"{name} missing INHERIT_PARENT_BY_OMISSION")
             self.assertNotIn("model must remain inherit", content, f"{name} still has 'model must remain inherit'")
             self.assertNotIn("VERDICT: PASS", content, f"{name} contains legacy PASS token")
@@ -603,7 +651,7 @@ class TestCanonicalDraftRow(unittest.TestCase):
     def test_D2_antigravity_draft_row_names_expected_files(self):
         # New installs refuse a non-trivial draft without --expected-files (PLAN_SCOPE_REQUIRED); the
         # canonical Antigravity draft row did not mention the flag, so the first draft failed.
-        for path in (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template"):
+        for path in (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template",):
             row = next(line for line in path.read_text(encoding="utf-8").splitlines()
                        if "harness.py task draft --repo . --task-id <id>" in line)
             with self.subTest(path=path.name):
@@ -613,7 +661,7 @@ class TestCanonicalDraftRow(unittest.TestCase):
 class TestAntigravityPlanHashApproval(unittest.TestCase):
     """B3: the documented Antigravity approval binds the plan hash that draft prints (PLAN_HASH)."""
 
-    DOCS = (REPO_ROOT / "GEMINI.md", REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template")
+    DOCS = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template",)
 
     def _approve_commands(self, path: Path) -> list[str]:
         return re.findall(r"`[^`]*harness\.py task approve [^`]*`", path.read_text(encoding="utf-8"))

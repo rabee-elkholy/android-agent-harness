@@ -7187,10 +7187,6 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
     def test_CONTRACT_REVIEW_HOST_001_contract_and_instructions_binding(self) -> None:
         """CONTRACT-REVIEW-HOST-001: Antigravity instructions bind --host antigravity; core defaults to generic."""
-        gemini_md = (KIT / "GEMINI.md").read_text(encoding="utf-8")
-        self.assertIn("--host antigravity", gemini_md)
-        self.assertIn("Review Host Binding", gemini_md)
-
         tmpl_md = (KIT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         self.assertIn("--host antigravity", tmpl_md)
         self.assertIn("Review Host Binding", tmpl_md)

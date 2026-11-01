@@ -366,6 +366,15 @@ def review_action(context: VerificationContext) -> dict | None:
                     pending_models = reviewer_model_map(exec_profile, sorted(dispatched))
                     pending_with_models = format_reviewers_with_models(exec_profile, sorted(dispatched))
                     done_cnt = len(required_reviewers) - len(dispatched)
+                    unbound = sorted(r for r in dispatched if not rev_states.get(r, {}).get("execution_id"))
+                    unbound_prompts = _engine._reviewer_prompts(exec_profile, unbound) if unbound else {}
+                    unbound_hint = (
+                        f" If `invoke_subagent` failed in the host with `subagent \"<role>\" not found` for {', '.join(unbound)}, "
+                        "read `.agents/subagents/<role>.json`, register it via `define_subagent` "
+                        "(`EnableWriteTools=false`, `EnableSubagentTools=false`, `EnableMCPTools=false`), "
+                        "and immediately re-invoke `invoke_subagent` with `reviewer_prompts[role]`."
+                        if unbound else ""
+                    )
                     return {
                         "code": "WAIT_FOR_REVIEWERS",
                         "kind": "HOST_ACTION",
@@ -375,17 +384,19 @@ def review_action(context: VerificationContext) -> dict | None:
                             f"Waiting for independent reviewer subagents to complete ({done_cnt}/{len(required_reviewers)} finished; "
                             f"remaining: {', '.join(sorted(dispatched))}; models: {pending_with_models}). "
                             "Yield immediately; in chat output at most one short progress line (e.g. "
-                            f"`{done_cnt}/{len(required_reviewers)}`) without listing pending reviewer names in prose."
+                            f"`{done_cnt}/{len(required_reviewers)}`) without listing pending reviewer names in prose.{unbound_hint}"
                         ),
                         "reviewers": required_reviewers,
                         "pending_reviewers": sorted(dispatched),
                         "reviewer_models": pending_models,
+                        **({"reviewer_prompts": unbound_prompts} if unbound_prompts else {}),
                         "inputs": {
                             "repo": ".",
                             "task_id": task_id,
                             "run_id": run_id,
                             "pending_reviewers": sorted(dispatched),
                             "reviewer_models": pending_models,
+                            **({"reviewer_prompts": unbound_prompts} if unbound_prompts else {}),
                         },
                         "expected": {"success_statuses": ["PASS"]},
                     }

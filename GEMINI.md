@@ -1,154 +1,18 @@
-<!-- managed-by: android-harness-kit -->
-# android-harness-kit — Gemini CLI / Antigravity
+<!-- managed-by: android-agent-harness -->
+# Android Agent Harness repository instructions (Gemini CLI / Antigravity)
 
-Before changing this repository, read `PROJECT_CONSTITUTION.md`, then follow `AGENTS.md` and `agents/rules/harness-rules.md`.
+Before modifying this repository, read:
 
-- Python: `python`
-- Assemble: `python .agents/harness.py assemble`
-- Harness Execution Boundary: Installed harness engine source under `.agents/scripts/**` is an implementation detail. Execute documented commands directly; do not inspect or recursively read harness Python implementation before execution.
-- Device: Physical device or emulator. Automatically resolved by `run_device.py`. Prefer a physical device when both are connected. Never hardcode a serial.
-- Discovery: Graph-backed. Exact code target -> `python .agents/harness.py task-context --file <path> --json` or `--symbol <name>`. Feature/unknown target or cross-module refactor -> `python .agents/harness.py graph --feature <name> --json` (or `--find <symbol>`) first, then Task Context on resolved target. Search is never the initial code discovery anchor; after discovery, search only within discovered scope; expand scope via Graph, not grep cascades.
-- Consultation & Edge Case Discussion Before Planning: If the user's prompt includes an engineering inquiry, trade-off question, architectural validation, asks to study/research missing scenarios or surface edge cases before starting (e.g. "study this carefully", "find missing scenarios/edge cases before starting"), or asks for confirmation before starting (e.g. "confirm with me first", "is this logic sound or best-practice?", "should we do A or B?"), the agent MUST fully discuss, analyze, and present the findings directly in plain chat BEFORE invoking `workflow.py draft` or drafting `implementation_plan.md`. When asked to surface edge cases or examine missing scenarios, the agent MUST present and discuss a comprehensive breakdown of all identified edge cases directly in chat first, and await developer alignment before drafting any implementation plan. Never swallow consultation questions or edge-case discovery into an immediate plan artifact. Only after the developer confirms the direction or says to proceed (e.g. "start", "write the plan"), begin the discovery and planning workflow.
-- Inspection vs. Mutation Invariant: When the user's prompt is an inquiry asking to check, verify, examine, inspect, or understand existing flow, code, or logic (e.g. "check if...", "inspect how...", "does X work?"), the agent MUST perform a strictly read-only investigation using read tools (task-context, AST, view_file, grep) and report findings directly in chat. The agent is STRICTLY FORBIDDEN from invoking `workflow.py draft`, creating task plans, or modifying code unless the user explicitly requests code changes, bug fixes, or implementation.
-- Pre-Planning Clarification: Missing requirements, edge cases, or domain ambiguities MUST be clarified interactively via `ask_question` or discussed in plain chat before drafting the plan; guessing or silently assuming missing scenarios is strictly forbidden.
-- Plan Approval Clarity: The approval question is the request: never add a separate sentence asking for approval (no "Review the plan above" line). If the developer replies with approval in chat, proceed immediately; never wait for a nonexistent button.
-- Unified Chat & Question UI/UX (Language-Adaptive): Match the developer's active conversation language dynamically (never hardcode a fixed language) and use the same 5 canonical Markdown card layouts across every task: (1) Plan Approval Card (`[plan.md](<URI>)` + bold-labeled `APPROVAL_BRIEF` bullets), (2) Reviewer Dispatch Table (`| Reviewer | Model | Status |` with only the role name in `Reviewer` and the active model in `Model` — never duplicate `[<model>]` in `Reviewer`), (3) Review Verdict Table (`| Reviewer | Model | Verdict | Findings |`), (4) 3-Section Mobile Walkthrough (`Navigation & Preconditions`, `| # | Action | Expected Result |` table, `Edge Cases`), and (5) Commit & Delivery Card (verified file list + fenced Conventional Commit block). On partial reviewer completion (`WAIT_FOR_REVIEWERS`, `WAIT_FOR_PHASE_REVIEWERS`, or when a reviewer subagent finishes while others are still running), output at most one short progress line (e.g. `1/2` or `1/6`) without listing pending reviewer names or `[<model>]` tags in prose. In any right-to-left (RTL) language, start every line/bullet with a word in that language and wrap every code symbol, file name, command, and English term in `` `backticks` ``.
-- Multi-Phase Execution: Multi-phase plans execute sequentially and autonomously. Single intake approval covers all phases; never pause or ask developer between phases.
-- Strict Verification Order: The Verification Plan in `implementation_plan.md` MUST use the 6-step headings (1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install -> 5. mobile walkthrough -> 6. verify). The agent MUST wait for ALL routed specialist reviewers (subagents) to finish, record their responses, and verify ZERO blocking findings BEFORE running `assemble` or starting device installation. Starting assemble or device deployment while any reviewer subagent is still running is strictly forbidden.
-- Reviewer Dispatch: 100% autonomous. Launch routed reviewers in parallel via subagents immediately; never pause, ask for permission, or demand 'Proceed'.
-- Review Protocol V2: On reactive reviewer completion, record trusted reviewer results with `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>`. Once all routed reviewers complete, finalize aggregate review evidence with `python .agents/harness.py review finalize --task <id>`. Clean reviews with findings: [] are recognized as PASS. Intermediate scratch files are forbidden.
-- Ask the developer about material design or compatibility questions before planning. Carry resolved answers into the plan without repeating them.
-- After approval, follow the Harness router until completion; all gates and developer decisions still apply.
-- Zero-Polling Invariant: Never poll background tasks or subagents in a loop using `manage_task(Action='status')`, `manage_subagents(Action='list')`, or `schedule`. Yield execution and wait for reactive wakeup messages from the system. Polling loops waste tokens, trigger safety blocks, and stall execution.
-- Existing File Edit Invariant: Use `replace_file_content` or `multi_replace_file_content` for existing project files; use `write_to_file` only for new files, modifying only the targeted sections and preserve commented-out code and original line endings.
-- Harness Immutability & Diagnostic Protocol: The harness engine under `.agents/**` is immutable developer infrastructure. If any harness command or verification gate crashes with a Python traceback or system error, the agent is STRICTLY FORBIDDEN from attempting to edit or patch files in `.agents/**` using host tools, PowerShell, Python `-c`, or shell commands. Instead, stop immediately, report the exact traceback and root cause to the developer, and await instructions.
-- Task Resumption: If a task becomes BLOCKED or fixes are needed during verification, run `python .agents/harness.py task resume --repo . --task-id <id>` to return to implementation.
-- In client Android apps: The agent must not run `git add`, `commit`, `push`, merge, rebase, stash, or reset. Leave changes unstaged. Draft a Conventional Commit message only. The developer commits. In this kit repository itself (`android-harness-kit` development): The agent may run git operations when instructed by the maintainer, but never commits to or pushes `main` before `python harness_cli.py selftest` has passed on that exact tree (Constitution 5.4); a targeted test run is not enough.
-- Independent Reviews: Reviewer roles selected by policy MUST be executed via subagents. The lead agent is strictly forbidden from self-certifying reviews using `record_review.py --verdict PASS` on HIGH/CRITICAL or sensitive changes; evaluations must come from actual reviewer runs.
-- Antigravity Planning Lifecycle: The interactive Proceed button appears ONLY on initial task plan approval. Subsequent updates show only Review. Never tell the developer to click 'Proceed' on follow-ups or bug fixes during active tasks; execute, compile, and deploy directly. When the developer approves in chat (e.g. replies with an approval in any language), the agent MUST immediately record approval via `python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>` (which atomically transitions directly to `IMPLEMENTING`); NEVER instruct the developer to run PowerShell commands manually.
-- 6-Tier Dynamic Risk Model: Review policy (`review_policy.py`) evaluates changes into 6 risk tiers (`T0_TRIVIAL` through `T5_CRITICAL`) and is the sole runtime authority for risk tier, required gates, reviewer roster, and device requirements. Execute exactly the policy-resolved roster; when reviewers are omitted by policy, do not dispatch subagents.
-- Next-Action Command Router: Follow the returned next_action or NEXT_ACTION/NEXT_REASON directly. Only when the action/payload is missing, query `python .agents/harness.py task status --task-id <id> --next --brief --json`. Never repeat status after a complete routed result. Once implementation is finished, `python .agents/harness.py verify-steps --task-id <id> --host <actual-host>` runs consecutive deterministic steps and stops at failures, reviews or decisions; STOPPED is not task completion.
-- Mobile Verification Walkthrough & Device Verification: The agent MUST wait for `run_device.py install-start` to finish execution with exit code 0 BEFORE outputting any mobile verification walkthrough or invoking `ask_question`. If `run_device.py` is still running as a background task, wait for completion; never output walkthrough or invoke `ask_question` prematurely. If `run_device.py` fails (e.g. `[ENV-FAILURE] no Android device detected via adb`), report the exact environment blocker to the developer; NEVER hallucinate device serials (such as `emulator-5554`), never claim the app is running when it is not, and NEVER ask the developer to verify a build that was not installed. If the developer chooses to skip device verification, record honest skip evidence with `python .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<phrase>"` (recording `status: "SKIPPED"`, never synthetic PASS). When installation succeeds, output a concise 3-section mobile verification walkthrough (`Navigation & Preconditions`, `| # | Action | Expected Result |` table with at most 5 core rows, `Edge Cases`, and NO file-change summary wall after the walkthrough) in chat AND in the SAME turn immediately invoke `ask_question` for sign-off (never stop after printing the walkthrough text without calling `ask_question`). Once developer replies with explicit PASS, record device sign-off via `python .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"`. Never run signoff before developer replies. If the developer chooses **Run phone E2E**, immediately run `python .agents/harness.py e2e start --task-id <id>` and drive the installed build yourself per `.agents/workflows/phone-e2e.md` (never `task revise`, never rerun gates or reviewers; ask via `e2e need-developer` + `ask_question` for human-only steps, then `e2e resume`).
-- Linked Zoho Sprints Integration: When a task plan includes an approved `zoho_link`, sync task start with `python .agents/harness.py zoho start-sync --task-id <id>` after approval, and sync delivery status/report with `python .agents/harness.py zoho delivery-sync --task-id <id>` after developer git commit. All Zoho task descriptions and comments must strictly obey any Zoho Sprints formatting, language, HTML template, and No-Code-Leak rules defined in `.agents/project-context/project-notes.md`.
-- Context Management Actions: Updating project context, recording architectural conventions, or adding/editing/removing domain notes (e.g. "add this note to project context", "note that Home screen uses MVI") is an administrative context action, NOT an Android code delivery task. Do NOT run change_classifier, review_policy, unit tests, or Gradle assemble. Never paste the developer's raw conversational phrasing verbatim: clarify any ambiguity first, then structure, detail, and translate the rule into clear, self-contained English before running `python harness_cli.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) or `context instruct` (`--supersedes <id>` / `--remove <id>`). Always adhere to `.agents/project-context/project-notes.md` across all task phases.
-- Review Host Binding:
-  - In Antigravity, prepare verification with:
-    `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity`
-  - Never claim Review Protocol V2 unless `current-run.json` says `review_protocol_version = 2`.
-- Reviewer Brief Inputs: Read the canonical `next_action.inputs` in JSON status output (plain output exposes the same payload once as `NEXT_ACTION_INPUTS`). Use only its dispatch reviewer roster. For each role, use the exact current `review_execution_profile.reviewers[role].brief_content` when present; otherwise read the full UTF-8 file at `briefs[role]` / `brief_path`. Pass that content as `Prompt`, never the path alone, a summary, a prior run's brief, or the whole execution profile. Missing or unreadable briefs block dispatch. After dispatch, follow WAIT/completion/retry actions; do not launch the roster again.
-- Exact Reviewer Dispatch Procedure (Antigravity):
-  1. Use the returned next_action and its inputs. Only if missing, run `python .agents/harness.py task status --task-id <id> --next --brief --json`.
-  2. If code == DISPATCH_REVIEWERS:
-     - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer with `ask_question` using the 5 choices (`flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) and run its `command_template` before launching subagents;
-     - use every reviewer in the returned `reviewers` list (never a partial subset);
-     - invoke all required reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer);
-     - for each reviewer:
-         TypeName = exact reviewer role
-         Role = exact reviewer role
-         Prompt = exact current reviewer brief
-         Workspace = inherit (or omit if host default is used consistently)
-         Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
-     - do not invent reasoning fields;
-     - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
-  3. Yield; do not poll.
-  4. On reactive completion, run `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call to complete all ready reviewers together). When other reviewers are still running (`WAIT_FOR_REVIEWERS`), output at most one concise progress line with the completed count (e.g. `1/6`) without listing pending reviewer names in prose.
-  5. On RETRY_REVIEW_PROTOCOL, execute the exact router-provided send_message.
-  6. On REVIEW_ENV_BLOCKED / REVIEW_PROFILE_BLOCKED / REVIEW_PROTOCOL_BLOCKED, stop reviewer flow and report blocker.
-  7. After all completed, run `python .agents/harness.py review finalize --task <id>` (if not already auto-finalized).
-  No legacy PASS token. No EVIDENCE footer. No self-certification.
-- Exact Scoped Phase Review V2 Procedure (Antigravity):
-  1. On `BUILD_PHASE_REVIEW_PACKAGE`: run `python .agents/harness.py phase-review package --task-id <id> --phase-id <phase>`.
-  2. On `DISPATCH_PHASE_REVIEWERS`:
-     - use every reviewer in the returned `reviewers` list (never a partial subset);
-     - invoke all required phase reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer);
-     - for each reviewer:
-         TypeName = exact reviewer role
-         Role = exact reviewer role
-         Prompt = `reviewer_prompts[role]` (one-line pointer; or exact current phase brief from `review_execution_profile.reviewers[role].brief_content` — do not open brief files)
-         Workspace = inherit (or omit if host default is used consistently)
-         Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
-     - do not invent reasoning fields;
-     - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
-  3. Yield; do not poll.
-  4. On reactive reviewer completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call when multiple phase reviewers finish together). When other phase reviewers are still running (`WAIT_FOR_PHASE_REVIEWERS` or on subagent idle wakeup before all finish), output at most one concise progress line with the completed count (e.g. `1/2`) without listing pending reviewer names or `[<model>]` tags in prose.
-  5. On `RETRY_PHASE_REVIEW_PROTOCOL`, execute the exact router-provided `send_message`.
-  6. On `PHASE_REVIEW_ENV_BLOCKED` / `PHASE_REVIEW_PROTOCOL_BLOCKED` / `PHASE_REVIEW_LEDGER_BLOCKED`, stop reviewer flow and report blocker.
-  7. After all phase reviewers completed, run `python .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>` (if not already auto-finalized).
-  8. Advance to next phase via `python .agents/harness.py task begin-next-phase --task-id <id>` (no second approval needed).
+1. `PROJECT_CONSTITUTION.md`
+2. `AGENTS.md`
+3. Relevant ADR and current architecture documents
 
-## Canonical Command Catalog & 4-Phase Lifecycle (PLAN → BUILD → VERIFY → SHIP)
+This checkout is the `android-agent-harness` kit itself, not a client Android application:
 
-Follow the simplified 4-phase lifecycle driven by `python .agents/harness.py task status --task-id <id> --next --json`:
+- Use `python harness_cli.py selftest` for the complete deterministic suite;
+- Use `python -m compileall -q harness_cli.py agents/scripts` for syntax validation;
+- Do not run Android Gradle or ADB gates against this repository;
+- Client Android project adapter instructions live in `agents/tool-adapters/GEMINI.md.template` (never mix client `.agents/harness.py` app workflows into kit repository maintenance);
+- Never poll background tasks or subagents in a loop (Zero-Polling invariant).
 
-| Phase | Step | Canonical Command | Description & Parameter Rules |
-| :--- | :--- | :--- | :--- |
-| **PLAN** | 1. Discovery | `python .agents/harness.py task-context --file <path> --json` | Bounded AST slice for target file/symbol |
-| **PLAN** | 1b. Graph | `python .agents/harness.py graph --feature <name> --json` | AST/symbol feature graph analysis |
-| **PLAN** | 2. Draft | `python .agents/harness.py task draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR\|CONFLICT> --expected-files <paths>` | Create task plan (`CONFLICT` / `FIX_CONFLICT` / `MERGE` for Git merge conflicts); `--expected-files` is required except for T0 resource/string/doc-only plans or active unmerged conflicts |
-| **PLAN** | 3. Approve | `python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>` | Record approval & atomically transition to IMPLEMENTING |
-| **BUILD** | 4. (Compat) Begin | `python .agents/harness.py task begin --repo . --task-id <id>` | Idempotent begin compatibility command |
-| **BUILD** | 4b. Zoho Start Sync | `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item (when plan has approved zoho_link) |
-| **BUILD** | 4c. Task Handoff | `python .agents/harness.py task handoff --task-id <id>` | Freeze WIP checkpoint for safe worktree switch |
-| **BUILD** | 4d. Reconcile Handoff | `python .agents/harness.py task reconcile-handoff --task-id <id>` | Validate developer WIP commit and update lineage |
-| **BUILD** | 4e. Phase Package | `python .agents/harness.py phase-review package --task-id <id> --phase-id <phase>` | Build immutable phase review package markdown and lean briefs |
-| **BUILD** | 4f. Phase Review Complete | `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` | Record trusted specialist phase review completion |
-| **BUILD** | 4g. Phase Review Finalize | `python .agents/harness.py phase-review finalize --task-id <id> --phase-id <phase>` | Finalize phase review evidence and substate |
-| **BUILD** | 5. Diagnostic Build | `python .agents/harness.py assemble` | Optional diagnostic build during implementation |
-| **VERIFY** | 6. Prepare | `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity` | Freeze review package & transition to VERIFYING |
-| **VERIFY** | 7. Preflight | `python .agents/harness.py preflight` | Deterministic preflight: strings, Room, architecture |
-| **VERIFY** | 8. Unit Tests | `python .agents/harness.py test` | Run unit tests gate (when required by policy) |
-| **VERIFY** | 9. Package | `python .agents/harness.py review package` | Generate immutable review package markdown |
-| **VERIFY** | 10. Reviews | `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted specialist reviewer completion |
-| **VERIFY** | 10b. Validate Finding| `python .agents/harness.py task validate-finding --repo . --task-id <id> --finding-id <id> --status <FALSE_POSITIVE\|CONFIRMED> --reason "<text>"` | Validate reviewer finding |
-| **VERIFY** | 10c. Resume | `python .agents/harness.py task resume --task-id <id>` | Resume to IMPLEMENTING if fixes needed |
-| **VERIFY** | 10d. Finalize Reviews | `python .agents/harness.py review finalize --task <id>` | Finalize aggregate review evidence once all routed reviewers complete |
-| **VERIFY** | 11. Assemble | `python .agents/harness.py assemble` | Build debug APK (after reviews pass) |
-| **VERIFY** | 12. Device Deploy / Skip | `python .agents/harness.py device install-start` (or `device skip-validation --source conversation --proof-reference "<phrase>"`) | Install & launch on device (when required), or record explicit developer skip |
-| **VERIFY** | 12b. Screen Capture | `python .agents/scripts/capture_screen.py --name <prefix>` | Optional screenshot verification proof |
-| **VERIFY** | 12c. Device Signoff | `python .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<phrase>"` | Record explicit developer device verification sign-off |
-| **SHIP** | 13. Final Verify | `python .agents/harness.py verify --task-id <id>` | Read-only delivery verification check |
-| **SHIP** | 14. Complete | `python .agents/harness.py task complete --repo . --task-id <id>` | Seal task to READY_FOR_DELIVERY (SHIP_PENDING) |
-| **SHIP** | 15. Reconcile / Deliver | `python .agents/harness.py task reconcile-delivery --repo . --task-id <id>` | Finalize to DELIVERED after developer git commit |
-| **SHIP** | 15b. Zoho Delivery Sync | `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item (when plan has zoho_link) |
-| - | Context Note | `python harness_cli.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) | Add, replace, or remove a structured English architectural convention/note |
-| - | Context Instruct | `python .agents/harness.py context instruct "<structured-english-instruction>" --scope "<scope>" --source conversation --proof-reference "<phrase>" --strength REQUIREMENT` (`--supersedes <id>` / `--remove <id>`) | Add, supersede, or remove a scoped developer instruction in developer-instructions.json |
-
-## Canonical Large-Task & Phased Execution Flow
-
-```text
-one task approval
-→ phase implementation
-→ deterministic checkpoint
-→ scoped phase delta review when selected
-→ next phase
-→ final integration review
-→ assemble/device
-→ developer signoff
-→ final verify
-→ developer Git commit
-→ deliver
-```
-
-## Urgent Interruption & Worktree Handoff Flow
-
-```text
-Task A
-→ task handoff (python .agents/harness.py task handoff --task-id <id>)
-→ developer WIP commit (developer creates Git commit for checkpoint)
-→ reconcile handoff (python .agents/harness.py task reconcile-handoff --task-id <id>)
-→ developer creates separate worktree (git worktree add ../repo-task-b HEAD)
-→ Task B in new chat/worktree
-→ return to Task A worktree/chat
-→ task status --next (python .agents/harness.py task status --task-id <id> --next)
-```
-
-### Core Invariants:
-- **Up to three disjoint live tasks per worktree**: up to 3 concurrent live tasks with explicit disjoint `--expected-files` may share one worktree (use `python .agents/harness.py task switch --task-id <id>` to switch focus); use a separate worktree for overlapping files or independent builds while another task is in `VERIFYING`.
-- **Model never executes Git mutations**: Git add, commit, tag, push, checkout, merge, and worktree operations are strictly developer-owned.
-- **Lineage enforcement**: a raw unregistered mid-task commit is a lineage violation; only a validated handoff checkpoint commit with accepted lineage receipt is allowed.
-- **Final review required**: aggregate final integration review remains required even when all intermediate phase reviews pass.
-
-Antigravity loads `agents/hooks.json` in this repo. Gemini CLI does not; still execute the policy-resolved reviewer roster before assemble. No `code-review-guard-agent`. No `LGTM`.
-
-- Native proof boundary: Never write Antigravity transcripts, `.system_generated` files or runtime metadata. Only the named planning artifacts (`implementation_plan.md`, `task.md`, `walkthrough.md`) are writable in conversation artifact directories.
-- Reviewer reading efficiency: Follow the brief's initial package line ranges when present; keep shared acceptance and integration context. The complete immutable package remains authoritative, and the reading guide never reduces review scope.
+Do not duplicate `PROJECT_CONSTITUTION.md` or `AGENTS.md` rules here.

@@ -372,10 +372,31 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
             dispatched = [r for r, d in revs.items() if d.get("state") == REVIEW_DISPATCHED]
             if dispatched:
                 from review_models import format_reviewers_with_models, reviewer_model_map
+                from review_execution import brief_pointer_prompt
                 run_meta_wait = _engine.read_json(prun_f) if prun_f.is_file() else {}
                 pending_models = reviewer_model_map(run_meta_wait, sorted(dispatched))
                 pending_with_models = format_reviewers_with_models(run_meta_wait, sorted(dispatched))
                 done_cnt = len(revs) - len(dispatched)
+                unbound = sorted(r for r in dispatched if not revs.get(r, {}).get("execution_id"))
+                unbound_prompts: dict[str, str] = {}
+                if unbound:
+                    wait_briefs = run_meta_wait.get("briefs") or {}
+                    for r in unbound:
+                        b_file = str(wait_briefs.get(r, "") or "")
+                        if b_file and Path(b_file).is_file():
+                            try:
+                                b_text = Path(b_file).read_text(encoding="utf-8")
+                                if b_text:
+                                    unbound_prompts[r] = brief_pointer_prompt(r, b_file, b_text)
+                            except OSError:
+                                pass
+                unbound_hint = (
+                    f" If `invoke_subagent` failed in the host with `subagent \"<role>\" not found` for {', '.join(unbound)}, "
+                    "read `.agents/subagents/<role>.json`, register it via `define_subagent` "
+                    "(`EnableWriteTools=false`, `EnableSubagentTools=false`, `EnableMCPTools=false`), "
+                    "and immediately re-invoke `invoke_subagent` with `reviewer_prompts[role]`."
+                    if unbound else ""
+                )
                 return {
                     "code": "WAIT_FOR_PHASE_REVIEWERS",
                     "kind": "HOST_ACTION",
@@ -385,11 +406,19 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         f"Waiting for phase reviewer subagents ({done_cnt}/{len(revs)} finished; "
                         f"remaining: {', '.join(sorted(dispatched))}; models: {pending_with_models}). "
                         "Yield immediately; in chat output at most one short progress line (e.g. "
-                        f"`{done_cnt}/{len(revs)}`) without listing pending reviewer names in prose."
+                        f"`{done_cnt}/{len(revs)}`) without listing pending reviewer names in prose.{unbound_hint}"
                     ),
                     "pending_reviewers": sorted(dispatched),
                     "reviewer_models": pending_models,
-                    "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id, "pending_reviewers": sorted(dispatched), "reviewer_models": pending_models},
+                    **({"reviewer_prompts": unbound_prompts} if unbound_prompts else {}),
+                    "inputs": {
+                        "repo": ".",
+                        "task_id": task_id,
+                        "phase_id": phase_id,
+                        "pending_reviewers": sorted(dispatched),
+                        "reviewer_models": pending_models,
+                        **({"reviewer_prompts": unbound_prompts} if unbound_prompts else {}),
+                    },
                     "expected": {"success_statuses": ["PASS"]},
                 }
 

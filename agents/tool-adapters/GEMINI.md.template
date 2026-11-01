@@ -64,6 +64,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
          Workspace = inherit (or omit if host default is used consistently)
          Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
      - do not invent reasoning fields;
+     - if `invoke_subagent` returns `subagent "<role>" not found or not allowed to be invoked` (e.g. after a server restart or mid-session update), immediately read `.agents/subagents/<role>.json`, register it via `define_subagent` (`Name=role`, `Description=description`, `SystemPrompt=system_prompt`, `EnableWriteTools=false`, `EnableSubagentTools=false`, `EnableMCPTools=false`), and re-invoke `invoke_subagent` in the next step;
      - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
   3. Yield; do not poll.
   4. On reactive completion, run `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call to complete all ready reviewers together). When other reviewers are still running (`WAIT_FOR_REVIEWERS`), output at most one concise progress line with the completed count (e.g. `1/6`) without listing pending reviewer names in prose.
@@ -83,6 +84,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
          Workspace = inherit (or omit if host default is used consistently)
          Model = "flash" if `reviewer_models[role]` starts with `gemini-3.8-flash-`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION)
      - do not invent reasoning fields;
+     - if `invoke_subagent` returns `subagent "<role>" not found or not allowed to be invoked` (e.g. after a server restart or mid-session update), immediately read `.agents/subagents/<role>.json`, register it via `define_subagent` (`Name=role`, `Description=description`, `SystemPrompt=system_prompt`, `EnableWriteTools=false`, `EnableSubagentTools=false`, `EnableMCPTools=false`), and re-invoke `invoke_subagent` in the next step;
      - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
   3. Yield; do not poll.
   4. On reactive reviewer completion, run `{{PY}} .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` in one call when multiple phase reviewers finish together). When other phase reviewers are still running (`WAIT_FOR_PHASE_REVIEWERS` or on subagent idle wakeup before all finish), output at most one concise progress line with the completed count (e.g. `1/2`) without listing pending reviewer names or `[<model>]` tags in prose.

@@ -782,9 +782,10 @@ def _sync_tree_in_place(src: Path, dst: Path, *, keep: frozenset[str] = frozense
             _replace_file(child, target)
 
 
-# Top-level `.agents/` entries an in-place engine update never rewrites: the live task state and the
-# rebuilt graph cache.
-IN_PLACE_KEEP = frozenset({"state", "cache"})
+# Top-level `.agents/` entries an in-place engine update never rewrites: the live task state, the
+# rebuilt graph cache, and `.agents/agents/` (Antigravity custom agent definitions generated and
+# updated in-place by `_configure()`, so open sessions never lose directory identity).
+IN_PLACE_KEEP = frozenset({"state", "cache", "agents"})
 
 
 def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False, in_place: bool = False) -> None:

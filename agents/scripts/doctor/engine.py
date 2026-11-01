@@ -1466,6 +1466,72 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(cat, "Trusted Transcript Resolver", "FAIL", f"Trusted transcript roots resolver error: {exc}")
 
+        # 8. File Watcher Storm Protection (Android build / cache exclusions)
+        self._check_watcher_exclusions(cat, is_ag=is_ag)
+
+    def _check_watcher_exclusions(self, category: str, *, is_ag: bool) -> None:
+        if self.is_raw_kit or not is_ag:
+            self.log(
+                category,
+                "File Watcher Exclusions",
+                "PASS",
+                "Kit template mode (Android build watcher exclusions checked on client projects)."
+                if self.is_raw_kit
+                else "Antigravity file watcher check optional (not selected).",
+            )
+            return
+        recommended = ("**/build/**", "**/.gradle/**", "**/.kotlin/**", "**/.cxx/**", "**/.agents/cache/**")
+        vscode_settings = self.repo / ".vscode" / "settings.json"
+        if not vscode_settings.is_file():
+            self.log(
+                category,
+                "File Watcher Exclusions",
+                "PASS",
+                "No .vscode/settings.json configured (optional: exclude **/build/**, **/.gradle/**, **/.kotlin/**, **/.cxx/**, and **/.agents/cache/** in files.watcherExclude to prevent @parcel/watcher event storms during Gradle builds).",
+            )
+            return
+        try:
+            raw = vscode_settings.read_text(encoding="utf-8", errors="ignore")
+            cleaned = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+            data = json.loads(cleaned)
+            watcher_exclude = data.get("files.watcherExclude") if isinstance(data, dict) else None
+            if not isinstance(watcher_exclude, dict):
+                self.log(
+                    category,
+                    "File Watcher Exclusions",
+                    "WARN",
+                    ".vscode/settings.json does not define 'files.watcherExclude' for heavy Android build directories.",
+                    [f"Recommended in .vscode/settings.json files.watcherExclude: {', '.join(recommended)}"],
+                )
+                return
+            missing = [
+                pat for pat in recommended
+                if not watcher_exclude.get(pat) and not watcher_exclude.get(pat.removeprefix("**/"))
+            ]
+            if missing:
+                self.log(
+                    category,
+                    "File Watcher Exclusions",
+                    "WARN",
+                    f".vscode/settings.json files.watcherExclude is missing {len(missing)} heavy Android directory pattern(s).",
+                    [f"Add to files.watcherExclude: \"{pat}\": true" for pat in missing],
+                )
+            else:
+                self.log(
+                    category,
+                    "File Watcher Exclusions",
+                    "PASS",
+                    "Heavy Android build and cache directories are excluded in .vscode/settings.json files.watcherExclude.",
+                )
+        except Exception:
+            self.log(
+                category,
+                "File Watcher Exclusions",
+                "PASS",
+                ".vscode/settings.json uses custom JSONC syntax; skipped automatic files.watcherExclude parse.",
+            )
+
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""
         try:

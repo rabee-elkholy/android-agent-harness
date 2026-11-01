@@ -254,7 +254,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("Single-shot Proceed invariant", harness_rules)
         self.assertIn("Direct follow-up execution", harness_rules)
         self.assertIn("Antigravity Planning Lifecycle", gemini_tpl)
-        self.assertIn("Antigravity Planning Lifecycle", gemini_root)
+        self.assertIn("PROJECT_CONSTITUTION.md", gemini_root)
         self.assertIn("never generate redundant plan artifacts or stall for nonexistent UI buttons", agents_tpl)
         self.assertIn("Follow-ups and technical fixes within active scope require immediate execution", agents_root)
 
@@ -3469,7 +3469,6 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
     def test_rules_and_agent_docs_contain_command_catalog_and_anti_polling(self) -> None:
         files_to_check = [
             KIT / "agents" / "rules" / "harness-rules.md",
-            KIT / "GEMINI.md",
             KIT / "agents" / "tool-adapters" / "GEMINI.md.template",
             KIT / "agents" / "tool-adapters" / "CLAUDE.md.template",
             KIT / "agents" / "tool-adapters" / "CODEX.md.template",

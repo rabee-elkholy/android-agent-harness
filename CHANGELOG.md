@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.59] - 2026-11-01
+
+### In-place `.agents/agents/` directory preservation, `define_subagent` unbound replay recovery, kit `GEMINI.md` separation, and `.vscode/settings.json` watcher storm advisory
+
+- **In-Place `.agents/agents/` Preservation Across Live Updates (`agents/scripts/lifecycle.py`, `agents/scripts/_antigravity_stability_selftest.py`)**: Add `"agents"` to `IN_PLACE_KEEP` in `lifecycle.py` so `_sync_tree_in_place` never removes `.agents/agents/` before `_configure()` updates `.agents/agents/<role>/agent.md` in-place, preserving directory identity for active Antigravity file watchers during mid-session updates.
+- **Automatic `define_subagent` + Unbound `invoke_subagent` Replay Recovery (`agents/scripts/_workflow/verification.py`, `agents/scripts/_workflow/phase_routing.py`, `agents/tool-adapters/GEMINI.md.template`)**: Emit `reviewer_prompts` and explicit recovery instructions on `WAIT_FOR_REVIEWERS` and `WAIT_FOR_PHASE_REVIEWERS` when a dispatched reviewer has an unbound `execution_id` (`null`), instructing the agent to register missing reviewer definitions from `.agents/subagents/<role>.json` via `define_subagent` (`EnableWriteTools=false`, `EnableSubagentTools=false`, `EnableMCPTools=false`) and replay `invoke_subagent` if the host lost `.agents/agents/` registration across a server restart.
+- **Kit Root `GEMINI.md` vs. Client Template Separation (`GEMINI.md`, `agents/scripts/_antigravity_stability_selftest.py`, `agents/scripts/_daily_workflow_selftest.py`, `agents/scripts/_vnext_selftest.py`)**: Align the kit root `GEMINI.md` with `AGENTS.md` and `CLAUDE.md` as concise kit-maintenance instructions while keeping client Android project instructions exclusively in `agents/tool-adapters/GEMINI.md.template`.
+- **Android Build File-Watcher Storm Advisory (`agents/scripts/doctor/engine.py`, `agents/scripts/_antigravity_stability_selftest.py`)**: Add a non-blocking `File Watcher Exclusions` check in `HarnessDoctor` that inspects `.vscode/settings.json` (when present) for `**/build/**`, `**/.gradle/**`, `**/.kotlin/**`, `**/.cxx/**`, and `**/.agents/cache/**` in `files.watcherExclude` to prevent `@parcel/watcher` event storms and V8 heap exhaustion during Gradle builds.
+
 ## [1.1.58] - 2026-11-01
 
 ### Lightweight merge-conflict verification (`CONFLICT`), Antigravity 2.0 file tool hooks, and isolated deferred merge-baseline backfill
