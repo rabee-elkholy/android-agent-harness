@@ -29,6 +29,28 @@ KIT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(KIT))
 
 
+def _copy_kit_tree(source: Path, destination: Path, **kwargs):
+    # Concurrent interpreters atomically rename temporary bytecode files.
+    # Fixture inputs are source assets, never the shared interpreter cache.
+    return shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*"), **kwargs)
+
+
+class KitCopyIsolationSelftest(unittest.TestCase):
+    def test_fixture_copy_excludes_mutable_python_cache_but_keeps_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / 'source'
+            cache = source / 'scripts/doctor/__pycache__'
+            cache.mkdir(parents=True)
+            (cache / 'engine.pyc.temporary').write_bytes(b'in-flight bytecode')
+            (source / 'scripts/doctor/engine.py').write_text('value = 1\n')
+            (source / 'legacy.pyc').write_bytes(b'compiled')
+            destination = Path(td) / 'copy'
+            _copy_kit_tree(source, destination)
+            self.assertTrue((destination / 'scripts/doctor/engine.py').is_file())
+            self.assertFalse((destination / 'scripts/doctor/__pycache__').exists())
+            self.assertFalse((destination / 'legacy.pyc').exists())
+
+
 def run_git(repo: Path, *args: str) -> None:
     proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
     if proc.returncode != 0:
@@ -1065,7 +1087,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
         (self.repo / ".agents").mkdir(parents=True, exist_ok=True)
         (self.repo / ".agents" / "VERSION").write_text(f"{kit_version}\n", encoding="utf-8")
 
-        shutil.copytree(KIT / "agents", self.repo / ".agents", dirs_exist_ok=True)
+        _copy_kit_tree(KIT / "agents", self.repo / ".agents", dirs_exist_ok=True)
         # Runtime state in a raw kit checkout is not installable content. Keep
         # this fixture isolated from any earlier suite that exercised the kit
         # in-place and may have left a fail-closed active-task record.
@@ -1179,7 +1201,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
         from _vnext_common import ValidationError
         with tempfile.TemporaryDirectory(prefix="fake_kit_") as fake_kit_dir:
             fake_kit = Path(fake_kit_dir)
-            shutil.copytree(KIT / "agents", fake_kit / "agents")
+            _copy_kit_tree(KIT / "agents", fake_kit / "agents")
             (fake_kit / "agents" / "VERSION").write_text("9.9.9\n", encoding="utf-8")
             with self.assertRaises(ValidationError) as ctx:
                 repair_repository(self.repo, fake_kit)
@@ -1191,7 +1213,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
         from _vnext_common import ValidationError
         with tempfile.TemporaryDirectory(prefix="fake_kit_corrupt_") as fake_kit_dir:
             fake_kit = Path(fake_kit_dir)
-            shutil.copytree(KIT / "agents", fake_kit / "agents")
+            _copy_kit_tree(KIT / "agents", fake_kit / "agents")
             (fake_kit / "agents" / "release_checksums.json").write_text("not-json", encoding="utf-8")
             with self.assertRaises(ValidationError) as ctx:
                 repair_repository(self.repo, fake_kit)
@@ -1203,7 +1225,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
         from _vnext_common import ValidationError
         with tempfile.TemporaryDirectory(prefix="fake_kit_unlisted_") as fake_kit_dir:
             fake_kit = Path(fake_kit_dir)
-            shutil.copytree(KIT / "agents", fake_kit / "agents")
+            _copy_kit_tree(KIT / "agents", fake_kit / "agents")
             extra = fake_kit / "agents" / "scripts" / "json.py"
             extra.write_text("# shadow stdlib\n", encoding="utf-8")
             with self.assertRaises(ValidationError) as ctx:
@@ -1425,7 +1447,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="harness_timeout_test_") as td:
             kit_dest = Path(td) / "active_kit"
-            shutil.copytree(KIT / "agents", kit_dest / "agents")
+            _copy_kit_tree(KIT / "agents", kit_dest / "agents")
             sentinel = kit_dest / "sentinel.txt"
             sentinel.write_text("original", encoding="utf-8")
 

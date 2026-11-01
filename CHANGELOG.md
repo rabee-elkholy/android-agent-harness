@@ -8,6 +8,7 @@
 - Correct Antigravity kernel activation to `always_on`; add scoped Compose, KMP and Gradle guides and doctor validation without changing approval, review or delivery authority.
 - Extend Compose preview discovery with dependency support and local name filtering, retaining existing build locks, freshness, Device Hub behavior and non-evidence semantics.
 - Bound live Gradle output and final diagnostics while retaining complete logs and process-derived verdicts. Preserve late noncompiler failure context and avoid log filename collisions.
+- Exclude mutable Python bytecode caches from public CLI fixture copies to prevent parallel CI races.
 - Cover conflicting repository environment settings, exact CLI option matching, truncated preview names and timeout cleanup failures with regression tests. Diagnostic success never replaces required gates.
 
 ## [1.1.55] - 2026-10-29
