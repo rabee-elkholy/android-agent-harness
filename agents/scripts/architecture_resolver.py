@@ -6,6 +6,8 @@ No LLM calls, no network access, no heuristic majority voting.
 """
 from __future__ import annotations
 
+from task_metrics import measured_operation
+
 import hashlib
 import json
 import os
@@ -178,6 +180,7 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
     return fam
 
 
+@measured_operation("architecture")
 def resolve_architecture_contract(
     repo: Path,
     *,

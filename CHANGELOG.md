@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.60] - 2026-11-01
+
+### Explicit context compaction, shared discovery reads, and bounded architecture guidance
+
+- Add `task-context --since <context_digest>` for unchanged context already visible in the same conversation, and `--full` to force a complete response. Fresh discovery, current receipts, instructions, warnings and scope restrictions remain authoritative. Fresh chats and uncertain context retention require full output.
+- Share facts, project notes and instruction reads within a multi-target discovery request. Index graph paths once when generating review topology instead of rescanning nodes for each changed path.
+- Add bounded advisory architecture context from existing native graph, project profiles and architecture contracts, including uncertainty and omitted counts. It never authorizes additional scope or certifies complete test impact.
+- Extend existing opt-in local metrics with bounded numeric operation counters and substeps; capture task ownership before commands can switch focus. Measurements do not alter gates or infer model token/cost savings.
+- Add eight focused efficiency contracts and a reproducible benchmark. Synthetic unchanged-context output was approximately 43% smaller than baseline full output; no general build or end-to-end speedup is claimed.
+- Document Antigravity delivery/retention limitations. Automatic session-based compaction is not enabled; preserve the explicit baseline mechanism and existing safety/review/device policies.
+
 ## [1.1.59] - 2026-11-01
 
 ### In-place `.agents/agents/` directory preservation, `define_subagent` unbound replay recovery, kit `GEMINI.md` separation, and `.vscode/settings.json` watcher storm advisory

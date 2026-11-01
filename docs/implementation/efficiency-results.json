@@ -1,0 +1,142 @@
+{
+  "method": "25 paired warm samples, alternating checkout order, content cache warmed explicitly; timing informational.",
+  "baseline": "2701c2c61cd4960247c561f78de36b0ee9896d5f",
+  "candidate_head": "2701c2c61cd4960247c561f78de36b0ee9896d5f",
+  "scenarios": [
+    {
+      "extra_files": 0,
+      "scenario": "mixed",
+      "baseline": {
+        "median_ms": 22.74769199993898,
+        "p95_ms": 27.09885200010831,
+        "facts_reads": 2,
+        "full_bytes": 21076,
+        "repeated_bytes": 21076,
+        "cold_query_ms": 46.73112899990883,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 22.877719000007346,
+        "p95_ms": 32.15512099995976,
+        "facts_reads": 1,
+        "full_bytes": 23334,
+        "repeated_bytes": 12087,
+        "cold_query_ms": 42.04654400018626,
+        "status": "BATCH_RESOLVED"
+      }
+    },
+    {
+      "extra_files": -1,
+      "scenario": "kmp",
+      "baseline": {
+        "median_ms": 22.737936999874364,
+        "p95_ms": 27.394938999805163,
+        "facts_reads": 2,
+        "full_bytes": 21079,
+        "repeated_bytes": 21079,
+        "cold_query_ms": 45.71624900017923,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 22.040972000013426,
+        "p95_ms": 24.776486999599,
+        "facts_reads": 1,
+        "full_bytes": 23337,
+        "repeated_bytes": 12090,
+        "cold_query_ms": 48.56205799978852,
+        "status": "BATCH_RESOLVED"
+      }
+    },
+    {
+      "extra_files": 500,
+      "scenario": "large",
+      "baseline": {
+        "median_ms": 115.75411199964947,
+        "p95_ms": 128.36144100037927,
+        "facts_reads": 2,
+        "full_bytes": 21094,
+        "repeated_bytes": 21094,
+        "cold_query_ms": 195.77030599975842,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 117.44502900000953,
+        "p95_ms": 135.33392199997252,
+        "facts_reads": 1,
+        "full_bytes": 23352,
+        "repeated_bytes": 12105,
+        "cold_query_ms": 230.4309920000378,
+        "status": "BATCH_RESOLVED"
+      }
+    }
+  ],
+  "candidate": "uncommitted maintenance tree on the same base SHA",
+  "replication": [
+    {
+      "extra_files": 0,
+      "scenario": "mixed",
+      "baseline": {
+        "median_ms": 24.4951550002952,
+        "p95_ms": 30.367911999746866,
+        "facts_reads": 2,
+        "full_bytes": 21076,
+        "repeated_bytes": 21076,
+        "cold_query_ms": 43.68112700012716,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 24.852231000295433,
+        "p95_ms": 28.373568000006344,
+        "facts_reads": 1,
+        "full_bytes": 23334,
+        "repeated_bytes": 12087,
+        "cold_query_ms": 47.11105000023963,
+        "status": "BATCH_RESOLVED"
+      }
+    },
+    {
+      "extra_files": -1,
+      "scenario": "kmp",
+      "baseline": {
+        "median_ms": 23.191009999663947,
+        "p95_ms": 26.188356000147905,
+        "facts_reads": 2,
+        "full_bytes": 21079,
+        "repeated_bytes": 21079,
+        "cold_query_ms": 50.16525500013813,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 22.83816499993918,
+        "p95_ms": 26.791474999754428,
+        "facts_reads": 1,
+        "full_bytes": 23337,
+        "repeated_bytes": 12090,
+        "cold_query_ms": 51.1718220000148,
+        "status": "BATCH_RESOLVED"
+      }
+    },
+    {
+      "extra_files": 500,
+      "scenario": "large",
+      "baseline": {
+        "median_ms": 114.66532799977358,
+        "p95_ms": 121.17393800008358,
+        "facts_reads": 2,
+        "full_bytes": 21094,
+        "repeated_bytes": 21094,
+        "cold_query_ms": 184.46302399979686,
+        "status": "BATCH_RESOLVED"
+      },
+      "candidate": {
+        "median_ms": 114.7387239998352,
+        "p95_ms": 123.01826200018695,
+        "facts_reads": 1,
+        "full_bytes": 23352,
+        "repeated_bytes": 12105,
+        "cold_query_ms": 182.80929200000173,
+        "status": "BATCH_RESOLVED"
+      }
+    }
+  ]
+}

@@ -22,7 +22,7 @@ def _directory(repo, task_id):
     return bounded_path(repo / ".agents/state/metrics", validate_id(task_id, "task id"))
 
 
-def record_operation(repo, task_id, operation, duration, exit_code, started=None):
+def record_operation(repo, task_id, operation, duration, exit_code, started=None, *, counters=None, span_kind="command", parent_id=None):
     """Diagnostic errors must never change a command's outcome."""
     try:
         directory = _directory(repo, task_id)
@@ -40,7 +40,14 @@ def record_operation(repo, task_id, operation, duration, exit_code, started=None
         value = {"schema_version": 1, "task_id": task_id, "operation": validate_id(operation),
                  "duration_seconds": round(duration, 6), "exit_code": int(exit_code),
                  "started_at": start, "ended_at": end}
-        atomic_write_json(directory / (uuid.uuid4().hex + ".json"), value)
+        if counters is not None or span_kind == "substep":
+            allowed = {"graph_syncs", "targets", "read_ranges", "emitted_bytes", "facts_reads", "notes_reads", "instruction_reads", "manifest_calls", "dispatches"}
+            safe = {k: v for k, v in (counters or {}).items() if k in allowed and type(v) is int and 0 <= v <= 10**12}
+            value.update(schema_version=2, span_kind=span_kind, counters=safe, repetition_reason="UNKNOWN")
+            if parent_id and isinstance(parent_id, str) and len(parent_id) == 32 and all(c in "0123456789abcdef" for c in parent_id):
+                value["parent_id"] = parent_id
+        if len(json.dumps(value).encode()) <= MAX_EVENT_BYTES:
+            atomic_write_json(directory / (uuid.uuid4().hex + ".json"), value)
     except Exception:
         return
 
@@ -55,7 +62,7 @@ def metrics_report(repo, task_id):
               "environment_failures": "UNAVAILABLE", "other_failed_commands": "UNAVAILABLE",
               "repeated_command_executions": "UNAVAILABLE", "successful_decision_commands": {},
               "reported_finding_verdicts": "UNAVAILABLE",
-              "history_capped": False,
+              "history_capped": False, "substeps": {}, "counters": {}, "repetition_reason": "UNKNOWN",
               "limitations": "Observed launcher commands only; repeats may be intentional. Decision command counts are not unique human interventions. Finding verdicts are recorded assessments, not independently proven false positives. Waits and host reviewer execution are not inferred."}
     if not directory.exists():
         return result
@@ -89,7 +96,7 @@ def metrics_report(repo, task_id):
             if path.is_symlink() or path.stat().st_size > MAX_EVENT_BYTES:
                 raise ValidationError("oversized or symlink metric")
             event = read_json(path)
-            if event.get("schema_version") != 1 or event.get("task_id") != task_id:
+            if event.get("schema_version") not in (1, 2) or event.get("task_id") != task_id:
                 raise ValidationError("invalid metric identity")
             duration = float(event["duration_seconds"])
             start, end = float(event["started_at"]), float(event["ended_at"])
@@ -99,6 +106,15 @@ def metrics_report(repo, task_id):
             exit_code = event["exit_code"]
             if type(exit_code) is not int:
                 raise ValidationError("invalid metric exit code")
+            if event.get("schema_version") == 2:
+                for name, count in (event.get("counters") or {}).items():
+                    if name in {"graph_syncs", "targets", "read_ranges", "emitted_bytes", "facts_reads", "notes_reads", "instruction_reads", "manifest_calls", "dispatches"} and type(count) is int and count >= 0:
+                        result["counters"][name] = result["counters"].get(name, 0) + count
+                if event.get("span_kind") == "substep":
+                    sub = result["substeps"].setdefault(operation, {"attempts": 0, "seconds": 0.0})
+                    sub["attempts"] += 1
+                    sub["seconds"] += duration
+                    continue
             row = result["operations"].setdefault(operation, {"attempts": 0, "nonzero_exits": 0, "seconds": 0.0})
             row["attempts"] += 1
             row["nonzero_exits"] += int(event["exit_code"] != 0)
@@ -111,7 +127,7 @@ def metrics_report(repo, task_id):
                 decisions = result["successful_decision_commands"]
                 decisions[operation] = decisions.get(operation, 0) + 1
             valid += 1
-        except (OSError, ValueError, KeyError, TypeError, ValidationError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, ValidationError):
             result["invalid_events"] += 1
     if valid:
         result["environment_failures"] = environment_failures
@@ -147,3 +163,60 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def metric_task_id(repo, args):
+    """Capture ownership before a command can change task focus. No probes if off."""
+    import os
+    if os.environ.get("HARNESS_LOCAL_METRICS") != "1":
+        return ""
+    for i, arg in enumerate(args):
+        if arg == "--task-id" and i + 1 < len(args):
+            return args[i + 1]
+        if arg.startswith("--task-id="):
+            return arg.split("=", 1)[1]
+    try:
+        path = Path(repo) / ".agents/state/active-task.json"
+        if not path.is_symlink() and path.stat().st_size <= 4096:
+            return str(read_json(path).get("task_id") or "")
+    except (OSError, ValueError, ValidationError):
+        pass
+    return ""
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def operation_span(repo, operation, *, task_id=None, counters=None):
+    """Optional bounded diagnostics: never intercept stdout or alter operation outcomes."""
+    import os
+    if os.environ.get("HARNESS_LOCAL_METRICS") != "1":
+        yield
+        return
+    owner = task_id or metric_task_id(repo, [])
+    started, clock = time.time(), time.monotonic()
+    code = 1
+    try:
+        yield
+        code = 0
+    finally:
+        if owner:
+            record_operation(Path(repo), owner, operation, time.monotonic()-clock, code,
+                             started, counters=counters or {}, span_kind="substep",
+                             parent_id=os.environ.get("HARNESS_METRIC_PARENT"))
+
+
+def measured_operation(name):
+    from functools import wraps
+    def decorate(function):
+        @wraps(function)
+        def wrapped(repo, *args, **kwargs):
+            owner = kwargs.get("task_id") or (args[0] if name == "review-package" and args else None)
+            with operation_span(repo, name, task_id=owner, counters={"manifest_calls": 1} if name == "manifest" else None):
+                result = function(repo, *args, **kwargs)
+            if name == "context-query" and isinstance(result, dict) and "architecture_context" not in result:
+                from context_presentation import architecture_context
+                result["architecture_context"] = architecture_context(result)
+            return result
+        return wrapped
+    return decorate

@@ -393,7 +393,13 @@ def discovery_command_allowed(command: str) -> bool:
     index, count = 3, 0
     while index < len(tokens):
         token = tokens[index]
-        if token == "--json":
+        if action == "task-context" and token == "--full":
+            index += 1
+        elif action == "task-context" and token == "--since" and index + 1 < len(tokens):
+            if not re.fullmatch(r"[0-9a-f]{64}", tokens[index + 1]):
+                return False
+            index += 2
+        elif token == "--json":
             index += 1
         elif token in valid and index + 1 < len(tokens):
             value = tokens[index + 1]

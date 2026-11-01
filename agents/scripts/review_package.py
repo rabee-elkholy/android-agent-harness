@@ -1,6 +1,8 @@
 """Create one complete, immutable review package for the active vNext run."""
 from __future__ import annotations
 
+from task_metrics import measured_operation
+
 import argparse
 import json
 import os
@@ -124,12 +126,15 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
         engine.sync()
         graph = engine.graph
 
+        # Index once per synchronized graph, rather than scanning every node
+        # once per changed path. No reuse crosses the freshness boundary.
+        nodes_by_path = {}
+        for node in graph.nodes.values():
+            if node.file_path:
+                nodes_by_path.setdefault(node.file_path.replace("\\", "/").lower(), []).append(node)
         touched_nodes = []
         for path in changed_paths:
-            norm_p = path.replace("\\", "/").lower()
-            for nid, node in graph.nodes.items():
-                if node.file_path and node.file_path.replace("\\", "/").lower() == norm_p:
-                    touched_nodes.append(node)
+            touched_nodes.extend(nodes_by_path.get(path.replace("\\", "/").lower(), []))
 
         ambiguous_matches: list[tuple[str, list[str]]] = []
         if not touched_nodes:
@@ -190,6 +195,14 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
         if not has_sources:
             lines.append("- Zero external callers detected in codebase graph (isolated leaf or new component).")
 
+        from context_presentation import architecture_context
+        if touched_nodes:
+            from task_context import _node_summary
+            advisory = architecture_context({"target": _node_summary(touched_nodes[0]),
+                "direct_dependencies": [_node_summary(n) for n in touched_nodes[:12]],
+                "warnings": ["Package-local graph snapshot; follow the approved architecture contract."]})
+            lines.extend(["\n### Source-grounded architecture context (advisory)",
+                          "```json", json.dumps(advisory, ensure_ascii=True, sort_keys=True), "```"])
         lines.append("\n### Reviewer Call-Chain Guidance:")
         lines.append("- Inspect any identified callers or contract files directly with `view_file` (maximum 2 hops).")
         lines.append("- Topology guidance is advisory; inspect callers and related contracts directly when verifying cross-component impact.")
@@ -199,6 +212,7 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
         return f"\n## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY\n*(Graph slice generation notice: {exc})*\n"
 
 
+@measured_operation("review-package")
 def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
     current = assert_active_run_fresh(repo, task_id)
     directory = task_dir(repo, task_id)

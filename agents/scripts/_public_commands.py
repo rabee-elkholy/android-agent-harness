@@ -456,7 +456,7 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "valid_states": ["ANY"],
         "required_inputs": ["file_or_symbol"],
         "model_facing": True,
-        "description": "Resolve bounded AST context for one target or up to 8 repeated --file/--symbol targets using one graph sync; single-target JSON remains unchanged.",
+        "description": "Resolve bounded AST context for one target or up to 8 repeated --file/--symbol targets using one graph sync; use --since <digest> for explicit unchanged presentation or --full for self-contained output.",
         "when_to_use": "Exact code targets are known. Reuse returned ranges, dependencies and tests; do not repeat graph discovery without a missing relationship. Never mix file and symbol selectors.",
         "example": "python .agents/harness.py task-context --file <first-path> --file <second-path> --json",
     },

@@ -72,7 +72,9 @@ def run_steps(repo: Path, task_id: str, host: str | None = None) -> tuple[int, d
                 return 1, summary
             print(f"VERIFICATION_STEP={code}", flush=True)
             started = time.monotonic()
-            exit_code = _dispatch(repo, script, arguments)
+            from task_metrics import operation_span
+            with operation_span(repo, "verification-dispatch", task_id=task_id, counters={"dispatches": 1}):
+                exit_code = _dispatch(repo, script, arguments)
             timings.append({"step": code, "duration_seconds": round(time.monotonic() - started, 3), "exit_code": exit_code})
             if exit_code:
                 summary.update(status="FAILED", failed_step=code, exit_code=exit_code,

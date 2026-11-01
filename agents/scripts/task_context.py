@@ -1,6 +1,8 @@
 """Read-only, bounded local task context resolver for Android and KMP projects."""
 from __future__ import annotations
 
+from task_metrics import measured_operation
+
 import argparse
 import hashlib
 import json
@@ -464,7 +466,9 @@ def lightweight_target_probe(
     engine = GraphEngine(root)
     # A cached hit can be stale or become ambiguous after an addition. Validate
     # the complete inventory before allowing discovery to publish a receipt.
-    sync = engine.sync(persist=False)
+    from task_metrics import operation_span
+    with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
+        sync = engine.sync(persist=False)
 
     if file:
         status, candidates, _ = _resolve_file(root, file, engine)
@@ -523,6 +527,7 @@ def lightweight_target_probe(
     return "RESOLVED"
 
 
+@measured_operation("context-query")
 def resolve_task_context(
     repo: Path,
     *,
@@ -536,7 +541,9 @@ def resolve_task_context(
     root = repo.resolve()
     bounded_limit = max(1, min(int(limit), MAX_NEIGHBOR_LIMIT))
     engine = GraphEngine(root)
-    sync = engine.sync(persist=False)
+    from task_metrics import operation_span
+    with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
+        sync = engine.sync(persist=False)
     return _resolve_task_context(root, engine, sync, file=file, symbol=symbol,
                                  module=module, source_set=source_set, limit=bounded_limit)
 
@@ -545,7 +552,7 @@ def _resolve_task_context(
     root: Path, engine: GraphEngine, sync: dict[str, Any], *,
     file: str | None = None, symbol: str | None = None,
     module: str | None = None, source_set: str | None = None,
-    limit: int = DEFAULT_NEIGHBOR_LIMIT, publish: bool = True,
+    limit: int = DEFAULT_NEIGHBOR_LIMIT, publish: bool = True, read_inputs=None,
 ) -> dict[str, Any]:
     """Resolve one target against the caller's synchronized graph."""
     bounded_limit = max(1, min(int(limit), MAX_NEIGHBOR_LIMIT))
@@ -571,7 +578,15 @@ def _resolve_task_context(
         base["candidates"] = _candidate_summaries(candidates)[:bounded_limit]
         return base
 
-    project_notes = load_project_notes(root)
+    read_inputs = read_inputs if read_inputs is not None else {}
+    def shared(key, loader):
+        if key not in read_inputs:
+            from task_metrics import operation_span
+            counter = {"facts": "facts_reads", "notes": "notes_reads", "instructions": "instruction_reads"}[key]
+            with operation_span(root, "context-input", counters={counter: 1}):
+                read_inputs[key] = loader(root)
+        return read_inputs[key]
+    project_notes = shared("notes", load_project_notes)
 
     if status == "FILE_FALLBACK":
         rel_posix = str(candidates[0])
@@ -595,7 +610,7 @@ def _resolve_task_context(
         except Exception:
             target_surfaces = []
 
-        facts_payload = _load_facts(root)
+        facts_payload = shared("facts", _load_facts)
         facts = facts_payload.get("facts", {})
 
         contract = _active_contract(root, rel_posix)
@@ -604,7 +619,7 @@ def _resolve_task_context(
         # file has no graph node, so it carries no package or architecture profile.
         file_target = GraphNode(id=f"file:{rel_posix}", name=Path(rel_posix).name, type="FILE", file_path=rel_posix, module=target_module, package="")
         matched_instructions = [
-            inst for inst in _load_developer_instructions(root)
+            inst for inst in shared("instructions", _load_developer_instructions)
             if _instruction_matches_node(inst, file_target, target_source_set, [])
         ]
         inst_conflict = _detect_instruction_conflict(matched_instructions)
@@ -746,7 +761,7 @@ def _resolve_task_context(
     ]
     test_discovery_status = "BOUNDED_COMPLETE" if len(test_candidates) <= MAX_OPEN_FILES else "PARTIAL"
 
-    facts_payload = _load_facts(root)
+    facts_payload = shared("facts", _load_facts)
     profiles, stale_seen = _matching_profiles(root, facts_payload, primary)
     contract = _active_contract(root, primary.file_path)
     conflicts: list[str] = []
@@ -757,7 +772,7 @@ def _resolve_task_context(
             conflicts.append("Live local profile disagrees with the approved source architecture family.")
 
     # Load and match developer instructions
-    all_instructions = _load_developer_instructions(root)
+    all_instructions = shared("instructions", _load_developer_instructions)
     matched_instructions = [
         inst for inst in all_instructions
         if _instruction_matches_node(inst, primary, _source_set(primary.file_path), profiles)
@@ -877,6 +892,8 @@ def _resolve_task_context(
     if receipt:
         base["discovery"] = receipt
     _add_line_numbers(root, base, target_nodes)
+    from context_presentation import architecture_context
+    base["architecture_context"] = architecture_context(base)
     if expansion_action:
         base["recommended_action"] = expansion_action
     if publish and result_status in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
@@ -893,6 +910,7 @@ def _resolve_task_context(
     return base
 
 
+@measured_operation("context-batch")
 def resolve_task_contexts(
     repo: Path, *, files: list[str] | None = None, symbols: list[str] | None = None,
     module: str | None = None, source_set: str | None = None,
@@ -908,10 +926,13 @@ def resolve_task_contexts(
     root = repo.resolve()
     before = compute_source_fingerprint(root)["source_fingerprint_sha256"]
     engine = GraphEngine(root)
-    sync = engine.sync(persist=False)
+    from task_metrics import operation_span
+    with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
+        sync = engine.sync(persist=False)
+    read_inputs = {}
     results = [_resolve_task_context(root, engine, sync,
                                     file=target if files else None, symbol=target if symbols else None,
-                                    module=module, source_set=source_set, limit=limit, publish=False)
+                                    module=module, source_set=source_set, limit=limit, publish=False, read_inputs=read_inputs)
                for target in dict.fromkeys(targets)]
     for row in results:
         if isinstance(row.get("project_notes"), dict) and "content" in row["project_notes"]:
@@ -922,7 +943,7 @@ def resolve_task_contexts(
         "status": "BATCH_RESOLVED" if len(successful) == len(results) else "BATCH_PARTIAL" if successful else "BATCH_FAILED",
         "graph_sync": sync,
         "results": results,
-        "project_notes": load_project_notes(root),
+        "project_notes": read_inputs.get("notes") or load_project_notes(root),
         "read_ranges": list(dict.fromkeys(item for row in results for item in row.get("read_ranges", []))),
     }
     if compute_source_fingerprint(root)["source_fingerprint_sha256"] != before:
@@ -1005,36 +1026,7 @@ def _add_line_numbers(root: Path, result: dict[str, Any], target_nodes: list[Gra
 
 
 def _deduplicate_cli_context_notes(repo: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    """Emit full project_notes content on the first CLI invocation or when sha256 changes;
-    subsequent consecutive CLI calls within 30 minutes receive compact metadata + sections."""
-    import time
-    from _vnext_common import atomic_write_json
-    notes = payload.get("project_notes")
-    if not isinstance(notes, dict) or not notes.get("has_custom_notes") or not notes.get("content"):
-        return payload
-    sha = str(notes.get("sha256") or "")
-    if not sha:
-        return payload
-    marker = repo.resolve() / ".agents" / "cache" / "task-context" / "last-emitted-notes.json"
-    now = time.time()
-    already_emitted = False
-    if marker.is_file():
-        try:
-            seen = json.loads(marker.read_text(encoding="utf-8"))
-            if isinstance(seen, dict) and seen.get("sha256") == sha and 0 <= now - float(seen.get("at", 0)) < 1800:
-                already_emitted = True
-        except Exception:
-            already_emitted = False
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(marker, {"sha256": sha, "at": now})
-    except (OSError, ValueError):
-        pass
-    if already_emitted:
-        compact_notes = {k: v for k, v in notes.items() if k != "content"}
-        compact_notes["content_omitted"] = True
-        compact_notes["note"] = "Unchanged project_notes content already loaded in session; see .agents/project-context/project-notes.md."
-        return {**payload, "project_notes": compact_notes}
+    """A repo marker cannot establish what a new conversation has read."""
     return payload
 
 
@@ -1048,7 +1040,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-set")
     parser.add_argument("--limit", type=int, default=DEFAULT_NEIGHBOR_LIMIT)
     parser.add_argument("--json", action="store_true")
+    presentation = parser.add_mutually_exclusive_group()
+    presentation.add_argument("--since", help="Digest actually received in this conversation; presentation only.")
+    presentation.add_argument("--full", action="store_true", help="Force self-contained context.")
     args = parser.parse_args(argv)
+    if args.since and not re.fullmatch(r"[0-9a-f]{64}", args.since):
+        parser.error("--since requires a lowercase SHA-256 context digest")
     targets = args.file or args.symbol
     if len(targets) > MAX_BATCH_TARGETS:
         parser.error("A task-context batch accepts at most 8 targets.")
@@ -1061,9 +1058,13 @@ def main(argv: list[str] | None = None) -> int:
                                       symbol=args.symbol[0] if args.symbol else None,
                                       module=args.module, source_set=args.source_set, limit=args.limit)
     if args.json:
-        out_payload = _deduplicate_cli_context_notes(repo_path, result)
+        from context_presentation import present_context
+        out_payload = present_context(repo_path, result, since=args.since)
         # ASCII JSON preserves every Unicode code point on legacy Windows pipes.
-        print(json.dumps(out_payload, ensure_ascii=True, indent=2))
+        rendered = json.dumps(out_payload, ensure_ascii=True, indent=2)
+        from task_metrics import operation_span
+        with operation_span(repo_path, "context-output", counters={"emitted_bytes": len((rendered + "\n").encode("utf-8")), "targets": len(targets), "read_ranges": len(result.get("read_ranges", []))}):
+            print(rendered)
     else:
         from _live_process import enable_line_buffered_stdio
         enable_line_buffered_stdio()

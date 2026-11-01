@@ -1564,8 +1564,8 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
             first_out = tc._deduplicate_cli_context_notes(root, payload)
             self.assertEqual("Long notes", first_out["project_notes"].get("content"))
             second_out = tc._deduplicate_cli_context_notes(root, payload)
-            self.assertNotIn("content", second_out["project_notes"])
-            self.assertTrue(second_out["project_notes"].get("content_omitted"))
+            self.assertEqual("Long notes", second_out["project_notes"].get("content"))
+            self.assertFalse(second_out["project_notes"].get("content_omitted", False))
             changed_out = tc._deduplicate_cli_context_notes(root, {"project_notes": {**payload["project_notes"], "sha256": "def456"}})
             self.assertEqual("Long notes", changed_out["project_notes"].get("content"))
 

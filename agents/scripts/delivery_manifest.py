@@ -1,6 +1,8 @@
 """Build the canonical delivery snapshot and reviewed change-set identities."""
 from __future__ import annotations
 
+from task_metrics import measured_operation
+
 import argparse
 import hashlib
 import json
@@ -601,6 +603,7 @@ def _toolchain_versions() -> dict[str, str]:
     }
 
 
+@measured_operation("manifest")
 def build_manifest(repo: Path) -> dict:
     root = repo.resolve()
     algorithm = _object_format(root)

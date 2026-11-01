@@ -146,9 +146,11 @@ def main(argv: list[str] | None = None) -> int:
     import time
     started = time.time()
     monotonic = time.monotonic()
+    from task_metrics import metric_task_id
+    metric_owner = metric_task_id(REPO_ROOT, args)
     code = _main(args)
     # Explicit opt-in: feature-off does not read tasks or scan metrics history.
-    if os.environ.get("HARNESS_LOCAL_METRICS") == "1" and args and args[0] in {"task", "preflight", "test", "assemble", "compile", "device", "review", "journey"}:
+    if os.environ.get("HARNESS_LOCAL_METRICS") == "1" and args and args[0] in {"task", "task-context", "verify-steps", "phase-review", "preflight", "test", "assemble", "compile", "device", "review", "journey"}:
         try:
             sys.path.insert(0, str(SCRIPTS))
             from task_metrics import record_operation
@@ -160,17 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             if len(args) > 1 and args[1] in actions.get(args[0], ()):
                 operation += "-" + args[1]
             if operation not in {"task-metrics", "task-coverage", "task-status", "journey-list", "journey-validate", "review-status", "review-profile"}:
-                task_id = ""
-                for index, argument in enumerate(args):
-                    if argument == "--task-id" and index + 1 < len(args):
-                        task_id = args[index + 1]
-                    elif argument.startswith("--task-id="):
-                        task_id = argument.split("=", 1)[1]
-                if not task_id:
-                    import json
-                    active = AGENTS_ROOT / "state/active-task.json"
-                    if active.is_file() and active.stat().st_size <= 4096:
-                        task_id = str(json.loads(active.read_text(encoding="utf-8")).get("task_id") or "")
+                task_id = metric_owner
                 if task_id:
                     record_operation(REPO_ROOT, task_id, operation, time.monotonic() - monotonic, code, started)
         except (OSError, ValueError, ImportError):

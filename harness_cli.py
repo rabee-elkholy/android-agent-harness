@@ -799,6 +799,10 @@ def cmd_task_context(args: argparse.Namespace) -> int:
     if args.source_set:
         cli_args.extend(["--source-set", args.source_set])
     cli_args.extend(["--limit", str(args.limit)])
+    if getattr(args, "since", None):
+        cli_args.extend(["--since", args.since])
+    if getattr(args, "full", False):
+        cli_args.append("--full")
     if args.json:
         cli_args.append("--json")
     return run_engine_script(kit, "task_context.py", cli_args, capture=args.json)
@@ -1091,6 +1095,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 
 FULL_SELFTEST_SUITES = (
+    "_efficiency_selftest.py",
     "_android_ui_selftest.py",
     "_android_inspect_selftest.py",
     "_change_decision_selftest.py",
@@ -1127,6 +1132,7 @@ FULL_SELFTEST_SUITES = (
 )
 
 QUICK_SELFTEST_SUITES = (
+    "_efficiency_selftest.py",
     "_review_models_selftest.py",
     "_portability_selftest.py",
     "_host_continuation_selftest.py",
@@ -1727,6 +1733,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--kit", help="Kit checkout to use (default: auto-discover or clone).")
     sp.add_argument("--json", action="store_true", help="Format output as JSON.")
+    presentation = sp.add_mutually_exclusive_group()
+    presentation.add_argument("--since", help="Previously received context digest.")
+    presentation.add_argument("--full", action="store_true")
     sp.set_defaults(func=cmd_task_context)
 
     sp = sub.add_parser("graph", help="Query the Universal Android Code & Architecture Graph.")

@@ -144,3 +144,5 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Antigravity UI diagnostics | `python .agents/harness.py android-ui capabilities` (then `list`, `render --fqn <exact-name>`, or `hub`) |
 | Android source/docs inspection | `python .agents/harness.py android-inspect declaration <symbol>` (or `usages`, `analyze <path>`, `docs-search <query>`, `docs-fetch <kb-url>`) |
 | Verify | `python .agents/harness.py verify --task-id <id>` |
+
+For repeated context and deterministic continuation, follow `.agents/workflows/efficient-context.md`; presentation digests never grant scope or evidence.
