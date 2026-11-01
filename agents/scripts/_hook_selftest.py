@@ -992,6 +992,19 @@ class HookTests(unittest.TestCase):
         })
         self.assertEqual("deny", res2["decision"])
 
+    def test_edit_hook_never_changes_target_bytes(self):
+        self.activate("IMPLEMENTING")
+        target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        original = b"package com.example\r\nclass MainActivity {}\r\n"
+        for tool in ("edit_file", "replace_file_content", "multi_replace_file_content"):
+            for text in ("missing target", "package com.example\nclass MainActivity {}", "class MainActivity {}"):
+                with self.subTest(tool=tool, target=text):
+                    target.write_bytes(original)
+                    result = self.call(tool, {"TargetFile": str(target), "TargetContent": text,
+                                             "ReplacementContent": "replacement"})
+                    self.assertEqual("allow", result["decision"])
+                    self.assertEqual(original, target.read_bytes())
+
     def test_P0_05_list_dir_intercepted(self):
         res = self.call("list_dir", {"DirectoryPath": "app"})
         self.assertIn("decision", res)
@@ -1279,6 +1292,32 @@ class GenericMCPTests(unittest.TestCase):
             with self.subTest(mut_cmd=mut_cmd):
                 res = self.call("run_command", {"CommandLine": mut_cmd})
                 self.assertNotEqual("allow", res["decision"], f"{mut_cmd} must be blocked")
+
+    def test_DRAFT_with_git_merge_in_approach_and_edit_file_preserves_bytes(self):
+        """Allow audited merge prose without letting the permission hook edit CRLF files."""
+        # 1. Audited harness command containing 'git merge' inside --approach prose is not blocked by git_mutation
+        draft_cmd = (
+            'python .agents/harness.py task draft --repo . --task-id merge-test '
+            '--outcome "Merge branch" --kind MERGE --expected-files "app/src/main/kotlin/com/example/MainActivity.kt" '
+            '--approach "1. Developer runs git merge origin/feature. 2. Resolve conflicts."'
+        )
+        # Even if command_allowed rejects unknown state in fixture, it must NOT be rejected by GIT_MUTATION
+        res_cmd = self.call("run_command", {"CommandLine": draft_cmd})
+        self.assertNotIn("git_mutation", res_cmd.get("reason", ""))
+
+        # 2. The hook authorizes the tool; it must not perform an edit before the tool runs.
+        self.activate(external_writes=[])
+        crlf_target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        original = b"package com.example\r\nclass MainActivity {\r\n    val a = 1\r\n}\r\n"
+        crlf_target.write_bytes(original)
+        self.assertIn(b"\r\n", crlf_target.read_bytes())
+        res_edit = self.call("edit_file", {
+            "Path": str(crlf_target),
+            "Target": "class MainActivity {\n    val a = 1\n}",
+            "Replacement": "class MainActivity {\n    val a = 2\n}",
+        })
+        self.assertEqual("allow", res_edit["decision"], f"edit_file should be allowed: {res_edit}")
+        self.assertEqual(original, crlf_target.read_bytes(), "permission checks must preserve exact target bytes")
 
 
 if __name__ == "__main__":

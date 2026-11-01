@@ -324,15 +324,16 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):
         require_reviewers({"convention-reviewer-agent"}, "CROSS_MODULE_CHANGE")
 
-    if micro:
+    is_conflict_task = str(task_kind or (plan or {}).get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
+    if micro or is_conflict_task:
         reviewers.clear()
-    if "UNKNOWN" in surfaces:
+    if "UNKNOWN" in surfaces and not is_conflict_task:
         reviewers.clear()
         if unknown_resolved:
             reviewers = set(FIVE_REVIEWERS) if risk_tier == "T5_CRITICAL" else set(UNKNOWN_APPROVED_REVIEWERS)
             reviewer_reasons = {name: {"APPROVED_UNKNOWN_FILES"} for name in reviewers}
 
-    if project_kind != "application":
+    if is_conflict_task or project_kind != "application":
         intrinsic_device_required = False
     elif ui_verification_class == "VISUAL_MICRO":
         intrinsic_device_required = False
@@ -363,14 +364,16 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     def require_gate(name, reasons):
         gates.add(name)
         gate_reasons.setdefault(name, set()).update(reasons)
-    if surfaces & TEST_SURFACES:
-        require_gate("unit_tests", surfaces & TEST_SURFACES)
-    if surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"}:
-        require_gate("localization", surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"})
-    if "ROOM_SCHEMA" in surfaces:
-        require_gate("room", {"ROOM_SCHEMA"})
-    if risk_tier != "T0_TRIVIAL" and (surfaces - {"DOCS"}):
-        require_gate("assemble", {"NONTRIVIAL_DELIVERY_CHANGE"})
+    if not is_conflict_task:
+        if surfaces & TEST_SURFACES:
+            require_gate("unit_tests", surfaces & TEST_SURFACES)
+        if surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"}:
+            require_gate("localization", surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"})
+        if "ROOM_SCHEMA" in surfaces:
+            require_gate("room", {"ROOM_SCHEMA"})
+        if risk_tier != "T0_TRIVIAL" and (surfaces - {"DOCS"}):
+            require_gate("assemble", {"NONTRIVIAL_DELIVERY_CHANGE"})
+    # Explicit approved criteria survive the lightweight merge defaults.
     if device_required:
         require_gate("device", {ui_verification_class, "APPROVED_DEVICE_POLICY"})
         if contract is not None:
@@ -380,7 +383,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
 
     skills = route(skills_root, sorted(surfaces), task_kind=task_kind)
     call_budget = _configured_model_call_budget()
-    status = "NO_DELIVERY_CHANGES" if not surfaces else "USER_DECISION_REQUIRED" if ("UNKNOWN" in surfaces and not unknown_resolved) else skills["status"]
+    status = "NO_DELIVERY_CHANGES" if not surfaces else "USER_DECISION_REQUIRED" if ("UNKNOWN" in surfaces and not unknown_resolved and not is_conflict_task) else skills["status"]
     if len(reviewers) > call_budget:
         status = "USER_DECISION_REQUIRED"
     result = {
@@ -394,7 +397,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         "risk_tier": risk_tier,
         "ui_verification_class": ui_verification_class,
         "micro_eligible": micro,
-        "review_status": "REVIEW_NOT_REQUIRED_BY_POLICY" if micro else "REQUIRED" if reviewers else "NONE",
+        "review_status": "REQUIRED" if reviewers else "REVIEW_NOT_REQUIRED_BY_POLICY" if (micro or is_conflict_task) else "NONE",
         "reviewers": sorted(reviewers),
         "gates": sorted(gates, key=lambda g: (PIPELINE_GATE_ORDER.index(g) if g in PIPELINE_GATE_ORDER else 99, g)),
         "device_verification_mode": device_verification_mode,
@@ -410,7 +413,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             "classification": classification.get("details") or {},
             "reviewers": {name: sorted(reviewer_reasons.get(name, ())) for name in sorted(reviewers)},
             "gates": {name: sorted(gate_reasons[name]) for name in sorted(gates)},
-            "review_exemption": "BOUNDED_MICRO_CHANGE" if micro and not reviewers else None,
+            "review_exemption": "MERGE_CONFLICT_RESOLUTION" if is_conflict_task and not reviewers else ("BOUNDED_MICRO_CHANGE" if micro and not reviewers else None),
             "device": {"ui_verification_class": ui_verification_class, "project_kind": project_kind,
                        "configured_mode": device_verification_mode, "required": device_required,
                        "contract_requires_device": bool(contract and (contract["journeys"] or any(c["method"] in {"manual", "journey"} for c in required_criteria)))},

@@ -534,6 +534,8 @@ def review_override_errors(policy: dict, evidence: dict) -> list[str]:
 
 def unplanned_mandatory_skills(plan: dict, policy: dict) -> list[str]:
     """Skills the verification policy makes mandatory that the approved plan did not name."""
+    if str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
+        return []
     from plan_authority import OUTCOME_SURFACE_KEYWORDS
     from skill_router import ROUTES
 
@@ -1004,7 +1006,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             checks.append({"name": f"carried:{reviewer or 'unknown'}", "status": "FAIL", "detail": str(exc)})
             reasons.append(f"carried review is invalid for {reviewer or 'unknown'}: {exc}")
 
-    if set(policy.get("surfaces") or []) & SENSITIVE_SURFACES:
+    is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
+    if not is_conflict_task and (set(policy.get("surfaces") or []) & SENSITIVE_SURFACES):
         approval_record, error = _validate_artifact(store, snapshot, change_set, run_id, "sensitive_approval", harness_version)
         checks.append({"name": "sensitive_approval", "status": "PASS" if error is None else "FAIL", "detail": error or "bound sensitive approval PASS"})
         if error:

@@ -6,9 +6,12 @@ ANTIGRAVITY_TOOLS = frozenset({
     "manage_task",
     "schedule",
     "view_file",
+    "read_file",
     "write_to_file",
+    "write_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "edit_file",
     "list_dir",
     "find_by_name",
     "grep_search",
@@ -27,8 +30,10 @@ ANTIGRAVITY_TOOLS = frozenset({
 
 MUTATION_TOOLS = frozenset({
     "write_to_file",
+    "write_file",
     "replace_file_content",
     "multi_replace_file_content",
+    "edit_file",
     "apply_patch",
     "edit",
     "multiedit",
@@ -40,6 +45,7 @@ MUTATION_TOOLS = frozenset({
 
 READ_ONLY_TOOLS = frozenset({
     "view_file",
+    "read_file",
     "list_dir",
     "find_by_name",
     "grep_search",

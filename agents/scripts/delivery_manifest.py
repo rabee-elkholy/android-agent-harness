@@ -636,6 +636,98 @@ def build_manifest(repo: Path) -> dict:
     }
 
 
+def _maybe_backfill_deferred_merge_baseline(root: Path, tid: str, baseline_file: Path, baseline: dict) -> dict:
+    """When a CONFLICT task was drafted before `git merge` ran, backfill the merge baseline once MERGE_HEAD appears."""
+    if not isinstance(baseline, dict) or (baseline.get("git_merge_state") or {}).get("merge_in_progress"):
+        return baseline
+    plan_file = baseline_file.with_name("plan.json")
+    plan: dict = {}
+    if plan_file.is_file():
+        try:
+            plan = read_json(plan_file)
+        except (OSError, ValueError, ValidationError):
+            plan = {}
+    if str(plan.get("task_kind") or "").upper() not in {"CONFLICT", "FIX_CONFLICT", "MERGE"}:
+        return baseline
+    try:
+        merge_state = git_merge_in_progress(root)
+    except (OSError, ValueError, ValidationError, HarnessError):
+        return baseline
+    if not merge_state.get("merge_head"):
+        return baseline
+    try:
+        cur_man = build_manifest(root)
+        index_entries, index_modes, _ = _index_and_untracked(root)
+        planned_rel_set = {
+            _normal_rel(str(p)) for p in (plan.get("expected_files") or []) if str(p).strip()
+        }
+        existing_map = {
+            _normal_rel(str(item.get("path") or "")): item
+            for item in (baseline.get("changes") or [])
+            if isinstance(item, dict) and item.get("path")
+        }
+        merged_changes: list[dict] = []
+        for ch in cur_man.get("changes") or []:
+            if not isinstance(ch, dict) or not ch.get("path"):
+                continue
+            rel = _normal_rel(str(ch["path"]))
+            if ch.get("status") == "U":
+                if has_conflict_markers(root / rel) > 0:
+                    merged_changes.append(dict(ch))
+                else:
+                    merged_changes.append({**ch, "content_identity": "git:pre-resolution-unmerged"})
+            elif rel in existing_map:
+                merged_changes.append(dict(existing_map[rel]))
+            elif ch.get("status") != "D" and rel in index_entries:
+                entry = dict(ch)
+                entry["content_identity"] = f"git:{index_entries[rel]}"
+                if rel in index_modes:
+                    entry["git_mode"] = index_modes[rel]
+                merged_changes.append(entry)
+            elif rel not in planned_rel_set:
+                merged_changes.append(dict(ch))
+        merged_changes.sort(key=lambda item: (item.get("path") or "", item.get("old_path") or "", item.get("status") or ""))
+        baseline = dict(baseline)
+        baseline["changes"] = merged_changes
+        baseline["git_merge_state"] = merge_state
+        identity = {key: baseline.get(key) for key in (
+            "schema_version", "task_id", "repository", "base_delivery_snapshot_sha256", "base_change_set_sha256", "changes",
+        )}
+        baseline["baseline_sha256"] = canonical_sha256(identity)
+        atomic_write_json(baseline_file, baseline)
+        if plan and plan_file.is_file():
+            plan["task_baseline"] = baseline
+            atomic_write_json(plan_file, plan)
+        import shutil
+        baseline_files_dir = baseline_file.parent / "baseline-files"
+        binary_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4", ".jar", ".aar", ".so", ".apk"}
+        for entry in merged_changes:
+            rel = str(entry.get("path") or "")
+            if not rel:
+                continue
+            if entry.get("status") != "U" and rel not in planned_rel_set:
+                continue
+            if entry.get("status") == "U" and has_conflict_markers(root / rel) == 0:
+                continue
+            if any(m in rel.lower() for m in SECRET_PATH_MARKERS):
+                continue
+            fpath = root / rel
+            dest = baseline_files_dir / rel
+            if not fpath.is_file() or fpath.is_symlink() or dest.exists():
+                continue
+            if fpath.suffix.lower() in binary_suffixes:
+                continue
+            try:
+                if fpath.stat().st_size <= 2 * 1024 * 1024:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(fpath, dest)
+            except OSError:
+                pass
+    except (OSError, ValueError, ValidationError, HarnessError):
+        return baseline
+    return baseline
+
+
 def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
     root = repo.resolve()
     tid = task_id
@@ -674,6 +766,7 @@ def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
             )}
             if canonical_sha256(identity) != baseline["baseline_sha256"]:
                 raise ValidationError(f"task baseline integrity mismatch: {baseline_file}")
+        baseline = _maybe_backfill_deferred_merge_baseline(root, tid, baseline_file, baseline)
         return baseline
     return None
 
@@ -1225,14 +1318,13 @@ def build_task_manifest(
         if norm_p not in current_paths and p not in current_paths:
             if norm_p in base_map or p in base_map:
                 base_entry = base_map.get(norm_p) or base_map.get(p) or {}
-                # Check for sensitive/secret marker
-                if any(m in norm_p.lower() for m in SECRET_PATH_MARKERS):
-                    raise ValidationError("HANDOFF_COMMIT_UNSAFE_DIRTY_BASELINE: pre-existing dirty sensitive file overlaps intended commit")
-                target_p = repo / norm_p
-                if target_p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".jar", ".aar", ".so", ".bin", ".gif"):
-                    raise ValidationError(f"HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY: cannot safely attribute binary file '{norm_p}' overlapping dirty baseline")
-                # Compare committed content to baseline content
+                # Compare committed content to baseline content first; untouched baseline/auto-merged files are not task changes
                 if comm.get("content_identity") != base_entry.get("content_identity"):
+                    if any(m in norm_p.lower() for m in SECRET_PATH_MARKERS):
+                        raise ValidationError("HANDOFF_COMMIT_UNSAFE_DIRTY_BASELINE: pre-existing dirty sensitive file overlaps intended commit")
+                    target_p = repo / norm_p
+                    if target_p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".jar", ".aar", ".so", ".bin", ".gif"):
+                        raise ValidationError(f"HANDOFF_DIRTY_BASE_UNPROVABLE_BINARY: cannot safely attribute binary file '{norm_p}' overlapping dirty baseline")
                     task_changes.append(comm)
                 current_paths.add(norm_p)
                 if p:

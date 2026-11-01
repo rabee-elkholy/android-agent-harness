@@ -1233,10 +1233,13 @@ def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, 
 def _state_snapshot(repo: Path) -> dict[str, str]:
     state = repo / ".agents/state"
     records = {}
-    ignored = {".write.lock", "audit_log.jsonl", "hook-conversations.json", "hook-state.json"}
+    ignored = {".write.lock", "audit_log.jsonl", "hook-conversations.json", "hook-state.json", "update_cache.json"}
     for path in state.rglob("*"):
         if path.is_symlink():
             raise ValidationError("active-task state contains a symlink; update refused")
+        rel_parts = path.relative_to(state).parts
+        if "cache" in rel_parts:
+            continue
         if (
             path.is_file()
             and path.name not in ignored

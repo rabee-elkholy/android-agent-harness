@@ -354,7 +354,8 @@ def _next_verification(repo, task_id, plan, host, identity, run_host, state, ses
     # The final verifier requires a run-bound sensitive approval whenever the run's surfaces include a
     # sensitive one. The router asked only when `policy.sensitive` was set, so a real task was sent to
     # `complete`, failed on a missing sensitive_approval.json, and was sent to `complete` again.
-    sensitive_touched = sorted(set(policy.get("surfaces") or []) & _engine.SENSITIVE_SURFACES)
+    is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
+    sensitive_touched = [] if is_conflict_task else sorted(set(policy.get("surfaces") or []) & _engine.SENSITIVE_SURFACES)
     # Exactly the condition `approve-sensitive` accepts and the verifier requires, so the router never
     # asks for an approval the command would refuse (nothing sets a bare `policy.sensitive` flag).
     sensitive_pending = bool(sensitive_touched) and not has_pass_evidence("sensitive_approval")

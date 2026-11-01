@@ -138,6 +138,18 @@ def _matches_verified_sibling_files(repo: Path, task_id: str, commit: str, paths
     return False
 
 
+def _matches_recorded_merge(repo: Path, head: str, parent: str, baseline: dict) -> bool:
+    """Accept exactly the two parents captured for this task's merge baseline."""
+    incoming = str((baseline.get("git_merge_state") or {}).get("merge_head") or "")
+    if not incoming:
+        return False
+    proc = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", head],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    )
+    return proc.returncode == 0 and proc.stdout.split() == [head, parent, incoming]
+
+
 def validate_checkpoint_receipt(
     repo: Path,
     task_id: str,
@@ -203,22 +215,9 @@ def validate_checkpoint_receipt(
         return False, f"cannot validate checkpoint against plan: {exc}", None
 
     if receipt.get("kind") == "REQUESTED_DELIVERY_COMMIT" and receipt.get("merge_delivery") is True:
-        proc_p1 = subprocess.run(
-            ["git", "rev-parse", f"{head}^1"],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        proc_p2 = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{head}^2"],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if proc_p1.returncode != 0 or proc_p1.stdout.strip() != parent_head or proc_p2.returncode != 0:
-            return False, f"merge delivery checkpoint '{head[:8]}' does not have first parent '{parent_head[:8]}'", None
+        baseline = load_task_baseline(repo, task_id) or {}
+        if not _matches_recorded_merge(repo, head, parent_head, baseline):
+            return False, f"merge delivery checkpoint '{head[:8]}' does not match the recorded two-parent merge", None
         return True, "", receipt
 
     # Supported one-commit transition
@@ -362,9 +361,7 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
     if merges.stdout.strip():
         if not is_merge_task:
             return None
-        first_parent = _git("rev-parse", f"{current_head}^1")
-        second_parent = _git("rev-parse", "--verify", f"{current_head}^2")
-        if first_parent.returncode != 0 or first_parent.stdout.strip() != parent_head or second_parent.returncode != 0:
+        if not _matches_recorded_merge(repo, current_head, parent_head, task_baseline):
             return None
         is_merge_delivery = True
     elif count.returncode != 0 or count.stdout.strip() != "1":

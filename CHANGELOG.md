@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.58] - 2026-11-01
+
+### Lightweight merge-conflict verification (`CONFLICT`), Antigravity 2.0 file tool hooks, and isolated deferred merge-baseline backfill
+
+- **Lightweight Verification Policy for `CONFLICT` Tasks (`agents/scripts/review_policy.py`, `agents/scripts/plan_authority.py`, `agents/scripts/final_verifier.py`, `agents/scripts/_workflow/router.py`)**: Configure `CONFLICT` (`FIX_CONFLICT` / `MERGE`) tasks to require only `gates = ["manifest", "preflight"]` with `reviewers = []` (`review_exemption = "MERGE_CONFLICT_RESOLUTION"`) and `device_required = False`, and exempt `CONFLICT` tasks from `surface:*` / `skill:*` material drift re-approval and separate `sensitive_approval` prompts so resolving branch merge conflicts does not trigger unit test suites, specialist AI reviewers, or phone walkthroughs on another developer's incoming branch code.
+- **Antigravity 2.0 File Tool Interception (`agents/hooks.json`, `agents/scripts/policy_vocab.py`, `agents/scripts/pre_tool_safety.py`)**: Add `read_file`, `write_file`, and `edit_file` interception and support `Path` / `AbsolutePath` target resolution. Permission hooks never rewrite target bytes or normalize line endings; the editing tool must preserve the file's original line endings, including when a replacement does not match.
+- **Deferred Merge-Baseline Backfill When `CONFLICT` Tasks Are Drafted Before `git merge` (`agents/scripts/delivery_manifest.py`, `agents/scripts/plan_authority.py`)**: Automatically backfill `task-baseline.json` (and `baseline-files/`) with stage-0 auto-merged files and `status == "U"` unmerged entries as soon as `MERGE_HEAD` appears for a `CONFLICT` task that was drafted on a clean tree prior to running `git merge`, and permit `_check_implementation_tree` when an active merge starts before approval.
+- **Audited Harness `git_mutation` Exemption & Active-Task Update Cache Exclusion (`agents/scripts/pre_tool_safety.py`, `agents/scripts/lifecycle.py`)**: Exempt single-segment audited harness lifecycle commands (`harness.py` / `workflow.py`) from false-positive `git_mutation` matching on free-text `--approach` / `--outcome` arguments, and ignore `.agents/state/cache/` and `update_cache.json` in `_state_snapshot` during `harness_cli.py update --preserve-active-task`.
+- **Merge Boundary Corrections**: Automatic `CONFLICT` classification requires actual unmerged Git paths; use an explicit conflict kind to plan before merging. Deferred baseline backfill is restricted to conflict tasks with `MERGE_HEAD`, leaving other tasks unchanged. Delivery lineage requires a validated receipt whose two parents match the task baseline; arbitrary merges and extra parents are rejected. Explicit approved test, device, and reviewer criteria retain their required gates and truthful review status even under lightweight merge defaults.
+
 ## [1.1.57] - 2026-11-01
 
 ### Merge-conflict resolution task kind (`CONFLICT` / `FIX_CONFLICT` / `MERGE`) and two-parent merge delivery

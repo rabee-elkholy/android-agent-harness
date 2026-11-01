@@ -71,10 +71,6 @@ from _verification_recipes import get_verification_recipes  # noqa: E402
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
 _CONFLICT_KIND_ALIASES = {"CONFLICT", "FIX_CONFLICT", "MERGE"}
-_CONFLICT_OUTCOME_RE = re.compile(
-    r"\b(?:merge\s+conflict|fix\s+conflict|resolve\s+.*conflict|conflict\s+resolution|unmerged)\b",
-    re.IGNORECASE,
-)
 
 
 def normalize_task_kind(raw_kind: str | None, repo: Path | None = None, text_to_scan: str = "") -> str:
@@ -85,8 +81,8 @@ def normalize_task_kind(raw_kind: str | None, repo: Path | None = None, text_to_
     if raw not in {"AUTO", "BUG", "FEATURE", "REFACTOR"}:
         raw = "AUTO"
     if raw == "AUTO":
-        if _CONFLICT_OUTCOME_RE.search(text_to_scan or ""):
-            return "CONFLICT"
+        # Outcome text can describe application/data conflicts. Only Git evidence
+        # or an explicit kind may select the merge-specific verification policy.
         if repo is not None:
             try:
                 if unmerged_paths(repo):

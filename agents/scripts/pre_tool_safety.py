@@ -44,7 +44,8 @@ MAX_STDIN_BYTES = 5 * 1024 * 1024
 AUDIT_MAX_RECORDS = 1000
 AUDIT_ROTATE_BYTES = 1024 * 1024
 WRITE_TOOLS = {
-    "write_to_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit",
+    "write_to_file", "write_file", "replace_file_content", "multi_replace_file_content", "edit_file",
+    "apply_patch", "edit", "multiedit",
     "create_file", "delete_file", "move_file", "rename_file",
 }
 SUBAGENT_TOOLS = frozenset(SUBAGENT_ORCHESTRATION_TOOLS)
@@ -367,7 +368,7 @@ def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
 
 
 def _target(args: dict) -> str:
-    for key in ("TargetFile", "targetFile", "path", "file_path", "filePath"):
+    for key in ("TargetFile", "targetFile", "Path", "path", "AbsolutePath", "absolutePath", "file_path", "filePath"):
         if args.get(key):
             return str(args[key]).replace("\\", "/")
     return ""
@@ -503,7 +504,7 @@ def _handle_command(command: str) -> None:
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
-            if code == "tracker_write" and _audited_harness_command(command):
+            if code in ("tracker_write", "git_mutation") and _audited_harness_command(command):
                 continue
             if code == "git_mutation" and _read_only_git_branch_command(command):
                 continue
@@ -2103,7 +2104,7 @@ def _main() -> None:
                     if cwd != REPO.resolve() or not discovery_command_allowed(command):
                         emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                         return
-                elif name not in {"view_file", "grep_search", "find_by_name", "list_dir"}:
+                elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
                     emit("deny", "Reviewer tools are limited to source reads and bounded discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                     return
                 if name in SEARCH_TOOLS:
@@ -2206,8 +2207,8 @@ def _main() -> None:
             return
 
         # Known read-only tools
-        if name in ("view_file", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
-            if name == "view_file":
+        if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+            if name in ("view_file", "read_file", "read"):
                 _flag_out_of_scope_read(name, args)
             emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return

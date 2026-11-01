@@ -359,11 +359,13 @@ def approve(plan: dict, *, source: str, proof_reference: str, enforcement_tier: 
 
 
 def _check_implementation_tree(repo: Path, plan: dict) -> None:
-    from delivery_manifest import disjoint_sibling_file_sets, assert_disjoint_task_scope, is_disjoint_sibling_change
+    from delivery_manifest import disjoint_sibling_file_sets, assert_disjoint_task_scope, is_disjoint_sibling_change, git_merge_in_progress
     current = build_manifest(repo)
     assert_disjoint_task_scope(repo, plan["task_id"], plan)
     if (current["delivery_snapshot_sha256"] == plan.get("base_delivery_snapshot_sha256")
             and current["change_set_sha256"] == plan.get("base_change_set_sha256")):
+        return
+    if str(plan.get("task_kind") or "").upper() == "CONFLICT" and git_merge_in_progress(repo).get("merge_in_progress"):
         return
     live_siblings, committed_siblings = disjoint_sibling_file_sets(repo, plan["task_id"], plan=plan)
     sibling_files = live_siblings | committed_siblings
@@ -579,12 +581,16 @@ def check_material_drift(
     With `repo`, an unlisted test file is allowed only when it is new or is the test of a
     planned file: editing another feature's existing test needs a revised plan (O65).
     """
+    if str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE") and not for_mutation:
+        return []
     expected_surfaces = set(normalize_expected_surfaces(plan.get("expected_surfaces") or []))
     actual_surface_set = set(normalize_expected_surfaces(actual_surfaces))
     expected_modules = set(plan.get("expected_modules") or [])
     actual_module_set = set(actual_modules or [])
 
     unplanned_surfaces = actual_surface_set - expected_surfaces
+    if str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
+        unplanned_surfaces = set()
     unplanned_surfaces -= NON_DRIFTING_SURFACES
     if "COROUTINES" in unplanned_surfaces and (expected_surfaces & CODE_SURFACES):
         unplanned_surfaces.remove("COROUTINES")

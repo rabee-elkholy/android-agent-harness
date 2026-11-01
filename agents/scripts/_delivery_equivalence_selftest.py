@@ -679,6 +679,206 @@ class DeliverySafetyRegressionTests(unittest.TestCase):
         delivered = deliver_task(repo, "fix-merge-conflict", require_clean_tree=True)
         self.assertEqual("DELIVERED", delivered["status"])
 
+    def test_conflict_task_drafted_before_git_merge_backfills_merge_baseline(self):
+        """CONFLICT task drafted and approved BEFORE developer runs `git merge` auto-backfills merge baseline."""
+        import argparse
+        import subprocess
+        from _daily_workflow_selftest import GitDeliveryTests, run_git, write_file
+        from delivery_manifest import build_task_manifest, load_task_baseline
+        from workflow import draft, prepare_verification, record_approval
+
+        fixture = GitDeliveryTests("test_GIT_DELIVERY_003_developer_commit_with_identical_content_returns_deliver")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+
+        rel_conflict = "app/src/main/kotlin/com/example/MainActivity.kt"
+        rel_auto = "app/src/main/kotlin/com/example/AutoMerged.kt"
+        write_file(repo / rel_conflict, "package com.example\nclass MainActivity {\n    fun step() = 1\n}\n")
+        write_file(repo / rel_auto, "package com.example\nclass AutoMerged {\n    fun clean() = 1\n}\n")
+        run_git(repo, "add", rel_conflict, rel_auto)
+        run_git(repo, "commit", "-qm", "merge base")
+
+        run_git(repo, "checkout", "-qb", "features/deferred-branch")
+        write_file(repo / rel_conflict, "package com.example\nclass MainActivity {\n    fun step() = 2\n    fun fromFeature() = true\n}\n")
+        write_file(repo / rel_auto, "package com.example\nclass AutoMerged {\n    fun clean() = 2\n}\n")
+        run_git(repo, "add", rel_conflict, rel_auto)
+        run_git(repo, "commit", "-qm", "incoming branch changes")
+
+        run_git(repo, "checkout", "-q", "-")
+        write_file(repo / rel_conflict, "package com.example\nclass MainActivity {\n    fun step() = 1\n    fun fromMain() = true\n}\n")
+        run_git(repo, "add", rel_conflict)
+        run_git(repo, "commit", "-qm", "main branch changes")
+
+        # 1. Draft and approve CONFLICT task BEFORE `git merge` is executed (clean tree)
+        draft_args = argparse.Namespace(
+            repo=str(repo),
+            task_id="deferred-merge",
+            outcome="Merge features/deferred-branch into main",
+            kind="MERGE",
+            planning_depth="BOUNDED",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            expected_files=rel_conflict,
+            test_strategy="Policy-selected relevant tests",
+            device_strategy="1. Open MainActivity -> verify both methods",
+            approach="Run git merge and resolve MainActivity conflict",
+            risks="Conflict resolution",
+            rollback="git merge --abort",
+            external_write=[],
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family=None,
+            phases=None,
+            verification_contract=None,
+        )
+        plan = draft(draft_args)
+        approve_args = argparse.Namespace(
+            repo=str(repo),
+            task_id="deferred-merge",
+            source="conversation",
+            proof_reference="approve merge plan",
+            enforcement_tier="RULE_ENFORCED",
+            plan_hash=plan["plan_sha256"][:12],
+        )
+        plan = record_approval(approve_args)
+        self.assertEqual("IMPLEMENTING", plan["status"])
+
+        # 2. Now developer runs `git merge --no-commit features/deferred-branch` in terminal
+        merge_proc = subprocess.run(
+            ["git", "merge", "--no-commit", "features/deferred-branch"],
+            cwd=str(repo), capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(0, merge_proc.returncode)
+
+        # 3. load_task_baseline transparently backfills the merge baseline (AutoMerged.kt + U MainActivity.kt)
+        base = load_task_baseline(repo, "deferred-merge")
+        self.assertTrue(base["git_merge_state"]["merge_in_progress"])
+        base_paths = {c["path"]: c["status"] for c in base["changes"]}
+        self.assertEqual("U", base_paths.get(rel_conflict))
+        self.assertEqual("M", base_paths.get(rel_auto))
+
+        # 4. Agent resolves MainActivity.kt conflict without touching AutoMerged.kt
+        write_file(
+            repo / rel_conflict,
+            "package com.example\nclass MainActivity {\n    fun step() = 2\n    fun fromMain() = true\n    fun fromFeature() = true\n}\n",
+        )
+        t_man = build_task_manifest(repo, "deferred-merge")
+        self.assertEqual([rel_conflict], [c["path"] for c in t_man["task_changes"]])
+        run_info = prepare_verification(argparse.Namespace(repo=str(repo), task_id="deferred-merge", host="antigravity"))
+        self.assertTrue(run_info.get("run_id"))
+
+
+class MergeBoundaryRegressionTests(unittest.TestCase):
+    def test_non_git_conflicts_keep_normal_verification(self):
+        from workflow import normalize_task_kind
+        from review_policy import decide
+        for outcome in ("Resolve sync conflict between offline records", "Fix conflict in account data", "Implement conflict resolution"):
+            with self.subTest(outcome=outcome):
+                kind = normalize_task_kind("AUTO", text_to_scan=outcome)
+                self.assertNotEqual("CONFLICT", kind)
+                policy = decide({"surfaces": ["AUTH"], "severity": "CRITICAL"},
+                                Path(__file__).resolve().parents[1] / "skills", task_kind=kind)
+                self.assertTrue(policy["reviewers"])
+                self.assertIn("unit_tests", policy["gates"])
+
+    def test_explicit_merge_kind_and_git_evidence_still_classify(self):
+        from unittest.mock import patch
+        from _workflow.engine import normalize_task_kind
+        for kind in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
+            self.assertEqual("CONFLICT", normalize_task_kind(kind))
+        with patch("_workflow.engine.unmerged_paths", return_value=["Main.kt"]):
+            self.assertEqual("CONFLICT", normalize_task_kind("AUTO", Path.cwd()))
+
+    def test_loading_other_task_does_not_backfill_merge(self):
+        from unittest.mock import patch
+        import delivery_manifest as manifest
+        from _vnext_common import atomic_write_json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / ".agents/state/tasks/feature"
+            directory.mkdir(parents=True)
+            baseline_path = directory / "task-baseline.json"
+            plan_path = directory / "plan.json"
+            atomic_write_json(baseline_path, {"task_id": "feature", "changes": []})
+            atomic_write_json(plan_path, {"task_kind": "FEATURE", "expected_files": ["feature.kt"]})
+            before = (baseline_path.read_bytes(), plan_path.read_bytes())
+            with patch.object(manifest, "git_merge_in_progress", return_value={
+                "merge_in_progress": True, "merge_head": "a" * 40, "unmerged_paths": ["other.kt"],
+            }), patch.object(manifest, "build_manifest", return_value={"changes": [
+                {"path": "other.kt", "status": "U", "content_identity": "git:original"},
+            ]}), patch.object(manifest, "_index_and_untracked", return_value=({}, {}, set())):
+                manifest.load_task_baseline(root, "feature")
+            self.assertEqual(before, (baseline_path.read_bytes(), plan_path.read_bytes()))
+
+    def test_conflict_contract_preserves_required_gates(self):
+        from unittest.mock import patch
+        import review_policy
+        for method in ("test", "manual", "review"):
+            with self.subTest(method=method), patch.object(review_policy, "_configured_device_verification_mode", return_value="required"):
+                contract = {"schema_version": 1, "criteria": [{"id": "required-check", "expected": "Preserve behavior",
+                            "method": method, "required": True}], "journeys": []}
+                policy = review_policy.decide({"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM"},
+                    Path(__file__).resolve().parents[1] / "skills", task_kind="CONFLICT",
+                    plan={"task_kind": "CONFLICT", "verification_contract": contract})
+                if method == "test":
+                    self.assertIn("unit_tests", policy["gates"])
+                elif method == "manual":
+                    self.assertTrue(policy["device_required"])
+                    self.assertTrue({"device", "assemble"} <= set(policy["gates"]))
+                else:
+                    self.assertEqual(["bug-reviewer-agent"], policy["reviewers"])
+                    self.assertEqual("REQUIRED", policy["review_status"])
+                    self.assertIsNone(policy["explanation"]["review_exemption"])
+
+    def test_unreceipted_merge_is_not_valid_lineage(self):
+        import subprocess
+        from _vnext_common import atomic_write_json
+        from task_git_lineage import is_valid_task_lineage, compute_receipt_sha, validate_checkpoint_receipt
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "Harness Test")
+            git("config", "user.email", "harness@example.invalid")
+            (root / "base.txt").write_text("base", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-qm", "Base")
+            base = git("rev-parse", "HEAD")
+            branch = git("branch", "--show-current")
+            git("checkout", "-qb", "unrelated")
+            (root / "outside.txt").write_text("unrelated", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-qm", "Unrelated")
+            incoming = git("rev-parse", "HEAD")
+            git("checkout", "-q", branch)
+            git("merge", "--no-ff", "-m", "Unrequested merge", "unrelated")
+            directory = root / ".agents/state/tasks/merge-task"
+            atomic_write_json(directory / "plan.json", {"task_id": "merge-task", "task_kind": "CONFLICT",
+                "task_base_head": base, "expected_files": ["base.txt"], "plan_sha256": "approved-plan"})
+            head = git("rev-parse", "HEAD")
+            valid, _ = is_valid_task_lineage(root, "merge-task", head)
+            self.assertFalse(valid)
+            receipt = {"kind": "REQUESTED_DELIVERY_COMMIT", "merge_delivery": True,
+                "task_id": "merge-task", "task_base_head": base, "parent_head": base,
+                "checkpoint_head": head, "plan_sha256": "approved-plan"}
+            receipt["receipt_sha256"] = compute_receipt_sha(receipt)
+            receipt_path = directory / "git-checkpoints" / (head + ".json")
+            atomic_write_json(receipt_path, receipt)
+            for recorded, expected in ((base, False), (incoming, True)):
+                atomic_write_json(directory / "task-baseline.json", {"task_id": "merge-task", "changes": [],
+                    "git_merge_state": {"merge_in_progress": True, "merge_head": recorded}})
+                self.assertEqual(expected, validate_checkpoint_receipt(root, "merge-task", base, receipt_path, set())[0])
+            # Even a receipt must not authorize an extra (octopus) parent.
+            extra = git("commit-tree", head + "^{tree}", "-p", base, "-m", "Extra parent")
+            octopus = git("commit-tree", head + "^{tree}", "-p", base, "-p", incoming, "-p", extra, "-m", "Octopus")
+            receipt["checkpoint_head"] = octopus
+            receipt["receipt_sha256"] = compute_receipt_sha(receipt)
+            octopus_path = receipt_path.with_name(octopus + ".json")
+            atomic_write_json(octopus_path, receipt)
+            self.assertFalse(validate_checkpoint_receipt(root, "merge-task", base, octopus_path, set())[0])
+
 
 if __name__ == "__main__":
     unittest.main()
