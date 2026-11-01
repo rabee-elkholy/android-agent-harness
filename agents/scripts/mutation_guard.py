@@ -150,12 +150,19 @@ def is_read_only_git_branch(args: list[str]) -> bool:
     if args[:1] != ["branch"]:
         return False
     rest = args[1:]
+    has_list_mode = "--list" in rest or (
+        "-l" in rest and any(f in rest for f in ("-a", "--all", "-r", "--remotes"))
+    )
     for index, arg in enumerate(rest):
         if arg in READ_ONLY_GIT_BRANCH_FLAGS:
             continue
-        # The value of --contains/--merged and friends (a commit or branch name).
-        if index > 0 and rest[index - 1] in {"--merged", "--no-merged", "--contains", "--no-contains"} and not arg.startswith("-"):
-            continue
+        # The value of --contains/--merged and friends (a commit or branch name), or pattern arguments in --list mode.
+        if not arg.startswith("-"):
+            if index > 0 and rest[index - 1] in {"--merged", "--no-merged", "--contains", "--no-contains", "--list", "-l"}:
+                if rest[index - 1] != "-l" or has_list_mode or index < len(rest) - 1:
+                    continue
+            if has_list_mode:
+                continue
         return False
     return True
 
@@ -183,7 +190,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             args = args[2:]
         if is_read_only_git_branch(args):
             return True
-        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame", "merge-base", "rev-list"}:
+        if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame", "merge-base", "rev-list", "for-each-ref", "merge-tree"}:
             return False
         if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):
             return False

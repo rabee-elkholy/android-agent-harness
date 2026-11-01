@@ -38,7 +38,15 @@ from _vnext_common import (  # noqa: E402
 )
 from _variants import resolve_assemble_task  # noqa: E402
 from change_classifier import PRESENTATIONAL_ASSET_EXTENSIONS, classify, is_documentation_path  # noqa: E402
-from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline  # noqa: E402
+from delivery_manifest import (  # noqa: E402
+    assert_no_unresolved_conflicts,
+    build_manifest,
+    build_task_manifest,
+    find_conflict_markers,
+    git_merge_in_progress,
+    load_task_baseline,
+    unmerged_paths,
+)
 from final_verifier import verify  # noqa: E402
 from plan_authority import (  # noqa: E402
     DEFAULT_APP_SURFACES,
@@ -62,6 +70,35 @@ from _verification_recipes import get_verification_recipes  # noqa: E402
 
 
 SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
+_CONFLICT_KIND_ALIASES = {"CONFLICT", "FIX_CONFLICT", "MERGE"}
+_CONFLICT_OUTCOME_RE = re.compile(
+    r"\b(?:merge\s+conflict|fix\s+conflict|resolve\s+.*conflict|conflict\s+resolution|unmerged)\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_task_kind(raw_kind: str | None, repo: Path | None = None, text_to_scan: str = "") -> str:
+    """Resolve and normalize task kind (`BUG`, `FEATURE`, `REFACTOR`, or `CONFLICT`)."""
+    raw = str(raw_kind or "AUTO").strip().upper()
+    if raw in _CONFLICT_KIND_ALIASES:
+        return "CONFLICT"
+    if raw not in {"AUTO", "BUG", "FEATURE", "REFACTOR"}:
+        raw = "AUTO"
+    if raw == "AUTO":
+        if _CONFLICT_OUTCOME_RE.search(text_to_scan or ""):
+            return "CONFLICT"
+        if repo is not None:
+            try:
+                if unmerged_paths(repo):
+                    return "CONFLICT"
+            except (OSError, ValueError, ValidationError):
+                pass
+        if re.search(r"\b(?:bug|crash|fix|regression|error|fault|anr|issue|exception)\b", (text_to_scan or "").lower()):
+            return "BUG"
+        return "FEATURE"
+    return raw
+
+
 # Every surface the change classifier can report; --expected-surfaces must name these (or aliases).
 KNOWN_SURFACES = {
     "ANALYTICS", "AUTH", "BILLING", "BUILD_CONFIG", "BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES", "CRYPTO",
@@ -371,9 +408,11 @@ def draft(args: argparse.Namespace) -> dict:
             req_outcome = str(args.outcome or "").strip()
             exist_outcome = str(existing_plan.get("requested_outcome") or "").strip()
             exist_kind = str(existing_plan.get("task_kind") or "").upper()
-            req_kind = str(getattr(args, "kind", "AUTO") or "AUTO").upper()
-            if req_kind == "AUTO":
-                req_kind = "BUG" if ("bug" in req_outcome.lower() or "fix" in req_outcome.lower()) else "FEATURE"
+            req_kind = normalize_task_kind(
+                getattr(args, "kind", "AUTO"),
+                repo=repo,
+                text_to_scan=f"{req_outcome} {getattr(args, 'expected_surfaces', None) or ''}",
+            )
             exist_depth = str(existing_plan.get("planning_depth") or "BOUNDED").upper()
             req_depth = str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper()
             norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
@@ -662,8 +701,11 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
     def joined(values: Any) -> str:
         return ",".join(str(item) for item in values or [] if str(item).strip())
 
-    if str(getattr(args, "kind", None) or "AUTO").upper() == "AUTO" and old_plan.get("task_kind"):
+    raw_arg_kind = str(getattr(args, "kind", None) or "AUTO").upper()
+    if raw_arg_kind == "AUTO" and old_plan.get("task_kind"):
         merged.kind = old_plan["task_kind"]
+    elif raw_arg_kind in _CONFLICT_KIND_ALIASES:
+        merged.kind = "CONFLICT"
     if not given("planning_depth") and old_plan.get("planning_depth"):
         merged.planning_depth = old_plan["planning_depth"]
     contract = old_plan.get("architecture_contract") or {}
@@ -1210,6 +1252,10 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     with step_progress("Building delivery manifest & snapshot"):
         sublog("Loading task baseline and building manifest...")
         task_baseline = load_task_baseline(repo, args.task_id)
+        try:
+            assert_no_unresolved_conflicts(repo, task_baseline, extra_paths=plan.get("expected_files"))
+        except Exception as exc:
+            raise ValidationError(str(exc)) from exc
         task_base_head = plan.get("task_base_head") or base_repo.get("head")
         manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"), task_base_head=task_base_head)
         sublog(f"Manifest ready with change set: {manifest.get('change_set_sha256', '')[:12]}")
@@ -2438,7 +2484,15 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     phase_dir.mkdir(parents=True, exist_ok=True)
     baseline_file = phase_dir / "baseline.json"
     base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, args.task_id)
-    manifest = build_task_manifest(repo, base_data, expected_files=target_phase.get("expected_files") or plan.get("expected_files"))
+    phase_scope_files = target_phase.get("expected_files") or plan.get("expected_files")
+    if phase_scope_files:
+        markers = find_conflict_markers(repo, phase_scope_files)
+        if markers:
+            listed = ", ".join(f"{m['path']}:{m['line']}" for m in markers[:10])
+            raise ValidationError(
+                f"UNRESOLVED_MERGE_CONFLICT: Git conflict markers remain in phase '{phase_id}' scope ({listed})."
+            )
+    manifest = build_task_manifest(repo, base_data, expected_files=phase_scope_files)
     phase_changes = manifest.get("task_changes") if "task_changes" in manifest else manifest.get("changes") or []
     # A later phase can be empty when an earlier phase's checkpoint already covered its files
     # (phases added by a revision after the work was done). It records an empty checkpoint; the
@@ -2979,9 +3033,12 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
         command.add_argument("--outcome", required=True)
     command.add_argument(
         "--kind",
-        choices=("AUTO", "BUG", "FEATURE", "REFACTOR", "auto", "bug", "feature", "refactor"),
+        choices=(
+            "AUTO", "BUG", "FEATURE", "REFACTOR", "CONFLICT", "FIX_CONFLICT", "MERGE",
+            "auto", "bug", "feature", "refactor", "conflict", "fix_conflict", "merge",
+        ),
         default="AUTO",
-        help="Task kind classification: AUTO, BUG, FEATURE, or REFACTOR",
+        help="Task kind classification: AUTO, BUG, FEATURE, REFACTOR, or CONFLICT (aliases: FIX_CONFLICT, MERGE)",
     )
     command.add_argument(
         "--planning-depth",
@@ -3327,9 +3384,19 @@ def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
     """A code task whose pre-edit test failures are not recorded yet (task-start or RED run)."""
     from plan_authority import CODE_SURFACES
 
+    if str(plan.get("task_kind") or "").upper() in _CONFLICT_KIND_ALIASES:
+        return False
     tdir = task_dir(repo, task_id)
     if (tdir / "task-start-failures.json").is_file() or (tdir / "red-evidence.json").is_file():
         return False
+    try:
+        base = load_task_baseline(repo, task_id) or {}
+        if any(isinstance(c, dict) and c.get("status") == "U" for c in (base.get("changes") or [])):
+            return False
+        if (base.get("git_merge_state") or {}).get("unmerged_paths"):
+            return False
+    except (OSError, ValueError, ValidationError):
+        pass
     return bool(set(plan.get("expected_surfaces") or []) & set(CODE_SURFACES))
 
 
@@ -3410,6 +3477,24 @@ def pre_existing_changes_line(repo: Path, plan: dict) -> str:
     paths = [path for path in paths if not path.startswith((".agents/", ".harness-"))]
     if not paths:
         return ""
+    merge_state = baseline.get("git_merge_state") or {}
+    unmerged = {
+        str(p).replace("\\", "/").strip("/")
+        for p in (merge_state.get("unmerged_paths") or [])
+        if str(p).strip()
+    } | {
+        str(item.get("path") or "").replace("\\", "/").strip("/")
+        for item in (baseline.get("changes") or [])
+        if isinstance(item, dict) and item.get("status") == "U" and item.get("path")
+    }
+    if str(plan.get("task_kind") or "").upper() in _CONFLICT_KIND_ALIASES or merge_state.get("merge_in_progress") or unmerged:
+        auto_merged_count = len([p for p in paths if p not in unmerged])
+        unmerged_list = ", ".join(sorted(unmerged)[:10]) or "none"
+        return (
+            f"MERGE_BASELINE={len(unmerged)} unmerged conflict file(s) ({unmerged_list}) "
+            f"and {auto_merged_count} clean auto-merged/pre-existing file(s) recorded in baseline. "
+            "Only the conflicted/planned files are in task scope; auto-merged baseline files remain untouched until the merge commit."
+        )
     planned = {str(item).replace("\\", "/").strip("/") for item in plan.get("expected_files") or []}
     shared = [path for path in paths if path in planned]
     line = f"PRE_EXISTING_CHANGES={len(paths)} file(s) already had uncommitted changes before this task: {', '.join(paths[:10])}"

@@ -59,7 +59,7 @@ def resolve_new_item_type(task_kind: str, explicit_type: str | None = None) -> s
         return "Bug"
     if kind == "FEATURE":
         return "Story"
-    if kind == "REFACTOR":
+    if kind in ("REFACTOR", "CONFLICT", "FIX_CONFLICT", "MERGE"):
         return "Task"
     return "Task"
 

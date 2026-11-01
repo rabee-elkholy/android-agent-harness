@@ -355,10 +355,13 @@ def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> se
 
 def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
     """Returns (map of base_strings_path -> set of touched keys, any_string_file_changed)."""
+    from _repo_files import active_task_scope
     touched_by_base: dict[Path, set[str]] = {}
     any_changed = False
 
-    for changed in changed_paths(include_deleted=True, repo=repo):
+    scoped_paths, _baseline_dir = active_task_scope(repo, include_deleted=True)
+    candidate_paths = scoped_paths if scoped_paths is not None else changed_paths(include_deleted=True, repo=repo)
+    for changed in candidate_paths:
 
 
         if changed.suffix != ".xml":
@@ -537,7 +540,9 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
 
     pairs = discover_locale_pairs(res_dirs=res_dirs, repo=r)
     errors = 0
-    modified = changed_paths(repo=r)
+    from _repo_files import active_task_scope, diff_modified_lines_against_baseline
+    scoped_paths, baseline_dir = (None, None) if args.all else active_task_scope(r)
+    modified = scoped_paths if scoped_paths is not None else changed_paths(repo=r)
     parsed: dict[Path, tuple[dict, list[str]]] = {}
     reported: set[Path] = set()
 
@@ -673,7 +678,16 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     hardcoded: list[str] = []
     if modified_src:
         print(f"\n[*] Checking {len(modified_src)} modified file(s) for hardcoded UI strings...")
-        lines_map = None if args.all else _get_modified_lines_map(modified_src, REPO)
+        lines_map = None if args.all else _get_modified_lines_map(modified_src, r)
+        if lines_map is not None and baseline_dir is not None:
+            for p in modified_src:
+                try:
+                    rel = p.resolve().relative_to(r.resolve()).as_posix()
+                except ValueError:
+                    continue
+                b_file = baseline_dir / rel
+                if b_file.is_file() and p.is_file():
+                    lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
         hardcoded = check_hardcoded_strings(modified_src, lines_map=lines_map)
         if hardcoded:
             print(f"[!] Hardcoded strings found in modified lines ({len(hardcoded)}):")

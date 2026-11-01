@@ -224,6 +224,59 @@ def changed_paths(*, include_untracked: bool = True, include_deleted: bool = Fal
     return list(seen.values())
 
 
+def active_task_scope(repo: Path | None = None, *, include_deleted: bool = False) -> tuple[list[Path] | None, Path | None]:
+    """When an active task has pre-existing changes in task-baseline.json, return (task_changed_paths, baseline_files_dir).
+
+    Returns (None, None) when no task baseline is active or during hook selftest.
+    """
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
+        return None, None
+    r = (repo or REPO).resolve()
+    try:
+        from _vnext_common import active_task_id, task_dir
+        from delivery_manifest import build_task_manifest, load_task_baseline
+
+        tid = os.environ.get("HARNESS_TASK_ID") or active_task_id(r)
+        if not tid:
+            return None, None
+        base = load_task_baseline(r, tid)
+        if not base or not (base.get("changes") or []):
+            return None, None
+        manifest = build_task_manifest(r, base)
+        t_changes = manifest.get("task_changes")
+        if t_changes is None:
+            return None, None
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for item in t_changes:
+            rel = str((item.get("path") if isinstance(item, dict) else item) or "").replace("\\", "/").strip("/")
+            if not rel or rel in seen:
+                continue
+            full = r / rel
+            if not include_deleted and not full.is_file():
+                continue
+            seen.add(rel)
+            paths.append(full)
+        b_dir = task_dir(r, tid) / "baseline-files"
+        return paths, (b_dir if b_dir.is_dir() else None)
+    except Exception:
+        return None, None
+
+
+def diff_modified_lines_against_baseline(baseline_file: Path, current_file: Path) -> set[int]:
+    """Return 1-based line numbers in `current_file` modified or added relative to `baseline_file`."""
+    import difflib
+
+    old_lines = baseline_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    new_lines = current_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
+    modified: set[int] = set()
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "insert"):
+            modified.update(range(j1 + 1, j2 + 1))
+    return modified
+
+
 
 def working_tree_fingerprint(repo: Path | None = None) -> str | None:
     """Hash every staged, unstaged, and untracked working-tree change.

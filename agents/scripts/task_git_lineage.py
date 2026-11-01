@@ -202,6 +202,25 @@ def validate_checkpoint_receipt(
     except Exception as exc:
         return False, f"cannot validate checkpoint against plan: {exc}", None
 
+    if receipt.get("kind") == "REQUESTED_DELIVERY_COMMIT" and receipt.get("merge_delivery") is True:
+        proc_p1 = subprocess.run(
+            ["git", "rev-parse", f"{head}^1"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        proc_p2 = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{head}^2"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc_p1.returncode != 0 or proc_p1.stdout.strip() != parent_head or proc_p2.returncode != 0:
+            return False, f"merge delivery checkpoint '{head[:8]}' does not have first parent '{parent_head[:8]}'", None
+        return True, "", receipt
+
     # Supported one-commit transition
     proc_cnt = subprocess.run(
         ["git", "rev-list", "--count", f"{parent_head}..{head}"],
@@ -276,6 +295,10 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     if proc.returncode != 0:
         return False, f"lineage check failed: {current_head[:8]} is not a descendant of task base {base_head[:8]}"
 
+    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
+    if current_head in valid_heads:
+        return True, "valid accepted checkpoint descendant"
+
     # Check for unauthorized merge commits
     merges_proc = subprocess.run(
         ["git", "rev-list", "--merges", f"{base_head}..{current_head}"],
@@ -286,10 +309,6 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     )
     if merges_proc.returncode == 0 and merges_proc.stdout.strip():
         return False, "TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED: merge commit detected in task lineage"
-
-    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
-    if current_head in valid_heads:
-        return True, "valid accepted checkpoint descendant"
 
     if _is_disjoint_sibling_commit_chain(repo, task_id, base_head, current_head, valid_heads, plan=plan):
         return True, "valid disjoint sibling task commit lineage"
@@ -322,11 +341,33 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
 
     if _git("merge-base", "--is-ancestor", parent_head, current_head).returncode != 0:
         return None
+    task_baseline = load_task_baseline(repo, task_id) or {}
+    baseline_changes = [c for c in (task_baseline.get("changes") or []) if isinstance(c, dict)]
+    baseline_dirty_paths = {
+        str(c[key]).replace("\\", "/")
+        for c in baseline_changes
+        for key in ("path", "old_path")
+        if c.get(key)
+    }
+    is_merge_task = (
+        str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
+        or bool((task_baseline.get("git_merge_state") or {}).get("merge_in_progress"))
+        or any(c.get("status") == "U" for c in baseline_changes)
+    )
+    is_merge_delivery = False
     merges = _git("rev-list", "--merges", f"{parent_head}..{current_head}")
     count = _git("rev-list", "--count", f"{parent_head}..{current_head}")
-    if merges.returncode != 0 or merges.stdout.strip():
+    if merges.returncode != 0:
         return None
-    if count.returncode != 0 or count.stdout.strip() != "1":
+    if merges.stdout.strip():
+        if not is_merge_task:
+            return None
+        first_parent = _git("rev-parse", f"{current_head}^1")
+        second_parent = _git("rev-parse", "--verify", f"{current_head}^2")
+        if first_parent.returncode != 0 or first_parent.stdout.strip() != parent_head or second_parent.returncode != 0:
+            return None
+        is_merge_delivery = True
+    elif count.returncode != 0 or count.stdout.strip() != "1":
         prev_proc = _git("rev-parse", f"{current_head}~1")
         prev_head = prev_proc.stdout.strip() if prev_proc.returncode == 0 else ""
         if prev_head and _is_disjoint_sibling_commit_chain(repo, task_id, parent_head, prev_head, valid_heads, plan=plan):
@@ -348,7 +389,10 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
                                cwd=str(repo), capture_output=True, check=False)
     committed_paths = {path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
                        for path in committed.stdout.split(b"\0") if path}
-    if committed.returncode != 0 or not committed_paths or not committed_paths <= verified_paths:
+    allowed_paths = (verified_paths | baseline_dirty_paths) if is_merge_delivery else verified_paths
+    if committed.returncode != 0 or not committed_paths or not committed_paths <= allowed_paths:
+        return None
+    if verified_paths and not (committed_paths & verified_paths):
         return None
 
     receipt_data = {
@@ -362,6 +406,8 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
         "checkpoint_paths": sorted(committed_paths),
         "created_at": utc_now(),
     }
+    if is_merge_delivery:
+        receipt_data["merge_delivery"] = True
     receipt_data["receipt_sha256"] = compute_receipt_sha(receipt_data)
     cdir = checkpoints_dir(tdir)
     cdir.mkdir(parents=True, exist_ok=True)

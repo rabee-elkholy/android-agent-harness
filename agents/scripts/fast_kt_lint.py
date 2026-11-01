@@ -587,11 +587,30 @@ def main() -> int:
         java_lines_map = {p: None for p in java_files}
         changed = changed_paths()
     else:
-        changed = changed_paths()
+        from _repo_files import active_task_scope, diff_modified_lines_against_baseline
+        scoped_paths, baseline_dir = active_task_scope(REPO)
+        changed = scoped_paths if scoped_paths is not None else changed_paths()
         target_files = [p for p in changed if p.suffix == ".kt"]
         modified_lines_map = get_modified_lines_map(REPO, target_files)
         java_files = [p for p in changed if p.suffix == ".java"]
         java_lines_map = get_modified_lines_map(REPO, java_files) if java_files else {}
+        if baseline_dir is not None:
+            for p in target_files:
+                try:
+                    rel = p.resolve().relative_to(REPO.resolve()).as_posix()
+                except ValueError:
+                    continue
+                b_file = baseline_dir / rel
+                if b_file.is_file() and p.is_file():
+                    modified_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
+            for p in java_files:
+                try:
+                    rel = p.resolve().relative_to(REPO.resolve()).as_posix()
+                except ValueError:
+                    continue
+                b_file = baseline_dir / rel
+                if b_file.is_file() and p.is_file():
+                    java_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
 
     build_files = [p for p in changed if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
 

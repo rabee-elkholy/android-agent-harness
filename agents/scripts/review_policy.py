@@ -157,6 +157,10 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
     if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}:
         return True
 
+    effective_kind = str((plan or {}).get("task_kind") or task_kind or "").upper()
+    if effective_kind in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
+        return False
+
     # Tier 1 (Visual): Visual Compose / UI
     if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}:
         if "COMPOSE_UI" in surfaces and not _is_visual_compose(classification):

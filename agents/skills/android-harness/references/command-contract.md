@@ -76,7 +76,7 @@ python .agents/harness.py task draft \
   --repo . \
   --task-id <id> \
   --outcome "<requested outcome>" \
-  --kind <AUTO|BUG|FEATURE|REFACTOR> \
+  --kind <AUTO|BUG|FEATURE|REFACTOR|CONFLICT> \
   --planning-depth <BOUNDED|ARCHITECTURAL> \
   --expected-surfaces "<comma-separated surfaces>" \
   --expected-modules "<comma-separated modules>" \

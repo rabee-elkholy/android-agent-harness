@@ -107,30 +107,50 @@ def _build_and_save_plan(
     scope_exclusions: tuple[str, ...] = (),
     activate: bool = True,
 ) -> dict:
-    with _engine.step_progress("Classifying changed surfaces"):
-        _engine.sublog("Inspecting working tree status and surface triggers...")
-        classification = _engine.classify(repo)
-        ch_files = classification.get("changed_files") or 0
-        surfs = ", ".join(classification.get("surfaces") or []) or "none"
-        _engine.sublog(f"Detected {ch_files} working tree changes, surfaces: {surfs}")
     raw_phases = getattr(args, "phases", None) or getattr(args, "phases_file", None)
     parsed_phases = _parse_plan_phases(repo, raw_phases)
 
-    task_context_id = getattr(args, "task_context_id", None)
-    cached_ctx = None
-    has_explicit_target = bool(
-        getattr(args, "architecture_target_scope", None)
-        or getattr(args, "expected_files", None)
-        or classification.get("changed_files", 0) > 0
+    resolved_kind = _engine.normalize_task_kind(
+        getattr(args, "kind", None),
+        repo=repo,
+        text_to_scan=f"{getattr(args, 'outcome', None) or ''} {getattr(args, 'expected_surfaces', None) or ''}",
     )
-    if task_context_id or not has_explicit_target:
-        cached_ctx = _engine._resolve_task_context_for_draft(repo, task_context_id)
+    active_unmerged = _engine.unmerged_paths(repo)
 
     raw_expected_files = getattr(args, "expected_files", None)
     files_named_by_plan = bool(raw_expected_files) or any((phase.get("expected_files") or []) for phase in (parsed_phases or []))
     if not raw_expected_files and parsed_phases:
         # The phases name the files; the task context's single target file is not the scope (N2).
         raw_expected_files = [f for phase in parsed_phases for f in (phase.get("expected_files") or [])]
+    if not raw_expected_files and resolved_kind == "CONFLICT" and active_unmerged:
+        raw_expected_files = list(active_unmerged)
+        files_named_by_plan = True
+
+    with _engine.step_progress("Classifying changed surfaces"):
+        _engine.sublog("Inspecting working tree status and surface triggers...")
+        prelim_expected_files = _engine.normalize_expected_files(repo, raw_expected_files)
+        if prelim_expected_files and (resolved_kind == "CONFLICT" or active_unmerged):
+            classification = _engine.classify(
+                repo,
+                task_changes=[{"path": p} for p in prelim_expected_files],
+                candidate_paths=prelim_expected_files,
+            )
+        else:
+            classification = _engine.classify(repo)
+        ch_files = classification.get("changed_files") or 0
+        surfs = ", ".join(classification.get("surfaces") or []) or "none"
+        _engine.sublog(f"Detected {ch_files} working tree changes, surfaces: {surfs}")
+
+    task_context_id = getattr(args, "task_context_id", None)
+    cached_ctx = None
+    has_explicit_target = bool(
+        getattr(args, "architecture_target_scope", None)
+        or raw_expected_files
+        or classification.get("changed_files", 0) > 0
+    )
+    if task_context_id or not has_explicit_target:
+        cached_ctx = _engine._resolve_task_context_for_draft(repo, task_context_id)
+
     if not raw_expected_files and cached_ctx and cached_ctx.get("target_file"):
         raw_expected_files = cached_ctx["target_file"]
 
@@ -210,6 +230,7 @@ def _build_and_save_plan(
             or ("ROOM_SCHEMA" in surfaces_for_layer_check and len(impl_files) >= 2)
             or (len(spanned_layer_groups) >= 3 and len(impl_files) > 8)
         )
+        and resolved_kind != "CONFLICT"
         and not getattr(args, "force", False)
     )
     if requires_phases and not parsed_phases:
@@ -223,17 +244,6 @@ def _build_and_save_plan(
             "no helper file or shell redirection is needed."
         )
 
-    raw_kind = str(getattr(args, "kind", None) or "AUTO").strip().upper()
-    if raw_kind not in {"AUTO", "BUG", "FEATURE", "REFACTOR"}:
-        raw_kind = "AUTO"
-    if raw_kind == "AUTO":
-        text_to_scan = f"{getattr(args, 'outcome', None) or ''} {getattr(args, 'expected_surfaces', None) or ''}".lower()
-        if _engine.re.search(r"\b(?:bug|crash|fix|regression|error|fault|anr|issue|exception)\b", text_to_scan):
-            resolved_kind = "BUG"
-        else:
-            resolved_kind = "FEATURE"
-    else:
-        resolved_kind = raw_kind
     if norm_expected_files and files_named_by_plan and raw_expected:
         expected = _engine._with_planned_file_surfaces(repo, expected, norm_expected_files, classification, resolved_kind,
                                                getattr(args, "outcome", None) or "")
@@ -746,6 +756,7 @@ def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases):
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
         "changes": base_man.get("changes") or [],
         "sensitive_changes": sensitive_changes,
+        "git_merge_state": _engine.git_merge_in_progress(repo),
     }
     task_baseline["baseline_sha256"] = _engine.canonical_sha256({
         "schema_version": task_baseline["schema_version"],
@@ -763,11 +774,15 @@ def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases):
     baseline_files_dir = directory / "baseline-files"
     secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
     binary_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ttf", ".otf", ".wav", ".mp3", ".ogg", ".mp4", ".jar", ".aar", ".so", ".apk"}
+    planned_rel_set = {str(p).replace("\\", "/").strip("/") for p in (plan.get("expected_files") or []) if str(p).strip()}
+    many_dirty_files = len(task_baseline["changes"]) > 60
     for entry in task_baseline["changes"]:
         rel = entry.get("path")
         if not rel:
             continue
         rel_norm = rel.replace("\\", "/")
+        if many_dirty_files and entry.get("status") != "U" and rel_norm.strip("/") not in planned_rel_set:
+            continue
         if any(m in rel_norm.lower() for m in secret_markers):
             continue
         fpath = repo / rel

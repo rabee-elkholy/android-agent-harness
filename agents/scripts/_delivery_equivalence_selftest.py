@@ -518,6 +518,167 @@ class DeliverySafetyRegressionTests(unittest.TestCase):
             self.assertIn("-hello  ", diff)
             self.assertIn("+hello", diff)
 
+    def test_merge_conflict_task_kind_end_to_end_lifecycle_and_two_parent_delivery(self):
+        import argparse
+        import subprocess
+        from _daily_workflow_selftest import GitDeliveryTests, run_git, write_file
+        from _vnext_common import ValidationError, read_json, atomic_write_json
+        from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline, unmerged_paths
+        from workflow import (
+            draft,
+            record_approval,
+            prepare_verification,
+            resolve_next_action,
+            deliver_task,
+            pre_existing_changes_line,
+            _should_record_task_start,
+        )
+
+        fixture = GitDeliveryTests("test_GIT_DELIVERY_003_developer_commit_with_identical_content_returns_deliver")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+
+        rel_conflict = "app/src/main/kotlin/com/example/MainActivity.kt"
+        rel_auto = "app/src/main/kotlin/com/example/AutoMerged.kt"
+        write_file(repo / rel_conflict, "package com.example\nclass MainActivity {\n    fun step() = 0\n}\n")
+        write_file(repo / rel_auto, "package com.example\nclass AutoMerged {\n    fun base() = 1\n}\n")
+        run_git(repo, "add", rel_conflict, rel_auto)
+        run_git(repo, "commit", "-qm", "Base before branches diverge")
+
+        # Create incoming branch that modifies both MainActivity.kt and AutoMerged.kt
+        run_git(repo, "checkout", "-qb", "features/incoming-solve")
+        write_file(
+            repo / rel_conflict,
+            "package com.example\nclass MainActivity {\n    fun step() = 2\n    fun onIncomingAction() = true\n}\n",
+        )
+        write_file(
+            repo / rel_auto,
+            "package com.example\nclass AutoMerged {\n    fun base() = 1\n    fun incomingHelper() = 42\n}\n",
+        )
+        run_git(repo, "add", rel_conflict, rel_auto)
+        run_git(repo, "commit", "-qm", "Incoming branch changes")
+
+        # Return to main branch and make conflicting edit to MainActivity.kt
+        run_git(repo, "checkout", "-q", "-")
+        write_file(
+            repo / rel_conflict,
+            "package com.example\nclass MainActivity {\n    fun step() = 1\n    fun onHeadOnboarding() = true\n}\n",
+        )
+        run_git(repo, "add", rel_conflict)
+        run_git(repo, "commit", "-qm", "HEAD onboarding changes")
+
+        # Start git merge that leaves MainActivity.kt in UU conflict and AutoMerged.kt cleanly staged
+        merge_proc = subprocess.run(
+            ["git", "merge", "--no-commit", "features/incoming-solve"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(0, merge_proc.returncode, "git merge should report conflict on MainActivity.kt")
+        self.assertEqual([rel_conflict], unmerged_paths(repo))
+
+        # Draft with --kind FIX_CONFLICT and without --expected-files (auto-populated from unmerged_paths)
+        draft_args = argparse.Namespace(
+            repo=str(repo),
+            task_id="fix-merge-conflict",
+            outcome="Resolve merge conflict between features/incoming-solve and HEAD",
+            kind="FIX_CONFLICT",
+            planning_depth="BOUNDED",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            expected_files=None,
+            test_strategy="Policy-selected relevant tests",
+            device_strategy="1. Open MainActivity -> onboarding and incoming actions work",
+            approach="Combine onHeadOnboarding and onIncomingAction in MainActivity without dropping either branch",
+            risks="Dropping callbacks from either branch",
+            rollback="git merge --abort",
+            external_write=[],
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family=None,
+            phases=None,
+            verification_contract=None,
+        )
+        plan = draft(draft_args)
+        self.assertEqual("CONFLICT", plan["task_kind"])
+        self.assertEqual([rel_conflict], plan["expected_files"])
+        base = load_task_baseline(repo, "fix-merge-conflict")
+        self.assertTrue(base["git_merge_state"]["merge_in_progress"])
+        self.assertEqual([rel_conflict], base["git_merge_state"]["unmerged_paths"])
+        self.assertIn("MERGE_BASELINE=1 unmerged conflict file(s)", pre_existing_changes_line(repo, plan))
+
+        # Approve task
+        approve_args = argparse.Namespace(
+            repo=str(repo),
+            task_id="fix-merge-conflict",
+            source="conversation",
+            proof_reference="approve conflict resolution plan",
+            enforcement_tier="RULE_ENFORCED",
+            plan_hash=plan["plan_sha256"][:12],
+        )
+        plan = record_approval(approve_args)
+        self.assertEqual("IMPLEMENTING", plan["status"])
+        self.assertFalse(_should_record_task_start(repo, "fix-merge-conflict", plan))
+        next_act = resolve_next_action(repo, "fix-merge-conflict", plan)
+        self.assertNotIn("before_first_edit", next_act)
+
+        # Attempting prepare_verification while conflict markers remain MUST fail closed
+        prep_args = argparse.Namespace(
+            repo=str(repo),
+            task_id="fix-merge-conflict",
+            host="antigravity",
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            prepare_verification(prep_args)
+        self.assertIn("UNRESOLVED_MERGE_CONFLICT", str(ctx.exception))
+
+        # Resolve conflict in working tree WITHOUT running git add (index remains UU)
+        resolved_code = (
+            "package com.example\n"
+            "class MainActivity {\n"
+            "    fun step() = 2\n"
+            "    fun onHeadOnboarding() = true\n"
+            "    fun onIncomingAction() = true\n"
+            "}\n"
+        )
+        write_file(repo / rel_conflict, resolved_code)
+        self.assertEqual([rel_conflict], unmerged_paths(repo), "Index is still UU because agent cannot run git add")
+
+        # Task manifest attributes ONLY MainActivity.kt (not AutoMerged.kt) to task_changes
+        t_man = build_task_manifest(repo, base, expected_files=plan["expected_files"])
+        self.assertEqual([rel_conflict], [c["path"] for c in t_man["task_changes"]])
+        pre_commit_snapshot = t_man["delivery_snapshot_sha256"]
+
+        # Prepare verification succeeds now that conflict markers are resolved
+        run_info = prepare_verification(prep_args)
+        self.assertEqual(pre_commit_snapshot, run_info["delivery_snapshot_sha256"])
+
+        # Seal task to READY_FOR_DELIVERY (simulate verified ready state as in _setup_ready_task)
+        from delivery_equivalence import snapshot_verified_files
+        tdir = repo / ".agents" / "state" / "tasks" / "fix-merge-conflict"
+        plan = read_json(tdir / "plan.json")
+        plan["status"] = "READY_FOR_DELIVERY"
+        plan["ready_run_id"] = run_info["run_id"]
+        plan["ready_delivery_snapshot_sha256"] = run_info["delivery_snapshot_sha256"]
+        plan["ready_change_set_sha256"] = run_info["change_set_sha256"]
+        atomic_write_json(tdir / "plan.json", plan)
+        snapshot_verified_files(repo, "fix-merge-conflict", plan, run_info["run_id"])
+
+        # Developer stages resolved conflict and commits the 2-parent merge commit
+        run_git(repo, "add", rel_conflict)
+        run_git(repo, "commit", "-qm", "fix(merge): resolve MainActivity conflict")
+
+        # Post-commit delivery_snapshot_sha256 matches pre-commit ready_delivery_snapshot_sha256
+        post_commit_manifest = build_manifest(repo)
+        self.assertEqual(pre_commit_snapshot, post_commit_manifest["delivery_snapshot_sha256"])
+
+        # Router routes to DELIVER and deliver_task accepts the 2-parent merge commit
+        self.assertEqual("DELIVER", resolve_next_action(repo, "fix-merge-conflict", read_json(tdir / "plan.json"))["code"])
+        delivered = deliver_task(repo, "fix-merge-conflict", require_clean_tree=True)
+        self.assertEqual("DELIVERED", delivered["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

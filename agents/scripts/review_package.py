@@ -533,6 +533,10 @@ def generate_task_brief(
             f"- **Architecture Mode**: `{contract.get('mode', 'PRESERVE')}`",
             f"- **Architecture Scope**: `{contract.get('target_scope') or 'whole task'}`",
         ])
+    if str(task_kind).upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
+        brief_lines.extend([
+            "- **Merge Conflict Resolution Focus**: Verify that both branches' intent (`HEAD` and incoming branch) is preserved without silently dropping callbacks, state fields, UI elements, imports, permissions, or error handling, and check for cross-branch signature or state mismatches.",
+        ])
     if plan.get("phases"):
         brief_lines.extend([
             "- **Final Integration Focus**: Prioritize cross-phase contract mismatch, integration regressions, state flow between layers, navigation wiring, and regressions introduced after earlier phase PASS.",

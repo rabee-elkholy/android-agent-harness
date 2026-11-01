@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.57] - 2026-11-01
+
+### Merge-conflict resolution task kind (`CONFLICT` / `FIX_CONFLICT` / `MERGE`) and two-parent merge delivery
+
+- **Dedicated `CONFLICT` Task Kind & Auto-Detection (`agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/planning.py`, `agents/scripts/_workflow/router.py`, `agents/scripts/review_policy.py`)**: Add `--kind CONFLICT` (with aliases `FIX_CONFLICT` and `MERGE`) and automatically classify `--kind AUTO` tasks as `CONFLICT` when an active Git merge or conflict-resolution outcome is detected; auto-populate `--expected-files` from unmerged (`status == "U"`) paths; isolate task surface classification from untouched auto-merged files; exempt `CONFLICT` tasks from forced multi-phase splitting (`requires_phases = False`); and disable the Tier-1 micro reviewer bypass (`_micro_eligible = False`) so resolved code conflicts receive full specialist review.
+- **Read-Only Git Branch Pattern & Merge Inspection (`agents/scripts/mutation_guard.py`, `agents/scripts/pre_tool_safety.py`)**: Allow read-only `git branch --list <pattern>` / `-a -l <pattern>`, `git for-each-ref`, and `git merge-tree` inspection commands while continuing to block branch creation, deletion, and rename operations.
+- **Unmerged Index Handling, Conflict-Marker Gate & Two-Parent Merge Delivery (`agents/scripts/delivery_manifest.py`, `agents/scripts/preflight_check.py`, `agents/scripts/_repo_files.py`, `agents/scripts/fast_kt_lint.py`, `agents/scripts/check_strings.py`, `agents/scripts/run_tests_gate.py`, `agents/scripts/task_git_lineage.py`)**: Skip pre-edit `--record-start` / `--capture-red` test gates when unresolved merge conflicts exist in `task-baseline.json`; include resolved working-tree files that remain `status == "U"` in the Git index in `delivery_manifest` so pre-commit and post-commit snapshots match without requiring agent `git add`; fail closed at `prepare-verification`, `checkpoint-phase`, and `preflight` if any `<<<<<<<` / `=======` / `>>>>>>>` conflict markers remain; scope `fast_kt_lint` and `check_strings` to active task changes so untouched auto-merged baseline files do not block preflight; and accept authorized two-parent merge commits (`HEAD^1` + `HEAD^2`) during `reconcile-delivery` / `deliver`.
+- **Zero Silent Code Drops & Mandatory Developer Clarification (`agents/rules/harness-rules.md`, `GEMINI.md`, `agents/tool-adapters/GEMINI.md.template`, `agents/tool-adapters/CLAUDE.md.template`, `agents/scripts/review_package.py`)**: Enforce in core rules, host adapters, and reviewer briefs that no code from either `HEAD` or the incoming branch is silently dropped and that any semantic or behavioral conflict between branches requires clarifying with the developer via `ask_question` before deciding.
+
 ## [1.1.56] - 2026-11-01
 
 ### Bounded Android inspection and scoped Antigravity guidance

@@ -158,7 +158,7 @@ class AndroidInspectTests(unittest.TestCase):
         self.assertTrue(head.startswith('HEAD'))
         self.assertEqual(len(head), 6000)
         _, tail = invoke(sys.executable, command, self.repo)
-        self.assertTrue(tail.endswith('TAIL\n'))
+        self.assertTrue(tail.endswith(('TAIL\n', 'TAIL\r\n')))
         self.assertEqual(len(tail), 6000)
 
     def test_managed_rules_validate_and_report_host_contract_regression(self):

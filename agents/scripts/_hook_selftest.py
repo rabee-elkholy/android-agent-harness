@@ -1257,6 +1257,29 @@ class GenericMCPTests(unittest.TestCase):
         })
         self.assertEqual("deny", res["decision"])
 
+    def test_READ_ONLY_git_branch_list_patterns_and_merge_tree_allowed(self):
+        """Read-only git branch --list patterns, chained read-only git branch, and git merge-tree are allowed."""
+        for cmd in (
+            'git branch -a --list "*solve*"',
+            'git branch -r -l "origin/features/*"',
+            'git status --short; git branch -a; git log -n 3 --oneline',
+            'git for-each-ref --format="%(refname:short)" refs/remotes',
+            'git merge-tree HEAD origin/main',
+        ):
+            with self.subTest(cmd=cmd):
+                res = self.call("run_command", {"CommandLine": cmd})
+                self.assertEqual("allow", res["decision"], f"{cmd} should be allowed: {res}")
+
+        for mut_cmd in (
+            "git branch new-feature-branch",
+            "git branch -d old-branch",
+            "git branch -M main",
+            "git status --short; git branch new-branch",
+        ):
+            with self.subTest(mut_cmd=mut_cmd):
+                res = self.call("run_command", {"CommandLine": mut_cmd})
+                self.assertNotEqual("allow", res["decision"], f"{mut_cmd} must be blocked")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -109,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
                 task_id = str(plan.get("task_id") or "")
             if task_id:
                 from workflow import load_task_baseline, build_task_manifest
+                from delivery_manifest import assert_no_unresolved_conflicts
                 base = load_task_baseline(repo_target, task_id)
+                assert_no_unresolved_conflicts(repo_target, base, extra_paths=(plan.get("expected_files") if plan else None))
                 if base:
                     task_manifest = build_task_manifest(repo_target, base)
                     task_changes = task_manifest.get("task_changes")

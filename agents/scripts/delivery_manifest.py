@@ -74,6 +74,152 @@ def _normal_rel(raw: str) -> str:
     return normalized[2:] if normalized.startswith("./") else normalized
 
 
+_CONFLICT_START_RE = re.compile(r"^<{7}(?: .*)?$")
+_CONFLICT_ANCESTOR_RE = re.compile(r"^\|{7}(?: .*)?$")
+_CONFLICT_SEP_RE = re.compile(r"^={7}\s*$")
+_CONFLICT_END_RE = re.compile(r"^>{7}(?: .*)?$")
+_DOC_MARKDOWN_SUFFIXES = {".md", ".txt", ".rst", ".adoc"}
+
+
+def has_conflict_markers(path: Path) -> int:
+    """Return the 1-based line number of the first Git conflict marker in `path`, or 0 if none."""
+    if not path.is_file() or path.is_symlink():
+        return 0
+    suffix = path.suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".jar", ".aar", ".so", ".bin", ".apk", ".ttf", ".otf", ".mp3", ".mp4", ".wav", ".ogg"}:
+        return 0
+    is_doc = suffix in _DOC_MARKDOWN_SUFFIXES
+    in_conflict_block = False
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    for idx, line in enumerate(text.splitlines(), 1):
+        if _CONFLICT_START_RE.match(line):
+            in_conflict_block = True
+            return idx
+        if _CONFLICT_ANCESTOR_RE.match(line) or _CONFLICT_END_RE.match(line):
+            return idx
+        if _CONFLICT_SEP_RE.match(line) and (in_conflict_block or not is_doc):
+            return idx
+    return 0
+
+
+def unmerged_paths(repo: Path) -> list[str]:
+    """Return sorted repo-relative POSIX paths with unmerged Git index entries (`u ` in porcelain v2)."""
+    try:
+        raw = git(repo.resolve(), "status", "--porcelain=v2", "-z", "-u", "--untracked-files=all")
+    except Exception:
+        return []
+    found: set[str] = set()
+    chunks = raw.split(b"\0")
+    idx = 0
+    while idx < len(chunks):
+        chunk = chunks[idx]
+        idx += 1
+        if not chunk:
+            continue
+        line = chunk.decode("utf-8", errors="surrogateescape")
+        if line.startswith("2 "):
+            idx += 1
+        elif line.startswith("u "):
+            parts = line.split(" ", 10)
+            if len(parts) >= 11:
+                found.add(_normal_rel(parts[10]))
+    return sorted(found)
+
+
+def git_merge_in_progress(repo: Path) -> dict[str, str | list[str]]:
+    """Return active Git merge/rebase/cherry-pick/revert heads and unmerged paths, if any."""
+    root = repo.resolve()
+    state: dict[str, str | list[str]] = {}
+    for ref_name, key in (
+        ("MERGE_HEAD", "merge_head"),
+        ("REBASE_HEAD", "rebase_head"),
+        ("CHERRY_PICK_HEAD", "cherry_pick_head"),
+        ("REVERT_HEAD", "revert_head"),
+    ):
+        proc = subprocess.run(
+            ["git", "rev-parse", "--verify", "-q", ref_name],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sha = (proc.stdout or "").strip() if proc.returncode == 0 else ""
+        if sha and re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
+            state[key] = sha
+    unmerged = unmerged_paths(root)
+    if unmerged:
+        state["unmerged_paths"] = unmerged
+    state["merge_in_progress"] = bool(state)
+    return state
+
+
+def find_conflict_markers(repo: Path, paths: list[str] | set[str] | None = None) -> list[dict[str, str | int]]:
+    """Scan `paths` (or all unmerged/changed paths in `repo`) for Git conflict markers."""
+    root = repo.resolve()
+    if paths is not None:
+        candidates = sorted({_normal_rel(str(p)) for p in paths if str(p).strip()})
+    else:
+        from _repo_files import changed_paths
+        candidates = sorted(
+            set(unmerged_paths(root))
+            | {p.relative_to(root).as_posix() for p in changed_paths(repo=root) if p.is_relative_to(root)}
+        )
+    hits: list[dict[str, str | int]] = []
+    for rel in candidates:
+        line_no = has_conflict_markers(root / rel)
+        if line_no > 0:
+            hits.append({"path": rel, "line": line_no})
+    return hits
+
+
+def assert_no_unresolved_conflicts(
+    repo: Path,
+    task_baseline: dict | None = None,
+    extra_paths: list[str] | set[str] | None = None,
+) -> None:
+    """Fail closed with ValidationError if any conflict markers or untouched unmerged files remain."""
+    root = repo.resolve()
+    unmerged = unmerged_paths(root)
+    check_paths: set[str] = set(unmerged)
+    if extra_paths:
+        for p in extra_paths:
+            if str(p).strip():
+                check_paths.add(_normal_rel(str(p).strip()))
+    if isinstance(task_baseline, dict):
+        for entry in task_baseline.get("changes") or []:
+            if isinstance(entry, dict) and entry.get("status") == "U" and entry.get("path"):
+                check_paths.add(_normal_rel(str(entry["path"])))
+    markers = find_conflict_markers(root, check_paths)
+    if markers:
+        listed = ", ".join(f"{m['path']}:{m['line']}" for m in markers[:10])
+        raise ValidationError(
+            f"UNRESOLVED_MERGE_CONFLICT: Git conflict markers remain in working tree ({listed}). "
+            "Resolve all conflict markers without dropping required code from either branch before verification."
+        )
+    if unmerged and isinstance(task_baseline, dict):
+        base_unmerged = {
+            _normal_rel(str(entry.get("path"))): str(entry.get("content_identity") or "")
+            for entry in (task_baseline.get("changes") or [])
+            if isinstance(entry, dict) and entry.get("status") == "U" and entry.get("path")
+        }
+        algorithm = _object_format(root)
+        for rel in unmerged:
+            if rel not in base_unmerged:
+                raise ValidationError(
+                    f"UNRESOLVED_MERGE_CONFLICT: unmerged path '{rel}' appeared outside the task baseline."
+                )
+            fpath = root / rel
+            if fpath.is_file() or fpath.is_symlink():
+                cur_oid = f"git:{_working_tree_oid(root, rel, fpath, algorithm)}"
+                if cur_oid == base_unmerged[rel]:
+                    raise ValidationError(
+                        f"UNRESOLVED_MERGE_CONFLICT: unmerged path '{rel}' still matches its initial conflicted state."
+                    )
+
+
 def is_delivery_relevant(relative: str) -> bool:
     rel = _normal_rel(relative)
     lowered = rel.lower()
@@ -237,6 +383,10 @@ def _porcelain_changes(
             parts = line.split(" ", 10)
             if len(parts) < 11:
                 continue
+            xy = parts[1]
+            head_mode = parts[4] if parts[4] != "000000" else parts[3]
+            index_mode = parts[4] if parts[4] != "000000" else parts[5]
+            worktree_mode = parts[6]
             rel = parts[10]
             status = "U"
         elif line.startswith("? "):
@@ -342,7 +492,7 @@ def _delivery_files(
     untracked: set[str],
 ) -> list[dict[str, str]]:
     changed_paths = {entry.path: entry for entry in changes}
-    candidates = set(index) | untracked
+    candidates = set(index) | untracked | set(changed_paths)
     result: list[dict[str, str]] = []
     for rel in sorted(candidates):
         if not is_delivery_relevant(rel):
@@ -1037,10 +1187,12 @@ def build_task_manifest(
     current_paths: set[str] = set()
 
     for cur in current_changes:
-        if cur.get("status") == "U":
-            raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
         path = cur.get("path")
         norm_path = _normal_rel(path) if path else ""
+        base_entry = (base_map.get(norm_path) or base_map.get(path)) if (path in base_map or norm_path in base_map) else None
+        if cur.get("status") == "U":
+            if base_entry is None or base_entry.get("status") != "U":
+                raise HarnessError(f"Conflicted path in working tree: {cur.get('path')}")
         if norm_path:
             current_paths.add(norm_path)
         if path:
@@ -1048,18 +1200,16 @@ def build_task_manifest(
         if is_disjoint_sibling_change(cur, live_sibling_files):
             continue
 
-        if path not in base_map and norm_path not in base_map:
+        if base_entry is None:
             task_changes.append(cur)
         else:
-            base_entry = base_map.get(norm_path) or base_map.get(path)
             # Changed if identity, status, or old_path differ
-            if base_entry:
-                if (cur.get("content_identity") != base_entry.get("content_identity") or
-                    cur.get("status") != base_entry.get("status") or
-                    cur.get("old_path") != base_entry.get("old_path") or
-                    ("git_mode" in base_entry and cur.get("git_mode") != base_entry.get("git_mode")) or
-                    cur.get("worktree_git_mode") != base_entry.get("worktree_git_mode")):
-                    task_changes.append(cur)
+            if (cur.get("content_identity") != base_entry.get("content_identity") or
+                cur.get("status") != base_entry.get("status") or
+                cur.get("old_path") != base_entry.get("old_path") or
+                ("git_mode" in base_entry and cur.get("git_mode") != base_entry.get("git_mode")) or
+                cur.get("worktree_git_mode") != base_entry.get("worktree_git_mode")):
+                task_changes.append(cur)
 
     # Add committed task changes not present in working tree changes
     for comm in committed_task_changes:

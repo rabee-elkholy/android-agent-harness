@@ -581,8 +581,12 @@ def _record_task_start(
     if not task_id or plan.get("status") != "IMPLEMENTING":
         live_print("[FAIL] --record-start needs an active task in IMPLEMENTING.", err=True)
         return 1
-    live_manifest = build_manifest(REPO)
-    task_manifest = build_task_manifest(REPO, load_task_baseline(REPO, task_id), expected_files=plan.get("expected_files"), live_manifest=live_manifest)
+    try:
+        live_manifest = build_manifest(REPO)
+        task_manifest = build_task_manifest(REPO, load_task_baseline(REPO, task_id), expected_files=plan.get("expected_files"), live_manifest=live_manifest)
+    except Exception as exc:
+        live_print(f"[FAIL] --record-start cannot run while working tree has unresolved conflicts: {exc}", err=True)
+        return 1
     if task_manifest.get("task_changes"):
         live_print(
             "[FAIL] --record-start runs only before the task's first edit: this task already changed files, so a "

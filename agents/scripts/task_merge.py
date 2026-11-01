@@ -117,9 +117,13 @@ def _combined_args(repo: Path, target: str, sources: list[dict]) -> argparse.Nam
     intent = {"PRESERVE": "EXISTING_CHANGE", "NEW": "NEW_FEATURE", "REFACTOR": "REFACTOR",
               "MIGRATE": "MIGRATION", "MIGRATION": "MIGRATION"}.get(arch.get("mode"), "EXISTING_CHANGE")
     kinds = {p.get("task_kind") for p in sources}
+    merged_kind = (
+        "CONFLICT" if "CONFLICT" in kinds
+        else ("BUG" if "BUG" in kinds else ("REFACTOR" if kinds == {"REFACTOR"} else "FEATURE"))
+    )
     return argparse.Namespace(
         repo=str(repo), task_id=target, outcome=joined("requested_outcome"),
-        kind="BUG" if "BUG" in kinds else ("REFACTOR" if kinds == {"REFACTOR"} else "FEATURE"),
+        kind=merged_kind,
         planning_depth="ARCHITECTURAL" if any(p.get("planning_depth") == "ARCHITECTURAL" for p in sources) else "BOUNDED",
         expected_files=sorted({f for p in sources for f in task_owned_files(repo, p["task_id"], p)}),
         expected_modules=",".join(union("expected_modules")), expected_surfaces=",".join(union("expected_surfaces")),

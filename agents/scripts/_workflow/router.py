@@ -216,12 +216,18 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
     if phases:
         from .phase_routing import phase_implementation_action
         return phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, phases)
+    is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
     action = {
         "code": "IMPLEMENT_APPROVED_SCOPE",
         "kind": "MODEL_ACTION",
         "command": "",
         "blocking": True,
-        "reason": "Implement code changes within approved scope and phases.",
+        "reason": (
+            "Resolve merge conflicts in approved scope without dropping required code from either branch. "
+            "Ask the developer via ask_question before deciding any semantic or behavioral conflict between branches."
+            if is_conflict_task
+            else "Implement code changes within approved scope and phases."
+        ),
         "inputs": {"repo": ".", "task_id": task_id},
         "expected": {},
     }
@@ -238,6 +244,11 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
         compile_hint = _engine._compile_check_hint(repo, task_changes)
         if compile_hint:
             action["reason"] = f"Continue the approved change. {compile_hint} Then run: {done_command}"
+        elif is_conflict_task:
+            action["reason"] = (
+                "Ensure all conflict markers are removed and no code from either branch was dropped. "
+                f"When complete, run: {done_command}"
+            )
         action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
     elif _engine._should_record_task_start(repo, task_id, plan):
         # O64: without a record, an old failing test in another feature blocks the gate later and
@@ -512,7 +523,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
 
         if kind == "FEATURE":
             prefix = "feat"
-        elif kind == "BUG":
+        elif kind in ("BUG", "CONFLICT", "FIX_CONFLICT", "MERGE"):
             prefix = "fix"
         elif kind == "REFACTOR":
             prefix = "refactor"

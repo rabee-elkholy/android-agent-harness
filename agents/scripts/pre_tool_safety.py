@@ -199,23 +199,37 @@ def _audited_harness_command(command: str) -> bool:
 
 
 def _read_only_git_branch_command(command: str) -> bool:
-    """A single `git branch` call that only lists or names branches, with nothing chained to it."""
-    import shlex
-
+    """True when every `git_mutation` match in `command` is a read-only `git branch` segment."""
     try:
-        from mutation_guard import SHELL_LAUNDERING, _operator_text_any_shell, is_read_only_git_branch
+        from mutation_guard import (
+            SHELL_LAUNDERING,
+            _entry,
+            _operator_text_any_shell,
+            _split_segments,
+            is_read_only_git_branch,
+        )
     except Exception:
         return False
     outside_quotes = _operator_text_any_shell(command or "")
-    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes) or re.search(r";|&&|\|\||\n", outside_quotes):
+    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes):
         return False
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
+    segments = _split_segments(command or "")
+    if not segments:
         return False
-    if not tokens or tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower() not in {"git", "git.exe"}:
-        return False
-    return is_read_only_git_branch(tokens[1:])
+    git_mut_re = DANGEROUS[0][1]
+    saw_branch = False
+    for seg in segments:
+        if not git_mut_re.search(seg):
+            continue
+        name, args = _entry(seg, REPO)
+        if name != "git":
+            return False
+        if args[:1] == ["-C"] and len(args) >= 3:
+            args = args[2:]
+        if not is_read_only_git_branch(args):
+            return False
+        saw_branch = True
+    return saw_branch
 
 
 CANCEL_REQUEST_FILE = "cancel-requested.json"
