@@ -5,6 +5,13 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    {'command': 'android-inspect capabilities', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': [], 'model_facing': True, 'description': 'Probe optional Android CLI inspection support; no setup or updates.'},
+    {'command': 'android-inspect studio-status', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': [], 'model_facing': True, 'description': 'Check running Studio connectivity; not lint or build proof.'},
+    {'command': 'android-inspect declaration', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['symbol'], 'model_facing': True, 'description': 'Project-bound semantic declaration lookup; optional --file context.'},
+    {'command': 'android-inspect usages', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['symbol'], 'model_facing': True, 'description': 'Project-bound indexed symbol usages; diagnostic only.'},
+    {'command': 'android-inspect analyze', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['path'], 'model_facing': True, 'description': 'Analyze one local source file; successful command is not clean-code evidence.'},
+    {'command': 'android-inspect docs-search', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['query'], 'model_facing': True, 'description': 'Search official Android docs with an explicit query; no appended project source.'},
+    {'command': 'android-inspect docs-fetch', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['kb_url'], 'model_facing': True, 'description': 'Fetch an official kb://android/ article from search results.'},
     {"command": "android-ui capabilities", "read_only": False, "valid_states": ["ANY"],
      "required_inputs": [], "model_facing": True,
      "description": "Antigravity-only cached Android CLI capability probe; never installs or updates tools."},

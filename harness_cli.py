@@ -1064,6 +1064,17 @@ def cmd_device(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_device.py", forward)
 
 
+def cmd_android_inspect(args: argparse.Namespace) -> int:
+    forward = list(args.inspect_args)
+    if forward[:1] == ["--"]:
+        forward = forward[1:]
+    repo = find_repo(args.repo) if args.repo else Path.cwd().resolve()
+    # Pin the public caller's project even with an inherited HARNESS_REPO or
+    # a conflicting forwarded --repo, matching the installed facade contract.
+    forward.extend(["--repo", str(repo)])
+    return _dispatch_pipeline_script(args, "android_inspect.py", forward)
+
+
 def cmd_android_ui(args: argparse.Namespace) -> int:
     forward = list(args.ui_args)
     if forward[:1] == ["--"]:
@@ -1081,6 +1092,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 
 FULL_SELFTEST_SUITES = (
     "_android_ui_selftest.py",
+    "_android_inspect_selftest.py",
     "_change_decision_selftest.py",
     "_review_models_selftest.py",
     "_portability_selftest.py",
@@ -1644,6 +1656,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("journey_args", nargs=argparse.REMAINDER)
     sp.set_defaults(func=cmd_journey)
+
+    sp = sub.add_parser("android-inspect", help="Optional Studio semantic inspection and official Android documentation.", formatter_class=argparse.RawDescriptionHelpFormatter, description="Actions: capabilities, declaration, usages, analyze, studio-status, docs-search, docs-fetch.\nUse <action> --help for adapter options.")
+    sp.add_argument("--repo", help="Project root.")
+    sp.add_argument("--kit", help="Kit checkout.")
+    sp.add_argument("inspect_args", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_android_inspect)
 
     sp = sub.add_parser("android-ui", help="Antigravity Compose previews and verified physical Device Hub.")
     sp.add_argument("--repo", help="Android project root (default: cwd).")

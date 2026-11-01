@@ -49,10 +49,11 @@ The mechanisms below check these failure modes within the configured host and ve
 
 ## What the harness adds
 
-The harness adds six engineering capabilities around your AI coding assistant:
+The harness adds these engineering capabilities around your AI coding assistant:
 
 - **Persistent project knowledge**: Generated project facts plus human project notes and scoped developer instructions (including optional decision `--rationale` and `--alternatives-rejected`) give future task sessions durable repo-local context without depending on one chat history.
 - **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph (across Kotlin, Java, XML, and KMP/iOS Swift files), source-set awareness, and automatic detection of local architecture families in mixed codebases.
+- **Focused Android feedback**: Optional Studio declaration/usages lookup, file analysis and official documentation through [Android inspection](https://github.com/rabee-elkholy/android-agent-harness/blob/main/agents/workflows/android-inspection.md). Compose preview filtering/dependency discovery, bounded Gradle output with retained full logs, and scoped Antigravity guidance reduce irrelevant context without replacing delivery gates.
 - **Approval-first execution**: Plan-before-mutation flow, graph-backed codebase reuse candidate detection (`reuse_candidates`), plan readiness diagnostics, plan hashes, and approval receipts, with scope drift checks. Conversation-based approval is rule-enforced; a hash binds the recorded plan but does not authenticate the human who approved it.
 - **Adaptive Android & KMP verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, Clean Architecture UI-to-Data-Source layer bypass (`UI_TO_DATA_SOURCE_BYPASS`), KMP `commonMain` platform purity, and device APIs.
 - **Epistemically isolated specialist reviews**: Role-scoped lean briefs enforce Goldfish epistemic independence—one designated reviewer verifies every item of the approved approach, while specialist reviewers evaluate runtime behavior, security, performance, and YAGNI/codebase reuse without being biased by implementer self-justification.

@@ -15,6 +15,12 @@ Other hosts retain the existing portable verification path.
    modify application code to hide tool failure, or skip existing gates.
 3. Run `python .agents/harness.py android-ui list --reference :<resolved-module>`.
    This compiles; reuse its result instead of rediscovering on every edit.
+   Use `--filter ScreenName` to return only matching discovered FQNs. For shared
+   components, `--include-dependencies` also discovers dependency-module previews
+   when the installed CLI advertises `--all`. These options do not limit the CLI's
+   compilation work. Capture is bounded to 64 KiB and output to 64 matching names;
+   `list_may_be_truncated` means the list is incomplete. Narrow the module/filter
+   and never interpret an empty or truncated list as proof that no previews exist.
 4. Select exact discovered FQNs for changed components and their affected screens.
    Run `python .agents/harness.py android-ui render --reference :<resolved-module> --fqn <exact-fqn>`.
    Repeat `--fqn` for up to 16 previews in one build. Do not render the whole app

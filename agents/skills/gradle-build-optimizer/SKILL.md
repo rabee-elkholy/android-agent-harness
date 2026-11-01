@@ -23,5 +23,10 @@ kernel-major: 1
 - This project does not use Git worktrees for AI subagents. Do not copy `local.properties` into a worktree or spawn `Workspace="share"`.
 
 ## Dependencies
+- Use `.agents/workflows/android-inspection.md` for official Android API/tooling
+  documentation when version behavior is uncertain; verify against the project's
+  actual versions. The Gradle runner caps live output and retains the full log at
+  the path printed in `[RESULT]`. Inspect relevant log ranges when summaries are
+  truncated; do not rerun a build just to retrieve hidden output.
 - Check transitive conflicts before adding libraries.
 - Check dependency ownership in the discovered module graph; avoid redundant declarations while preserving dependencies required by each module's public API.

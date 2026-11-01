@@ -7,6 +7,11 @@ kernel-major: 1
 
 # Compose Inspector & Layout Verifier
 
+For indexed declaration/usages lookup or a focused file diagnostic, follow
+`.agents/workflows/android-inspection.md`. On Antigravity, use the existing
+`.agents/workflows/android-ui.md` preview adapter after task approval; filter and
+batch representative previews. Optional diagnostics never replace routed gates.
+
 ## 1. Composition & Performance Safety Checks
 - **Stability**: Diagnose a recomposition problem with runtime observations or compiler reports before changing stability. `List`, `Set`, and `Map` are not proof of immutability. `@Immutable` and `@Stable` are compiler contracts, not transformations: use them only when all reachable values satisfy the immutability contract, or mutable public state notifies Compose and satisfies the stability contract. Check mutation through aliases and element types; prefer a correctly modeled type over an annotation that hides instability. See the [official stability guidance](https://developer.android.com/develop/ui/compose/performance/stability/fix).
 - **Calculations**: Verify `remember` is used for expensive object allocations or formatting inside composables.

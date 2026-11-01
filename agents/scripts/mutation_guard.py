@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -215,6 +215,10 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name == "run_device" and args == ["status"]:
         return True
+    if name == "android_inspect" or (name in {"harness_cli", "android-harness"} and args[:1] == ["android-inspect"]):
+        inspection_args = args if name == "android_inspect" else args[1:]
+        from android_inspect import ACTIONS
+        return bool(inspection_args) and inspection_args[0] in {"capabilities", *ACTIONS}
     if name in INSPECTION_SCRIPTS:
         if name == "task_context":
             return _valid_context_targets(args)

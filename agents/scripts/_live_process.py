@@ -132,6 +132,7 @@ def run_streaming(
     env: dict[str, str] | None = None,
     heartbeat_sec: float = DEFAULT_HEARTBEAT_SEC,
     should_echo: Callable[[str], bool] | None = None,
+    format_echo: Callable[[str], str] | None = None,
     label: str = "command",
     echo: bool = True,
 ) -> tuple[int, str, list[str]]:
@@ -196,6 +197,7 @@ def run_streaming(
             raw_chunks.append(line)
             clean = line.rstrip("\n\r")
             if echo_fn(clean):
+                clean = format_echo(clean) if format_echo else clean
                 with lock:
                     last["text"] = clean.strip()[:180]
                     last["t"] = time.time()

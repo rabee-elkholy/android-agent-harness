@@ -24,10 +24,17 @@ from evidence_store import StateLock
 from build_execution import build_lock
 
 MAX_OUTPUT = 6000
+MAX_LIST_OUTPUT = 65536
 FQN = re.compile(r"[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+", re.ASCII)
 
 
-def invoke(executable: str, args: list[str], repo: Path, timeout: int = 120, *, detach: bool = False) -> tuple[int, str]:
+def supports_flag(help_text: str, flag: str) -> bool:
+    """Match an advertised option token, not a similarly prefixed option."""
+    return bool(re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", help_text))
+
+
+def invoke(executable: str, args: list[str], repo: Path, timeout: int = 120, *, head: bool = False,
+           max_output: int = MAX_OUTPUT, detach: bool = False) -> tuple[int, str]:
     # Disk-backed capture bounds Python memory even with very noisy build tools.
     # No shell interpolation; public inputs are separately allowlisted.
     if os.name == "nt" and Path(executable).suffix.lower() in {".bat", ".cmd"}:
@@ -48,21 +55,29 @@ def invoke(executable: str, args: list[str], repo: Path, timeout: int = 120, *, 
             code = process.wait(timeout=timeout)
         except (subprocess.TimeoutExpired, KeyboardInterrupt):
             # Kill the launched process tree before releasing the build lock.
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=False)
-            else:
-                try:
+            cleanup_error = None
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+                else:
                     os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            process.kill()
-            process.wait(timeout=15)
+            except ProcessLookupError:
+                pass
+            except (OSError, subprocess.SubprocessError) as exc:
+                cleanup_error = exc
+            finally:
+                # A missing/failing taskkill must not bypass launcher cleanup.
+                process.kill()
+                process.wait(timeout=15)
+            if cleanup_error is not None:
+                raise ValidationError("Process-tree cleanup failed; launcher stopped but child exit is unverified. "
+                                      "Check remaining Android CLI processes before retrying.") from cleanup_error
             raise
         output.seek(0, 2)
         size = output.tell()
-        output.seek(max(0, size - MAX_OUTPUT))
-        text = output.read(MAX_OUTPUT).decode("utf-8", errors="replace")
+        output.seek(0 if head else max(0, size - max_output))
+        text = output.read(max_output).decode("utf-8", errors="replace")
     return code, text
 
 
@@ -83,7 +98,7 @@ def capabilities(repo: Path, executable: str) -> dict:
     try:
         cached = read_json(path)
         if (isinstance(cached, dict) and cached.get("identity") == identity
-                and 0 <= time.time() - cached.get("at", 0) < 600 and cached.get("schema_version") == 1
+                and 0 <= time.time() - cached.get("at", 0) < 600 and cached.get("schema_version") == 2
                 and isinstance(cached.get("version"), str) and isinstance(cached.get("features"), dict)
                 and all(type(cached["features"].get(key)) is bool for key in ("list", "render", "hub"))):
             return cached
@@ -99,8 +114,8 @@ def capabilities(repo: Path, executable: str) -> dict:
         ("hub", ["device", "hub", "--help"], ["--device"]),
     ):
         status, help_text = invoke(executable, args, repo, 20)
-        features[action] = status == 0 and all(flag in help_text for flag in required)
-    result = {"schema_version": 1, "identity": identity, "at": time.time(),
+        features[action] = status == 0 and all(supports_flag(help_text, flag) for flag in required)
+    result = {"schema_version": 2, "identity": identity, "at": time.time(),
               "version": version.strip()[:200], "features": features}
     atomic_write_json(path, result)
     return result
@@ -198,11 +213,20 @@ def output_files(directory: Path) -> list[dict]:
 
 def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
     reference, configured_task = preview_reference(repo, args.reference)
+    include_dependencies = getattr(args, "include_dependencies", False)
+    name_filter = getattr(args, "filter", None) or ""
+    if len(name_filter) > 256 or (name_filter and not name_filter.isprintable()):
+        raise ValidationError("Preview filter must be a printable name substring, at most 256 characters.")
+    if include_dependencies:
+        status, help_text = invoke(executable, ["preview", "list", "--help"], repo, 20)
+        if status or not supports_flag(help_text, "--all"):
+            raise ValidationError("UNSUPPORTED: dependency discovery requires preview list --all; no automatic update.")
     fqns = sorted(set(args.fqn))
     if args.action == "render" and (not 1 <= len(fqns) <= 16 or any(not FQN.fullmatch(f) for f in fqns)):
         raise ValidationError("Render requires 1..16 exact preview FQNs obtained from preview list.")
     selection = {"action": args.action, "reference": reference, "fqns": fqns,
-                 "image": args.image, "daemon": not args.no_daemon, "configured_assemble": configured_task}
+                 "image": args.image, "daemon": not args.no_daemon, "configured_assemble": configured_task,
+                 "include_dependencies": include_dependencies, "filter": name_filter}
     with build_lock(repo):
         plan = authorize(repo, args.action)
         identity = input_identity(repo, plan, caps, selection)
@@ -227,6 +251,8 @@ def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
         directory = root / uuid.uuid4().hex
         directory.mkdir(parents=True)
         command = ["preview", args.action, reference]
+        if args.action == "list" and include_dependencies:
+            command.append("--all")
         if args.action == "render":
             command += ["--component-tree", "--output=" + str(directory)]
             if not args.image:
@@ -235,7 +261,10 @@ def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
                 command.append("--daemon")
             command += ["--fqn=" + f for f in fqns]
         started = time.monotonic()
-        code, output = invoke(executable, command, repo, 300)
+        if args.action == "list":
+            code, output = invoke(executable, command, repo, 300, head=True, max_output=MAX_LIST_OUTPUT)
+        else:
+            code, output = invoke(executable, command, repo, 300)
         from _vnext_common import redact
         (directory / "tool-output.txt").write_text(redact(output), encoding="utf-8")
         if code:
@@ -251,8 +280,16 @@ def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
                   "selection": selection, "seconds": round(time.monotonic() - started, 3), "reused": False,
                   "variant_note": "CLI preview target resolution is diagnostic; only harness assemble proves the configured APK variant."}
         if args.action == "list":
-            result["previews"] = [line.strip() for line in output.splitlines() if FQN.fullmatch(line.strip())][:64]
-            result["list_may_be_truncated"] = len(output.encode("utf-8")) >= MAX_OUTPUT
+            captured_lines = output.splitlines()
+            capture_truncated = len(output.encode("utf-8")) >= MAX_LIST_OUTPUT
+            if capture_truncated and not output.endswith(("\n", "\r")):
+                # A byte boundary can cut a valid FQN into another valid-looking name.
+                captured_lines = captured_lines[:-1]
+            matches = sorted({line.strip() for line in captured_lines
+                              if FQN.fullmatch(line.strip()) and name_filter in line.strip()})
+            result["previews"] = matches[:64]
+            result["matched_in_capture"] = len(matches)
+            result["list_may_be_truncated"] = len(matches) > 64 or capture_truncated
         atomic_write_json(directory / "receipt.json", result)
         atomic_write_json(cache, result)
         return result
@@ -296,9 +333,13 @@ def main(argv=None) -> int:
     parser.add_argument("--image", action="store_true")
     parser.add_argument("--no-daemon", action="store_true")
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--include-dependencies", action="store_true", help="List previews from dependent modules too (CLI --all).")
+    parser.add_argument("--filter", help="Case-sensitive substring filter on discovered preview FQNs; list only.")
     parser.add_argument("--serial")
     parser.add_argument("--json", action="store_true", help="Structured output (also the default).")
     args = parser.parse_args(argv)
+    if args.action != "list" and (args.include_dependencies or args.filter is not None):
+        parser.error("--include-dependencies and --filter require list.")
     if args.action not in {"list", "render"} and (args.reference or args.fqn or args.image or args.no_daemon or args.refresh):
         parser.error("Preview selection/options require list or render.")
     if args.action != "hub" and args.serial:

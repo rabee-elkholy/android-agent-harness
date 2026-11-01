@@ -202,6 +202,21 @@ class AndroidUiTests(unittest.TestCase):
             ui.capabilities(self.repo, str(executable))
             self.assertEqual(4, invoke.call_count)
 
+    def test_windows_timeout_still_reaps_launcher_when_taskkill_fails(self):
+        import subprocess
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        process = Mock(pid=123)
+        process.wait.side_effect = [subprocess.TimeoutExpired('android', 1), 0]
+        with patch.object(ui, 'os', SimpleNamespace(name='nt')), \
+             patch.object(ui.subprocess, 'CREATE_NEW_PROCESS_GROUP', 512, create=True), \
+             patch.object(ui.subprocess, 'Popen', return_value=process), \
+             patch.object(ui.subprocess, 'run', side_effect=FileNotFoundError('taskkill missing')):
+            with self.assertRaises((subprocess.TimeoutExpired, ValidationError)):
+                ui.invoke('android.exe', ['--version'], self.repo, 1)
+        process.kill.assert_called_once()
+        self.assertEqual(2, process.wait.call_count)
+
     def test_repository_local_executable_rejected(self):
         executable = self.repo / "android.exe"
         executable.write_bytes(b"not trusted")
@@ -237,6 +252,43 @@ class AndroidUiTests(unittest.TestCase):
             self.assertIn("phone is not ready", reason)
         with patch.object(ui, "authorize", return_value=self.plan):
             self.assertTrue(command_allowed(self.repo, command)[0])
+
+    def test_list_filters_dependencies_and_reports_truncation(self):
+        output = '\n'.join(['a.Other.Preview', *['a.Screen.Preview' + str(i) for i in range(80)]])
+        with patch.object(ui, 'invoke', side_effect=[(0, '--all'), (0, output)]) as invoke:
+            result = self.render(self.args(action='list', fqn=[], include_dependencies=True, filter='Screen'))
+        self.assertIn('--all', invoke.call_args.args[1])
+        self.assertEqual(64, len(result['previews']))
+        self.assertEqual(80, result['matched_in_capture'])
+        self.assertTrue(result['list_may_be_truncated'])
+        self.assertTrue(all('Screen' in name for name in result['previews']))
+        self.assertFalse(result['delivery_evidence'])
+
+    def test_dependency_discovery_requires_advertised_flag(self):
+        with patch.object(ui, 'invoke', return_value=(0, 'old help')) as invoke:
+            with self.assertRaisesRegex(ValidationError, 'UNSUPPORTED'):
+                self.render(self.args(action='list', fqn=[], include_dependencies=True))
+        self.assertEqual(1, invoke.call_count)
+        self.assertEqual(['preview', 'list', '--help'], invoke.call_args.args[1])
+
+    def test_truncated_list_never_returns_a_partial_symbol(self):
+        partial = 'sample.Screen.PartialPreview'
+        output = '!' * (ui.MAX_LIST_OUTPUT - len(partial) - 1) + '\n' + partial
+        with patch.object(ui, 'invoke', return_value=(0, output)):
+            result = self.render(self.args(action='list', fqn=[]))
+        self.assertTrue(result['list_may_be_truncated'])
+        self.assertNotIn(partial, result['previews'])
+
+    def test_dependency_flag_must_match_exact_option(self):
+        with patch.object(ui, 'invoke', return_value=(0, '--all-projects')):
+            with self.assertRaisesRegex(ValidationError, 'UNSUPPORTED'):
+                self.render(self.args(action='list', fqn=[], include_dependencies=True))
+
+    def test_list_options_rejected_for_render_before_launch(self):
+        with patch.object(ui, 'invoke') as invoke, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                ui.main(['render', '--filter', 'Screen', '--fqn', 'a.B'])
+        invoke.assert_not_called()
 
 
 if __name__ == "__main__":

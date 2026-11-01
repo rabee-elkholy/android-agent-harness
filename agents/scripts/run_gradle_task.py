@@ -12,6 +12,8 @@ import re
 import shutil
 import sys
 import time
+import uuid
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -84,6 +86,41 @@ NOISE_PATTERNS = [
     re.compile(r"^\d+ actionable tasks?:"),
 ]
 RAW_LOG_KEEP = 20
+DISPLAY_LINE_LIMIT = 600
+
+
+def display_line(line: str) -> str:
+    """Bound terminal output only; classification and retained logs use original bytes."""
+    from _vnext_common import redact
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
+    clean = "".join(c for c in clean if c.isprintable() or c == "\t")
+    clean = redact(clean)
+    return clean if len(clean) <= DISPLAY_LINE_LIMIT else clean[:DISPLAY_LINE_LIMIT - 3] + "..."
+
+
+class GradleOutputBudget:
+    """Separate ordinary/error quotas keep late diagnostics visible after task noise."""
+    def __init__(self):
+        self.remaining = {"ordinary": 40, "diagnostic": 40}
+        self.hidden = 0
+
+    def __call__(self, line: str) -> bool:
+        if not should_echo_gradle(line):
+            return False
+        category = "diagnostic" if re.search(r"(^e:|error:|FAILED|FAILURE:|BUILD SUCCESSFUL|What went wrong)", line) else "ordinary"
+        if self.remaining[category] <= 0:
+            self.hidden += 1
+            return False
+        self.remaining[category] -= 1
+        return True
+
+
+def bounded_summary(text: str, limit: int = 24) -> str:
+    lines = text.splitlines()
+    summary = "\n".join(display_line(line) for line in lines[:limit])
+    if len(lines) > limit:
+        summary += "\n[... additional diagnostics retained in the full log]"
+    return summary
 
 
 def is_boilerplate(line: str) -> bool:
@@ -113,9 +150,11 @@ def save_raw_log(repo: Path, task_label: str, raw_log: str) -> Path | None:
         log_dir = state_root(repo) / "logs" / "gradle"
         log_dir.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^A-Za-z0-9._-]+", "_", task_label).strip("_") or "gradle"
-        path = log_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}.log"
+        path = log_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}-{uuid.uuid4().hex[:12]}.log"
         path.write_text(raw_log, encoding="utf-8")
-        for old in sorted(log_dir.glob("*.log"))[:-RAW_LOG_KEEP]:
+        previous = sorted((p for p in log_dir.glob("*.log") if p != path),
+                          key=lambda p: (p.stat().st_mtime_ns, p.name))
+        for old in previous[:max(0, len(previous) - RAW_LOG_KEEP + 1)]:
             old.unlink(missing_ok=True)
         return path
     except Exception:
@@ -423,24 +462,31 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
     env["PYTHONIOENCODING"] = "utf-8"
 
     # run_streaming owns the quiet-output heartbeat for this step.
+    output_budget = GradleOutputBudget()
     with step_progress(f"Gradle: {task_label}", heartbeat_sec=0):
         code, raw_log, echoed = run_streaming(
             gradle_cmd,
             cwd=str(run_root),
             env=env,
             heartbeat_sec=10.0,
-            should_echo=should_echo_gradle,
+            should_echo=output_budget,
+            format_echo=display_line,
             label="gradle",
         )
 
     elapsed_text = f"{time.time() - started:.1f}s"
     hidden_warnings = sum(1 for line in raw_log.splitlines() if is_warning(line))
     log_path = save_raw_log(run_root, task_label, raw_log)
-    important_lines = list(echoed)
+    if log_path is None:
+        live_print("[!] Full Gradle log could not be saved; displayed output is bounded.")
+    elif output_budget.hidden:
+        live_print(f"[*] {output_budget.hidden} additional output lines retained in the full log.")
+    important_lines = deque(maxlen=24)
     for line in raw_log.splitlines():
-        if "BUILD FAILED" in line or line.strip().startswith("e: ") or " FAILED" in line:
-            if line not in important_lines:
-                important_lines.append(line)
+        # Select from the original log, independently of the exhausted live
+        # quota. Noncompiler configuration/dependency errors need their context.
+        if should_echo_gradle(line):
+            important_lines.append(line)
 
     if code != 0:
         verdict = classify_gradle_failure(code, raw_log)
@@ -482,14 +528,14 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
             live_print(result_line("FAIL", task_label, elapsed_text, hidden_warnings, log_path))
             return 1
         record("PASS", 0, artifact_set=artifact_set)
-        hint = _duration_hint(raw_log)
+        hint = display_line(_duration_hint(raw_log))
         if hint == "done":
             hint = f"{time.time() - started:.1f}s"
         live_print(f"[+] BUILD SUCCESSFUL in {hint}")
-        for item in echoed:
+        for item in echoed[-12:]:
             lower = item.lower()
             if "BUILD SUCCESSFUL" in item or "tests completed" in lower or " passed" in lower:
-                live_print(f"    {item}")
+                live_print(f"    {display_line(item)}")
         if artifact_set:
             live_print(f"[+] Installable artifact set: {artifact_set['artifact_set_sha256'][:12]}")
             for member in artifact_set["members"]:
@@ -500,11 +546,12 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
     live_print(f"[!] BUILD FAILED (exit {code})")
     parsed = parse_compiler_errors(raw_log)
     if parsed:
-        live_print(format_errors(parsed))
+        live_print(bounded_summary(format_errors(parsed[:20])))
+        if len(parsed) > 20:
+            live_print(f"[*] Showing at most 20 of {len(parsed)} compiler diagnostics; inspect the full log for details.")
     else:
         live_print("--- Isolated Error Output ---")
-        for item in important_lines[-80:]:
-            live_print(f"  {item}")
+        live_print(bounded_summary("\n".join(important_lines)))
     live_print(result_line("FAIL", task_label, elapsed_text, hidden_warnings, log_path))
     return code
 

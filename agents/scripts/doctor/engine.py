@@ -1209,6 +1209,13 @@ class HarnessDoctor:
         else:
             self.log(cat, "Antigravity Adapter", "PASS", "Kit repository template mode (GEMINI.md verified in client checkouts).")
 
+        if is_ag or self.is_raw_kit:
+            from antigravity_contract import rule_errors
+            activation_errors = rule_errors(self.agents_dir)
+            self.log(cat, "Managed Rule Activation", "FAIL" if activation_errors else "PASS",
+                     "; ".join(activation_errors) if activation_errors else
+                     "Managed kernel uses always_on; scoped guides use supported quoted glob patterns. Runtime host capability checks still apply.")
+
         # 2. Antigravity hooks present & PreToolUse / PostToolUse matchers
         hooks_file = self.agents_dir / "hooks.json"
         if not hooks_file.is_file():
