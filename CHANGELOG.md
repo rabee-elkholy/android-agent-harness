@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.1] - 2026-11-03
+
+### 52% compaction of always-loaded Antigravity rules and adapter templates (`GEMINI.md.template` and `harness-rules.md`)
+
+- **Always-Loaded Rule Token Compaction (`agents/tool-adapters/GEMINI.md.template`, `agents/rules/harness-rules.md`, `agents/scripts/_vnext_selftest.py`)**: Deduplicate and compact `GEMINI.md.template` (`30,840 -> 11,600 chars`) and `harness-rules.md` (`27,002 -> 14,084 chars`), reducing the combined `always_on` rule footprint (`harness-rules.md` + `GEMINI.md` + `AGENTS.md`) by **52.1%** (`62,240 -> 29,794 chars`, dropping Antigravity's `Rules` token usage in client apps from `18,638 / 20,000 (93.2%)` to `11,448 / 20,000 (57.2%)`) while preserving 100% of safety invariants, UI/UX card layouts, RTL formatting rules, Review V2 dispatch/replay procedures, and contract assertions.
+
 ## [1.2.0] - 2026-11-03
 
 ### Streamlined 3-reviewer roster, single-approval task lifecycle, and cross-module discovery scope
