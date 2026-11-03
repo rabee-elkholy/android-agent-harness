@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -23,6 +23,7 @@ BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery", "switch", "merge",
     "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue", "change-decision", "plan-note",
+    "heal",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
@@ -229,6 +230,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name in INSPECTION_SCRIPTS:
         if name == "task_context":
             return _valid_context_targets(args)
+        if name == "incident_reporter" and "--submit" in args:
+            return False
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
@@ -236,6 +239,10 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if args == ["device", "status"]:
             return True
         if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"]):
+            return True
+        if args[:1] == ["report-issue"] and "--submit" not in args:
+            return True
+        if args[:2] in (["pm", "discover"], ["pm", "status"]):
             return True
         if args[:1] == ["task-context"]:
             return _valid_context_targets(args)
@@ -372,8 +379,50 @@ def active_plan(repo: Path | str, *, allow_missing: bool = False) -> dict:
     raise ValidationError(f"cannot read JSON artifact {active_file}: No active task found")
 
 
+def _untracked_standalone_docs_allowed(root: Path, targets: list[str] | None) -> bool:
+    """Allow editing existing untracked documentation notes inside the repo without task ceremony."""
+    if not targets:
+        return False
+    try:
+        from change_classifier import is_documentation_path
+        from delivery_manifest import live_task_plans
+        from change_decision import additional_files
+        claimed: set[str] = set()
+        for _, other_plan, _ in live_task_plans(root):
+            for f in (other_plan.get("expected_files") or []):
+                claimed.add(os.path.normcase(str(f).replace("\\", "/").strip("/")))
+            for f in additional_files(other_plan):
+                claimed.add(os.path.normcase(str(f).replace("\\", "/").strip("/")))
+        checked = 0
+        for target in targets:
+            target_str = str(target or "").strip()
+            if not target_str:
+                return False
+            raw_cand = Path(target_str)
+            if not raw_cand.is_absolute():
+                raw_cand = root / raw_cand
+            if raw_cand.is_symlink():
+                return False
+            target_path = raw_cand.resolve()
+            if not target_path.is_relative_to(root) or not target_path.is_file() or target_path.is_symlink():
+                return False
+            rel_posix = target_path.relative_to(root).as_posix()
+            if not is_documentation_path(rel_posix):
+                return False
+            if os.path.normcase(rel_posix) in claimed:
+                return False
+            if _is_tracked(root, rel_posix):
+                return False
+            checked += 1
+        return checked > 0
+    except Exception:
+        return False
+
+
 def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple[bool, str, str]:
     root = repo.resolve()
+    if _untracked_standalone_docs_allowed(root, targets):
+        return True, "Untracked standalone documentation file edit is allowed.", "FILE_MUTATION_ALLOWED"
     try:
         plan = active_plan(root)
         require_mutation(plan)
@@ -802,12 +851,21 @@ ZOHO_LIFECYCLE_STATES = {
 
 
 def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
-    """Allow only the audited zoho_sync lifecycle commands for a Zoho-linked task in scope."""
+    """Allow only the audited zoho_sync / pm_discovery lifecycle commands for a linked task in scope."""
     name, args = _entry(command, repo)
-    if name in {"harness_cli", "android-harness"} and args[:1] == ["zoho"]:
-        # The public form (`harness.py zoho delivery-sync`) runs zoho_sync.py; after `deliver` no task is
-        # active, and the public form was refused while the script form was allowed.
-        name, args = "zoho_sync", args[1:]
+    if name in {"harness_cli", "android-harness"} and args[:1] in (["zoho"], ["pm"]):
+        # The public form (`harness.py zoho delivery-sync` or `harness.py pm authorize`) runs zoho_sync/pm_discovery.
+        sub_type = args[0]
+        name, args = ("pm_discovery" if sub_type == "pm" else "zoho_sync"), args[1:]
+    if name == "pm_discovery":
+        action = args[0] if args else ""
+        if action in {"--help", "-h", "discover", "status"} or args[1:2] in (["--help"], ["-h"]):
+            return True, "pm_discovery read-only discovery/status"
+        if action == "authorize":
+            return True, "records the developer's explicit PM update order as a short-lived PM write grant"
+        if action == "prepare-report":
+            return True, "prepares a structured QA handoff report for the task"
+        return False, f"pm '{action}' is not an audited PM command"
     if name != "zoho_sync":
         return None
     action = args[0] if args else ""

@@ -174,7 +174,7 @@ T = {
             "guide is printed after install). Mutations stay locked behind an explicit "
             "trigger phrase for every tracker."
         ),
-        "i20_zoho_sprints": "Zoho Sprints — built-in MCP server (Recommended, current default)",
+        "i20_zoho_sprints": "Zoho Sprints — external MCP integration (Recommended, current default)",
         "i20_github_projects": "GitHub Projects & Issues — via the gh CLI",
         "i20_jira_mcp": "Jira — official upstream MCP server (registration guide)",
         "i20_linear_mcp": "Linear — official upstream MCP server (registration guide)",

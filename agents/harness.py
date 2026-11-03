@@ -15,6 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
+    "heal",
 })
 
 
@@ -32,6 +33,8 @@ def _run(script: str, args: list[str]) -> int:
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "run_device.py" and args == ["status"])
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
+    read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
+    read_only = read_only or (script == "incident_reporter.py" and bool({"--list", "--dry-run"} & set(args)))
     # Merge checks the execution sessions of every source before applying; preview is read-only.
     read_only = read_only or (script == "workflow.py" and args[:1] == ["merge"])
     # The bounded verification runner owns its execution lease, including when
@@ -127,7 +130,9 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
     print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
     if action.get("reason"):
         print(f"NEXT_REASON={action['reason']}", flush=True)
-    if action.get("tool") == "ask_question" and action.get("instructions"):
+    if action.get("suggested_commit"):
+        print(f"SUGGESTED_COMMIT={action['suggested_commit']}", flush=True)
+    if action.get("instructions") and (action.get("tool") == "ask_question" or action.get("kind") == "DEVELOPER_ACTION"):
         print(f"NEXT_INSTRUCTIONS={action['instructions']}", flush=True)
     if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
         try:
@@ -186,7 +191,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|android-inspect|journey|e2e|verify|zoho|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|android-inspect|journey|e2e|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -287,6 +292,18 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("run_device.py", args)
     if command == "verify":
         return _run("workflow.py", ["verify", "--repo", str(REPO_ROOT), *args])
+    if command == "pm":
+        if not args or args[0] in {"-h", "--help"}:
+            return _run("pm_discovery.py", args or ["--help"])
+        forwarded = list(args)
+        if "--repo" not in forwarded:
+            forwarded = [forwarded[0], "--repo", str(REPO_ROOT), *forwarded[1:]]
+        return _run("pm_discovery.py", forwarded)
+    if command == "report-issue":
+        forwarded = list(args)
+        if "--repo" not in forwarded:
+            forwarded = ["--repo", str(REPO_ROOT), *forwarded]
+        return _run("incident_reporter.py", forwarded)
     if command == "zoho":
         return _run("zoho_sync.py", args)
 

@@ -451,7 +451,10 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
     if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
         from delivery_equivalence import evaluate_post_ready_changes
         equivalence = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
-        sibling_only_drift = equivalence.get("is_benign") and equivalence.get("reason") == "DISJOINT_SIBLING_TASK_CHANGES_ONLY"
+        sibling_only_drift = equivalence.get("is_benign") and equivalence.get("reason") in (
+            "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
+            "UNTRACKED_DOCUMENTATION_NOTES_ONLY",
+        )
     if ready_snapshot and live_snapshot and (ready_snapshot != live_snapshot or external_changed) and not sibling_only_drift:
         dirty = _engine._find_uncommitted_task_files(repo, task_id, plan)
         if not dirty:
@@ -556,9 +559,24 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             if mixed else ""
         )
 
+        approach_text = str(plan.get("approach") or plan.get("implementation_approach") or "").strip()
+        commit_bullets: list[str] = []
+        if approach_text:
+            for raw_part in re.split(r"(?:\r?\n|;\s+|\.\s+)", approach_text):
+                cleaned_part = raw_part.strip().lstrip("-*•0123456789.) ").rstrip(".")
+                if len(cleaned_part) >= 8 and cleaned_part not in commit_bullets:
+                    commit_bullets.append(f"- {cleaned_part}.")
+                if len(commit_bullets) >= 4:
+                    break
+        if not commit_bullets:
+            for d_file in sorted(dirty)[:5]:
+                commit_bullets.append(f"- Update `{d_file}`.")
+        suggested_commit_full = suggested_commit + "\n\n" + "\n".join(commit_bullets)
+
         return {
             "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
             "kind": "DEVELOPER_ACTION",
+            "tool": "ask_question",
             "command": "",
             "blocking": True,
             "reason": (
@@ -568,6 +586,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
             ),
             "suggested_commit": suggested_commit,
+            "suggested_commit_block": suggested_commit_full,
             "inputs": {
                 "repo": ".",
                 "task_id": task_id,
@@ -575,16 +594,18 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 "verified_snapshot_sha256": ready_snapshot,
                 "dirty_task_files": sorted(dirty),
                 "suggested_commit_message": suggested_commit,
+                "suggested_commit_block": suggested_commit_full,
             },
             "instructions": (
                 f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
-                + f"Suggested commit: {suggested_commit}\n"
-                "Format the commit card consistently in the developer's active conversation language: "
-                "(1) a clean Markdown table or bullet list of the verified files (with file names in backticks and noting any pre-existing edits), "
-                "(2) the suggested Conventional Commit message inside a fenced `text` code block for easy copying, and "
-                "(3) ask with `ask_question` using options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task'.\n"
-                "Tip: Commit files as-is without reformatting or reordering imports.\n"
+                + f"Suggested commit:\n```text\n{suggested_commit_full}\n```\n"
+                "Format the Commit & Delivery Card in the developer's active conversation language:\n"
+                "(1) Verified files list (every file path in `backticks`, noting any pre-existing edits),\n"
+                "(2) The full Conventional Commit message (subject line + bullet body) inside a copyable fenced ```text code block, and\n"
+                "(3) Invoke `ask_question` with options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task'.\n"
+                "IMPORTANT: Because `ask_question` turns often hide separate chat prose, ALSO include the verified file list and the fenced ```text Conventional Commit block directly inside the `ask_question` question text so the developer can always copy the commit message!\n"
+                "Tip: Keep 'Optimize imports' and 'Reformat code' unchecked in Android Studio Commit.\n"
                 "The model must NOT run git commit commands. Await developer commit."
             ),
             "expected": {},

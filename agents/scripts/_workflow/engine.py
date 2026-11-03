@@ -314,8 +314,41 @@ def _load_plan(repo: Path, task_id: str) -> dict:
 
 def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[str]:
     manifest = build_manifest(repo)
-    current_changes = {str(c.get(k) or "") for c in (manifest.get("changes") or []) for k in ("path", "old_path")}
+    changes_list_live = manifest.get("changes") or []
+    current_changes = {str(c.get(k) or "") for c in changes_list_live for k in ("path", "old_path")}
     if not current_changes:
+        return []
+    from change_classifier import is_documentation_path
+    from change_decision import additional_files
+    planned_paths = {
+        str(p).replace("\\", "/").strip("/")
+        for p in list(plan.get("expected_files") or []) + list(additional_files(plan))
+        if str(p).strip()
+    }
+    verified_paths: set[str] = set()
+    ready_run_id = str(plan.get("ready_run_id") or "")
+    if ready_run_id:
+        ready_manifest_path = task_dir(repo, task_id) / f"manifest-{ready_run_id}.json"
+        if ready_manifest_path.is_file():
+            try:
+                rm = read_json(ready_manifest_path)
+                for c in (rm.get("task_changes") if "task_changes" in rm else rm.get("changes") or []):
+                    p = str(c.get("path") if isinstance(c, dict) else c or "").replace("\\", "/").strip("/")
+                    if p:
+                        verified_paths.add(p)
+            except (OSError, ValueError, ValidationError):
+                pass
+    untracked_unplanned_docs = {
+        str(c.get("path") or "")
+        for c in changes_list_live
+        if isinstance(c, dict)
+        and c.get("status") == "?"
+        and c.get("path")
+        and is_documentation_path(str(c["path"]))
+        and str(c["path"]).replace("\\", "/").strip("/") not in (planned_paths | verified_paths)
+    }
+    effective_changes = current_changes - untracked_unplanned_docs
+    if not effective_changes:
         return []
     task_baseline = load_task_baseline(repo, task_id)
     if task_baseline is not None:
@@ -325,7 +358,7 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
             for c in (task_manifest.get("task_changes") or [])
             if (c.get("path") if isinstance(c, dict) else c) and (not isinstance(c, dict) or c.get("status") != "BASELINE_DIRTY_REMOVED")
         ]
-        return sorted(set(uncommitted) & current_changes)
+        return sorted(set(uncommitted) & effective_changes)
     task_current = task_dir(repo, task_id) / "current-run.json"
     if task_current.is_file():
         run_info = read_json(task_current)
@@ -336,9 +369,9 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[s
             run_manifest = read_json(run_manifest_path)
             changes_list = run_manifest.get("task_changes") if "task_changes" in run_manifest else run_manifest.get("changes") or []
             task_files = {str(c.get("path") if isinstance(c, dict) else c or "") for c in changes_list if (c.get("path") if isinstance(c, dict) else c)}
-            return sorted(task_files & current_changes)
+            return sorted(task_files & effective_changes)
     expected = set(plan.get("expected_files") or [])
-    return sorted(expected & current_changes)
+    return sorted(expected & effective_changes)
 
 
 from delivery_manifest import LIVE_TASK_STATUSES, live_task_plans, assert_disjoint_task_scope, TaskConflictError
@@ -1079,6 +1112,11 @@ def record_approval(args: argparse.Namespace) -> dict:
             "plan_path": str(plan_file),
             "updated_at": utc_now(),
         })
+        try:
+            from self_heal import save_stable_snapshot
+            save_stable_snapshot(repo, args.task_id, "approved", plan=plan)
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
     return plan
 
 
@@ -1107,6 +1145,11 @@ def begin_task(args: argparse.Namespace) -> dict:
         plan = begin(repo, loaded_plan)
         save_plan(_plan_path(repo, args.task_id), plan)
         atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
+        try:
+            from self_heal import save_stable_snapshot
+            save_stable_snapshot(repo, args.task_id, "implementing", plan=plan)
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
     return plan
 
 
@@ -1541,6 +1584,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     # be written, the task remains IMPLEMENTING and prepare-verification is
     # safely retryable instead of becoming a VERIFYING task with no run.
     save_plan(_plan_path(repo, args.task_id), plan)
+    try:
+        from self_heal import save_stable_snapshot
+        save_stable_snapshot(repo, args.task_id, "verifying", plan=plan, current_run=current)
+    except (OSError, ValueError, ImportError, ValidationError):
+        pass
 
     return current
 
@@ -1622,6 +1670,22 @@ def complete(args: argparse.Namespace) -> dict:
         return plan
     result = verify_task(args)
     if result.get("status") != "APPROVED":
+        try:
+            next_act = resolve_next_action(repo, args.task_id, plan)
+            if isinstance(next_act, dict) and next_act.get("code") == "COMPLETE_TASK":
+                from incident_reporter import record_incident
+                record_incident(
+                    repo,
+                    code="HARNESS_CONTRADICTION",
+                    title="task complete blocked while router still returns COMPLETE_TASK",
+                    command=f"workflow.py complete --task-id {args.task_id}",
+                    error_message="; ".join(result.get("blocked_by") or [str(result.get("status"))]),
+                    task_id=args.task_id,
+                    task_status=str(plan.get("status") or ""),
+                    next_action="COMPLETE_TASK",
+                )
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
         # Real app: with no remedy named, the agent recommended rewriting red-evidence.json to the developer.
         raise ValidationError(
             "delivery cannot be completed: " + "; ".join(result.get("blocked_by") or [str(result.get("status"))])
@@ -1639,6 +1703,11 @@ def complete(args: argparse.Namespace) -> dict:
     from delivery_equivalence import snapshot_verified_files
     snapshot_verified_files(repo, args.task_id, plan, result["run_id"])
     save_plan(_plan_path(repo, args.task_id), plan)
+    try:
+        from self_heal import save_stable_snapshot
+        save_stable_snapshot(repo, args.task_id, "ready_for_delivery", plan=plan)
+    except (OSError, ValueError, ImportError, ValidationError):
+        pass
     return plan
 
 
@@ -1934,6 +2003,22 @@ def cmd_reconcile_delivery(args: argparse.Namespace) -> dict:
     return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 
 
+def cmd_heal_task(args: argparse.Namespace) -> dict:
+    from self_heal import heal_task_state
+    repo = Path(args.repo).resolve()
+    task_id = str(getattr(args, "task_id", "") or "").strip() or None
+    reason = str(getattr(args, "reason", "") or "").strip()
+    prepare_fresh = bool(getattr(args, "prepare_fresh_run", False))
+    host = getattr(args, "host", None)
+    return heal_task_state(
+        repo,
+        task_id=task_id,
+        reason=reason,
+        prepare_fresh_run=prepare_fresh,
+        host=host,
+    )
+
+
 def installed_harness_version(repo: Path) -> str:
     root = repo / ".agents" if (repo / ".agents").is_dir() else repo / "agents"
     path = root / "VERSION"
@@ -2099,8 +2184,28 @@ def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None)
     directory = task_dir(repo, task_id)
     current_path = directory / "current-run.json"
     if not current_path.is_file():
+        try:
+            from self_heal import load_stable_snapshot
+            snap = load_stable_snapshot(repo, task_id, "verifying")
+            if isinstance(snap, dict) and isinstance(snap.get("current_run"), dict):
+                atomic_write_json(current_path, snap["current_run"])
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
+    if not current_path.is_file():
         raise ValidationError(f"task '{task_id}' verification run is not initialized")
-    current = read_json(current_path)
+    try:
+        current = read_json(current_path)
+    except (OSError, ValueError, ValidationError):
+        try:
+            from self_heal import load_stable_snapshot
+            snap = load_stable_snapshot(repo, task_id, "verifying")
+            if isinstance(snap, dict) and isinstance(snap.get("current_run"), dict):
+                atomic_write_json(current_path, snap["current_run"])
+                current = snap["current_run"]
+            else:
+                raise
+        except (OSError, ValueError, ImportError, ValidationError) as exc:
+            raise ValidationError(f"task '{task_id}' current-run.json is corrupted: {exc}") from exc
     if str(current.get("task_id") or "") != task_id:
         raise ValidationError(f"current-run task mismatch: expected '{task_id}', found '{current.get('task_id')}'")
     active_run_id = str(current.get("run_id") or "")
@@ -2713,6 +2818,12 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         phase_state.setdefault("phase_checkpoints", {})[phase_id] = checkpoint_record["checkpoint_sha256"]
         atomic_write_json(phase_state_file, phase_state)
 
+    try:
+        from self_heal import save_stable_snapshot
+        save_stable_snapshot(repo, args.task_id, f"checkpoint-{phase_id}", plan=plan, phase_state=phase_state)
+    except (OSError, ValueError, ImportError, ValidationError):
+        pass
+
     return {
         "status": CheckpointStatus("CHECKPOINT_PASS"),
         "phase_id": phase_id,
@@ -3274,6 +3385,13 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     command.add_argument("--task-id", required=True, help="Task ID to restore as active task")
     command.set_defaults(handler=recover_active)
+    heal_cmd = sub.add_parser("heal", help="Self-heal a stale or corrupted task state back to the nearest valid stable step")
+    heal_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    heal_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
+    heal_cmd.add_argument("--reason", default="", help="Reason for self-healing rollback")
+    heal_cmd.add_argument("--prepare-fresh-run", action="store_true", help="Immediately prepare a fresh delta verification run after healing")
+    heal_cmd.add_argument("--host", default=None, help="Host environment when preparing a fresh verification run")
+    heal_cmd.set_defaults(handler=cmd_heal_task)
     parser.add_argument("--json", action="store_true")
     for subparser in sub.choices.values():
         # Accept --json after the subcommand too; SUPPRESS keeps the top-level value.
@@ -3864,7 +3982,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     args = parser.parse_args(argv)
     try:
-        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge"}:
+        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
         if args.action in {"continue", "merge"} and args.json:
@@ -3916,7 +4034,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{recipe['surface']}]:")
                 for step in recipe["steps"]:
                     print(f"    - {step}")
-    elif args.action in ("change-decision", "plan-note"):
+    elif args.action in ("change-decision", "plan-note", "heal"):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
@@ -3979,7 +4097,7 @@ def main(argv: list[str] | None = None) -> int:
                 item_cmd = "invoke ask_question tool in this turn (DEVELOPER_ACTION)"
             print(f"NEXT_ACTION={item.get('action')}: {item_cmd}")
             print(f"NEXT_REASON={item.get('reason')}")
-            if item.get("tool") == "ask_question" and item.get("instructions"):
+            if item.get("instructions") and (item.get("tool") == "ask_question" or item.get("kind") == "DEVELOPER_ACTION"):
                 print(f"NEXT_INSTRUCTIONS={item.get('instructions')}")
             if item.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"}:
                 # Preserve the router's exact payload once, including current briefs.

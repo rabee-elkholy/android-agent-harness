@@ -378,16 +378,36 @@ def evaluate_post_ready_changes(repo: Path, task_id: str, plan: dict[str, Any], 
         if not all_changed:
             return reject("NO_FILE_DIFF_DETECTED", "Snapshot divergence has no bound file difference.")
         from delivery_manifest import disjoint_sibling_file_sets
+        from change_classifier import is_documentation_path
+        from change_decision import additional_files
         live_siblings, committed_siblings = disjoint_sibling_file_sets(root, task_id, plan=plan)
         dirty = {item.get(key) for item in live_manifest.get("changes") or [] for key in ("path", "old_path")}
         sib_files = live_siblings | (committed_siblings - dirty)
-        changed = [rel for rel in all_changed if rel.replace("\\", "/").strip("/") not in sib_files]
+        planned_files = {
+            str(p).replace("\\", "/").strip("/")
+            for p in list(plan.get("expected_files") or []) + list(additional_files(plan))
+            if str(p).strip()
+        }
+        untracked_docs = {
+            str(item.get("path") or "").replace("\\", "/").strip("/")
+            for item in (live_manifest.get("changes") or [])
+            if isinstance(item, dict)
+            and item.get("status") == "?"
+            and item.get("path")
+            and is_documentation_path(str(item["path"]))
+            and str(item["path"]).replace("\\", "/").strip("/") not in (planned_files | set(before))
+        }
+        changed = [
+            rel for rel in all_changed
+            if rel.replace("\\", "/").strip("/") not in (sib_files | untracked_docs)
+        ]
         if not changed:
+            only_docs = all(rel.replace("\\", "/").strip("/") in untracked_docs for rel in all_changed)
             return {
                 "is_benign": True,
-                "reason": "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
+                "reason": "UNTRACKED_DOCUMENTATION_NOTES_ONLY" if only_docs else "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
                 "normalized_files": [],
-                "diff_summary": "Only disjoint sibling task files changed.",
+                "diff_summary": "Only untracked standalone documentation files changed." if only_docs else "Only disjoint sibling task files changed.",
             }
         directory = _verified_dir(root, task_id, run_id)
         cache = read_json(directory / "verified-files-manifest.json")

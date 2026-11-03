@@ -1122,6 +1122,28 @@ class HarnessDoctor:
         else:
             self.log(category, "MCP Configuration", "PASS", "No mcp_config.json found (Zoho Sprints is optional).")
 
+        try:
+            sys.path.insert(0, str(self.agents_dir / "scripts"))
+            from pm_discovery import discover_installed_pm_mcps
+            discovered_pm = discover_installed_pm_mcps(self.repo)
+            if discovered_pm:
+                names = [f"{item.get('display')} ({item.get('server_name')})" for item in discovered_pm]
+                self.log(
+                    category,
+                    "Discovered PM MCPs",
+                    "PASS",
+                    f"Auto-discovered {len(discovered_pm)} PM MCP provider(s): {', '.join(names)}. Universal PM guardrails active.",
+                )
+            else:
+                self.log(
+                    category,
+                    "Discovered PM MCPs",
+                    "PASS",
+                    "Zero external PM MCP servers discovered in host/repo (auto-discovery ready when any PM MCP is installed).",
+                )
+        except (OSError, ValueError, ImportError) as exc:
+            self.log(category, "Discovered PM MCPs", "WARN", f"PM MCP discovery check warning: {exc}")
+
         repo_tokens: list[Path] = []
         seen_token_paths: set[str] = set()
         secret_names = (

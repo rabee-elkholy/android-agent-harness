@@ -1105,7 +1105,7 @@ FULL_SELFTEST_SUITES = (
     "_vnext_selftest.py",
     "_hook_selftest.py",
     "_security_selftest.py",
-    "_zoho_selftest.py",
+    "_pm_selftest.py",
     "_baseline_selftest.py",
     "_graph_selftest.py",
     "_adb_core_selftest.py",

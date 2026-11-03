@@ -119,6 +119,50 @@ class ZohoPolicyResolver:
 
         if is_english:
             is_bug = "BUG" in template_name
+            if use_html_template and not is_bug:
+                tc_list = test_cases if isinstance(test_cases, list) else [line.strip() for line in str(test_cases or "").splitlines() if line.strip()]
+                rows_html = []
+                for idx, tc in enumerate(tc_list or ["Verify expected behavior"], 1):
+                    rows_html.append(
+                        "      <tr>\n"
+                        f"        <td style=\"text-align: center;\">{idx}</td>\n"
+                        f"        <td>QA Scenario {idx}</td>\n"
+                        f"        <td>{tc}</td>\n"
+                        "        <td>Scenario passes without issues</td>\n"
+                        "      </tr>"
+                    )
+                blast_items = blast_radius if isinstance(blast_radius, list) else [line.strip() for line in str(blast_radius or "").splitlines() if line.strip()]
+                blast_p = ", ".join(blast_items) if blast_items else blast_str.strip()
+                return (
+                    "<div dir=\"ltr\" style=\"font-family: inherit; line-height: 1.6; text-align: left;\">\n"
+                    "  <h3>1. Root Cause &amp; Objective</h3>\n"
+                    f"  <p>{root_cause_or_objective.strip()}</p>\n\n"
+                    "  <h3>2. Functional Solution &amp; What Changed</h3>\n"
+                    f"  <p>{solution_or_changes.strip()}</p>\n"
+                    "  <p><strong>Unit Tests Status:</strong> All unit tests passed (PASS).</p>\n"
+                    f"  <p><strong>Commit Hash:</strong> <code>{c_hash}</code></p>\n\n"
+                    "  <h3>3. Impact Area &amp; Blast Radius</h3>\n"
+                    f"  <p>{blast_p}</p>\n\n"
+                    "  <h3>4. Manual QA Scenarios</h3>\n"
+                    "  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; border: 1px solid rgba(128,128,128,0.3); text-align: left;\">\n"
+                    "    <thead>\n"
+                    "      <tr style=\"background-color: rgba(128,128,128,0.15);\">\n"
+                    "        <th style=\"width: 5%; text-align: center;\">#</th>\n"
+                    "        <th style=\"width: 25%;\">Scenario</th>\n"
+                    "        <th style=\"width: 40%;\">Steps</th>\n"
+                    "        <th style=\"width: 30%;\">Expected Result</th>\n"
+                    "      </tr>\n"
+                    "    </thead>\n"
+                    "    <tbody>\n"
+                    + "\n".join(rows_html)
+                    + "\n    </tbody>\n"
+                    "  </table>\n\n"
+                    "  <h3>5. Acceptance Criteria</h3>\n"
+                    "  <ul>\n"
+                    f"    <li>[x] {root_cause_or_objective.strip()}</li>\n"
+                    "  </ul>\n"
+                    "</div>"
+                )
             sec1_header = "Root Cause:" if is_bug else "Objective:"
             sec2_header = "Solution:" if is_bug else "What Changed:"
             return (

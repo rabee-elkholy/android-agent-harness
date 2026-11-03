@@ -17,7 +17,6 @@ from unittest import mock
 KIT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(KIT))
 sys.path.insert(0, str(KIT / 'agents/scripts'))
-sys.path.insert(0, str(KIT / 'agents/mcp/zoho_sprints'))
 
 import harness_cli
 import room_guard

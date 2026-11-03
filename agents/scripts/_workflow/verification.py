@@ -774,12 +774,12 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "device_target_identity": serial_hash,
                     },
                     "instructions": (
-                        "Present a concise 3-section mobile verification walkthrough in chat "
+                        "Present a concise 3-section mobile verification walkthrough "
                         "(translated into the developer's active conversation language; never hardcode a language): "
                         "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |` with at most 5 core rows), "
-                        "and (3) Edge Cases — with NO file-change summary wall after the walkthrough — "
-                        "AND in the SAME response turn immediately invoke `ask_question` with a concise summary "
-                        "(never end the turn after printing the walkthrough without calling `ask_question`). "
+                        "and (3) Edge Cases — with NO file-change summary wall — "
+                        "AND in the SAME response turn immediately invoke `ask_question` "
+                        "(include the 3-section walkthrough with the `| # | Action | Expected Result |` table in chat or directly inside the `ask_question` question text so the developer always sees the numbered steps, never just a one-line summary). "
                         "Do not run automatic validation before selection."
                     ),
                     "accepted_responses": accepted_responses,

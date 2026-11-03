@@ -175,7 +175,7 @@ def _flag(rest: list[str], name: str) -> str:
 
 
 AUDITED_HARNESS_ENTRY = re.compile(
-    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|workflow|zoho_sync)\.py\s", re.I,
+    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery)\.py\s", re.I,
 )
 
 
@@ -404,6 +404,36 @@ def _is_ide_artifact(resolved: Path) -> bool:
         return False
 
 
+def _is_external_user_doc(raw: Path, resolved: Path) -> bool:
+    """Allow standalone documentation/notes files outside the repository when explicitly targeted by absolute path."""
+    if not raw.is_absolute():
+        return False
+    try:
+        if raw.is_symlink() or resolved.is_symlink():
+            return False
+    except OSError:
+        return False
+    if resolved.suffix.lower() not in {".md", ".txt", ".rst", ".adoc"}:
+        return False
+    if resolved.name.lower() in IMMUTABLE_ADAPTER_FILES or resolved.name.lower() in {
+        "cmakelists.txt", "baseline-prof.txt", "startup-prof.txt",
+        "requirements.txt", "constraints.txt", "runtime.txt", "version.txt",
+    }:
+        return False
+    if any(part.startswith(".") for part in raw.parts) or any(part.startswith(".") for part in resolved.parts):
+        return False
+    blocked_dirs = {"appdata", "programdata", "windows", "system32", "program files", "program files (x86)", "library"}
+    if any(part.lower() in blocked_dirs for part in resolved.parts):
+        return False
+    try:
+        for parent in (resolved.parent, *resolved.parents):
+            if (parent / ".agents").exists() or (parent / ".git").exists():
+                return False
+    except OSError:
+        return False
+    return True
+
+
 def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, bool]:
     root = (repo or REPO).resolve()
     if not raw_target.strip():
@@ -426,7 +456,7 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
         temp_dir = Path(tempfile.gettempdir()).resolve()
         if (resolved == temp_dir or temp_dir in resolved.parents) and resolved.suffix.lower() == ".json":
             return True, str(resolved), True
-        if _is_ide_artifact(resolved):
+        if _is_ide_artifact(resolved) or _is_external_user_doc(raw, resolved):
             return True, str(resolved), True
         return False, f"Target path '{raw_target}' is outside the repository boundary.", False
     if (
@@ -1409,21 +1439,77 @@ def _handle_subagent(name: str, args: dict) -> None:
         emit("deny", f"Reviewer policy validation failed closed: {exc}", tool=name)
 
 
-def _handle_external_mutation(integration, tool_name: str, args: dict) -> None:
+def _handle_external_mutation(integration, tool_name: str, args: dict, server: str = "") -> None:
     try:
+        try:
+            plan = active_plan(REPO) or {}
+        except (OSError, ValueError, ValidationError):
+            plan = {}
+        if isinstance(plan, dict) and plan:
+            plan = {**plan, "repo_root": str(REPO)}
+            if not plan.get("repository"):
+                plan["repository"] = str(REPO)
+        elif not isinstance(plan, dict):
+            plan = {}
+
+        if integration.name == "universal_pm":
+            from zoho_grant import active_pm_grant, pm_authorize_command
+            from integrations.external_write_policy import sensitive_values
+            secrets = sensitive_values([args])
+            if secrets:
+                emit(
+                    "deny",
+                    f"External PM operation '{tool_name}' would send a credential or signing file "
+                    f"({', '.join(sorted(set(secrets)))}).",
+                    tool=tool_name,
+                    reason_code="SENSITIVE_EXTERNAL_UPLOAD",
+                )
+                return
+            provider_id = integration.resolve_provider_id(server, tool_name)
+            display = integration.resolve_display_name(server, tool_name)
+            grant = active_pm_grant(REPO, provider=provider_id)
+            ok, policy_reason = integration.validate_pm_mutation(server, tool_name, args, plan, grant=grant)
+            if not ok:
+                emit("deny", policy_reason, tool=tool_name, reason_code="PM_POLICY_VIOLATION")
+                return
+            ext_writes = set(plan.get("external_writes") or []) if isinstance(plan, dict) else set()
+            nonce_ok = bool(
+                isinstance(plan, dict)
+                and plan.get("execution_nonce")
+                and isinstance(plan.get("approval"), dict)
+                and plan.get("execution_nonce") == plan["approval"].get("single_use_nonce")
+            )
+            plan_authorized = nonce_ok and bool(
+                ext_writes & {provider_id, "universal_pm", "pm", f"mcp:{server}"}
+            )
+            if grant or plan_authorized:
+                emit(
+                    "allow",
+                    f"{display} mutation '{tool_name}' is authorized by active PM grant/plan and complies with PM guardrails.",
+                    tool=tool_name,
+                    reason_code="PM_MUTATION_ALLOWED",
+                )
+                return
+            emit(
+                "deny",
+                f"PM_PREVIEW_AND_APPROVAL_REQUIRED: Before calling '{tool_name}' on {display}, you MUST: "
+                f"(1) present the exact preview of the tracker changes (target item ID, fields/status/comment to be written) "
+                f"to the developer in chat and ask for their approval; "
+                f"(2) once the developer confirms (e.g. 'حدث التاسك' / 'update pm' / 'موافق حدث التاسك'), run "
+                f"`{pm_authorize_command(provider_id.replace('_projects', '').replace('_sprints', ''))}` with their exact message; "
+                f"then retry '{tool_name}'.",
+                tool=tool_name,
+                reason_code="PM_PREVIEW_AND_APPROVAL_REQUIRED",
+            )
+            return
+
         grant = None
         if integration.name == "zoho_sprints":
             from zoho_grant import active_grant
             grant = active_grant(REPO)
-        try:
-            plan = active_plan(REPO) or {}
-        except Exception:
-            plan = {}
         if not plan and not grant:
             emit("deny", f"{integration.display_name} mutation is not included in the active approved plan.", tool=tool_name)
             return
-        if isinstance(plan, dict) and not plan.get("repository"):
-            plan = {**plan, "repository": str(REPO)}
         allowed, reason = validate_external_write(integration, tool_name, args, plan, grant=grant)
         if not allowed:
             emit("deny", reason, tool=tool_name)
@@ -1447,13 +1533,14 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
     else:
         tool_args = {}
 
-    # 1. Query specialized integration registry (e.g. Zoho)
+    # 1. Query specialized integration registry (e.g. Zoho Sprints & Universal PM MCPs)
     integration = registry.resolve(server, tool_name)
     if integration is not None:
         if integration.is_read_only(tool_name, tool_args):
-            emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name, reason_code="READ_ALLOWED")
+            disp = integration.resolve_display_name(server, tool_name) if hasattr(integration, "resolve_display_name") else integration.display_name
+            emit("allow", f"Read-only {disp} inspection is allowed.", tool=name, reason_code="READ_ALLOWED")
             return
-        _handle_external_mutation(integration, tool_name, tool_args)
+        _handle_external_mutation(integration, tool_name, tool_args, server=server)
         return
 
     # 2. Generic MCP classification and authorization (Sections 57-63)
@@ -1973,7 +2060,9 @@ def _main() -> None:
                 emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if all_temp:
-                emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
+                if name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
+                    _normalize_crlf_for_edit(REPO, targets, args)
+                emit("allow", "Temporary setup answers, IDE artifact, or external user document write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
             try:
                 pending_tid = str(active_plan(REPO).get("task_id") or "")

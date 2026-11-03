@@ -143,20 +143,6 @@ def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout or "adapter generation failed").strip())
 
-    zoho_script = scripts_dir / "install_zoho_mcp.py"
-    if zoho_script.is_file():
-        mode = "--enable" if answers.get("pm_provider") == "zoho_sprints" and answers.get("zoho_mcp") == "enable" else "--disable"
-        command = [
-            sys.executable,
-            str(zoho_script),
-            "--repo", str(repo),
-            "--py", str(answers.get("py") or sys.executable),
-            "--tools", tools_arg,
-            mode,
-        ]
-        proc = subprocess.run(command, cwd=str(repo), capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout or "Zoho adapter generation failed").strip())
     # Adapter generation determines which hosts really have executable hooks.
     # Re-emit product configuration from detected capabilities, never answers.
     generate_product_py(repo, answers)

@@ -1,60 +1,43 @@
 ---
-description: Zoho Sprints ingest, create, and update zoho — same workflow as the original engine.
+description: Universal PM Tracker (Zoho Projects, Zoho Sprints, Jira, Linear, Monday, ClickUp, Asana, Trello, GitHub) ingest, create, and update workflow.
 ---
 
-# Zoho Sprints
+# Universal PM Tracker Playbook (All Providers)
 
-Follow `.agents/rules/harness-rules.md` section 7. This file is the playbook. **Zoho Desk is not used.** If `workflow_defaults.json` has empty values, the server resolves defaults at runtime. Fill them during install (I.16) or leave them for the developer to configure later.
+Follow `.agents/rules/harness-rules.md` section 7. This playbook governs **all** external PM MCP servers installed in Antigravity (`zoho-projects_mcp`, `zoho-sprints`, `atlassian-mcp-server` / Jira, `linear`, `monday`, `clickup`, `asana`, `trello`, `github`).
 
-Credentials stay in the user-level config. Never copy tokens into the repo. Never mutate Zoho unless the developer explicitly says `update zoho` (or an equivalent explicit order).
+## 1. Zero-Config Discovery & Read-Only Ingest
 
-## Tools
+Run `python .agents/harness.py pm status` to inspect all installed PM MCP servers and their categorized tools (`read_tools`, `create_tools`, `update_status_tools`, `update_description_tools`, `comment_tools`).
 
-`zoho_list_sprints` · `zoho_list_tasks` · `zoho_get_task_details` · `zoho_create_task` · `zoho_update_task_status` · `zoho_update_task_description` · `zoho_add_comment`
+- **Read/Search/Inspect tools are always allowed immediately** without approval.
+- **Bug id / Issue id:** fetch details from the active PM MCP, explain in chat, analyze, then draft the normal task plan with `workflow.py` and request approval.
+- **Feature / Task id:** fetch details, explain in chat, then ask whether to start the plan. Do not implement until the developer approves.
+- Never change status, description, or comments during ingest.
 
-Pass sprint_id + item id (display number or internal id). The server resolves display numbers.
+## 2. Mandatory Preview & Approval Before Any PM Write
 
-## Ingest (read-only — not `update zoho`)
+Never create, update, comment, transition, or delete any item on any PM MCP without **first showing the exact preview to the developer and obtaining their explicit approval**:
 
-**Bug id:** fetch details if tools exist, explain in chat, analyze, then draft the normal task plan with `workflow.py` and request approval.
+1. **Present the Preview in Chat**:
+   - Target Provider & Item ID / Title
+   - Target Action (`Create Task`, `Update Description`, `Add Bug QA Comment`, `Update Status`)
+   - Exact Status Transition (e.g. `In progress` or `Ready To ReTest` / `In Review`)
+   - Exact formatted Description or Comment body (prepared via `python .agents/harness.py pm prepare-report ...`)
+2. **Wait for Explicit Approval**:
+   - When the developer replies (`حدث التاسك` / `update pm` / `update zoho` / `update jira` / `update linear` / `حدث زوهو`), record the 30-minute write grant:
+     `python .agents/harness.py pm authorize --proof-reference "<developer's message>"`
+   - Never revise the code task plan (`workflow.py revise`) just to update the PM tracker.
 
-**Feature task id:** fetch, explain, then ask whether to start the plan. Do not implement until they approve.
+## 3. Universal PM Safety & Quality Rules (All Providers)
 
-If MCP tools are missing: do not invent ticket fields. Ask the developer to paste the ticket or enable Zoho. Continue local work with what they provide.
-
-Do **not** change status, description, or comments during ingest.
-
-## Create a task (only when they asked to create one)
-
-This still counts as a mutate. Do it only on an explicit create request (including `update zoho` that says to open a new item).
-
-- Title: the work name only. **No developer name** in the title (the server strips known suffixes).
-- Type: `Task` / `Bug` / `Story` as they said. Default `Task`.
-- Priority: `Low` / `Medium` / `High` / `None`. Default `Medium`.
-- Assignee: the default Sprints user from the MCP workflow (do not pick someone else).
-- Optional `parent_item_id` for a sub-item.
-- Description: Resolved per `ZOHO_LANGUAGE` in `_product.py`, no emoji, no engine internals. Use the matching template below if they asked for a full write-up; otherwise a short scope is enough.
-
-## `update zoho` (mutate)
-
-Never `Done` / `Solved`. Show the developer exactly what will be written first. When they type
-`update zoho` (or the same order in their language, e.g. حدث زوهو), run `python .agents/harness.py zoho authorize --proof-reference "<their message>"`:
-it grants Zoho writes for 30 minutes without touching the task plan. Never revise the task plan
-(or re-run its approval and reviews) just to update the tracker. A plan approved with
-`--external-write zoho_sprints` also allows the writes.
-
-For every mutation, generate one stable `operation_id` from the task id and intended action (for example `SP-123-ready-retest-abc1234`) and reuse it on retries. If the server reports an unknown previous outcome, inspect the item before deciding whether a new operation is needed; never change the id just to force a retry.
-
-| When | Status | What to write |
-|---|---|---|
-| Work started (Plan approved) | `In progress` | Silent status transition (no comment). |
-| All policy-selected delivery gates pass (`update zoho` on **Bug**) | `Ready To ReTest` | Full template in a **Comment**. **NEVER edit Bug Description** (preserves QA's original report). |
-| All policy-selected delivery gates pass (`update zoho` on **Task / Story / Sub-task**) | `Ready To ReTest` | Full template written/updated in **Description**. Short **comment** with the commit hash (`Commit: <hash>`). |
-
-### Audience & Tone Policy
-- **Primary Audience**: **QA / Testers & Product Stakeholders**.
-- **STRICTLY FORBIDDEN**: Low-level code internals (e.g. no XML layout file names like `fragment_*.xml`, no Kotlin source files, no XML attribute names like `clipToPadding`, no framework class names, and no arbitrary `dp`/`px` numbers). Explain everything in functional, user-facing behavior.
-- **Mandatory Commit Hash**: The first line MUST always be `Commit: <hash>` (retrieved via `git log -1 --format=%h`). If HEAD has not moved (developer has not committed), ask them to paste the hash. Do not invent one.
+| Rule | Requirement Across Every PM MCP |
+|---|---|
+| **Bug / Issue Description Preservation** | For **Bug / Defect / Issue** items, **NEVER modify or overwrite the Bug's Description** (preserves QA's original bug report and reproduction steps). Always post the QA delivery report as a **Comment** (`ZohoProjects_add_issue_comments`, `addCommentToJiraIssue`, `zoho_add_comment`, etc.). |
+| **Task / Story Delivery** | For **Task / Story / Feature** items, write the full 5-section QA delivery report in the **Description** and post a short **Comment** with `Commit: <short-hash>`. |
+| **Terminal Status Protection** | Never set `Done`, `Closed`, `Solved`, `Completed`, or `Resolved` automatically — always transition to `Ready To ReTest` / `In Review` / `Ready for Testing`, **unless** the developer explicitly ordered closing the task (`close task` / `اقفل التاسك`). |
+| **Zero Code / File / Class Leak** | Never include raw source file names (`.kt`, `.java`, `.xml`, `.kts`, `.gradle`), class/architecture identifiers (`*ViewModel`, `*Fragment`, `*Activity`, `*Repository`, `*UseCase`, `*Composable`), or internal code jargon. Write for **QA / Testers & Product Stakeholders** in functional user-facing terms. |
+| **5-Section RTL HTML Standard (when required by `project-notes.md` or HTML trackers)** | Use `<div dir="rtl" style="font-family: inherit; line-height: 1.6; text-align: right;">` with `<h3>` headings (`1. سبب المشكلة والهدف من المهمة`, `2. التعديلات الوظيفية والسلوكية للتطبيق` + Unit Tests PASS + Commit hash, `3. نطاق التأثير وفحص الآثار الجانبية`, `4. سيناريوهات الفحص اليدوي وفريق الجودة` in a 4-column `<table>`, `5. معايير القبول`). Never hardcode dark colors (`#2c3e50`, `#000000`); use `inherit` and `rgba(128,128,128,0.15)` for Dark/Light Mode compatibility. |
 
 ---
 

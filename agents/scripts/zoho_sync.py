@@ -28,19 +28,11 @@ def _get_zoho_server():
     global _SERVER_MODULE
     if _SERVER_MODULE is not None:
         return _SERVER_MODULE
-    mcp_dir = Path(__file__).resolve().parent.parent / "mcp" / "zoho_sprints"
-    if str(mcp_dir) not in sys.path:
-        sys.path.insert(0, str(mcp_dir))
-    server_path = mcp_dir / "server.py"
-    if not server_path.is_file():
-        raise RuntimeError(f"Zoho MCP server not found at {server_path}")
-    spec = importlib.util.spec_from_file_location("zoho_sprints_server", server_path)
-    if not spec or not spec.loader:
-        raise RuntimeError("Failed to load Zoho MCP server module spec")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    _SERVER_MODULE = mod
-    return _SERVER_MODULE
+    raise RuntimeError(
+        "Bundled Zoho Sprints MCP server has been removed in favor of external Antigravity PM MCP plugins "
+        "(e.g., zoho-sprints, zoho-projects_mcp, atlassian-mcp-server). Use the external PM MCP tools after "
+        "authorizing via `python .agents/harness.py pm authorize --proof-reference \"<user approval>\"`."
+    )
 
 
 def _sanitize_op_id(raw_id: str) -> str:
@@ -337,12 +329,14 @@ def cmd_delivery(args: argparse.Namespace) -> int:
         sys.stderr.write("ERROR: DELIVERY_REPORT_TAMPERED: zoho-delivery-report.json report_sha256 does not match canonical contents.\n")
         return 1
 
+    from pm_discovery import resolve_configured_pm_language
+    language = resolve_configured_pm_language(repo, plan)
     policy_res = ZohoPolicyResolver.resolve(
         item_type=str(zoho_link.get("item_type") or "Task"),
         task_state=status,
         delivery_state="DELIVERED",
         approved_external_write_scope=external_writes,
-        configured_language=plan.get("language") or "en_titles_ar_comments",
+        configured_language=language,
         commit_hash=short_commit,
     )
     if not policy_res.get("allowed"):
@@ -354,14 +348,13 @@ def cmd_delivery(args: argparse.Namespace) -> int:
     target_status = str(policy_res.get("status") or "Ready To ReTest")
     tmpl_name = str(policy_res.get("template") or "TASK_DESCRIPTION")
 
-    language = plan.get("language") or "en_titles_ar_comments"
     use_html = False
     try:
-        from project_context import extract_zoho_notes_section, load_project_notes
+        from project_context import extract_pm_notes_section, load_project_notes
         notes = load_project_notes(repo)
         if notes.get("has_custom_notes"):
-            zoho_sec = extract_zoho_notes_section(notes.get("content") or "")
-            if "<div dir=\"rtl\"" in zoho_sec:
+            zoho_sec = extract_pm_notes_section(notes.get("content") or "")
+            if "<div dir=\"rtl\"" in zoho_sec or "<div dir='rtl'" in zoho_sec:
                 use_html = True
     except Exception:
         use_html = False

@@ -1,17 +1,17 @@
-"""Crash-safe idempotency ledger for explicit Zoho mutations."""
+"""Crash-safe idempotency ledger for explicit external PM mutations."""
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import tempfile
 import sys
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from harness_shared.processes import pid_alive as _pid_alive
 
 
@@ -55,9 +55,6 @@ def _read(path: Path) -> dict:
     return data
 
 
-
-
-
 @contextmanager
 def _ledger_lock(path: Path):
     lock = path.with_suffix(path.suffix + ".lock")
@@ -75,8 +72,6 @@ def _ledger_lock(path: Path):
             try:
                 owner = int(lock.read_text(encoding="ascii").strip())
             except (OSError, ValueError):
-                # The creator may have opened the lock but not flushed its PID
-                # yet. Preserve a fresh lock, but recover a corrupt stale one.
                 try:
                     fresh = (time.time() - lock.stat().st_mtime) < 2.0
                 except OSError:
@@ -122,8 +117,6 @@ def execute_once(tool: str, arguments: dict, operation: Callable[[], dict]) -> d
             "tool": tool, "operation_sha256": digest, "status": "PENDING", "started_at_epoch": int(time.time()),
         }
         _write(path, data)
-        # Keep the lock over the network mutation. This serializes writes and
-        # prevents two processes from issuing the same request concurrently.
         result = operation()
         data = _read(path)
         record = data["operations"].get(operation_id) or {}

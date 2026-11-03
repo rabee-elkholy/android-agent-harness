@@ -38,3 +38,9 @@ try:
     registry.register(ZohoSprintsIntegration())
 except ImportError:
     pass
+
+try:
+    from integrations.universal_pm import UniversalPmIntegration
+    registry.register(UniversalPmIntegration())
+except ImportError:
+    pass

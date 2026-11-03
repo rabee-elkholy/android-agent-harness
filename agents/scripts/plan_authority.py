@@ -607,7 +607,25 @@ def check_material_drift(
 
     unplanned_modules = actual_module_set - expected_modules
     if not expected_modules:
+        unplanned_modules.discard(":")
         unplanned_modules.discard(":app")
+    elif ":" in unplanned_modules:
+        if actual_surface_set and actual_surface_set <= NON_DRIFTING_SURFACES:
+            unplanned_modules.discard(":")
+        elif actual_files:
+            from change_classifier import is_documentation_path
+            mod_prefixes = tuple(
+                m.lstrip(":").replace(":", "/").strip("/") + "/"
+                for m in expected_modules
+                if m and m != ":"
+            )
+            root_files = [
+                f.replace("\\", "/").strip("/")
+                for f in actual_files
+                if f and (not mod_prefixes or not f.replace("\\", "/").strip("/").startswith(mod_prefixes))
+            ]
+            if root_files and all(is_documentation_path(f) for f in root_files):
+                unplanned_modules.discard(":")
 
     unplanned_files: set[str] = set()
     expected_files = {f.replace("\\", "/").strip("/") for f in (plan.get("expected_files") or [])}

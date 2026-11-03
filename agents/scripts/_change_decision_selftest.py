@@ -260,6 +260,50 @@ class ChangeDecisionTests(unittest.TestCase):
         current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", force=False))
         self.assertTrue(current["run_id"])
 
+    def test_doc_prose_with_auth_keywords_and_root_module_does_not_drift_or_block_delivery(self):
+        import subprocess
+        from change_classifier import classify
+        from plan_authority import check_material_drift
+
+        doc_file = self.repo / "ai_food_plan_scenarios_ar.md"
+        doc_file.write_text(
+            "# سيناريوهات الخطة الغذائية\n"
+            "- استدعاء `POST Users/Login` مع `BillingClient` و `public class Foo`.\n",
+            encoding="utf-8",
+        )
+        cls = classify(self.repo, task_changes=[{"path": "ai_food_plan_scenarios_ar.md"}], candidate_paths=["ai_food_plan_scenarios_ar.md"], progress=False)
+        self.assertEqual(["DOCS"], cls["surfaces"])
+        self.assertEqual("LOW", cls["severity"])
+
+        plan_app = {
+            "expected_surfaces": ["BUSINESS_LOGIC"],
+            "expected_modules": [":app"],
+            "expected_files": ["app/src/main/java/com/example/MainViewModel.kt"],
+        }
+        drift = check_material_drift(
+            plan_app,
+            cls["surfaces"],
+            [":"],
+            actual_files=["ai_food_plan_scenarios_ar.md"],
+            repo=self.repo,
+            for_mutation=True,
+        )
+        self.assertEqual([], [d for d in drift if not d.startswith("file:")])
+
+        # Also verify that an untracked unplanned .md file dropped into the repo during READY_FOR_DELIVERY
+        # does not block delivery of a committed task, and DEVELOPER_GIT_COMMIT_REQUIRED exposes ask_question + commit block.
+        self.start()
+        self.ready("alpha")
+        alpha_plan = read_json(workflow.task_dir(self.repo, "alpha") / "plan.json")
+        action = workflow.resolve_next_action(self.repo, "alpha", alpha_plan)
+        self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", action["code"])
+        self.assertEqual("ask_question", action.get("tool"))
+        self.assertIn("```text", action.get("instructions", ""))
+        subprocess.run(["git", "add", "A.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "Deliver alpha"], cwd=self.repo, check=True)
+        _, status_code = workflow.reconcile_delivery(self.repo, "alpha")
+        self.assertEqual("DELIVERED", status_code)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,8 @@ class ZohoSprintsIntegration(ExternalIntegration):
     def matches(self, server: str, tool_name: str) -> bool:
         server_lower = (server or "").lower().strip()
         tool_lower = (tool_name or "").lower().strip()
+        if "zoho-projects" in server_lower or "zoho_projects" in server_lower or tool_lower.startswith("zohoprojects_"):
+            return False
         if "zoho" in server_lower or "zoho" in tool_lower:
             return True
         if tool_lower in ZOHO_MUTATION_TOOLS or tool_lower in ZOHO_READ_TOOLS:
@@ -56,8 +58,9 @@ class ZohoSprintsIntegration(ExternalIntegration):
         if status_req in ("done", "solved", "closed", "completed"):
             return False, "ZOHO_POLICY_VIOLATION: Terminal tracker states (Done/Solved) are developer-owned and cannot be automated."
 
-        item_type = str(args.get("item_type") or args.get("type") or "").strip().lower()
-        if tool_name == "zoho_update_task_description" and item_type in ("bug", "defect", "issue"):
+        z_link = plan.get("zoho_link") if isinstance(plan, Mapping) and isinstance(plan.get("zoho_link"), Mapping) else {}
+        item_type = str(args.get("item_type") or args.get("type") or z_link.get("item_type") or "").strip().lower()
+        if str(tool_name or "").strip().lower() == "zoho_update_task_description" and item_type in ("bug", "defect", "issue"):
             return False, "ZOHO_POLICY_VIOLATION: Editing Bug description is strictly prohibited. Bug delivery reports must be added as a Comment to preserve QA original bug report."
 
         if status_req in ("ready to retest", "ready for retest"):
@@ -77,11 +80,12 @@ class ZohoSprintsIntegration(ExternalIntegration):
         tool_name: str,
         args: Mapping[str, Any],
         plan: Mapping[str, Any],
-        item_type: str,
+        item_type: str = "",
     ) -> tuple[bool, str]:
         import os
         import re
         from pathlib import Path
+        from pm_discovery import classify_pm_tool
 
         repo_raw = (
             (plan.get("repository") or plan.get("repo_root")) if isinstance(plan, Mapping) else None
@@ -102,11 +106,11 @@ class ZohoSprintsIntegration(ExternalIntegration):
             return True, ""
 
         try:
-            from project_context import extract_zoho_notes_section, load_project_notes
+            from project_context import extract_pm_notes_section, load_project_notes
             notes = load_project_notes(repo_path)
             if not notes.get("has_custom_notes"):
                 return True, ""
-            zoho_section = extract_zoho_notes_section(notes.get("content") or "")
+            zoho_section = extract_pm_notes_section(notes.get("content") or "")
         except (ImportError, OSError, ValueError, KeyError):
             return True, ""
 
@@ -114,12 +118,46 @@ class ZohoSprintsIntegration(ExternalIntegration):
             return True, ""
 
         zoho_lower = zoho_section.lower()
-        is_bug = item_type in ("bug", "defect", "issue")
+        tl = str(tool_name or "").strip().lower()
+        tool_class = classify_pm_tool(tl, args)
 
-        if "<div dir=\"rtl\"" in zoho_section and tool_name in ("zoho_create_task", "zoho_update_task_description") and not is_bug:
-            desc = str(args.get("description") or "").strip()
+        fields_obj = args.get("fields") if isinstance(args.get("fields"), Mapping) else {}
+        if not item_type:
+            item_type = str(
+                args.get("item_type")
+                or args.get("type")
+                or args.get("issue_type")
+                or args.get("issuetype")
+                or (fields_obj.get("issuetype", {}).get("name") if isinstance(fields_obj.get("issuetype"), Mapping) else "")
+                or ""
+            ).strip().lower()
+        is_bug = item_type in ("bug", "defect", "issue") or "issue" in tl or "bug" in tl
+
+        desc = str(
+            args.get("description")
+            or fields_obj.get("description")
+            or ""
+        ).strip()
+        comment_or_body = str(
+            desc
+            or args.get("comment")
+            or args.get("notes")
+            or args.get("body")
+            or args.get("content")
+            or fields_obj.get("comment")
+            or ""
+        ).strip()
+
+        is_desc_mutation = (
+            tl in ("zoho_create_task", "zoho_update_task_description")
+            or (tool_class in ("CREATE", "UPDATE_DESCRIPTION") and bool(desc))
+            or (tool_class == "WRITE" and bool(desc))
+        )
+        requires_rtl_html = ("<div dir=\"rtl\"" in zoho_section or "<div dir='rtl'" in zoho_section)
+        if requires_rtl_html and is_desc_mutation and not is_bug:
             requires_table = "<table" in zoho_lower
-            if not desc or "<div dir=\"rtl\"" not in desc or "<h3>" not in desc or (requires_table and "<table" not in desc):
+            has_rtl_div = ("<div dir=\"rtl\"" in desc or "<div dir='rtl'" in desc)
+            if not desc or not has_rtl_div or "<h3>" not in desc or (requires_table and "<table" not in desc):
                 return False, (
                     "ZOHO_PROJECT_NOTES_VIOLATION: .agents/project-context/project-notes.md requires Task/Story "
                     "descriptions to use the mandatory 5-section Arabic HTML template (<div dir=\"rtl\" ...> with "
@@ -130,11 +168,10 @@ class ZohoSprintsIntegration(ExternalIntegration):
         if (
             "no code/file artifacts" in zoho_lower
             or "no code or file artifacts" in zoho_lower
-            or "forbid raw class names" in zoho_lower
-        ) and tool_name in (
-            "zoho_create_task", "zoho_update_task_description", "zoho_add_comment"
-        ):
-            raw_body = str(args.get("description") or args.get("comment") or args.get("content") or "").strip()
+            or "forbid raw class" in zoho_lower
+            or "raw class/function names" in zoho_lower
+        ) and bool(comment_or_body):
+            raw_body = comment_or_body
             if raw_body and not re.fullmatch(r"Commit:\s*[0-9a-fA-F]{7,40}", raw_body, re.I):
                 plain = re.sub(r"<[^>]+>", " ", raw_body)
                 file_hits = re.findall(r"\b[A-Za-z0-9_/-]+\.(?:kt|java|xml|kts|gradle)\b", plain)
@@ -144,7 +181,7 @@ class ZohoSprintsIntegration(ExternalIntegration):
                     plain,
                 )
                 allowed_terms = {
-                    "JetpackCompose", "MaterialTheme", "ZohoSprints", "GooglePlay", "PlayStore",
+                    "JetpackCompose", "MaterialTheme", "ZohoSprints", "ZohoProjects", "GooglePlay", "PlayStore",
                     "HealthConnect", "CustomTabs", "DeepLink", "DarkMode", "UnitTests", "ManualQA",
                     "BlastRadius", "RootCause", "WhatChanged", "ImpactArea", "TestCases", "AcceptanceCriteria",
                 }
@@ -159,14 +196,12 @@ class ZohoSprintsIntegration(ExternalIntegration):
                 if found:
                     return False, (
                         "ZOHO_PROJECT_NOTES_VIOLATION: .agents/project-context/project-notes.md strictly forbids "
-                        f"raw code/class/file names in Zoho descriptions/comments (found: {', '.join(found[:5])}). "
+                        f"raw code/class/file names in PM descriptions/comments (found: {', '.join(found[:5])}). "
                         "Replace them with user-facing Arabic functional names as required by .agents/project-context/project-notes.md."
                     )
 
-        if ("dark mode compatibility" in zoho_lower or "#2c3e50" in zoho_lower) and tool_name in (
-            "zoho_create_task", "zoho_update_task_description", "zoho_add_comment"
-        ):
-            raw_lower = str(args.get("description") or args.get("comment") or args.get("content") or "").lower()
+        if ("dark mode compatibility" in zoho_lower or "#2c3e50" in zoho_lower) and bool(comment_or_body):
+            raw_lower = comment_or_body.lower()
             if "#2c3e50" in raw_lower or "#000000" in raw_lower:
                 return False, (
                     "ZOHO_PROJECT_NOTES_VIOLATION: .agents/project-context/project-notes.md forbids hardcoded dark "

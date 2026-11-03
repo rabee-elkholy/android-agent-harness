@@ -1178,6 +1178,7 @@ class PhaseDRepairSelftest(unittest.TestCase):
         mcp_bytes = b'{"mcpServers":{"zoho":{"command":"python"}}}\n'
         mcp_file.write_bytes(mcp_bytes)
         workflow_defaults = self.repo / ".agents" / "mcp" / "zoho_sprints" / "workflow_defaults.json"
+        workflow_defaults.parent.mkdir(parents=True, exist_ok=True)
         workflow_defaults_bytes = b'{"custom_status":"Ready for QA"}\n'
         workflow_defaults.write_bytes(workflow_defaults_bytes)
 

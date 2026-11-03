@@ -40,7 +40,7 @@ Set during setup (wizard question I.20) or by editing `PM_PROVIDER` in
 
 | `PM_PROVIDER` | Tracker | Transport | Trigger phrase |
 |---|---|---|---|
-| `zoho_sprints` (default; also when the field is absent) | Zoho Sprints | Built-in MCP server (`agents/mcp/zoho_sprints/server.py`) | `update zoho` |
+| `zoho_sprints` (default; also when the field is absent) | Zoho Sprints | External MCP server (`zoho-sprints` / `zoho_sync.py`) | `update zoho` / `update pm` |
 | `github_projects` | GitHub Projects & Issues | `gh` CLI via `pm_github.py` | `update github` |
 | `jira_mcp` | Jira | Official upstream MCP server | `update jira` |
 | `linear_mcp` | Linear | Official upstream MCP server | `update linear` |

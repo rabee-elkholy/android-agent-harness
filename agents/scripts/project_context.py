@@ -1276,21 +1276,33 @@ def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
     }
 
 
-def extract_zoho_notes_section(notes_text: str) -> str:
-    """Extract the Zoho Sprints section from project-notes.md if present."""
+def extract_pm_notes_section(notes_text: str) -> str:
+    """Extract the PM / Tracker (Zoho, Jira, Linear, Task & Bug Description Standard) rules from project-notes.md."""
     if not notes_text:
         return ""
     norm = notes_text.replace("\r\n", "\n")
     m = re.search(
-        r"(^##\s+[^\n]*zoho[^\n]*\n.*?)(?=^\\?---\s*\n+\s*^##\s+|^##\s+|\Z)",
+        r"(^##\s+[^\n]*(?:zoho|pm\b|tracker|jira|atlassian|linear|monday|clickup|asana|trello|task\s*(?:&|and)\s*bug|description\s+standard)[^\n]*\n.*?)(?=^\\?---\s*\n+\s*^##\s+|^##\s+|\Z)",
         norm,
         flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     if m:
         return m.group(1).strip()
-    if "zoho" in norm.lower():
-        return norm[:4000].strip()
+    matched_lines = [
+        line.strip()
+        for line in norm.splitlines()
+        if re.search(
+            r"(?:zoho|jira|linear|monday|clickup|asana|trello|5-section|dir=['\"]rtl['\"]|manual\s+qa|task/story\s+descriptions|bug\s+description)",
+            line,
+            flags=re.IGNORECASE,
+        )
+    ]
+    if matched_lines:
+        return "\n".join(matched_lines)[:4000].strip()
     return ""
+
+
+extract_zoho_notes_section = extract_pm_notes_section
 
 
 def project_context_status(repo: Path) -> dict:

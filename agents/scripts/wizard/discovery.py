@@ -687,12 +687,13 @@ def gemini_exists() -> bool:
 
 
 def zoho_config_present() -> bool:
-    mcp = Path(__file__).resolve().parent.parent.parent / "mcp" / "zoho_sprints"
-    if str(mcp) not in sys.path:
-        sys.path.insert(0, str(mcp))
-    from _config import resolve_config_path  # noqa: E402
-
-    return resolve_config_path() is not None
+    if (Path.home() / ".android-harness" / "zoho_sprints.json").is_file():
+        return True
+    try:
+        from pm_discovery import discover_installed_pm_mcps
+        return bool(discover_installed_pm_mcps())
+    except ImportError:
+        return False
 
 
 def discover_architectural_bases(repo: Path, sources: list[Path] | None = None) -> dict:

@@ -36,7 +36,7 @@ jobs:
 
       - name: Compile Python sources
         run: |
-          python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py
+          python -m compileall -q agents/scripts harness_cli.py
 
       - name: Smoke Standalone CLI Dispatcher
         env:
@@ -99,7 +99,7 @@ jobs:
 
       - name: Compile Python sources
         run: |
-          python -m compileall -q agents/scripts agents/mcp/zoho_sprints harness_cli.py
+          python -m compileall -q agents/scripts harness_cli.py
 
       - name: Smoke Standalone CLI Dispatcher
         env:

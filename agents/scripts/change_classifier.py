@@ -49,9 +49,19 @@ ROOM_EXPORTED_SCHEMA_RE = re.compile(r"(^|/)schemas/[a-z0-9_.]+\.[a-z0-9_]+/\d+\
 
 
 def is_documentation_path(relative: str) -> bool:
-    """Whether a path is documentation rather than an Android runtime asset."""
+    """Whether a path is documentation rather than an Android runtime asset or build/harness file."""
     lower = relative.replace("\\", "/").lower()
+    name = Path(lower).name
     if Path(lower).suffix not in {".md", ".txt", ".rst", ".adoc"}:
+        return False
+    if name in {
+        "baseline-prof.txt", "startup-prof.txt", "cmakelists.txt",
+        "requirements.txt", "constraints.txt", "runtime.txt", "version.txt",
+        "lint-baseline.txt", "current.txt", "removed.txt", "public.txt",
+        "proguard-android.txt", "proguard-android-optimize.txt",
+        "agents.md", "gemini.md", "claude.md", "copilot-instructions.md",
+        "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md",
+    }:
         return False
     return not ("/src/" in f"/{lower}" and "/assets/" in f"/{lower}/")
 
@@ -1021,7 +1031,7 @@ def classify(
             _add(found, "NATIVE_CODE", rel, "NATIVE_OR_AIDL_CHANGE")
         if test_path:
             _add(found, "TEST_ONLY", rel, "TEST_CHANGE")
-        if not test_path:
+        if not test_path and not is_documentation_path(rel):
             has_explicit_public = bool(re.search(r"\b(public|protected)\s+(class|interface|object|fun|static|abstract)\b", diff_text))
             has_implicit_public = False
             if suffix in (".kt", ".kts"):
@@ -1050,13 +1060,14 @@ def classify(
             _add(found, "BUILD_CONFIG", rel, "PROGUARD_RULES")
         if Path(lower).name in ("baseline-prof.txt", "startup-prof.txt"):
             _add(found, "BUILD_CONFIG", rel, "BASELINE_PROFILE")
-        # res/values*.xml holds user-facing copy and constants; words like "login" or
+        # res/values*.xml and prose documentation hold copy/notes; words like "login" or
         # "subscribe" there are text, not billing/auth/device code.
         values_resource = ("/res/values" in f"/{lower}" or "/composeresources/values" in f"/{lower}") and suffix == ".xml"
+        doc_prose = is_documentation_path(rel)
         pattern_diff_text = _strip_comments_only(diff_text) if suffix in (".kt", ".java", ".kts") else diff_text
         for surface, pattern, reason in PATTERNS:
 
-            if not test_path and not values_resource:
+            if not test_path and not values_resource and not doc_prose:
                 if pattern.search(pattern_diff_text):
                     _add(found, surface, rel, reason)
                 elif comparison is not None and surface in (CRITICAL_SURFACES | {"COROUTINES", "ROOM_SCHEMA", "DEVICE_API"}) and pattern.search(context_text):

@@ -1322,6 +1322,43 @@ class GenericMCPTests(unittest.TestCase):
         self.assertEqual("allow", res_edit["decision"], f"edit_file should be allowed: {res_edit}")
         self.assertEqual(original.replace(b"\r\n", b"\n"), crlf_target.read_bytes(), "multi-line LF target must normalize CRLF to LF for edit_file")
 
+    def test_external_and_untracked_documentation_files_allowed_without_task_ceremony(self):
+        """Standalone external .md files and untracked in-repo .md notes can be edited directly."""
+        with tempfile.TemporaryDirectory() as ext_dir:
+            ext_root = Path(ext_dir).resolve()
+            # Ensure no ancestor of ext_root has .git or .agents for this test
+            if not any((p / ".git").exists() or (p / ".agents").exists() for p in (ext_root, *ext_root.parents)):
+                ext_doc = ext_root / "ai_food_plan_scenarios_ar.md"
+                ext_doc.write_bytes(b"# Scenarios\r\n- Step 1: POST Users/Login\r\n- Step 2: Check plan\r\n")
+                res_ext = self.call("edit_file", {
+                    "Path": str(ext_doc),
+                    "Target": "- Step 1: POST Users/Login\n- Step 2: Check plan",
+                    "Replacement": "- Step 1: POST Users/Login\n- Step 2: Verify updated plan",
+                })
+                self.assertEqual("allow", res_ext["decision"], res_ext)
+                self.assertNotIn(b"\r\n", ext_doc.read_bytes())
+
+            # External code files remain strictly blocked
+            ext_kt = ext_root / "Outside.kt"
+            self.assertEqual("deny", self.call("write_to_file", {"TargetFile": str(ext_kt)})["decision"])
+
+            # External .md inside another git repository remains blocked
+            other_repo = ext_root / "other_repo"
+            (other_repo / ".git").mkdir(parents=True)
+            other_doc = other_repo / "README.md"
+            self.assertEqual("deny", self.call("write_to_file", {"TargetFile": str(other_doc)})["decision"])
+
+        # Untracked standalone .md file dropped into the repo is editable even when task is READY_FOR_DELIVERY
+        self.activate(status="READY_FOR_DELIVERY")
+        untracked_doc = self.repo / "ai_food_plan_scenarios_ar.md"
+        untracked_doc.write_text("# Notes\nPOST Users/Login\n", encoding="utf-8")
+        res_untracked = self.call("edit_file", {
+            "Path": str(untracked_doc),
+            "Target": "POST Users/Login",
+            "Replacement": "POST Users/Login updated",
+        })
+        self.assertEqual("allow", res_untracked["decision"], res_untracked)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

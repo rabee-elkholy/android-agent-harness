@@ -1,31 +1,24 @@
-"""Offline golden and idempotency tests for the retained Zoho workflow."""
+"""Offline golden, policy, idempotency, and universal external PM MCP selftests."""
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
-import re
 from pathlib import Path
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
-MCP = HERE.parent / "mcp" / "zoho_sprints"
-sys.path.insert(0, str(MCP))
 sys.path.insert(0, str(HERE))
 
 from _idempotency import _ledger_lock, execute_once  # noqa: E402
-from _vnext_common import atomic_write_json, read_json  # noqa: E402
+from _vnext_common import atomic_write_json, canonical_sha256, read_json  # noqa: E402
+from plan_authority import plan_payload, save_plan  # noqa: E402
 import workflow  # noqa: E402
 import zoho_sync  # noqa: E402
 from zoho_sync import resolve_new_item_type  # noqa: E402
-
-SPEC = importlib.util.spec_from_file_location("zoho_vnext_server", MCP / "server.py")
-assert SPEC and SPEC.loader
-server = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(server)
 
 
 class FakeAPI:
@@ -63,7 +56,55 @@ class FakeAPI:
         return {"status": "success", "description": description}
 
 
-class ZohoTests(unittest.TestCase):
+class MockExternalPmServer:
+    """In-memory mock external PM MCP adapter used for offline deterministic selftests."""
+
+    TOOLS = [
+        {"name": "zoho_list_sprints", "inputSchema": {"type": "object", "required": []}},
+        {"name": "zoho_list_tasks", "inputSchema": {"type": "object", "required": []}},
+        {"name": "zoho_get_task_details", "inputSchema": {"type": "object", "required": ["item_id"]}},
+        {"name": "zoho_create_task", "inputSchema": {"type": "object", "required": ["name", "operation_id"]}},
+        {"name": "zoho_update_task_status", "inputSchema": {"type": "object", "required": ["item_id", "status", "operation_id"]}},
+        {"name": "zoho_add_comment", "inputSchema": {"type": "object", "required": ["item_id", "comment", "operation_id"]}},
+        {"name": "zoho_update_task_description", "inputSchema": {"type": "object", "required": ["item_id", "description", "operation_id"]}},
+    ]
+
+    def get_api(self):
+        return FakeAPI()
+
+    def handle_call_tool(self, name: str, arguments: dict):
+        api = self.get_api()
+        if name == "zoho_update_task_status":
+            status = str(arguments.get("status") or "").strip()
+            if status.lower() in ("done", "solved", "closed", "completed"):
+                raise RuntimeError(f"Setting terminal status '{status}' is forbidden")
+            res = execute_once(
+                name,
+                arguments,
+                lambda: api.update_item_status(arguments.get("sprint_id") or "sprint-1", str(arguments.get("item_id")), status),
+            )
+            return {"content": [{"type": "text", "text": json.dumps(res)}]}
+        if name == "zoho_add_comment":
+            res = execute_once(
+                name,
+                arguments,
+                lambda: api.add_comment(arguments.get("sprint_id") or "sprint-1", str(arguments.get("item_id")), str(arguments.get("comment") or "")),
+            )
+            return {"content": [{"type": "text", "text": json.dumps(res)}]}
+        if name == "zoho_update_task_description":
+            res = execute_once(
+                name,
+                arguments,
+                lambda: api.update_item_description(arguments.get("sprint_id") or "sprint-1", str(arguments.get("item_id")), str(arguments.get("description") or "")),
+            )
+            return {"content": [{"type": "text", "text": json.dumps(res)}]}
+        raise RuntimeError(f"Unsupported mock tool: {name}")
+
+
+server = MockExternalPmServer()
+
+
+class PmIdempotencyAndAdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.ledger = Path(self.temp.name) / "operations.json"
@@ -76,6 +117,11 @@ class ZohoTests(unittest.TestCase):
         else:
             os.environ["ANDROID_HARNESS_ZOHO_LEDGER"] = self._prev_ledger
         self.temp.cleanup()
+
+    def test_bundled_zoho_mcp_is_removed_from_kit(self):
+        kit_root = HERE.parent.parent
+        self.assertFalse((kit_root / "agents" / "mcp" / "zoho_sprints").exists(), "Bundled zoho_sprints MCP directory must be removed")
+        self.assertFalse((HERE / "install_zoho_mcp.py").exists(), "install_zoho_mcp.py must be removed")
 
     def test_tool_names_remain_compatible(self):
         self.assertEqual(
@@ -132,12 +178,10 @@ class ZohoTests(unittest.TestCase):
 
     def test_missing_or_blank_operation_id_is_strictly_rejected(self):
         calls = []
-        # Missing operation_id
         with self.assertRaisesRegex(RuntimeError, "operation_id is required"):
             execute_once("status", {"item_id": "1", "status": "In progress"}, lambda: calls.append(1) or {"status": "ok"})
         self.assertEqual(0, len(calls))
 
-        # Blank operation_id
         with self.assertRaisesRegex(RuntimeError, "operation_id is required"):
             execute_once("status", {"item_id": "1", "status": "In progress", "operation_id": "   "}, lambda: calls.append(1) or {"status": "ok"})
         self.assertEqual(0, len(calls))
@@ -157,8 +201,9 @@ class ZohoTests(unittest.TestCase):
             else:
                 self.assertNotIn("operation_id", required, f"{tool['name']} should not require operation_id")
 
-class ZohoPolicyTests(unittest.TestCase):
-    """ZOHO-001 through ZOHO-009: Deterministic Zoho integration policy tests."""
+
+class PmPolicyTests(unittest.TestCase):
+    """Deterministic PM integration policy tests."""
 
     def setUp(self) -> None:
         sys.path.insert(0, str(HERE))
@@ -170,7 +215,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.validate_write = validate_external_write
 
     def test_ZOHO_001_and_002_bug_delivery_report_in_comment_description_preserved(self) -> None:
-        """ZOHO-001 & ZOHO-002: Bug delivery report goes to Comment; Bug description edit rejected."""
         res = self.resolver.resolve(
             item_type="Bug",
             task_state="READY_FOR_DELIVERY",
@@ -182,7 +226,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertEqual("Ready To ReTest", res["status"])
         self.assertEqual("BUG_COMMENT", res["template"])
 
-        # Attempt to edit Bug description via tool
         plan = {
             "status": "READY_FOR_DELIVERY",
             "execution_nonce": "nonce-bug",
@@ -199,7 +242,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertIn("Editing Bug description is strictly prohibited", reason)
 
     def test_ZOHO_003_and_004_task_story_report_in_description_commit_in_comment(self) -> None:
-        """ZOHO-003 & ZOHO-004: Task/Story report goes to Description; short commit comment."""
         for itype in ("Task", "Story"):
             with self.subTest(item_type=itype):
                 res = self.resolver.resolve(
@@ -214,7 +256,6 @@ class ZohoPolicyTests(unittest.TestCase):
                 self.assertEqual("Ready To ReTest", res["status"])
 
     def test_ZOHO_005_plan_approval_in_progress_only_when_external_write_approved(self) -> None:
-        """ZOHO-005: Plan approval transitions to In progress only when external write is approved."""
         res_ok = self.resolver.resolve(
             item_type="Task",
             task_state="IMPLEMENTING",
@@ -233,7 +274,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", res_denied["denied_reason"])
 
     def test_ZOHO_006_delivery_ready_to_retest_never_done_or_solved(self) -> None:
-        """ZOHO-006: Delivery transitions to Ready To ReTest, never Done or Solved."""
         res = self.resolver.resolve(
             item_type="Task",
             task_state="READY_FOR_DELIVERY",
@@ -260,7 +300,6 @@ class ZohoPolicyTests(unittest.TestCase):
                 self.assertIn("Terminal tracker states", reason)
 
     def test_ZOHO_007_missing_external_scope_fails_closed(self) -> None:
-        """ZOHO-007: Missing external write scope fails closed with EXTERNAL_WRITE_SCOPE_REQUIRED."""
         plan_no_scope = {
             "status": "IMPLEMENTING",
             "execution_nonce": "n1",
@@ -277,7 +316,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertIn("EXTERNAL_WRITE_SCOPE_REQUIRED", reason)
 
     def test_ZOHO_008_denied_external_write_never_generates_bypass_script(self) -> None:
-        """ZOHO-008: Denied external write provides remediation advice, not bypass script."""
         plan = {
             "status": "IMPLEMENTING",
             "execution_nonce": "n1",
@@ -295,7 +333,6 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertIn("Do not revise the task plan", reason)
 
     def test_ZOHO_009_language_template_obeys_configured_language(self) -> None:
-        """ZOHO-009: Language template formatting obeys configured ZOHO_LANGUAGE."""
         tmpl_ar = self.resolver.render_template(
             "BUG_COMMENT",
             "en_titles_ar_comments",
@@ -325,8 +362,8 @@ class ZohoPolicyTests(unittest.TestCase):
         self.assertIn("Impact Area (Blast Radius):", tmpl_en)
 
 
-class ZohoLifecycleTests(unittest.TestCase):
-    """ZOHO-LIFE-001 through ZOHO-LIFE-020: Comprehensive Zoho lifecycle and integration tests."""
+class PmLifecycleTests(unittest.TestCase):
+    """Comprehensive PM lifecycle, Universal PM MCP discovery, incident reporter, and self-healing tests."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -366,8 +403,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         }
         default_plan.update(plan_data)
         if "plan_sha256" not in plan_data:
-            from plan_authority import plan_payload
-            from _vnext_common import canonical_sha256
             comp_hash = canonical_sha256(plan_payload(default_plan))
             default_plan["plan_sha256"] = comp_hash
             if "approval" in default_plan and isinstance(default_plan["approval"], dict):
@@ -376,7 +411,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         return tdir
 
     def test_ZOHO_LIFE_001_linked_approved_task_routes_sync_zoho_start(self):
-        """ZOHO-LIFE-001: Linked approved task routes SYNC_ZOHO_START."""
         tid = "T-ZOHO-001"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -391,7 +425,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertTrue(action.get("blocking"))
 
     def test_ZOHO_LIFE_002_unlinked_task_never_auto_mutates_zoho(self):
-        """ZOHO-LIFE-002: Unlinked task never auto-mutates Zoho."""
         tid = "T-ZOHO-002"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -403,18 +436,15 @@ class ZohoLifecycleTests(unittest.TestCase):
         action = workflow.resolve_next_action(self.repo, tid, plan)
         self.assertNotEqual("SYNC_ZOHO_START", action.get("code"))
 
-        # In DELIVERED state without link
         plan["status"] = "DELIVERED"
         atomic_write_json(tdir / "plan.json", plan)
         action_deliv = workflow.resolve_next_action(self.repo, tid, plan)
         self.assertEqual("TASK_DELIVERED", action_deliv.get("code"))
 
-        # Calling zoho_sync start directly on unlinked task fails
         rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
 
     def test_ZOHO_LIFE_003_linked_but_unapproved_scope_denied(self):
-        """ZOHO-LIFE-003: Linked but unapproved external scope is denied."""
         tid = "T-ZOHO-003"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -430,7 +460,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(1, rc)
 
     def test_ZOHO_LIFE_004_start_sync_in_progress_only(self):
-        """ZOHO-LIFE-004: Start sync updates status to In progress only (no comments/descriptions)."""
         tid = "T-ZOHO-004"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -450,7 +479,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("In progress", sync_data.get("target_status"))
 
     def test_ZOHO_LIFE_005_bug_description_preserved(self):
-        """ZOHO-LIFE-005: Bug Description is preserved and never modified on delivery."""
         tid = "T-ZOHO-005"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -472,8 +500,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(0, len(api.descriptions), "Bug description must NEVER be modified")
 
     def test_ZOHO_LIFE_005b_report_takes_plain_items_and_missing_report_names_the_command(self):
-        """Antigravity CLI run: JSON arrays in PowerShell failed three times, and delivery without a report
-        only said "run prepare-report first"."""
         import contextlib
         import io
         tid = "T-ZOHO-005B"
@@ -508,7 +534,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn('give 1 to 30 --tests items, e.g. --tests "<first>"', err.getvalue())
 
     def test_ZOHO_LIFE_006_bug_report_to_comment(self):
-        """ZOHO-LIFE-006: Bug report goes to Comment, then status set to Ready To ReTest."""
         tid = "T-ZOHO-006"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -532,7 +557,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(1, api.status_updates)
 
     def test_ZOHO_LIFE_007_task_report_to_description(self):
-        """ZOHO-LIFE-007: Task delivery report goes to Description."""
         tid = "T-ZOHO-007"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -554,7 +578,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("Clean up view models", api.descriptions[0][2])
 
     def test_ZOHO_LIFE_008_story_report_to_description(self):
-        """ZOHO-LIFE-008: Story delivery report goes to Description."""
         tid = "T-ZOHO-008"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -576,7 +599,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("Implement dark mode", api.descriptions[0][2])
 
     def test_ZOHO_LIFE_009_task_story_short_commit_comment(self):
-        """ZOHO-LIFE-009: Task/Story delivery adds short Commit: <short-hash> comment."""
         tid = "T-ZOHO-009"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -598,7 +620,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("Commit: a1b2c3d", api.comments[0][2])
 
     def test_ZOHO_LIFE_010_ready_to_retest_only(self):
-        """ZOHO-LIFE-010: Delivery sets status to Ready To ReTest only."""
         for itype in ("Bug", "Task", "Story"):
             tid = f"T-ZOHO-010-{itype}"
             self._create_task(tid, {
@@ -621,7 +642,6 @@ class ZohoLifecycleTests(unittest.TestCase):
             self.assertEqual("Ready To ReTest", sync_res.get("target_status"))
 
     def test_ZOHO_LIFE_011_terminal_done_solved_closed_forbidden(self):
-        """ZOHO-LIFE-011: Terminal Done/Solved/Closed states are strictly forbidden."""
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
             for bad_status in ("Done", "Solved", "Closed", "Completed"):
@@ -634,9 +654,7 @@ class ZohoLifecycleTests(unittest.TestCase):
                     })
 
     def test_ZOHO_LIFE_012_delivery_requires_actual_commit_sha(self):
-        """ZOHO-LIFE-012: Delivery sync requires actual commit SHA and DELIVERED state."""
         tid = "T-ZOHO-012"
-        # 1. Missing commit sha
         self._create_task(tid, {
             "status": "DELIVERED",
             "zoho_link": {"item_id": "1012", "sprint_id": "sprint-1", "item_type": "Task"},
@@ -646,7 +664,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
 
-        # 2. Not in DELIVERED status
         tdir = workflow.task_dir(self.repo, tid)
         plan = read_json(tdir / "plan.json")
         plan["status"] = "IMPLEMENTING"
@@ -656,7 +673,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(1, rc2)
 
     def test_ZOHO_LIFE_013_stable_operation_ids(self):
-        """ZOHO-LIFE-013: Operation IDs are stable, deterministic, and properly sanitized."""
         tid = "T-ZOHO-013"
         plan_sha = "abcdef1234567890abcdef1234567890"
         commit_sha = "1234567890abcdef"
@@ -681,7 +697,6 @@ class ZohoLifecycleTests(unittest.TestCase):
             self.assertTrue(bool(re.match(r"^[a-zA-Z0-9_.-]+$", op_id)), f"Invalid op_id characters: {op_id}")
 
     def test_ZOHO_LIFE_014_duplicate_retry_idempotent(self):
-        """ZOHO-LIFE-014: Duplicate retry of sync is idempotent through the ledger."""
         tid = "T-ZOHO-014"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -697,7 +712,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual(1, api.status_updates, "Duplicate retry must not make a second API call")
 
     def test_ZOHO_LIFE_015_unknown_prior_outcome_not_blindly_retried(self):
-        """ZOHO-LIFE-015: Unknown prior outcome blocks blind retry."""
         op_id = "T-ZOHO-015.zoho.start.unknown"
         with self.assertRaises(OSError):
             execute_once("status", {"item_id": "1015", "status": "In progress", "operation_id": op_id}, lambda: (_ for _ in ()).throw(OSError("Network timeout")))
@@ -705,7 +719,6 @@ class ZohoLifecycleTests(unittest.TestCase):
             execute_once("status", {"item_id": "1015", "status": "In progress", "operation_id": op_id}, lambda: {"status": "success"})
 
     def test_ZOHO_LIFE_016_denied_mutation_cannot_emit_bypass_script(self):
-        """ZOHO-LIFE-016: Denied mutation offers remediation, never bypass scripts."""
         tid = "T-ZOHO-016"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -724,8 +737,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertNotIn("requests.", output)
 
     def test_ZOHO_LIFE_016b_update_zoho_grants_writes_without_a_plan_revision(self):
-        """Real app: after the commit the developer typed `update zoho`; the agent had to revise the code plan
-        with --external-write and approve it again. The developer's `update zoho` is now the grant."""
         import io
         import zoho_grant
         from integrations.base import validate_external_write
@@ -752,7 +763,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         with mock.patch("sys.stdout", out):
             self.assertEqual(0, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "Update Zoho"]))
         self.assertIn("ZOHO_WRITE_GRANTED", out.getvalue())
-        # Real app: the developer gave the order in Arabic ("حدث زوهو ...").
         self.assertTrue(zoho_grant.is_update_zoho("حدث زوهو بتعديلات"))
         self.assertTrue(zoho_grant.is_update_zoho("تحديث زوهو"))
         self.assertFalse(zoho_grant.is_update_zoho("شوف زوهو"), "looking at Zoho is not an order to write")
@@ -760,12 +770,10 @@ class ZohoLifecycleTests(unittest.TestCase):
         grant = zoho_grant.active_grant(self.repo)
         self.assertIsNotNone(grant)
         self.assertEqual((True, ""), validate_external_write(integ, "zoho_update_task_status", write, plan, grant=grant))
-        # The Zoho rules still apply under the grant.
         self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "Done", "operation_id": "op"}, plan, grant=grant)[0])
         self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "In progress"}, plan, grant=grant)[0])
         from mutation_guard import command_allowed
         self.assertTrue(command_allowed(self.repo, 'python .agents/harness.py zoho authorize --proof-reference "update zoho"')[0])
-        # It expires.
         path = zoho_grant._state(self.repo) / zoho_grant.GRANT_FILE
         data = json.loads(path.read_text(encoding="utf-8"))
         data["expires_epoch"] = data["granted_epoch"] - 1
@@ -773,7 +781,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIsNone(zoho_grant.active_grant(self.repo))
 
     def test_ZOHO_LIFE_017_language_mapping_preserved(self):
-        """ZOHO-LIFE-017: Language mapping is preserved in delivery report formatting."""
         from integrations.zoho_sprints.policy import ZohoPolicyResolver
         tmpl_ar = ZohoPolicyResolver.render_template(
             "TASK_DESCRIPTION",
@@ -800,7 +807,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("What Changed:", tmpl_en)
 
     def test_ZOHO_LIFE_018_zoho_env_does_not_fake_pass(self):
-        """ZOHO-LIFE-018: Zoho ENV failure does not fake PASS."""
         tid = "T-ZOHO-018"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -817,13 +823,11 @@ class ZohoLifecycleTests(unittest.TestCase):
         sync_res = read_json(tdir / "zoho-start-sync.json")
         self.assertEqual("ENV", sync_res.get("status"))
         self.assertNotEqual("PASS", sync_res.get("status"))
-        # O67: the agent carried on silently and then called the Zoho MCP tool directly.
         printed = json.loads(out.getvalue())
         self.assertIn("Tell the developer now that Zoho item 1018 was not moved to In progress: DNS failure", printed["next"])
         self.assertIn("Do not call Zoho MCP tools directly", printed["next"])
 
     def test_ZOHO_LIFE_019_delivered_local_state_remains_delivered_during_tracker_outage(self):
-        """ZOHO-LIFE-019: Delivered local state remains DELIVERED during tracker outage."""
         tid = "T-ZOHO-019"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -845,7 +849,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("DELIVERED", plan.get("status"))
 
     def test_ZOHO_LIFE_020_successful_sync_ends_linked_task_external_work(self):
-        """ZOHO-LIFE-020: Successful sync ends linked-task external work."""
         tid = "T-ZOHO-020"
         self._create_task(tid, {
             "status": "DELIVERED",
@@ -867,7 +870,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertFalse(action.get("blocking"))
 
     def test_ZOHO_start_outside_implementing_denied(self):
-        """P1-3: Start sync outside IMPLEMENTING is denied."""
         tid = "T-ZOHO-NON-IMPL"
         self._create_task(tid, {
             "status": "VERIFYING",
@@ -882,7 +884,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("TASK_NOT_IMPLEMENTING", stderr_buf.getvalue())
 
     def test_ZOHO_corrupt_execution_nonce_denied(self):
-        """P1-3: Corrupt execution nonce mismatch is denied."""
         tid = "T-ZOHO-BAD-NONCE"
         self._create_task(tid, {
             "status": "IMPLEMENTING",
@@ -899,7 +900,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("EXECUTION_NONCE_MISMATCH", stderr_buf.getvalue())
 
     def test_ZOHO_stale_report_plan_denied(self):
-        """P1-3: Delivery report from a stale or superseded plan is denied."""
         tid = "T-ZOHO-STALE-REPORT"
         tdir = self._create_task(tid, {
             "status": "DELIVERED",
@@ -907,8 +907,6 @@ class ZohoLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "abcdef1234567890",
         })
-        # Write report with mismatched plan_sha256
-        from _vnext_common import canonical_sha256
         rep = {
             "schema_version": 1,
             "task_id": tid,
@@ -929,7 +927,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("DELIVERY_REPORT_PLAN_MISMATCH", stderr_buf.getvalue())
 
     def test_ZOHO_tampered_report_hash_denied(self):
-        """P1-3: Tampered report hash in delivery report is denied."""
         tid = "T-ZOHO-TAMPERED-REPORT"
         tdir = self._create_task(tid, {
             "status": "DELIVERED",
@@ -958,7 +955,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("DELIVERY_REPORT_TAMPERED", stderr_buf.getvalue())
 
     def test_ZOHO_delivery_actions_match_policy_resolver_and_sha12_op_ids(self):
-        """P1-3: Delivery actions match ZohoPolicyResolver and operation IDs use sha12."""
         tid = "T-ZOHO-POLICY-MATCH"
         full_commit = "abcdef1234567890fedcba"
         tdir = self._create_task(tid, {
@@ -969,7 +965,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         })
         plan = read_json(tdir / "plan.json")
 
-        from _vnext_common import canonical_sha256
         rep = {
             "schema_version": 1,
             "task_id": tid,
@@ -991,25 +986,21 @@ class ZohoLifecycleTests(unittest.TestCase):
             rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
 
-        # Bug delivery: only zoho_add_comment and zoho_update_task_status (never description)
         tool_names = [t[0] for t in called_tools]
         self.assertIn("zoho_add_comment", tool_names)
         self.assertIn("zoho_update_task_status", tool_names)
         self.assertNotIn("zoho_update_task_description", tool_names)
 
-        # Verify operation IDs use sha12 (first 12 chars of commit: abcdef123456)
         expected_sha12 = full_commit[:12]
         for name, args in called_tools:
             op_id = args.get("operation_id", "")
             self.assertTrue(op_id.endswith(expected_sha12), f"Operation ID {op_id} must end with sha12 {expected_sha12}")
 
-        # Verify comment displays 7-char short commit (abcdef1)
         comment_call = next(args for name, args in called_tools if name == "zoho_add_comment")
         comment_text = comment_call.get("comment", "")
         self.assertIn(full_commit[:7], comment_text)
 
     def test_ZOHO_new_item_type_resolver(self):
-        """Section 52: New Zoho item type resolver logic."""
         self.assertEqual("Bug", resolve_new_item_type("BUG"))
         self.assertEqual("Story", resolve_new_item_type("FEATURE"))
         self.assertEqual("Task", resolve_new_item_type("REFACTOR"))
@@ -1017,7 +1008,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertEqual("Bug", resolve_new_item_type("FEATURE", explicit_type="Bug"))
 
     def test_ZOHO_project_notes_authorize_and_mutation_validation(self):
-        """Verify project-notes.md Zoho HTML template and No-Code-Leak rules are enforced."""
         notes_p = self.repo / ".agents" / "project-context" / "project-notes.md"
         notes_p.parent.mkdir(parents=True, exist_ok=True)
         notes_p.write_text(
@@ -1043,16 +1033,17 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertIn("No Code or File Artifacts", stdout_buf.getvalue())
 
         from integrations.zoho_sprints.integration import ZohoSprintsIntegration
+        from integrations.universal_pm import UniversalPmIntegration
         integ = ZohoSprintsIntegration()
+        upm = UniversalPmIntegration()
         plan = {
             "status": "READY_FOR_DELIVERY",
             "repo_root": str(self.repo),
             "execution_nonce": "nonce-notes",
             "approval": {"single_use_nonce": "nonce-notes"},
-            "external_writes": ["zoho_sprints"],
+            "external_writes": ["zoho_sprints", "zoho_projects"],
         }
 
-        # 1. Plain-text bulleted description without <div dir="rtl" -> rejected
         ok_plain, reason_plain = integ.validate_mutation(
             "zoho_create_task",
             {"name": "Task", "description": "تم فصل منطق البانرات بالكامل", "operation_id": "op-1"},
@@ -1061,7 +1052,19 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertFalse(ok_plain)
         self.assertIn("ZOHO_PROJECT_NOTES_VIOLATION", reason_plain)
 
-        # 2. HTML description leaking class/file names -> rejected
+        # UniversalPmIntegration also enforces project-notes.md 5-section Arabic HTML & No-Code-Leak rules!
+        ok_upm_plain, reason_upm_plain = upm.validate_mutation(
+            "call_mcp_tool",
+            {
+                "ServerName": "zoho-projects_mcp",
+                "ToolName": "ZohoProjects_create_a_task",
+                "Arguments": {"name": "Task", "description": "تم فصل منطق البانرات بالكامل"},
+            },
+            plan,
+        )
+        self.assertFalse(ok_upm_plain)
+        self.assertIn("ZOHO_PROJECT_NOTES_VIOLATION", reason_upm_plain)
+
         bad_html = (
             '<div dir="rtl">'
             '🎯 الهدف من التاسك 🔍 المشكلة أو السياق الحالي 🛠️ الحل والتعديلات المنفذة '
@@ -1077,7 +1080,6 @@ class ZohoLifecycleTests(unittest.TestCase):
         self.assertFalse(ok_leak)
         self.assertIn("ZOHO_PROJECT_NOTES_VIOLATION", reason_leak)
 
-        # 3. Compliant 5-section Arabic HTML description without code/class names -> accepted
         good_html = (
             '<div dir="rtl">'
             '<h3>🎯 الهدف من التاسك</h3><p>فصل منطق البانرات الترويجية</p>'
@@ -1093,6 +1095,193 @@ class ZohoLifecycleTests(unittest.TestCase):
             plan,
         )
         self.assertTrue(ok_good, reason_good)
+
+    def test_universal_pm_discovery_and_guardrails(self):
+        from pm_discovery import discover_installed_pm_mcps
+        from integrations.universal_pm import UniversalPmIntegration
+        from zoho_grant import active_pm_grant, is_explicit_close_order, is_update_pm, record_pm_grant
+
+        self.assertTrue(is_update_pm("update pm"))
+        self.assertTrue(is_update_pm("حدث التاسك على زوهو"))
+        self.assertTrue(is_update_pm("update jira"))
+        self.assertFalse(is_update_pm("please update all dependencies"), "Wildcard provider='all' must not match 'update all'")
+        self.assertTrue(is_explicit_close_order("update pm and close task"))
+        self.assertTrue(is_explicit_close_order("حدث التاسك واقفل التاسك"))
+        self.assertFalse(is_explicit_close_order("حدث التاسك"))
+
+        # Verify installation-chosen TRACKER_LANGUAGE in _product.py is respected across all PM providers
+        from pm_discovery import resolve_configured_pm_language
+        from integrations.zoho_sprints.policy import ZohoPolicyResolver
+        prod_file = self.repo / ".agents" / "scripts" / "_product.py"
+        prod_file.parent.mkdir(parents=True, exist_ok=True)
+        prod_file.write_text('TRACKER_LANGUAGE = "all_en"\nZOHO_LANGUAGE = "all_en"\n', encoding="utf-8")
+        self.assertEqual("all_en", resolve_configured_pm_language(self.repo))
+        html_en = ZohoPolicyResolver.render_template(
+            "TASK_DESCRIPTION", "all_en", "abc1234", "Improve performance", "Optimized caching", ["Home"], ["Verify cold start"], use_html_template=True
+        )
+        self.assertIn('<div dir="ltr"', html_en)
+        self.assertIn("<h3>1. Root Cause &amp; Objective</h3>", html_en)
+        prod_file.write_text('TRACKER_LANGUAGE = "en_titles_ar_comments"\nZOHO_LANGUAGE = "en_titles_ar_comments"\n', encoding="utf-8")
+        self.assertEqual("en_titles_ar_comments", resolve_configured_pm_language(self.repo))
+
+        mcp_root = self.repo / "fake_ag_mcp"
+        zp_dir = mcp_root / "zoho-projects_mcp"
+        zp_dir.mkdir(parents=True, exist_ok=True)
+        (zp_dir / "ZohoProjects_get_tasks_by_project.json").write_text('{"name": "ZohoProjects_get_tasks_by_project"}', encoding="utf-8")
+        (zp_dir / "ZohoProjects_update_issue.json").write_text('{"name": "ZohoProjects_update_issue"}', encoding="utf-8")
+        jira_dir = mcp_root / "atlassian-mcp-server"
+        jira_dir.mkdir(parents=True, exist_ok=True)
+        (jira_dir / "getJiraIssue.json").write_text('{"name": "getJiraIssue"}', encoding="utf-8")
+        (jira_dir / "editJiraIssue.json").write_text('{"name": "editJiraIssue"}', encoding="utf-8")
+
+        discovered = discover_installed_pm_mcps(self.repo, extra_mcp_roots=[mcp_root])
+        providers = {item["provider_id"]: item for item in discovered}
+        self.assertIn("zoho_projects", providers)
+        self.assertIn("jira", providers)
+        self.assertIn("ZohoProjects_get_tasks_by_project", providers["zoho_projects"]["tools"]["read_tools"])
+        self.assertIn("ZohoProjects_update_issue", providers["zoho_projects"]["tools"]["write_tools"])
+
+        upm = UniversalPmIntegration()
+        self.assertTrue(upm.owns_tool("ZohoProjects_get_tasks_by_project"))
+        self.assertTrue(upm.owns_tool("ZohoProjects_update_issue"))
+        self.assertTrue(upm.owns_tool("call_mcp_tool", {"ServerName": "zoho-projects_mcp", "ToolName": "ZohoProjects_update_a_task"}))
+        self.assertTrue(upm.is_read_only("ZohoProjects_get_tasks_by_project"))
+        self.assertTrue(upm.is_read_only("call_mcp_tool", {"ServerName": "atlassian-mcp-server", "ToolName": "getJiraIssue"}))
+        self.assertFalse(upm.is_read_only("call_mcp_tool", {"ServerName": "zoho-projects_mcp", "ToolName": "ZohoProjects_update_issue"}))
+
+        plan = {
+            "status": "READY_FOR_DELIVERY",
+            "repo_root": str(self.repo),
+            "execution_nonce": "n-upm",
+            "approval": {"single_use_nonce": "n-upm"},
+            "external_writes": ["zoho_projects"],
+        }
+
+        ok_bug_desc, reason_bug_desc = upm.validate_mutation(
+            "call_mcp_tool",
+            {
+                "ServerName": "zoho-projects_mcp",
+                "ToolName": "ZohoProjects_update_issue",
+                "Arguments": {"issue_id": "123", "description": "overwritten"},
+            },
+            plan,
+        )
+        self.assertFalse(ok_bug_desc)
+        self.assertIn("Editing a Bug/Issue description is strictly prohibited", reason_bug_desc)
+
+        record_pm_grant(self.repo, "conversation", "حدث التاسك")
+        ok_closed, reason_closed = upm.validate_mutation(
+            "call_mcp_tool",
+            {
+                "ServerName": "zoho-projects_mcp",
+                "ToolName": "ZohoProjects_update_a_task",
+                "Arguments": {"task_id": "123", "status": "Closed"},
+            },
+            plan,
+        )
+        self.assertFalse(ok_closed)
+        self.assertIn("Terminal tracker states", reason_closed)
+
+        import pre_tool_safety
+        import io
+        hook_out = io.StringIO()
+        (self.repo / ".agents" / "state" / "zoho-write-grant.json").unlink(missing_ok=True)
+        unapproved_plan = {
+            "status": "READY_FOR_DELIVERY",
+            "repo_root": str(self.repo),
+            "execution_nonce": "n-upm",
+            "approval": {"single_use_nonce": "n-upm"},
+            "external_writes": [],
+        }
+        with mock.patch.object(pre_tool_safety, "REPO", self.repo), \
+             mock.patch.object(pre_tool_safety, "active_plan", return_value=unapproved_plan), \
+             mock.patch("sys.stdout", hook_out):
+            pre_tool_safety._handle_mcp_tool(
+                "call_mcp_tool",
+                {
+                    "ServerName": "zoho-projects_mcp",
+                    "ToolName": "ZohoProjects_update_a_task",
+                    "Arguments": {"task_id": "123", "name": "Updated Task"},
+                },
+            )
+        hook_res = json.loads(hook_out.getvalue())
+        self.assertEqual("deny", hook_res["decision"])
+        self.assertIn("PM_PREVIEW_AND_APPROVAL_REQUIRED", hook_res["reason"])
+        self.assertIn("present the exact preview of the tracker changes", hook_res["reason"])
+
+        record_pm_grant(self.repo, "conversation", "حدث التاسك واقفل التاسك", allow_close=True)
+        self.assertTrue(active_pm_grant(self.repo).get("allow_close"))
+        ok_closed_explicit, reason_closed_explicit = upm.validate_mutation(
+            "call_mcp_tool",
+            {
+                "ServerName": "zoho-projects_mcp",
+                "ToolName": "ZohoProjects_update_a_task",
+                "Arguments": {"task_id": "123", "status": "Closed"},
+            },
+            plan,
+        )
+        self.assertTrue(ok_closed_explicit, reason_closed_explicit)
+
+    def test_incident_reporter_and_self_healing_snapshots(self):
+        from incident_reporter import list_incidents, record_incident
+        from self_heal import heal_task_state, load_stable_snapshot, save_stable_snapshot
+
+        inc1 = record_incident(
+            self.repo,
+            code="HARNESS_CONTRADICTION",
+            title="Test contradiction",
+            command=f"python {self.repo}/harness.py task complete",
+            error_message=f"Failed at {self.repo}/app/src/main/Login.kt",
+            task_id="t-heal",
+            task_status="VERIFYING",
+            auto_submit=False,
+        )
+        self.assertEqual("RECORDED", inc1["status"])
+        inc_dup = record_incident(
+            self.repo,
+            code="HARNESS_CONTRADICTION",
+            title="Test contradiction",
+            command=f"python {self.repo}/harness.py task complete",
+            error_message=f"Failed at {self.repo}/app/src/main/Login.kt",
+            task_id="t-heal",
+            task_status="VERIFYING",
+            auto_submit=False,
+        )
+        self.assertEqual("DUPLICATE", inc_dup["status"])
+        incidents = list_incidents(self.repo)
+        self.assertEqual(1, len(incidents))
+        self.assertIn("<REPO_ROOT>", incidents[0]["command"])
+        self.assertNotIn(str(self.repo).replace("\\", "/"), incidents[0]["command"])
+
+        tid = "t-heal"
+        tdir = self.repo / ".agents" / "state" / "tasks" / tid
+        tdir.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": tid,
+            "status": "READY_FOR_DELIVERY",
+            "requested_outcome": "Fix login",
+            "expected_files": ["app/src/main/Login.kt"],
+            "expected_surfaces": ["BUSINESS_LOGIC"],
+            "approval": {"single_use_nonce": "nonce-heal", "approval_source": "conversation"},
+            "execution_nonce": "nonce-heal",
+            "review_rounds": 1,
+            "review_calls_used": 3,
+            "ready_run_id": "run-old",
+            "ready_delivery_snapshot_sha256": "deadbeef",
+        }
+        plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+        save_plan(tdir / "plan.json", plan)
+        save_stable_snapshot(self.repo, tid, "ready_for_delivery", plan=plan)
+        snap = load_stable_snapshot(self.repo, tid, "ready_for_delivery")
+        self.assertIsNotNone(snap)
+
+        heal_res = heal_task_state(self.repo, task_id=tid, reason="pre_commit_edit", prepare_fresh_run=False)
+        self.assertEqual("HEALED", heal_res["status"])
+        self.assertEqual("IMPLEMENTING", heal_res["to_status"])
+        self.assertEqual(3, heal_res["preserved_review_calls_used"])
+        healed_plan = read_json(tdir / "plan.json")
+        self.assertEqual("IMPLEMENTING", healed_plan["status"])
+        self.assertEqual(3, healed_plan["review_calls_used"])
 
 
 if __name__ == "__main__":
