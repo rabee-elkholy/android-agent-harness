@@ -422,8 +422,21 @@ def _is_external_user_doc(raw: Path, resolved: Path) -> bool:
         return False
     if any(part.startswith(".") for part in raw.parts) or any(part.startswith(".") for part in resolved.parts):
         return False
-    blocked_dirs = {"appdata", "programdata", "windows", "system32", "program files", "program files (x86)", "library"}
-    if any(part.lower() in blocked_dirs for part in resolved.parts):
+    resolved_str = str(resolved).replace("\\", "/").lower()
+    if any(
+        seg in resolved_str
+        for seg in (
+            "/appdata/roaming/",
+            "/appdata/local/programs/",
+            "/appdata/local/microsoft/",
+            "/programdata/",
+            "/windows/",
+            "/system32/",
+            "/program files/",
+            "/program files (x86)/",
+            "/library/",
+        )
+    ):
         return False
     try:
         for parent in (resolved.parent, *resolved.parents):
