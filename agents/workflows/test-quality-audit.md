@@ -1,5 +1,5 @@
 ---
-description: Static audit of unit and UI test suites (*Test.kt) using test-quality-reviewer-agent.
+description: Static audit of unit and UI test suites (*Test.kt) using bug-test-reviewer-agent.
 ---
 
 # Test Quality Audit Workflow (`/test-quality-audit`)
@@ -9,7 +9,7 @@ Follow `.agents/rules/harness-rules.md`. Solo test quality audit does not replac
 ## Steps
 
 1. Identify modified or newly added test files (`*Test.kt`).
-2. Invoke `test-quality-reviewer-agent` with the target test files.
+2. Invoke `bug-test-reviewer-agent` with the target test files.
 3. Verify assertion depth, `runTest` Coroutines dispatchers, and mocking integrity.
 4. If this audit is part of a delivery, run the reviewers and gates selected by the immutable policy.
 5. Reference: `.agents/skills/android-harness/references/test-quality-guidelines.md`

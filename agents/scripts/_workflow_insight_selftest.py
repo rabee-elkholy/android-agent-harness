@@ -47,7 +47,7 @@ class WorkflowInsightTests(unittest.TestCase):
     def test_review_forecast_keeps_documentation_and_disabled_phase_reviews_cheap(self):
         from review_budget import forecast_review_calls
         plan = {"phases": [{"id": "p1", "expected_files": ["docs/guide.md"]}, {"id": "p2"}]}
-        policy = {"model_call_budget": 30, "reviewers": ["bug-reviewer-agent"]}
+        policy = {"model_call_budget": 30, "reviewers": ["bug-test-reviewer-agent"]}
         self.assertEqual(2, forecast_review_calls(plan, policy)["phase_calls_estimate"])
         plan["scoped_phase_review_enabled"] = False
         self.assertEqual(0, forecast_review_calls(plan, policy)["phase_calls_estimate"])
@@ -277,12 +277,12 @@ class WorkflowInsightTests(unittest.TestCase):
                 "task_id": task_id,
                 "plan_sha256": "plan123",
                 "validations": [
-                    {"finding_id": "F-BUG-1", "reviewer": "bug-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Guarded by null check"},
-                    {"finding_id": "F-SEC-1", "reviewer": "security-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Internal token only"},
+                    {"finding_id": "F-BUG-1", "reviewer": "bug-test-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Guarded by null check"},
+                    {"finding_id": "F-SEC-1", "reviewer": "security-perf-reviewer-agent", "status": "FALSE_POSITIVE", "reason": "Internal token only"},
                 ],
             }
             (tdir / "finding-validations.json").write_text(json.dumps(validations), encoding="utf-8")
-            routed = ["bug-reviewer-agent", "security-reviewer-agent", "convention-reviewer-agent", "spec-compliance-agent"]
+            routed = ["bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent", "spec-compliance-agent"]
             policy = {"reviewers": routed, "surfaces": ["STATE_ARCH"]}
             metadata = {
                 "run_id": "RUN_1",
@@ -291,9 +291,9 @@ class WorkflowInsightTests(unittest.TestCase):
                 "package_sha256": "pkg1234567890",
             }
             changes = [{"path": "app/src/main/kotlin/com/example/CheckoutViewModel.kt", "status": "M"}]
-            bug_brief = review_package.generate_task_brief(repo, task_id, "bug-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
-            sec_brief = review_package.generate_task_brief(repo, task_id, "security-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
-            conv_brief = review_package.generate_task_brief(repo, task_id, "convention-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            bug_brief = review_package.generate_task_brief(repo, task_id, "bug-test-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            sec_brief = review_package.generate_task_brief(repo, task_id, "security-perf-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
+            conv_brief = review_package.generate_task_brief(repo, task_id, "arch-regression-reviewer-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
             spec_brief = review_package.generate_task_brief(repo, task_id, "spec-compliance-agent", pkg_dir, metadata, plan, policy, changes).read_text(encoding="utf-8")
 
             self.assertIn("**Approved Approach**:", bug_brief)
@@ -337,7 +337,7 @@ class WorkflowInsightTests(unittest.TestCase):
                 "constraints": [],
             }
             payload_before = plan_payload(dict(base_plan))
-            policy = {"risk_tier": "T3_HIGH", "gates": ["preflight", "unit_tests"], "reviewers": ["bug-reviewer-agent"]}
+            policy = {"risk_tier": "T3_HIGH", "gates": ["preflight", "unit_tests"], "reviewers": ["bug-test-reviewer-agent"]}
             enriched_plan = dict(base_plan)
             enriched_plan["reuse_candidates"] = candidates
             enriched_plan["readiness_assessment"] = _evaluate_plan_readiness(enriched_plan, policy)

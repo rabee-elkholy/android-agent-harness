@@ -834,7 +834,11 @@ def build_task_diff(
             if plan_file.is_file() and not task_base_head:
                 try:
                     pdata = json.loads(plan_file.read_text(encoding="utf-8"))
-                    task_base_head = pdata.get("task_base_head") or pdata.get("repository", {}).get("head")
+                    task_base_head = (
+                        pdata.get("task_base_head")
+                        or ((pdata.get("task_baseline") or {}).get("repository") or {}).get("head")
+                        or (pdata.get("repository") or {}).get("head")
+                    )
                 except (OSError, ValueError, ValidationError):
                     pass
 
@@ -1173,14 +1177,19 @@ def build_task_manifest(
 
     if task_id:
         pdata = _load_task_plan_dict(repo, task_id)
-        if plan_defaults and isinstance(pdata, dict):
-            if task_base_head is None:
-                task_base_head = pdata.get("task_base_head") or (pdata.get("repository") or {}).get("head")
-            if expected_files is None:
+        if isinstance(pdata, dict):
+            if task_base_head is None and pdata.get("task_base_head"):
+                task_base_head = pdata.get("task_base_head")
+            if plan_defaults and expected_files is None:
                 expected_files = pdata.get("expected_files")
 
     if task_base_head is None and isinstance(baseline, dict):
         task_base_head = baseline.get("task_base_head") or (baseline.get("repository") or {}).get("head")
+    if task_base_head is None and isinstance(pdata, dict):
+        task_base_head = (
+            ((pdata.get("task_baseline") or {}).get("repository") or {}).get("head")
+            or (pdata.get("repository") or {}).get("head")
+        )
 
     live_sibling_files, committed_sibling_files = disjoint_sibling_file_sets(
         repo, task_id, plan=pdata, expected_files=expected_files

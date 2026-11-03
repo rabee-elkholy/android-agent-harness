@@ -102,7 +102,7 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
             self.assertIn("Reload Window", err.getvalue())
             self.assertEqual(identities, [os.stat(path).st_ino for path in watched])
             self.assertFalse(stale.exists(), "files no longer shipped are removed by the in-place update")
-            self.assertTrue((self.repo / ".agents/subagents/perf-anr-guardian-agent.json").is_file())
+            self.assertTrue((self.repo / ".agents/subagents/security-perf-reviewer-agent.json").is_file())
             self.assertEqual([], list(self.repo.glob(".agents.previous-*")))
 
             with mock.patch.object(lifecycle, "_warm_project_graph", side_effect=OSError("simulated interruption")):

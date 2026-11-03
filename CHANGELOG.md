@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] - 2026-11-03
+
+### Streamlined 3-reviewer roster, single-approval task lifecycle, and cross-module discovery scope
+
+- **Consolidated 3-Reviewer Roster (`agents/subagents/`, `.claude/agents/`, `agents/scripts/policy_vocab.py`, `agents/scripts/review_policy.py`, `agents/scripts/review_models.py`)**: Merge the 6 leaf code reviewers into 3 comprehensive domain reviewers (`bug-test-reviewer-agent`, `arch-regression-reviewer-agent`, and `security-perf-reviewer-agent` plus optional architectural `spec-compliance-agent`) to cut subagent dispatch overhead in half while preserving full coverage across bugs, concurrency, unit test quality, caller/navigation regressions, `project-notes.md` conventions, security/privacy, and all 4 performance/ANR pillars (main-thread I/O, memory leaks, Compose stability, and WakeLock/sensor battery drain).
+- **Single-Approval Lifecycle Without Mid-Task Stalls (`agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/router.py`, `agents/scripts/final_verifier.py`, `agents/scripts/phase_review.py`, `agents/scripts/mutation_guard.py`)**: Disable automatic mid-phase subagent reviews by default (`scoped_phase_review_enabled` opt-in), automatically extend `expected_files` during `checkpoint_phase` and `prepare_verification` for in-scope task files without `FILE_SCOPE_DECISION_REQUIRED` interruptions, and remove redundant `SENSITIVE_FINAL_APPROVAL_REQUIRED` prompts after passing `security-perf-reviewer-agent` and verification gates.
+- **Unrestricted In-Repo Search After Discovery (`agents/scripts/pre_tool_safety.py`)**: Allow `grep_search`, `find_by_name`, and `list_dir` across any in-repository module path once an initial `task-context` discovery receipt or active task exists, while keeping `.agents/scripts` (`HARNESS_IMPLEMENTATION_BOUNDARY`) and external paths (`PROTECTED_PATH`) protected.
+- **Unified `task_base_head` Resolution & Self-Contained Context Summaries (`agents/scripts/_workflow/engine.py`, `agents/scripts/delivery_manifest.py`, `agents/scripts/host_continuation.py`, `agents/scripts/context_presentation.py`)**: Persist `task_base_head` consistently across plan creation and manifest/continuation checks to prevent false `TASK_CHANGE_SET_CHANGED` loops, and deduplicate repeated batch fields in `task-context` JSON responses while preserving full target instructions, warnings, and `--full` expansion.
+
 ## [1.1.60] - 2026-11-01
 
 ### Explicit context compaction, shared discovery reads, and bounded architecture guidance

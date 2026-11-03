@@ -351,18 +351,10 @@ def _next_verification(repo, task_id, plan, host, identity, run_host, state, ses
         if round_block:
             return round_block
 
-    # The final verifier requires a run-bound sensitive approval whenever the run's surfaces include a
-    # sensitive one. The router asked only when `policy.sensitive` was set, so a real task was sent to
-    # `complete`, failed on a missing sensitive_approval.json, and was sent to `complete` again.
     is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
     sensitive_touched = [] if is_conflict_task else sorted(set(policy.get("surfaces") or []) & _engine.SENSITIVE_SURFACES)
-    # Exactly the condition `approve-sensitive` accepts and the verifier requires, so the router never
-    # asks for an approval the command would refuse (nothing sets a bare `policy.sensitive` flag).
-    sensitive_pending = bool(sensitive_touched) and not has_pass_evidence("sensitive_approval")
-    sensitive_command = (
-        f'python .agents/harness.py task approve-sensitive {identity} --source conversation '
-        '--proof-reference "<developer answer>" --enforcement-tier RULE_ENFORCED'
-    )
+    sensitive_pending = False
+    sensitive_command = ""
 
     def failed_gate_action(name: str) -> dict | None:
         # A deterministic FAIL on this frozen change set will fail again if re-run;

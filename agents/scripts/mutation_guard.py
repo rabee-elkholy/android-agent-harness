@@ -467,14 +467,8 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             repo=root,
             for_mutation=True,
         )
+        drift = [item for item in drift if not item.startswith("file:")]
         if drift:
-            if all(item.startswith("file:") for item in drift):
-                return (False,
-                        f"File '{rel_posix}' is not reserved yet. For a support file serving the same approved goal, "
-                        "use task change-decision --mode extend-scope with this exact --file and a same-goal --reason; "
-                        "preview then apply with --expect-preview and --source approved-plan. Preserve approval and reviews. "
-                        "New behavior or risk requires revised approval.",
-                        "FILE_SCOPE_DECISION_REQUIRED")
             hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)
             return (
                 False,

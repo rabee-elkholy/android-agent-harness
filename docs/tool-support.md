@@ -8,7 +8,7 @@ The harness has one engine and thin host adapters. The canonical rules are
 
 | Host | Installed entry points | Effective enforcement |
 |---|---|---|
-| **Google Antigravity** | `GEMINI.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Primary production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and invoke_subagent pre/post calls; Review Protocol V2 with 7 custom reviewer subagents |
+| **Google Antigravity** | `GEMINI.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Primary production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and invoke_subagent pre/post calls; Review Protocol V2 with 4 custom reviewer subagents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) |
 | Claude Code | `CLAUDE.md`, `.claude/settings.json`, commands, named agents, `PreToolUse` bridge | `HARD_ENFORCED` for covered mutations where the installed hook runs; conversational approval remains `RULE_ENFORCED` |
 | GitHub Copilot | instructions, prompts, optional `preToolUse` bridge | `RULE_ENFORCED`: Rule guidance + downstream verification gate |
 | Gemini CLI | `GEMINI.md` | `RULE_ENFORCED`: Downstream verification gate (legacy compatibility path) |
@@ -73,7 +73,7 @@ with project defaults and task/per-role overrides frozen per run. See
 The final change classification selects the smallest valid reviewer set from the adaptive 6-tier risk policy. Eligible micro-changes use `REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine, network, persistence, and build changes select their relevant specialist roles. Critical security, billing, authentication, cryptography, or sensitive-data changes select all applicable specialist roles.
 
 On **Google Antigravity**:
-- Seven custom reviewer subagents are provisioned under `.agents/agents/<reviewer>/agent.md`.
+- Four custom reviewer subagents are provisioned under `.agents/agents/<reviewer>/agent.md` (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`).
 - Routed reviewers execute concurrently in parallel via `invoke_subagent`.
 - Reviewer subagents inherit the parent agent's model by omission (no model override).
 - Review Protocol V2 enforces structured JSON output (`HARNESS_REVIEW_RESULT_V2`). Clean reviews report `findings: []` and `verdict: "PASS"`.

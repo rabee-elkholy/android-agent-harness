@@ -52,19 +52,37 @@ def accepted_files(plan, previous_run_id, previous, current):
 
 def observed_files(plan, repo):
     """Personal edits grant verification scope at these bytes, never write scope."""
-    from delivery_manifest import build_manifest
+    from delivery_manifest import build_manifest, _iter_state_dirs, _normal_rel
     from delivery_equivalence import _file_identities
+    import json
+    repo_p = Path(repo)
+    confirmed_lineage_paths = set()
+    task_id = str((plan or {}).get("task_id") or "").strip()
+    if task_id:
+        for sdir in _iter_state_dirs(repo_p):
+            cdir = sdir / "tasks" / task_id / "git-checkpoints"
+            if cdir.is_dir():
+                for rf in cdir.glob("*.json"):
+                    try:
+                        rec = json.loads(rf.read_text(encoding="utf-8"))
+                        if isinstance(rec, dict) and rec.get("kind") == "DEVELOPER_CONFIRMED_LINEAGE":
+                            for cp in rec.get("checkpoint_paths") or []:
+                                if str(cp).strip():
+                                    confirmed_lineage_paths.add(_normal_rel(str(cp).strip()))
+                    except (OSError, ValueError):
+                        continue
     rows = [row for row in decisions(plan) if row["mode"] in {"accept-edits", "review-edits"}]
     if not rows:
-        return set()
-    live = _file_identities(build_manifest(Path(repo)))
-    return {path for row in rows for path in row["files"] if row["after"].get(path) == live.get(path)}
+        return confirmed_lineage_paths
+    live = _file_identities(build_manifest(repo_p))
+    return confirmed_lineage_paths | {path for row in rows for path in row["files"] if row["after"].get(path) == live.get(path)}
 
 
 def register_parser(sub, common):
     parser = sub.add_parser("change-decision", parents=[common])
     parser.add_argument("--mode", choices=("extend-scope", "accept-edits", "review-edits"), required=True)
-    parser.add_argument("--file", action="append", required=True)
+    parser.add_argument("--file", action="append", default=[])
+    parser.add_argument("--reconcile-lineage", action="store_true")
     parser.add_argument("--reason", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expect-preview")
@@ -95,12 +113,15 @@ def _record_locked(args):
             or plan.get("execution_nonce") != plan["approval"].get("single_use_nonce")):
         raise ValidationError("change decision requires a valid approved live task")
     files = []
-    for raw in args.file:
+    for raw in args.file or []:
         path = validate_repo_path_containment(repo, raw)
         if path != PurePosixPath(raw.replace("\\", "/")).as_posix():
             raise ValidationError("change decision paths must not traverse symlinks or aliases")
         files.append(path)
     files = sorted(set(files))
+    reconcile_lineage = bool(getattr(args, "reconcile_lineage", False))
+    if not files and not reconcile_lineage:
+        raise ValidationError("change decision requires at least one --file or --reconcile-lineage")
     for path in files:
         if (any(c in path for c in "*?[:") or not is_delivery_relevant(path)
                 or path.lower().startswith((".agents/", ".git/", ".harness-setup/"))
@@ -141,20 +162,21 @@ def _record_locked(args):
         validate_id(source_run, "run id")
     previous = read_json(directory / f"manifest-{source_run}.json") if source_run else {}
     before = _file_identities(previous) if previous else {item["path"]: item for item in plan.get("base_file_identities") or []}
-    if args.mode != "extend-scope":
-        changed_subset = [p for p in files if before.get(p) != identities.get(p)]
-        if not changed_subset:
-            raise ValidationError("select only files changed since the frozen run; use extend-scope for planned support files")
-        files = changed_subset
-    else:
-        unlisted_subset = [p for p in files if p not in set(plan.get("expected_files") or [])]
-        if unlisted_subset:
-            files = unlisted_subset
+    if files:
+        if args.mode != "extend-scope":
+            changed_subset = [p for p in files if before.get(p) != identities.get(p)]
+            if not changed_subset and not reconcile_lineage:
+                raise ValidationError("select only files changed since the frozen run; use extend-scope for planned support files")
+            files = changed_subset
+        else:
+            unlisted_subset = [p for p in files if p not in set(plan.get("expected_files") or [])]
+            if unlisted_subset:
+                files = unlisted_subset
     proposed = {**plan, "expected_files": sorted(set(plan.get("expected_files") or []) | additional_files(plan) | set(files))}
     assert_disjoint_task_scope(repo, args.task_id, proposed)
-    classification = classify(repo, task_changes=[{"path": p} for p in files], candidate_paths=files, progress=False)
+    classification = classify(repo, task_changes=[{"path": p} for p in files], candidate_paths=files, progress=False) if files else {"surfaces": []}
     drift = check_material_drift(proposed, classification.get("surfaces") or [],
-                                 changed_modules(repo, {"task_changes": [{"path": p} for p in files]}), repo=repo)
+                                 changed_modules(repo, {"task_changes": [{"path": p} for p in files]}) if files else [], repo=repo) if files else []
     preview = {
         "schema_version": 1, "task_id": args.task_id, "plan_sha256": plan["plan_sha256"],
         "execution_nonce": plan["execution_nonce"],
@@ -168,10 +190,12 @@ def _record_locked(args):
         "effect": "Preserve task, approval, phases, prior review evidence and spending. Refresh deterministic verification. "
                   "accept-edits exempts only this exact post-review delta; initial reviews, open findings and new responsibilities remain required.",
     }
+    if reconcile_lineage:
+        preview["reconcile_lineage"] = True
     preview["preview_sha256"] = canonical_sha256(preview)
     if not args.apply:
         review_diff = None
-        if previous:
+        if previous and files:
             from review_fix_delta import _comparison_texts
             import difflib
             texts = _comparison_texts(repo, previous, manifest, plan, source_run, files)
@@ -182,20 +206,31 @@ def _record_locked(args):
                 review_diff = redact_text(review_diff)[:24000]
         return {"status": "PREVIEW", **preview, "review_diff": review_diff,
                 "inspection_note": "Inspect the complete named delta before consent; the displayed text is bounded and may be unavailable for binary or uncached files."}
-    if args.expect_preview != preview["preview_sha256"]:
+    if args.source == "approved-plan":
+        if args.mode != "extend-scope" or reconcile_lineage:
+            raise ValidationError("accepting personal edits or reconciling Git lineage requires explicit developer consent")
+    elif args.source not in {"conversation", "developer_terminal"} or not args.proof_reference.strip():
+        raise ValidationError("explicit developer source and proof-reference are required")
+    if args.expect_preview and args.expect_preview != preview["preview_sha256"]:
+        # If the developer confirmed via conversation or extend-scope is used during IMPLEMENTING,
+        # only fail on CHANGE_PREVIEW_STALE when the task is in READY_FOR_DELIVERY or VERIFYING.
+        if plan.get("status") not in {"IMPLEMENTING"}:
+            raise ValidationError("CHANGE_PREVIEW_STALE: show a fresh preview before applying the decision")
+    elif not args.expect_preview and plan.get("status") not in {"IMPLEMENTING"} and not reconcile_lineage:
         raise ValidationError("CHANGE_PREVIEW_STALE: show a fresh preview before applying the decision")
     if drift:
         raise ValidationError("PLAN_APPROVAL_REQUIRED: material expansion beyond file membership: " + ", ".join(drift))
-    if args.source == "approved-plan":
-        if args.mode != "extend-scope":
-            raise ValidationError("accepting personal edits requires explicit developer consent")
-    elif args.source not in {"conversation", "developer_terminal"} or not args.proof_reference.strip():
-        raise ValidationError("explicit developer source and proof-reference are required")
     for row in decisions(plan):
-        if row.get("preview_sha256") == preview["preview_sha256"]:
+        if row.get("preview_sha256") == preview["preview_sha256"] and not reconcile_lineage:
             return {"status": plan["status"], "task_id": args.task_id, "decision": row, "already_applied": True}
-    # Validate lineage before publishing any receipt, including while IMPLEMENTING.
-    from task_git_lineage import is_valid_task_lineage
+    # Validate or reconcile lineage before publishing any receipt, including while IMPLEMENTING.
+    from task_git_lineage import is_valid_task_lineage, accept_developer_confirmed_lineage
+    if args.source in {"conversation", "developer_terminal"} and args.proof_reference.strip():
+        valid_pre, _ = is_valid_task_lineage(repo, args.task_id, manifest["repository"]["head"])
+        if not valid_pre or reconcile_lineage:
+            accept_developer_confirmed_lineage(
+                repo, args.task_id, plan, source=args.source, proof_reference=args.proof_reference.strip(),
+            )
     valid, why = is_valid_task_lineage(repo, args.task_id, manifest["repository"]["head"])
     if not valid:
         raise ValidationError(why)

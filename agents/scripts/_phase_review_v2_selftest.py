@@ -192,12 +192,12 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "AuthTokenManager.kt", "package com.example\nclass AuthTokenManager {\n  fun saveToken(token: String) {}\n}\n")
 
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
-        policy = {"surfaces": ["AUTH", "SECURITY"], "reviewers": ["bug-reviewer-agent", "security-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"]}
+        policy = {"surfaces": ["AUTH", "SECURITY"], "reviewers": ["bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"]}
         needed, reviewers = is_phase_review_needed(self.repo, task_id, plan, phases[0], [{"path": "app/src/main/java/com/example/AuthTokenManager.kt"}], policy)
         self.assertTrue(needed)
         self.assertLessEqual(len(reviewers), 2)
-        self.assertIn("security-reviewer-agent", reviewers)
-        self.assertNotIn("convention-reviewer-agent", reviewers)
+        self.assertIn("security-perf-reviewer-agent", reviewers)
+        self.assertNotIn("arch-regression-reviewer-agent", reviewers)
 
     def test_PHASE_V2_003_phase_package_contains_only_phase_delta_plus_bounded_context(self) -> None:
         """PHASE_V2_003: phase package contains only phase delta plus bounded context."""
@@ -404,15 +404,15 @@ class PhaseReviewV2Selftest(unittest.TestCase):
     def test_PHASE_V2_011_material_scope_drift_still_requires_plan_revision(self) -> None:
         """PHASE_V2_011: material scope drift still requires plan revision/approval."""
         phases = [
-            {"id": "p1", "name": "Phase 1", "description": "Auth Phase", "expected_files": ["app/src/main/java/com/example/Auth.kt"]},
-            {"id": "p2", "name": "Phase 2", "description": "UI Phase", "expected_files": ["app/src/main/java/com/example/UI.kt"]},
+            {"id": "p1", "name": "Phase 1", "description": "Auth Phase", "expected_files": ["app/src/main/java/com/example/Auth.kt"], "expected_modules": [":app"]},
+            {"id": "p2", "name": "Phase 2", "description": "UI Phase", "expected_files": ["app/src/main/java/com/example/UI.kt"], "expected_modules": [":app"]},
         ]
-        task_id = self._create_phased_task(phases, scoped_phase_review=True)
-        # Touch unexpected file outside scope
-        write_file(self.repo / "app" / "src" / "main" / "java" / "com" / "example" / "SecretUnauthorized.kt", "class SecretUnauthorized")
+        task_id = self._create_phased_task(phases, scoped_phase_review=True, expected_modules=":app")
+        # Touch unexpected file outside approved module scope
+        write_file(self.repo / "feature" / "secret" / "src" / "main" / "java" / "com" / "example" / "SecretUnauthorized.kt", "class SecretUnauthorized")
         with self.assertRaises(ValidationError) as ctx:
             checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
-        self.assertIn("modified file outside expected_files", str(ctx.exception))
+        self.assertIn("modified file outside expected_modules", str(ctx.exception))
 
     def test_PHASE_V2_012_phase_calls_count_toward_global_safety_cap(self) -> None:
         """PHASE_V2_012: phase calls count toward global safety cap."""
@@ -1443,12 +1443,12 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         plan = {
             "task_kind": "FEATURE", "expected_surfaces": ["AUTH", "SECURITY"],
             "phases": [{"expected_surfaces": ["TEST_ONLY"]}],
-            "model_call_budget": 6, "review_calls_used": 0,
+            "model_call_budget": 3, "review_calls_used": 0,
         }
         reserve = phase_review.derive_final_review_reserve(self.repo, plan, {"surfaces": ["AUTH"], "severity": "CRITICAL"})
         self.assertEqual("T5_CRITICAL", reserve["risk_tier"])
-        self.assertIn("test-quality-reviewer-agent", reserve["reviewers"])
-        self.assertGreaterEqual(reserve["reserved_calls"], 6)
+        self.assertIn("bug-test-reviewer-agent", reserve["reviewers"])
+        self.assertGreaterEqual(reserve["reserved_calls"], 3)
         allowed, reason = phase_review.check_phase_safety_cap(plan, 1, reserve)
         self.assertFalse(allowed)
         self.assertIn("reserved_final", reason)
@@ -1524,7 +1524,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
         current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         policy = read_json(Path(current["policy"]))
-        self.assertIn("security-reviewer-agent", policy["reviewers"])
+        self.assertIn("security-perf-reviewer-agent", policy["reviewers"])
         self.assertEqual(before, {p: p.read_bytes() for p in before})
         self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="antigravity")["code"])
 
@@ -2320,7 +2320,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         ]
         task_id = self._create_phased_task(phases, scoped_phase_review=True)
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
-        policy = {"risk_tier": "T4_DATA_DEVICE", "reviewers": ["bug-reviewer-agent", "regression-impact-reviewer-agent"]}
+        policy = {"risk_tier": "T4_DATA_DEVICE", "reviewers": ["bug-test-reviewer-agent", "arch-regression-reviewer-agent"]}
         needed, reviewers = is_phase_review_needed(self.repo, task_id, plan, phases[0], [{"path": "app/src/main/java/com/example/AppDatabase.kt"}], policy)
         self.assertTrue(needed)
 
@@ -2342,8 +2342,11 @@ class PhaseReviewV2Selftest(unittest.TestCase):
 
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
         changes = [{"path": f"app/src/main/java/com/example/F{i}.kt"} for i in range(1, 5)]
+        needed_default, _ = is_phase_review_needed(self.repo, task_id, plan, phases[0], changes)
+        self.assertFalse(needed_default, "Phase review is opt-in by default")
+        plan["scoped_phase_review_enabled"] = True
         needed, reviewers = is_phase_review_needed(self.repo, task_id, plan, phases[0], changes)
-        self.assertTrue(needed, "4 files with >600 lines must trigger phase review even without explicit flag")
+        self.assertTrue(needed, "4 files with >600 lines must trigger phase review when scoped_phase_review_enabled is True")
 
     def test_PHASE_DELTA_SIZE_002_routine_feature_and_final_phase_skip_redundant_phase_review(self) -> None:
         """Routine <400-line T2_FEATURE intermediate phases and final phases skip redundant subagent phase reviews."""

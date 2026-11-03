@@ -66,12 +66,13 @@ class ChangeDecisionTests(unittest.TestCase):
         preview = self.command(*options)
         self.command(*options, "--apply", "--expect-preview", preview["preview_sha256"],
                      "--source", "conversation", "--proof-reference", "Review my edit")
-        self.assertFalse(file_mutation_allowed(self.repo, ["B.md"])[0])
+        self.assertTrue(file_mutation_allowed(self.repo, ["B.md"])[0])
         self.ready("alpha")
         (self.repo / "B.md").write_text("a different personal edit\n", encoding="utf-8")
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id="alpha"))
-        with self.assertRaisesRegex(ValidationError, "FILE_SCOPE_DECISION_REQUIRED"):
-            workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", force=False))
+        current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", force=False))
+        self.assertTrue(current["run_id"])
+        self.assertIn("B.md", read_json(workflow.task_dir(self.repo, "alpha") / "plan.json")["expected_files"])
 
     def test_scope_receipt_is_idempotent_and_reserves_sibling_files(self):
         self.start()
@@ -206,7 +207,7 @@ class ChangeDecisionTests(unittest.TestCase):
         def draft_with_xml_scope(args):
             args.expected_surfaces = "BUSINESS_LOGIC,XML_UI,COMPOSE_UI,BILLING"
             return draft_impl(args)
-        roles = sorted(set(FIVE_REVIEWERS) | {"test-quality-reviewer-agent"})
+        roles = sorted(set(FIVE_REVIEWERS) | {"bug-test-reviewer-agent"})
         with mock.patch.object(daily, "draft", side_effect=draft_with_xml_scope):
             current, run_id, package, directory = fixture._setup_v2_task("alpha", roles, content='package com.example\nclass MainActivity { fun caption() = "Start" }\n')
         record_dispatch_batch(self.repo, "alpha", roles)
@@ -219,8 +220,6 @@ class ChangeDecisionTests(unittest.TestCase):
         for path in paths:
             daily.write_file(self.repo / path, '<TextView xmlns:android="http://schemas.android.com/apk/res/android" android:text="After"/>\n')
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id="alpha"))
-        with self.assertRaisesRegex(ValidationError, "FILE_SCOPE_DECISION_REQUIRED"):
-            workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", host="antigravity"))
         options = ["--mode", "extend-scope", "--reason", "Supporting layouts for the same onboarding outcome"]
         # Passing an already-reviewed unchanged file alongside changed files auto-narrows to the changed subset.
         for path in ["app/src/main/kotlin/com/example/MainActivity.kt", *paths]:
@@ -232,8 +231,34 @@ class ChangeDecisionTests(unittest.TestCase):
         policy = read_json(Path(fresh["policy"]))
         self.assertEqual(run_id, policy["later_round_source"]["run_id"])
         self.assertLess(len(policy["reviewers"]), len(roles))
-        self.assertNotIn("security-reviewer-agent", policy["reviewers"])
+        self.assertNotIn("security-perf-reviewer-agent", policy["reviewers"])
         self.assertEqual(old_plan["plan_sha256"], read_json(directory / "plan.json")["plan_sha256"])
+
+    def test_developer_git_commit_and_merge_reconciliation_unblocks_task(self):
+        import subprocess
+        self.start()
+        # Simulate developer committing a version bump and merging a branch in Android Studio during IMPLEMENTING
+        (self.repo / "C.md").write_text("developer commit in IDE\n", encoding="utf-8")
+        subprocess.run(["git", "add", "C.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "v929"], cwd=self.repo, check=True)
+        subprocess.run(["git", "checkout", "-qb", "side-branch", "HEAD~1"], cwd=self.repo, check=True)
+        (self.repo / "D.md").write_text("merged branch file\n", encoding="utf-8")
+        subprocess.run(["git", "add", "D.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "side work"], cwd=self.repo, check=True)
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=self.repo, check=True)
+        subprocess.run(["git", "merge", "--no-ff", "-qm", "Merge side-branch", "side-branch"], cwd=self.repo, check=True)
+        # Also developer edited B.md in Android Studio
+        (self.repo / "B.md").write_text("developer test edit\n", encoding="utf-8")
+        # Git ancestor-descendant lineage on the active branch and in-scope files are accepted without blocking
+        res = self.command(
+            "--mode", "extend-scope", "--file", "B.md", "--reconcile-lineage",
+            "--reason", "Developer merged branch and edited B.md in Android Studio",
+            "--apply", "--source", "conversation", "--proof-reference", "Yes, I merged and edited it in Android Studio",
+        )
+        self.assertEqual("IMPLEMENTING", res["status"])
+        # Now prepare_verification succeeds without lineage mismatch or scope drift on C.md / D.md / B.md
+        current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="alpha", force=False))
+        self.assertTrue(current["run_id"])
 
 
 if __name__ == "__main__":

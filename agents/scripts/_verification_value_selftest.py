@@ -120,17 +120,17 @@ class VerificationContracts(unittest.TestCase):
     def test_review_boolean_cannot_replace_ingested_criterion_result(self):
         self.plan["verification_contract"] = contract("review")
         self.store.write(snapshot="snapshot", run_id="run", name="reviews", producer="review_orchestrator",
-            harness_version="1", change_set="change", status="PASS", evidence={"reports": [{"reviewer": "bug-reviewer-agent",
+            harness_version="1", change_set="change", status="PASS", evidence={"reports": [{"reviewer": "bug-test-reviewer-agent",
                 "verdict": "PASS", "independent_execution_verified": True, "criterion_results": {"refresh": "PASS"}}]})
         with self.assertRaises(ValidationError):
-            bind_evidence(self.plan, self.current, self.store, "refresh", "reviews", "bug-reviewer-agent")
+            bind_evidence(self.plan, self.current, self.store, "refresh", "reviews", "bug-test-reviewer-agent")
 
     def test_review_result_binding_rejects_tampered_aggregate(self):
         from review_orchestrator import save_ledger, result_file, dispatch_receipt_file
         from _vnext_common import atomic_write_json, sha256_file
         self.plan["verification_contract"] = contract("review")
         self.current["review_protocol_version"] = 2
-        reviewer = "bug-reviewer-agent"
+        reviewer = "bug-test-reviewer-agent"
         directory = self.store.state_root / "tasks/task"
         package = self.store.run_dir("snapshot", "run") / "review-package.md"
         package.parent.mkdir(parents=True, exist_ok=True)
@@ -625,7 +625,7 @@ class PublicWorkflowContracts(unittest.TestCase):
         plan_file = self.repo / ".agents/state/tasks/feature/plan.json"
         plan = read_json(plan_file)
         plan.update(review_calls_used=9, review_rounds=2,
-                    final_review_call_charges={"run-previous": ["bug-reviewer-agent"]})
+                    final_review_call_charges={"run-previous": ["bug-test-reviewer-agent"]})
         atomic_write_json(plan_file, plan)
         self.call("revise", "--verification-contract", json.dumps(contract("journey") | {"journeys": [journey()]}))
         revised = read_json(plan_file)

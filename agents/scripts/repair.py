@@ -254,6 +254,26 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 pass
         restored.append(rel_installed)
 
+    # Re-render Antigravity agent markdown wrappers when present so subagent JSON updates propagate
+    if (root / ".agents" / "agents").is_dir():
+        try:
+            from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
+            from review_models import _antigravity_frontmatter_model
+            for agent_md in sorted((root / ".agents" / "agents").glob("*/agent.md")):
+                role = agent_md.parent.name
+                src_json = root / ".agents" / "subagents" / f"{role}.json"
+                if src_json.is_file():
+                    data = json.loads(src_json.read_text(encoding="utf-8"))
+                    fm_model = _antigravity_frontmatter_model(root, role)
+                    rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model)).encode("utf-8")
+                    if agent_md.read_bytes() != rendered:
+                        atomic_write_bytes(agent_md, rendered)
+                        rel_agent = agent_md.relative_to(root).as_posix()
+                        if rel_agent not in restored:
+                            restored.append(rel_agent)
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
+
     # Restore project context facts if missing
     facts_file = root / ".agents" / "project-context" / "project-facts.json"
     if not facts_file.is_file() or facts_file.stat().st_size == 0:

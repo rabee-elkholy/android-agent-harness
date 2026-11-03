@@ -25,12 +25,9 @@ def active_review_package_path(repo: Path, current_run: dict, root: Path | None 
 VALID_VERDICTS = {"PASS", "FINDINGS"}
 VALID_SEVERITIES = {"INFO", "LOW", "MEDIUM", "HIGH", "MAJOR", "CRITICAL", "BLOCKER"}
 PASS_TOKENS = {
-    "bug-reviewer-agent": "BUG_PASS",
-    "convention-reviewer-agent": "CONVENTION_PASS",
-    "security-reviewer-agent": "SECURITY_PASS",
-    "perf-anr-guardian-agent": "PERF_PASS",
-    "regression-impact-reviewer-agent": "REGRESSION_PASS",
-    "test-quality-reviewer-agent": "TEST_PASS",
+    "bug-test-reviewer-agent": "BUG_PASS",
+    "security-perf-reviewer-agent": "SECURITY_PASS",
+    "arch-regression-reviewer-agent": "REGRESSION_PASS",
     "spec-compliance-agent": "SPEC_PASS",
 }
 
@@ -651,7 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--response-text", action="append", default=[], metavar="REVIEWER=TEXT", help="Ingest an unchanged reviewer response text with its evidence footer")
     parser.add_argument("--from-subagent", action="append", default=[], metavar="REVIEWER=CONV_ID_OR_PATH", help="Auto-harvest subagent transcript and record review; on Claude Code pass the subagent transcript path (JSONL)")
     parser.add_argument("--subagent-id", default="", help="Subagent conversation ID or execution reference proving independent reviewer run")
-    parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-reviewer-agent=PASS, or PASS with --reviewer)")
+    parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-test-reviewer-agent=PASS, or PASS with --reviewer)")
     parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
     parser.add_argument("--evidence-pkg", default="", help="Optional package SHA prefix to validate against active review package")
     parser.add_argument("--message", default="", help="Optional finding message if verdict is FINDINGS")

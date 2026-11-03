@@ -20,13 +20,11 @@ All workflows use the central lifecycle in `.agents/scripts/workflow.py`.
 4. Consume approval and implement.
 5. Freeze the delivery manifest and adaptive policy.
 6. Run only selected gates and reviewers.
-7. For sensitive surfaces, the developer separately approves the frozen final
-   snapshot interactively in chat (via `ask_question`), from their terminal, or via host-native control.
-8. Read-only final verification.
-9. Mark the unchanged snapshot ready and hand it off.
+7. Read-only final verification.
+8. Mark the unchanged snapshot ready and hand it off.
 
 A blocking finding returns the task to `BLOCKED`. `resume` reopens implementation under the same approved scope; a material scope change requires a new approval. Three failed review rounds require developer direction.
-The AI hook denies `approve` and `approve-sensitive` without `--source conversation`, and denies `cancel`; those
+The AI hook denies `approve` without `--source conversation`, and denies `cancel`; those
 developer-authority transitions must come from explicit developer approval.
 
 ## Verification recovery
@@ -61,15 +59,13 @@ The agent handles routine retries and harness commands. The developer intervenes
 
 ## Approved resource file scope
 
-Both `prepare-verification` and final verification enforce the approved file scope
-against the task delta. Renames require authority for the deleted source and the
-destination; revise hints include both paths. A copy does not require write authority
-for its unchanged source. An empty task delta does not include unrelated baseline edits.
+Both `checkpoint-phase` and `prepare-verification` automatically extend `expected_files`
+for newly modified or created files within the approved surfaces and modules, while
+unapproved surfaces or modules still require `revise` and developer approval. An empty task delta does not include unrelated baseline edits.
 
-When a plan declares `expected_files`, resource surfaces (`RESOURCE_UI`, `XML_UI`,
-`LOCALIZATION`) do not authorize additional files. The same check runs before file
-mutation and during `prepare-verification`. Explicitly approved new files can be
-created without another approval; additional resources, modules, or source sets
+When a plan declares `expected_files`, pre-tool mutation checks still enforce file
+membership during implementation unless extended via `change-decision --mode extend-scope`
+or checkpointed at phase/verification preparation. Unplanned modules or surfaces
 outside the declared scope require `revise` and approval of the new plan hash.
 Repository-relative Windows separators are normalized for comparison. Existing
 surface/module-scoped plans with no explicit file list and declared companion-test
@@ -88,7 +84,7 @@ and pass in full; a bare path is not a valid Prompt. V1 fallback is unchanged. T
 retry actions never authorize redispatch; trusted completion and same-model
 inheritance remain governed by the existing host contract.
 
-Each generated lean brief applies role-scoped epistemic isolation: one completeness owner (`bug-reviewer-agent` or `regression-impact-reviewer-agent`) verifies every item of the `Approved Approach`, while specialist reviewers evaluate the diff under Goldfish epistemic independence (treating implementer prose and `FALSE_POSITIVE` finding validations as untrusted hypotheses to be re-verified against the code). `convention-reviewer-agent` also checks `reuse_candidates` to prevent duplicate utilities and speculative YAGNI abstractions. See [ADR-019](adr/019-egm-selective-integration.md).
+Each generated lean brief applies role-scoped epistemic isolation: one completeness owner (`bug-test-reviewer-agent` or `arch-regression-reviewer-agent`) verifies every item of the `Approved Approach`, while specialist reviewers evaluate the diff under Goldfish epistemic independence (treating implementer prose and `FALSE_POSITIVE` finding validations as untrusted hypotheses to be re-verified against the code). `arch-regression-reviewer-agent` also checks `reuse_candidates` to prevent duplicate utilities and speculative YAGNI abstractions. See [ADR-019](adr/019-egm-selective-integration.md).
 
 ## Gradle progress and daemon investigation
 

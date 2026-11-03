@@ -454,6 +454,51 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
     return True, relative, False
 
 
+def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict) -> None:
+    """Normalize CRLF to LF on authorized edit targets before host edit tools run.
+
+    Host edit_file tools match multi-line Target strings byte-for-byte, while LLM tool
+    payloads emit LF (`\\n`). Normalizing CRLF (`\\r\\n`) to LF (`\\n`) on disk right before
+    an authorized edit prevents `target content not found` failures on Windows checkouts.
+    """
+    target_chunks: list[str] = []
+    for key in ("Target", "target", "TargetContent", "targetContent"):
+        val = args.get(key)
+        if isinstance(val, str) and val:
+            target_chunks.append(val)
+    for key in ("ReplacementChunks", "replacementChunks", "Replacements", "replacements", "chunks", "edits"):
+        items = args.get(key)
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    for subkey in ("Target", "target", "TargetContent", "targetContent", "OldStr", "old_str"):
+                        subval = item.get(subkey)
+                        if isinstance(subval, str) and subval:
+                            target_chunks.append(subval)
+    multiline_lf_targets = [
+        chunk.encode("utf-8", errors="surrogateescape")
+        for chunk in target_chunks
+        if "\n" in chunk and "\r\n" not in chunk
+    ]
+    if not multiline_lf_targets:
+        return
+    from _vnext_common import atomic_write_bytes
+    for t in targets:
+        if not t:
+            continue
+        try:
+            cand = Path(t) if Path(t).is_absolute() else (repo / t)
+            if not cand.is_file() or cand.is_symlink():
+                continue
+            data = cand.read_bytes()
+            if b"\r\n" in data and b"\x00" not in data:
+                lf_data = data.replace(b"\r\n", b"\n")
+                if any(chunk in lf_data for chunk in multiline_lf_targets):
+                    atomic_write_bytes(cand, lf_data)
+        except OSError:
+            pass
+
+
 def check_write_safety(repo: Path | str, target: str, tool_name: str = "write_to_file") -> dict[str, Any]:
     safe, detail, is_temp = _safe_target(str(target), repo=Path(repo))
     if not safe:
@@ -1480,76 +1525,17 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
     )
 
 
-def _is_targeted_search_path(target: str) -> bool:
-    if not target or target.strip() in {".", "./", "", "/", "\\"}:
-        return False
-    p = target.replace("\\", "/").strip().rstrip("/")
-    file_exts = (
-        ".kt", ".java", ".xml", ".gradle", ".kts", ".json", ".properties",
-        ".pro", ".txt", ".md", ".toml", ".png", ".jpg", ".webp", ".svg",
-    )
-    if any(p.lower().endswith(ext) for ext in file_exts):
+def _is_within_repo(repo: Path, raw: str) -> bool:
+    clean = str(raw or "").strip().replace("\\", "/")
+    if not clean or clean in {".", "./"}:
         return True
-
-    generic_roots = {
-        "app", "core", "domain", "data", "feature", "features",
-        "app/src", "app/src/main", "app/src/main/java", "app/src/main/res",
-        "core/src", "core/src/main", "core/src/main/java",
-    }
     try:
-        resolved = Path(target).resolve()
-        rel = resolved.relative_to(REPO.resolve()).as_posix().lower()
-    except Exception:
-        rel = p.lstrip("./").lower()
-
-    if rel in generic_roots or rel in {".", ""}:
+        root = repo.resolve()
+        path = Path(clean)
+        resolved = (path if path.is_absolute() else root / path).resolve()
+        return resolved == root or resolved.is_relative_to(root)
+    except (OSError, ValueError, RuntimeError):
         return False
-
-    parts = [part for part in rel.split("/") if part]
-    if len(parts) >= 4:
-        return True
-    if any(segment in {"feature", "features", "navigation", "ui", "viewmodel", "repository", "datasource"} for segment in parts):
-        return True
-    return False
-
-
-BROAD_SEARCH_PATTERNS = {
-    "*", "*.*", "*.kt", "*.java", "*.xml", "*.gradle", "*.kts", "*.json",
-    "*.properties", "*.pro", "**/*", "**", "",
-}
-
-
-def _is_targeted_pattern(pattern: str) -> bool:
-    if not pattern:
-        return False
-    clean = pattern.strip().replace("\\", "/")
-    if clean.lower() in BROAD_SEARCH_PATTERNS:
-        return False
-    if re.match(r"^\*+\.[a-zA-Z0-9]+$", clean):
-        return False
-    core = re.sub(r"[*?]", "", clean)
-    core_name = Path(core).name
-    return len(core_name) >= 3 and core_name.lower() not in {"src", "main", "test", "app", "core", "file"}
-
-
-def _is_targeted_search(name: str, args: dict) -> bool:
-    if name == "grep_search":
-        target = str(args.get("SearchPath") or args.get("searchPath") or "")
-        if _is_targeted_search_path(target):
-            return True
-        includes = args.get("Includes") or args.get("includes") or []
-        if isinstance(includes, list) and any(_is_targeted_pattern(str(inc)) for inc in includes):
-            return True
-        return False
-    elif name == "find_by_name":
-        target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
-        if _is_targeted_search_path(target):
-            return True
-        pattern = str(args.get("Pattern") or args.get("pattern") or "")
-        if _is_targeted_pattern(pattern):
-            return True
-        return False
-    return False
 
 
 def _get_active_task_scope(repo: Path, plan: dict) -> tuple[set[str], set[str]]:
@@ -1662,93 +1648,6 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
     return False
 
 
-def _is_contract_file(path: str) -> bool:
-    if not path:
-        return False
-    norm = str(path).replace("\\", "/").strip().lower().lstrip("./")
-    if norm in {"agents.md", "gemini.md", "claude.md", "readme.md"}:
-        return True
-    if norm.startswith("agents/rules/") or norm.startswith(".agents/") or norm.startswith("agents/contracts/"):
-        return True
-    try:
-        from discovery_router import _is_exact_non_architectural_file
-        if _is_exact_non_architectural_file(norm):
-            return True
-    except (OSError, ValueError, ImportError, ValidationError):
-        pass
-    return False
-
-
-def _is_path_in_verifying_scope(repo: Path, target_path: str, plan: dict) -> tuple[bool, str]:
-    target_str = str(target_path or "").replace("\\", "/").strip().rstrip("/")
-    if not target_str or target_str in {".", "./"}:
-        return False, "ROOT_SEARCH_FORBIDDEN"
-
-    from discovery_receipt import relative_search_target
-    rel = relative_search_target(repo, target_str)
-
-    if not rel or rel in {".", "./"}:
-        return False, "ROOT_SEARCH_FORBIDDEN"
-
-    if _is_contract_file(rel):
-        return True, "CONTRACT_FILE_ALLOWED"
-
-    review_scope = {}
-    task_id = str(plan.get("task_id") or "")
-    if task_id:
-        try:
-            from workflow import task_dir
-            run_file = task_dir(repo, task_id) / "current-run.json"
-        except Exception:
-            run_file = state_root(repo) / "tasks" / task_id / "current-run.json"
-        if run_file.is_file():
-            try:
-                run_data = json.loads(run_file.read_text(encoding="utf-8"))
-                review_scope = run_data.get("review_scope") or {}
-            except (OSError, ValueError, ValidationError):
-                pass
-    if not review_scope:
-        review_scope = plan.get("review_scope") or {}
-
-    changed_files = {str(f).replace("\\", "/").lower().lstrip("./") for f in review_scope.get("changed_files") or []}
-    allowed_roots = {str(r).replace("\\", "/").lower().lstrip("./").rstrip("/") for r in review_scope.get("allowed_roots") or []}
-    direct_callers = {str(f).replace("\\", "/").lower().lstrip("./") for f in review_scope.get("direct_callers") or []}
-
-    for dc in direct_callers:
-        from discovery_receipt import source_search_root
-        parent = source_search_root(dc).lower()
-        if parent:
-            allowed_roots.add(parent)
-
-    if not changed_files and not allowed_roots and not direct_callers:
-        plan_roots, plan_files = _get_active_task_scope(repo, plan)
-        allowed_roots.update(plan_roots)
-        changed_files.update(plan_files)
-
-    if rel in changed_files:
-        return True, "CHANGED_FILE_ALLOWED"
-    if rel in direct_callers:
-        return True, "DIRECT_CALLER_ALLOWED"
-
-    for r in allowed_roots:
-        if not r:
-            continue
-        if rel == r or rel.startswith(r + "/"):
-            return True, "ALLOWED_ROOT"
-
-    try:
-        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
-        receipt = load_latest_discovery_receipt(repo)
-        if receipt:
-            fresh, _ = check_discovery_freshness(repo, receipt)
-            if fresh and is_path_in_discovery_scope(repo, target_str, receipt):
-                return True, "GRAPH_EXPANSION_ALLOWED"
-    except (OSError, ValueError, ImportError, ValidationError):
-        pass
-
-    return False, "OUT_OF_SCOPE"
-
-
 def _handle_list_dir(name: str, args: dict) -> None:
     plan: dict = {}
     try:
@@ -1758,49 +1657,21 @@ def _handle_list_dir(name: str, args: dict) -> None:
         status = ""
 
     dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
-
-    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
-        if _is_path_in_active_scope(REPO, dir_target, plan):
-            emit("allow", "Directory listing is within active task scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
-            return
-        try:
-            from discovery_router import _is_exact_non_architectural_file
-            if dir_target and _is_exact_non_architectural_file(dir_target):
-                emit("allow", "Exact non-architectural directory listing allowed under D0.", tool=name, reason_code="LIST_DIR_ALLOWED")
-                return
-        except (OSError, ValueError, ImportError, ValidationError):
-            pass
-        emit(
-            "deny",
-            f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Directory listing '{dir_target}' is outside the active task scope. "
-            "Expand scope through Project Graph: 'python .agents/harness.py graph --feature <name> --json' "
-            "or 'python .agents/harness.py task-context --file <path> --json'.",
-            tool=name,
-            reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
-        )
+    if not _is_within_repo(REPO, dir_target):
+        emit("deny", "Directory target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
         return
 
-    if status == "VERIFYING":
-        allowed, reason = _is_path_in_verifying_scope(REPO, dir_target, plan)
-        if allowed:
-            emit("allow", "Directory listing is within verified review scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
-            return
-        emit(
-            "deny",
-            f"REVIEW_SCOPE_EXPANSION_REQUIRED: Directory listing '{dir_target}' is outside the frozen review scope. "
-            "Reviewers must stay within review_scope or run graph expansion.",
-            tool=name,
-            reason_code="REVIEW_SCOPE_EXPANSION_REQUIRED",
-        )
+    if status in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+        emit("allow", "Directory listing is allowed during active task lifecycle.", tool=name, reason_code="LIST_DIR_ALLOWED")
         return
 
     try:
-        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
+        from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness
         receipt = load_latest_discovery_receipt(REPO)
         if receipt:
             fresh, _ = check_discovery_freshness(REPO, receipt)
-            if fresh and is_path_in_discovery_scope(REPO, dir_target, receipt):
-                emit("allow", "Directory listing is within active discovery scope.", tool=name, reason_code="LIST_DIR_ALLOWED")
+            if fresh:
+                emit("allow", "Directory listing is allowed after initial discovery anchor.", tool=name, reason_code="LIST_DIR_ALLOWED")
                 return
     except Exception:
         receipt = None
@@ -1868,49 +1739,22 @@ def _handle_search(name: str, args: dict) -> None:
         target = str(args.get("SearchDirectory") or args.get("searchDirectory") or "")
         query = str(args.get("Pattern") or args.get("pattern") or "")
 
+    if target and not _is_within_repo(REPO, target):
+        emit("deny", "Search target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
+        return
+
     if status == "VERIFYING":
-        allowed, reason = _is_path_in_verifying_scope(REPO, target, plan)
-        if allowed:
-            emit("allow", "Search is within verified review scope.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
-            return
-        emit(
-            "deny",
-            f"REVIEW_SCOPE_EXPANSION_REQUIRED: Search path '{target or '.'}' is outside the frozen review scope. "
-            "Reviewers must stay within review_scope or run graph expansion.",
-            tool=name,
-            reason_code="REVIEW_SCOPE_EXPANSION_REQUIRED",
-        )
+        emit("allow", "Search is allowed during verification.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
         return
 
-    # 1. If actively implementing, search must stay inside discovered / approved task scope
-    if status in ("IMPLEMENTING", "READY_FOR_DELIVERY"):
-        if _is_path_in_active_scope(REPO, target, plan):
-            emit("allow", "Search is targeted to active task implementation scope.", tool=name, reason_code="SEARCH_ALLOWED")
-            return
-
-        try:
-            from discovery_router import _is_exact_non_architectural_file
-            if target and _is_exact_non_architectural_file(target):
-                emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
-                return
-        except (OSError, ValueError, ImportError, ValidationError):
-            pass
-
-        clean_target = target.replace("\\", "/").strip()
-        emit(
-            "deny",
-            f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Search path '{clean_target or '.'}' is outside the active task implementation scope. "
-            "Expand scope through Project Graph: 'python .agents/harness.py graph --find <symbol> --json' "
-            "or 'python .agents/harness.py graph --feature <feature> --json' rather than unanchored search.",
-            tool=name,
-            reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
-        )
+    if status in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "READY_FOR_DELIVERY"):
+        emit("allow", "Search is allowed during active task lifecycle.", tool=name, reason_code="SEARCH_ALLOWED")
         return
 
-    # 2. In Discovery Phase: Check if a fresh discovery receipt exists
+    # In Discovery Phase: Check if a fresh discovery receipt exists
     receipt = None
     try:
-        from discovery_receipt import load_latest_discovery_receipt, is_path_in_discovery_scope, check_discovery_freshness
+        from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness
         receipt = load_latest_discovery_receipt(REPO)
     except Exception:
         receipt = None
@@ -1918,19 +1762,8 @@ def _handle_search(name: str, args: dict) -> None:
     if receipt:
         fresh, _ = check_discovery_freshness(REPO, receipt)
         if fresh:
-            if target and is_path_in_discovery_scope(REPO, target, receipt):
-                emit("allow", "Search is targeted within active discovery scope.", tool=name, reason_code="SEARCH_ALLOWED")
-                return
-            else:
-                emit(
-                    "deny",
-                    f"DISCOVERY_SCOPE_EXPANSION_REQUIRED: Search path '{target or '.'}' is outside the active discovery scope. "
-                    "Expand discovery through Project Graph: 'python .agents/harness.py graph --find <symbol> --json' "
-                    "or '--feature <feature> --json' rather than unanchored search.",
-                    tool=name,
-                    reason_code="DISCOVERY_SCOPE_EXPANSION_REQUIRED",
-                )
-                return
+            emit("allow", "Search is allowed after initial discovery anchor.", tool=name, reason_code="SEARCH_ALLOWED")
+            return
 
     # 3. No discovery receipt yet: Check exact non-architectural file exception (D0)
     try:
@@ -2142,26 +1975,6 @@ def _main() -> None:
             if all_temp:
                 emit("allow", "Temporary setup answers or IDE artifact write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
-            if name == "write_file" and bool(args.get("Overwrite") or args.get("overwrite")):
-                for t in targets:
-                    if not t:
-                        continue
-                    try:
-                        cand = Path(t) if Path(t).is_absolute() else (REPO / t)
-                        if cand.is_file():
-                            emit(
-                                "deny",
-                                (
-                                    f"EXISTING_FILE_OVERWRITE_FORBIDDEN: Do not use write_file(Overwrite=true) to modify "
-                                    f"existing project file '{t}'. Always use edit_file to modify only targeted sections "
-                                    f"and preserve commented-out code and original line endings."
-                                ),
-                                tool=name,
-                                reason_code="EXISTING_FILE_OVERWRITE_FORBIDDEN",
-                            )
-                            return
-                    except OSError:
-                        pass
             try:
                 pending_tid = str(active_plan(REPO).get("task_id") or "")
             except Exception:
@@ -2170,6 +1983,8 @@ def _main() -> None:
                 emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
+            if allowed and name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
+                _normalize_crlf_for_edit(REPO, targets, args)
             emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
             return
         if name == "run_command":

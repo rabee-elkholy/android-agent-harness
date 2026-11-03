@@ -1042,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true")
     presentation = parser.add_mutually_exclusive_group()
     presentation.add_argument("--since", help="Digest actually received in this conversation; presentation only.")
-    presentation.add_argument("--full", action="store_true", help="Force self-contained context.")
+    presentation.add_argument("--full", action="store_true", help="Return all advisory details without summary or shared-field references.")
     args = parser.parse_args(argv)
     if args.since and not re.fullmatch(r"[0-9a-f]{64}", args.since):
         parser.error("--since requires a lowercase SHA-256 context digest")
@@ -1059,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
                                       module=args.module, source_set=args.source_set, limit=args.limit)
     if args.json:
         from context_presentation import present_context
-        out_payload = present_context(repo_path, result, since=args.since)
+        out_payload = present_context(repo_path, result, since=args.since, full=args.full)
         # ASCII JSON preserves every Unicode code point on legacy Windows pipes.
         rendered = json.dumps(out_payload, ensure_ascii=True, indent=2)
         from task_metrics import operation_span

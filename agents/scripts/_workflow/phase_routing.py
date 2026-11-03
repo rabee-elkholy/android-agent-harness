@@ -147,6 +147,19 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 "expected": {},
             }
 
+        from phase_review import phase_review_freshness
+        fresh, fresh_reason = phase_review_freshness(repo, task_id, phase_id, run_meta)
+        if not fresh:
+            return {
+                "code": "CHECKPOINT_PHASE",
+                "kind": "HARNESS_COMMAND",
+                "command": f'python .agents/harness.py task checkpoint-phase {identity} --phase-id "{phase_id}"',
+                "blocking": True,
+                "reason": f"Active phase review run for '{phase_id}' is stale ({fresh_reason}). Re-checkpoint the phase to refresh the review package.",
+                "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
+                "expected": {"success_exit_codes": [0]},
+            }
+
         # Check for durable post-tool reconciliation error marker
         rdir = phase_review_dir(tdir, phase_id)
         marker_1 = rdir / "post-tool-reconcile-error.json"

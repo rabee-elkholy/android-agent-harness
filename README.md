@@ -39,8 +39,8 @@ The mechanisms below check these failure modes within the configured host and ve
 | Tests that were already broken block the task or get blamed on the change. | Installation and task-start captures can identify pre-existing failures. Recognized unrelated debt is reported separately; unmatched failures and suspected flaky results still block verification. |
 | The agent edits files the developer never agreed to. | The plan pins expected files and surfaces. On Antigravity, installed native hooks can deny supported out-of-scope tool writes. Verification checks scope drift on every supported host. |
 | The agent approves its own plan, cancels its own task, or commits. | Approval must cite the developer's words in chat. Cancel, commit, merge, rebase and push stay with the developer. |
-| A risky change gets the same light review as a string fix. | A 6-tier risk model routes reviewers and gates from the final diff: none for trivial changes, specialists for Room, security or device surfaces. |
-| A large change is reviewed only once, at the end. | Multi-phase tasks checkpoint each phase; substantial or risky phases get a scoped delta review before the next begins. |
+| A risky change gets the same light review as a string fix. | A 6-tier risk model routes 3 comprehensive specialist reviewers (`bug-test-reviewer-agent`, `arch-regression-reviewer-agent`, `security-perf-reviewer-agent`) plus optional `spec-compliance-agent` and gates from the final diff: none for trivial changes, targeted specialists for logic/UI/Room/security/device surfaces. |
+| A large change is reviewed only once, at the end. | Multi-phase tasks run fast deterministic checkpoints at each phase boundary (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests) without pausing for mid-phase AI subagent reviews unless explicitly opted in (`scoped_phase_review_enabled`). |
 | The developer asks for a change after verification and the workflow wedges. | `task change-decision` (`extend-scope`, `accept-edits`, `review-edits`) and `task resume --reopen` record incremental scope or post-verification changes under the same task without re-drafting from scratch. |
 | External CLI or MCP writes (Google Drive/Docs/Sheets/Slides/Calendar, generic MCP tools) either get blocked by task plan state or run silently. | External writes are independent of code task plan state and route through a native developer confirmation prompt (`ask`/`force_ask`), while secret files (`.env`, keystores, `local.properties`, `google-services.json`, credentials) are hard-denied. |
 | A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo. Applicable instructions are selected during planning; this does not provide memory to the chat provider. |
@@ -96,7 +96,7 @@ Evidence-Bound Result
 
 ### Large-Task & Multi-Phase Flow
 
-> Large tasks can be split into coherent phases. When a phase is substantial or risk-sensitive, reviewers inspect the immutable delta for that phase instead of seeing the whole large change for the first time at the end. Final verification still performs an integration-focused review across the completed task.
+> Large tasks can be split into coherent phases. Each phase runs a fast deterministic checkpoint before the next phase begins, while final verification performs a comprehensive integration review across the completed task. Opt-in scoped phase delta reviews (`scoped_phase_review_enabled`) remain available when explicitly requested.
 
 Complex tasks execute through sequential phases under a single initial approval:
 ```text
@@ -114,7 +114,7 @@ one task approval
 ```
 
 - **Semantic boundaries**: Phases represent coherent engineering steps, not mechanical 200-line splits.
-- **Proportional review**: Routine `< 400`-line feature phases and the final phase before `prepare-verification` use fast deterministic checkpoints only (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests); substantial intermediate deltas (`>= 400` changed lines), elevated risks (`T3_SUBSYSTEM` through `T5_CRITICAL`), critical surfaces, or explicitly opted-in phases trigger 1–2 policy-routed specialists.
+- **Fast deterministic phase checkpoints by default**: Phase transitions use fast deterministic checkpoints (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests) and auto-extend approved in-scope file paths without pausing for mid-phase AI subagent reviews unless `scoped_phase_review_enabled` is explicitly set.
 - **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
 
 ### Continuing across AI hosts
@@ -163,7 +163,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.60/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.0/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -186,7 +186,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.1.60 --single-branch \
+git clone --depth 1 --branch v1.2.0 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -243,7 +243,7 @@ The harness inspects the final classified working tree diff and selects an adapt
 | T2 | FEATURE | ViewModel, UseCase, normal feature behavior | tests + targeted review + assemble |
 | T3 | SUBSYSTEM | multi-module, DI, network, architecture integration | stronger integration/architecture verification |
 | T4 | DATA_DEVICE | Room, migrations, permissions, location, FGS, device APIs | specialized gates + runtime/device proof as applicable |
-| T5 | CRITICAL | Billing, Auth, Security, Crypto, Sensitive Data | highest applicable review/evidence + sensitive approval |
+| T5 | CRITICAL | Billing, Auth, Security, Crypto, Sensitive Data | highest applicable review/evidence across all 3 core specialist reviewers |
 
 > Exact reviewers, gates, and device requirements are calculated by the current runtime policy from the final classified change set.
 
@@ -384,7 +384,11 @@ The harness is engineered primary-first for **Google Antigravity**:
 For design, migration, compatibility and security decisions the agent asks the developer before drafting the plan. After approval it follows the Harness router, the authority for next actions and completion, until the task ends. Every plan also gets a readable, generated `plan.md` linked from the approval question.
 
 - **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
-- **Dedicated Custom Reviewer Subagents**: Seven core specialist reviewers are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md` (`bug-reviewer-agent`, `security-reviewer-agent`, `perf-anr-guardian-agent`, `convention-reviewer-agent`, `regression-impact-reviewer-agent`, `test-quality-reviewer-agent`, `spec-compliance-agent`).
+- **Dedicated Custom Reviewer Subagents**: Three comprehensive specialist reviewers plus the architectural compliance reviewer are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md`:
+  - `bug-test-reviewer-agent` (logic, nullability, coroutines, lifecycle/UI state, and unit test quality/assertions),
+  - `arch-regression-reviewer-agent` (caller/navigation/schema regressions, project conventions, architecture layer boundaries, KDoc, localization, and YAGNI/codebase reuse),
+  - `security-perf-reviewer-agent` (security, privacy, auth/billing/crypto, exported components, main-thread I/O & ANR prevention, memory leaks, Compose stability, and WakeLock/sensor/FGS lifecycle),
+  - `spec-compliance-agent` (architectural plan and specification compliance when routed).
 - **Developer-selected reviewer models & per-reviewer model visibility**: Inheritance remains the default. On Google Antigravity, the router prompts once before first dispatch (`SELECT_REVIEW_MODEL`: `flash-dynamic-task`, `flash-dynamic-once`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) or accepts explicit model/thinking choices (`gemini-3.8-flash-*`, `gemini-4-argon-*`, `gemini-3.1-pro-*`), syncs `.agents/agents/<role>/agent.md` frontmatter, and verifies native SQLite execution metadata (`NATIVE_METADATA_OBSERVED`). Claude Code supports native model aliases (`sonnet`, `opus`, `haiku`) or per-role choices. Every router action, status report, and chat update displays each reviewer alongside its active model (`<role> [<model>]`). See [reviewer model configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
 - **Parallel Routed Reviews**: Central policy selects the required reviewer roster. Antigravity dispatch commands prepare concurrent `invoke_subagent` calls when the host supports them; protocol and environment blockers remain explicit.
 - **Reviewer Call Safety Cap**: Maximum safety ceiling on total reviewer model calls (recommended: 20).
@@ -566,7 +570,7 @@ Only that task becomes DELIVERED. Other tasks keep their local changes and accep
 **Shared build limitation:** Gradle, unit tests, assembly, and the APK use the entire working tree, including unfinished sibling changes. Keep parked work compilable. Editing any task during another task's frozen verification makes that run stale; rerun verification against the actual tree. Use separate developer-created worktrees when you need overlapping files or independent builds. The existing `task handoff` / `task reconcile-handoff` WIP checkpoint flow remains available.
 
 **11. Does every phase run AI reviewers?**
-No. Deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) remain primary. Routine feature phases (`< 400` changed lines) and the final phase of a multi-phase plan (which is immediately followed by `prepare-verification`) skip redundant AI subagent phase reviews. Scoped phase delta review runs only on intermediate phases when the delta is substantial (`>= 400` changed lines), elevates canonical risk (`T3_SUBSYSTEM` through `T5_CRITICAL`), touches critical surfaces, or explicitly enables `scoped_phase_review_enabled`. Even then, only 1–2 policy-routed specialists review the phase delta. Final integration review across the completed task remains authoritative.
+No. Phase boundaries run fast deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) by default without spawning mid-phase AI reviewer subagents. Scoped phase delta review runs only when explicitly opted in via `scoped_phase_review_enabled`, in which case 1–2 policy-routed specialists inspect the phase delta. Final integration review across the completed task remains authoritative.
 
 ---
 

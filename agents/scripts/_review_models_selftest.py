@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import ValidationError, atomic_write_json, read_json, task_dir
 import review_models as models
 
-ROLE = "bug-reviewer-agent"
-SECURITY = "security-reviewer-agent"
+ROLE = "bug-test-reviewer-agent"
+SECURITY = "security-perf-reviewer-agent"
 SCRIPT = Path(models.__file__)
 
 
@@ -267,7 +267,7 @@ class ReviewerModelsTests(unittest.TestCase):
         run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
         record_phase_dispatch_batch(fixture.repo, task, "p1", roster, host="antigravity")
         root, identity = self.antigravity_identity()
-        role = roster[0]
+        role = "bug-test-reviewer-agent" if "bug-test-reviewer-agent" in roster else roster[0]
         prompt = Path(run["briefs"][role]).read_text(encoding="utf-8").strip()
         content = '<SYSTEM_MESSAGE>\n[Message] timestamp=2026-10-19T09:02:22Z sender=parent-123 priority=MESSAGE_PRIORITY_HIGH content=' + prompt + '\n</SYSTEM_MESSAGE>'
         Path(identity["transcript_path"]).write_text(json.dumps({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "content": content}) + '\n', encoding="utf-8")
@@ -352,7 +352,7 @@ class ReviewerModelsTests(unittest.TestCase):
         models.set_policy(fixture.repo, self.policy("flash-dynamic"), task_id=task,
                           host="antigravity", source="conversation", proof_reference="Flash")
         record_phase_dispatch_batch(fixture.repo, task, "p1", roster, host="antigravity")
-        role = roster[0]
+        role = "bug-test-reviewer-agent" if "bug-test-reviewer-agent" in roster else roster[0]
         before = (fixture.repo / ".agents/agents" / role / "agent.md").read_bytes()
         with self.assertRaisesRegex(ValidationError, "LAUNCH_PENDING"):
             models.freeze_models(fixture.repo, "sibling", "antigravity", roster, run_id="sibling-run")
@@ -583,7 +583,7 @@ class ReviewerModelsTests(unittest.TestCase):
         import shutil
         shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents", dirs_exist_ok=True)
         generate_antigravity_agents(self.repo, dry_run=False)
-        conv = "convention-reviewer-agent"
+        conv = "arch-regression-reviewer-agent"
         roster = [conv, ROLE, SECURITY]
         prompt = models.build_antigravity_model_prompt(self.repo, "task-ag", roster, run_id="run-1")
         self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
@@ -828,8 +828,7 @@ class ReviewerModelsTests(unittest.TestCase):
             host="antigravity", source="conversation", proof_reference="Flash for task",
         )
         run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
-        role = roster[0]
-        agent_md = fixture.repo / ".agents" / "agents" / role / "agent.md"
+        agent_md = fixture.repo / ".agents" / "agents" / "bug-test-reviewer-agent" / "agent.md"
         expected_bytes = agent_md.read_bytes()
         self.assertIn(b'model: "gemini-3.8-flash-high"', expected_bytes)
 

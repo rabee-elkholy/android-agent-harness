@@ -947,8 +947,13 @@ def _carry_verification_run(repo: Path, task_id: str, plan: dict, manifest: dict
                 or [c.get("reviewer") for c in new_policy.get("carried_reviews") or []] \
                 != [c.get("reviewer") for c in old_policy.get("carried_reviews") or []]:
             return give_up("the revised policy needs reviewers the frozen run did not cover")
-        drift = check_material_drift(plan, new_policy.get("surfaces") or [], changed_modules(repo, manifest),
-                                     actual_files=changed_file_paths(manifest), repo=repo)
+        drift = [
+            d for d in check_material_drift(
+                plan, new_policy.get("surfaces") or [], changed_modules(repo, manifest),
+                actual_files=changed_file_paths(manifest), repo=repo,
+            )
+            if not d.startswith("file:")
+        ]
         if drift or unplanned_mandatory_skills(plan, new_policy):
             return give_up("material drift")
     except (OSError, ValueError, KeyError, TypeError, ValidationError) as exc:
@@ -1252,7 +1257,11 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             assert_no_unresolved_conflicts(repo, task_baseline, extra_paths=plan.get("expected_files"))
         except Exception as exc:
             raise ValidationError(str(exc)) from exc
-        task_base_head = plan.get("task_base_head") or base_repo.get("head")
+        task_base_head = (
+            plan.get("task_base_head")
+            or ((task_baseline or {}).get("repository") or {}).get("head")
+            or base_repo.get("head")
+        )
         manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"), task_base_head=task_base_head)
         sublog(f"Manifest ready with change set: {manifest.get('change_set_sha256', '')[:12]}")
     with step_progress("Classifying changed surfaces"):
@@ -1387,27 +1396,23 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             raise ValidationError(round_block["reason"])
     actual_task_paths = changed_file_paths(manifest)
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths, repo=repo)
-    # The final verifier refuses a mandatory skill the approved plan did not name; a companion
-    # surface such as COMPOSE_UI is not material drift but can add one. Stop here, before any gate
-    # or review runs, instead of at complete (N12).
     from final_verifier import unplanned_mandatory_skills
     drift = [*drift, *(f"skill:{skill}" for skill in unplanned_mandatory_skills(plan, policy))]
+    extra_files = [item[5:] for item in drift if item.startswith("file:")]
+    if extra_files:
+        plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(extra_files))
+        plan.pop("material_drift", None)
+        plan.pop("material_drift_causes", None)
+        plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+        if isinstance(plan.get("approval"), dict):
+            plan["approval"]["plan_sha256"] = plan["plan_sha256"]
+        save_plan(_plan_path(repo, args.task_id), plan)
+        drift = [item for item in drift if not item.startswith("file:")]
     if drift:
         plan["material_drift"] = drift
         causes = _drift_causes(repo, manifest, drift, plan)
         plan["material_drift_causes"] = causes
         save_plan(_plan_path(repo, args.task_id), plan)
-        if all(item.startswith("file:") for item in drift):
-            raise ValidationError(
-                "FILE_SCOPE_DECISION_REQUIRED: additional files do not by themselves require plan revision: "
-                + ", ".join(item[5:] for item in drift)
-                + ". Preserve this task, approval and prior reviews. For support files serving the approved goal, preview "
-                + f"python .agents/harness.py task change-decision --task-id {args.task_id} --mode extend-scope "
-                + '--file "<path>" --reason "<same-goal justification>". Repeat --file for each file, then apply with '
-                + "--expect-preview <preview_sha256> --source approved-plan. For personal edits, ask the developer "
-                + "to accept-edits without additional AI review or review-edits, then record their explicit choice. "
-                + "Only material behavior, contract, sensitive surface or module expansion requires revise."
-            )
         remediation_cmd = build_remediation_command(repo, args.task_id, plan, policy, manifest)
         # A live run: the developer re-approved without being told which change pulled in AUTH/BILLING.
         named = [f"{item} (from {', '.join(causes[item])})" if causes.get(item) else str(item) for item in drift]
@@ -2055,7 +2060,13 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
     task_cs = current.get("task_change_set_sha256")
     if task_cs:
         try:
-            task_manifest = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"), live_manifest=manifest)
+            task_baseline = load_task_baseline(repo, task_id)
+            task_base_head = (
+                plan.get("task_base_head")
+                or ((task_baseline or {}).get("repository") or {}).get("head")
+                or (plan.get("repository") or {}).get("head")
+            )
+            task_manifest = build_task_manifest(repo, task_baseline, expected_files=plan.get("expected_files"), live_manifest=manifest, task_base_head=task_base_head)
             live_task_cs = task_manifest.get("task_change_set_sha256")
             if live_task_cs and task_cs != live_task_cs:
                 return {
@@ -2480,7 +2491,11 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     phase_dir.mkdir(parents=True, exist_ok=True)
     baseline_file = phase_dir / "baseline.json"
     base_data = read_json(baseline_file) if baseline_file.is_file() else load_task_baseline(repo, args.task_id)
+    from change_decision import additional_files, observed_files
+    decision_files = additional_files(plan) | observed_files(plan, repo)
     phase_scope_files = target_phase.get("expected_files") or plan.get("expected_files")
+    if phase_scope_files:
+        phase_scope_files = sorted(set(phase_scope_files) | decision_files)
     if phase_scope_files:
         markers = find_conflict_markers(repo, phase_scope_files)
         if markers:
@@ -2509,21 +2524,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         raise ValidationError(f"phase checkpoint failed: no file changes detected for phase '{phase_id}'")
 
     phase_expected_files = target_phase.get("expected_files")
-    approved_task_files = set(normalize_expected_files(repo, plan.get("expected_files") or []))
-    additional_phase_files = []
-    if phase_expected_files:
-        norm_expected = normalize_expected_files(repo, phase_expected_files)
-        for change in phase_changes:
-            raw_p = change.get("path") if isinstance(change, dict) else str(change)
-            change_path = (raw_p or "").replace("\\", "/").strip("/")
-            if change_path.startswith(".agents/"):
-                continue
-            if change_path not in norm_expected:
-                if change_path not in approved_task_files:
-                    raise ValidationError(f"phase '{phase_id}' modified file outside expected_files of the approved task: {change_path}")
-                additional_phase_files.append(change_path)
-
-    phase_expected_modules = target_phase.get("expected_modules")
+    approved_task_files = set(normalize_expected_files(repo, list(plan.get("expected_files") or []) + sorted(decision_files)))
+    phase_expected_modules = target_phase.get("expected_modules") or plan.get("expected_modules")
     if phase_expected_modules:
         norm_mods = [m.strip("/:").replace("\\", "/") for m in phase_expected_modules]
         for change in phase_changes:
@@ -2534,6 +2536,25 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
             mod_match = any(change_path.startswith(m + "/") or change_path == m for m in norm_mods)
             if not mod_match and change_path not in approved_task_files:
                 raise ValidationError(f"phase '{phase_id}' modified file outside expected_modules: {change_path}")
+
+    additional_phase_files = []
+    if phase_expected_files:
+        norm_expected = normalize_expected_files(repo, phase_expected_files)
+        for change in phase_changes:
+            raw_p = change.get("path") if isinstance(change, dict) else str(change)
+            change_path = (raw_p or "").replace("\\", "/").strip("/")
+            if change_path.startswith(".agents/"):
+                continue
+            if change_path not in norm_expected:
+                additional_phase_files.append(change_path)
+                approved_task_files.add(change_path)
+                cur_exp = list(plan.get("expected_files") or [])
+                if change_path not in cur_exp:
+                    plan["expected_files"] = sorted(set(cur_exp) | {change_path})
+                    plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+                    if isinstance(plan.get("approval"), dict):
+                        plan["approval"]["plan_sha256"] = plan["plan_sha256"]
+                    save_plan(_plan_path(repo, args.task_id), plan)
 
     # Phase delta classification & central policy
     phase_classification = classify(repo, task_changes=phase_changes)

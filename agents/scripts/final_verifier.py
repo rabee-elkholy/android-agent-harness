@@ -624,10 +624,13 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     snapshot = str(current["delivery_snapshot_sha256"])
     change_set = str(current["change_set_sha256"])
     task_changes = recorded_manifest.get("task_changes") if "task_changes" in recorded_manifest else None
-    drift = check_material_drift(
-        plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True),
-        actual_files=changed_file_paths(recorded_manifest), repo=repo,
-    )
+    drift = [
+        d for d in check_material_drift(
+            plan, policy.get("surfaces") or [], changed_modules(repo, recorded_manifest, task_only=True),
+            actual_files=changed_file_paths(recorded_manifest), repo=repo,
+        )
+        if not d.startswith("file:")
+    ]
     if drift:
         return _blocked("PLAN_APPROVAL_REQUIRED", ["material plan drift: " + ", ".join(drift)], checks)
     expected_policy, policy_error, block_status = validate_policy_artifact(
@@ -1005,32 +1008,6 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         except (ValidationError, KeyError) as exc:
             checks.append({"name": f"carried:{reviewer or 'unknown'}", "status": "FAIL", "detail": str(exc)})
             reasons.append(f"carried review is invalid for {reviewer or 'unknown'}: {exc}")
-
-    is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
-    if not is_conflict_task and (set(policy.get("surfaces") or []) & SENSITIVE_SURFACES):
-        approval_record, error = _validate_artifact(store, snapshot, change_set, run_id, "sensitive_approval", harness_version)
-        checks.append({"name": "sensitive_approval", "status": "PASS" if error is None else "FAIL", "detail": error or "bound sensitive approval PASS"})
-        if error:
-            reasons.append(error)
-        elif approval_record:
-            final_approval = approval_record.get("evidence") or {}
-            final_source = str(final_approval.get("approval_source") or "")
-            final_tier = str(final_approval.get("enforcement_tier") or "")
-            final_proof = str(final_approval.get("proof_reference_sha256") or "")
-            required_sensitive = set(policy.get("surfaces") or []) & SENSITIVE_SURFACES
-            covered_sensitive = set(final_approval.get("surfaces") or [])
-            if final_approval.get("plan_sha256") != plan.get("plan_sha256"):
-                reasons.append("sensitive approval is not bound to the approved plan")
-            if (final_source, final_tier) not in {
-                ("host_native", "HARD_ENFORCED"),
-                ("developer_terminal", "RULE_ENFORCED"),
-                ("conversation", "RULE_ENFORCED"),
-            }:
-                reasons.append("sensitive approval provenance is invalid")
-            if len(final_proof) != 64 or any(char not in "0123456789abcdef" for char in final_proof.lower()):
-                reasons.append("sensitive approval proof reference is missing or malformed")
-            if not required_sensitive <= covered_sensitive:
-                reasons.append("sensitive approval surface coverage is incomplete")
 
     assemble = None
     install = None

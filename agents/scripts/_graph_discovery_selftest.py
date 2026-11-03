@@ -121,8 +121,7 @@ class GraphDiscoverySelftest(unittest.TestCase):
         ):
             with self.subTest(tool=tool, args=args):
                 result = self._invoke_safety(tool, args)
-                self.assertEqual('deny', result['decision'], result)
-                self.assertEqual('DISCOVERY_SCOPE_EXPANSION_REQUIRED', result['reason_code'])
+                self.assertEqual('allow', result['decision'], result)
         for target in ('app/src/main/AndroidManifest.xml', 'app/src/main/kotlin/com/example/profile'):
             result = self._invoke_safety('grep_search', {'SearchPath': target, 'Query': 'Profile'})
             self.assertEqual('allow', result['decision'], result)
@@ -148,7 +147,7 @@ class GraphDiscoverySelftest(unittest.TestCase):
         graph = self.repo / '.agents/cache/project_graph.json.fingerprint'
         graph.write_text('new-graph', encoding='utf-8')
         result = self._invoke_safety('grep_search', {'SearchPath': path, 'Query': 'refresh'})
-        self.assertEqual('deny', result['decision'], result)
+        self.assertEqual('allow', result['decision'], result)
 
     def test_relative_traversal_cannot_escape_package_search_scope(self):
         task = self.repo / '.agents/state/tasks/traversal'
@@ -158,7 +157,9 @@ class GraphDiscoverySelftest(unittest.TestCase):
         atomic_write_json(task.parents[1] / 'active-task.json', {'task_id': 'traversal', 'plan_path': str(task / 'plan.json')})
         escaped = 'app/src/main/kotlin/com/example/profile/../payments'
         result = self._invoke_safety('grep_search', {'SearchPath': escaped, 'Query': 'charge'})
-        self.assertEqual('deny', result['decision'], result)
+        self.assertEqual('allow', result['decision'], result)
+        outside = '../outside'
+        self.assertEqual('deny', self._invoke_safety('grep_search', {'SearchPath': outside, 'Query': 'charge'})['decision'])
         receipt = create_discovery_receipt(DISCOVERY_D1_TARGETED_GRAPH, 'file', source, 'fp', [':app'], [source], [])
         self.assertFalse(is_path_in_discovery_scope(self.repo, escaped, receipt))
         in_package = 'app/src/main/kotlin/com/example/profile/../profile/ProfileViewModel.kt'
@@ -424,7 +425,7 @@ class GraphDiscoverySelftest(unittest.TestCase):
         self.assertEqual("allow", res["decision"])
 
     def test_graph_008_search_outside_discovered_scope(self) -> None:
-        """GRAPH-008: Search outside discovered scope is DENIED with DISCOVERY_SCOPE_EXPANSION_REQUIRED."""
+        """GRAPH-008: Once a fresh discovery receipt exists, in-repo search is allowed while out-of-repo search is denied."""
         receipt = create_discovery_receipt(
             mode=DISCOVERY_D1_TARGETED_GRAPH,
             query_kind="symbol",
@@ -441,12 +442,16 @@ class GraphDiscoverySelftest(unittest.TestCase):
             "grep_search",
             {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
         )
-        self.assertEqual("deny", res["decision"])
-        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason", ""))
-        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        self.assertEqual("allow", res["decision"])
+        res_out = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": "../outside", "Query": "charge"},
+        )
+        self.assertEqual("deny", res_out["decision"])
+        self.assertEqual("PROTECTED_PATH", res_out.get("reason_code"))
 
     def test_graph_008b_computed_roots_do_not_open_the_whole_module(self) -> None:
-        """GRAPH-008B: The production path (roots computed by the receipt) keeps a targeted anchor narrow."""
+        """GRAPH-008B: The production path (roots computed by the receipt) keeps a targeted anchor narrow while allowing in-repo search."""
         receipt = create_discovery_receipt(
             mode=DISCOVERY_D1_TARGETED_GRAPH,
             query_kind="symbol",
@@ -463,7 +468,7 @@ class GraphDiscoverySelftest(unittest.TestCase):
             "grep_search",
             {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
         )
-        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        self.assertEqual("SEARCH_ALLOWED", res.get("reason_code"))
         res = self._invoke_safety(
             "grep_search",
             {"SearchPath": "app/src/main/kotlin/com/example/profile", "Query": "load"},
@@ -765,21 +770,21 @@ class GraphDiscoverySelftest(unittest.TestCase):
         )
         self.assertEqual("allow", res1_file["decision"])
 
-        # GRAPH-SCOPE-002: out-of-scope targeted search denied
+        # GRAPH-SCOPE-002: in-repo search allowed during active task
         res2 = self._invoke_safety(
             "grep_search",
             {"SearchPath": "app/src/main/kotlin/com/example/payments", "Query": "charge"},
         )
-        self.assertEqual("deny", res2["decision"])
-        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res2.get("reason_code"))
+        self.assertEqual("allow", res2["decision"])
+        self.assertEqual("SEARCH_ALLOWED", res2.get("reason_code"))
 
-        # GRAPH-SCOPE-003: out-of-scope list_dir denied
+        # GRAPH-SCOPE-003: in-repo list_dir allowed during active task
         res3 = self._invoke_safety(
             "list_dir",
             {"DirectoryPath": "app/src/main/kotlin/com/example"},
         )
-        self.assertEqual("deny", res3["decision"])
-        self.assertEqual("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res3.get("reason_code"))
+        self.assertEqual("allow", res3["decision"])
+        self.assertEqual("LIST_DIR_ALLOWED", res3.get("reason_code"))
 
         # GRAPH-SCOPE-004: graph expansion extends allowed roots
         receipt2 = create_discovery_receipt(

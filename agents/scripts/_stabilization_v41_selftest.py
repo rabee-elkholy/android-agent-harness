@@ -168,7 +168,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
 
         # Lead agent creates raw response text with valid pass token and valid package hash
         raw_text = f"SECURITY_PASS\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nLooks good."
-        report = response_text_to_report(self.tmp, task_id, "security-reviewer-agent", raw_text)
+        report = response_text_to_report(self.tmp, task_id, "security-perf-reviewer-agent", raw_text)
         self.assertFalse(report.get("independent_execution_verified", False))
 
         rep_path = self.tmp / ".harness-setup" / "sec_report.json"
@@ -176,7 +176,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
         reports = [rep_path]
         policy_data = read_json(Path(prep["policy"]))
         for other in policy_data.get("reviewers", []):
-            if other != "security-reviewer-agent":
+            if other != "security-perf-reviewer-agent":
                 tok = f"{other.split('-')[0].upper()}_PASS\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nPASS"
                 oth_rep = response_text_to_report(self.tmp, task_id, other, tok)
                 p = self.tmp / ".harness-setup" / f"{other}.json"
@@ -221,13 +221,13 @@ class ReviewerIndependenceTests(unittest.TestCase):
             "schema_version": 1,
             "task_id": task_id,
             "run_id": prep["run_id"],
-            "reviewer": "security-reviewer-agent",
+            "reviewer": "security-perf-reviewer-agent",
             "package_sha256": pkg_sha,
             "subagent_id": subagent_id,
             "dispatched_at": utc_now(),
         }
         rc_data["receipt_sha256"] = canonical_sha256(rc_data)
-        _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
+        _write_json(rc_dir / "security-perf-reviewer-agent.json", rc_data)
 
         # Create mock trusted transcript in test-injected ANTIGRAVITY_APP_DATA root
         app_data_dir = self.tmp / "test_app_data"
@@ -241,7 +241,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
 
             ok, proof = verify_independent_reviewer_execution(
                 self.tmp, task_id=task_id, run_id=prep["run_id"],
-                reviewer="security-reviewer-agent", package_sha256=pkg_sha,
+                reviewer="security-perf-reviewer-agent", package_sha256=pkg_sha,
                 subagent_id=subagent_id, transcript_path=transcript_path,
             )
             self.assertTrue(ok)
@@ -256,7 +256,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
         task_id = "task-rev-003"
         ok, proof = verify_independent_reviewer_execution(
             self.tmp, task_id=task_id, run_id="run-1",
-            reviewer="security-reviewer-agent", package_sha256="abc",
+            reviewer="security-perf-reviewer-agent", package_sha256="abc",
             subagent_id="sub-nonexistent",
             transcript_path=self.tmp / "nonexistent.jsonl",
         )
@@ -269,17 +269,17 @@ class ReviewerIndependenceTests(unittest.TestCase):
         rc_dir.mkdir(parents=True, exist_ok=True)
         rc_data = {
             "schema_version": 1, "task_id": task_id, "run_id": "run-expected",
-            "reviewer": "security-reviewer-agent", "package_sha256": "pkg-expected",
+            "reviewer": "security-perf-reviewer-agent", "package_sha256": "pkg-expected",
             "subagent_id": "sub-4", "dispatched_at": utc_now(),
         }
         rc_data["receipt_sha256"] = canonical_sha256(rc_data)
-        _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
+        _write_json(rc_dir / "security-perf-reviewer-agent.json", rc_data)
 
         # Mismatched run_id in caller
         ok, proof = verify_independent_reviewer_execution(
             self.tmp, task_id=task_id, run_id="run-DIFFERENT",
-            reviewer="security-reviewer-agent", package_sha256="pkg-expected",
-            subagent_id="sub-4", transcript_path=rc_dir / "security-reviewer-agent.json",
+            reviewer="security-perf-reviewer-agent", package_sha256="pkg-expected",
+            subagent_id="sub-4", transcript_path=rc_dir / "security-perf-reviewer-agent.json",
         )
         self.assertFalse(ok)
 
@@ -289,10 +289,10 @@ class ReviewerIndependenceTests(unittest.TestCase):
         rc_dir.mkdir(parents=True, exist_ok=True)
         rc_data = {
             "schema_version": 1, "task_id": task_id, "run_id": "run-1",
-            "reviewer": "security-reviewer-agent", "package_sha256": "pkg-1",
+            "reviewer": "security-perf-reviewer-agent", "package_sha256": "pkg-1",
             "subagent_id": "sub-5", "receipt_sha256": "bad-hash",
         }
-        _write_json(rc_dir / "security-reviewer-agent.json", rc_data)
+        _write_json(rc_dir / "security-perf-reviewer-agent.json", rc_data)
         _write_json(task_dir(self.tmp, task_id) / "current-run.json", {
             "task_id": task_id, "run_id": "run-1", "review_host": "antigravity", "review_protocol_version": 1,
         })
@@ -306,7 +306,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
 
             ok, proof = verify_independent_reviewer_execution(
                 self.tmp, task_id=task_id, run_id="run-1",
-                reviewer="security-reviewer-agent", package_sha256="pkg-1",
+                reviewer="security-perf-reviewer-agent", package_sha256="pkg-1",
                 subagent_id="sub-5", transcript_path=t_path,
             )
             self.assertFalse(ok)
@@ -339,7 +339,7 @@ class ReviewerIndependenceTests(unittest.TestCase):
         # Override on sensitive surface is strictly forbidden
         store.write(**comm, status="PASS", name="reviews", producer="developer_override", evidence={
             "developer_override": True, "source": "developer_terminal", "proof_reference": "override",
-            "proof_reference_sha256": "abc", "reviewers": ["security-reviewer-agent"],
+            "proof_reference_sha256": "abc", "reviewers": ["security-perf-reviewer-agent"],
         })
         store.write(**comm, status="PASS", name="unit_tests", producer="run_tests_gate", evidence={"executed": 1})
         store.write(**comm, status="PASS", name="preflight", producer="preflight_check", evidence={})
@@ -759,7 +759,7 @@ class RedGreenTemporalTests(unittest.TestCase):
         store.write(**comm, name="unit_tests", producer="run_tests_gate", evidence={"executed": 1, "executed_tests": ["com.example.FixTest#test"]})
         store.write(**comm, name="preflight", producer="preflight_check", evidence={})
         store.write(**comm, name="assemble", producer="run_gradle_task", evidence={})
-        store.write(**comm, name="reviews", producer="review_orchestrator", evidence={"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "verdict": "PASS", "independent_execution_verified": True}]})
+        store.write(**comm, name="reviews", producer="review_orchestrator", evidence={"reviewers": ["bug-test-reviewer-agent"], "reports": [{"reviewer": "bug-test-reviewer-agent", "verdict": "PASS", "independent_execution_verified": True}]})
 
         res = verify_delivery(self.tmp, task_id)
         self.assertNotEqual("PASS", res.get("status"))
@@ -912,8 +912,8 @@ class PhaseCheckpointsTests(unittest.TestCase):
         p1_dir.mkdir(parents=True, exist_ok=True)
         (p1_dir / "unit_tests.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
         (p1_dir / "reviews.json").write_text(json.dumps([
-            {"reviewer": "bug-reviewer-agent", "verdict": "PASS"},
-            {"reviewer": "regression-impact-reviewer-agent", "verdict": "PASS"},
+            {"reviewer": "bug-test-reviewer-agent", "verdict": "PASS"},
+            {"reviewer": "arch-regression-reviewer-agent", "verdict": "PASS"},
         ]), encoding="utf-8")
         res = checkpoint_phase(Namespace(repo=str(self.tmp), task_id=task_id))
         self.assertEqual("CHECKPOINT_PASS", res.get("status"))

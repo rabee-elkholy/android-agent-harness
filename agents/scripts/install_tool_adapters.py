@@ -107,12 +107,9 @@ COMMAND_DIRS: dict[str, tuple[str, str]] = {
 }
 
 EMPTY_DIR_CANDIDATES = (
-    ".agents/agents/bug-reviewer-agent",
-    ".agents/agents/security-reviewer-agent",
-    ".agents/agents/perf-anr-guardian-agent",
-    ".agents/agents/convention-reviewer-agent",
-    ".agents/agents/regression-impact-reviewer-agent",
-    ".agents/agents/test-quality-reviewer-agent",
+    ".agents/agents/bug-test-reviewer-agent",
+    ".agents/agents/security-perf-reviewer-agent",
+    ".agents/agents/arch-regression-reviewer-agent",
     ".agents/agents/spec-compliance-agent",
     ".agents/agents",
     ".amazonq/rules",
@@ -563,9 +560,36 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
                 continue
             path.unlink()
             logs.append(f"deleted {rel_s}")
+    elif claude_dir.is_dir():
+        active_stems = {p.stem for p in subagents_dir(repo).glob("*.json") if p.stem not in SKIP_SUBAGENTS}
+        for path in sorted(claude_dir.glob("*.md")):
+            if path.stem in active_stems or not is_managed_file(path):
+                continue
+            rel_s = rel_of(path, repo)
+            if dry_run:
+                logs.append(f"dry-run delete {rel_s}")
+                continue
+            path.unlink()
+            logs.append(f"deleted {rel_s}")
+    ag_agents_dir = repo / ".agents" / "agents"
     if "antigravity" not in selected:
         for r in CORE_ROUTED_REVIEWERS:
-            path = repo / ".agents" / "agents" / r / "agent.md"
+            path = ag_agents_dir / r / "agent.md"
+            if not is_managed_file(path):
+                continue
+            rel_s = rel_of(path, repo)
+            if dry_run:
+                logs.append(f"dry-run delete {rel_s}")
+                continue
+            path.unlink()
+            logs.append(f"deleted {rel_s}")
+    if ag_agents_dir.is_dir():
+        for child in sorted(ag_agents_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            if "antigravity" in selected and child.name in CORE_ROUTED_REVIEWERS:
+                continue
+            path = child / "agent.md"
             if not is_managed_file(path):
                 continue
             rel_s = rel_of(path, repo)

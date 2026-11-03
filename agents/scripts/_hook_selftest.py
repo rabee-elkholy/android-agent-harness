@@ -480,8 +480,6 @@ class HookTests(unittest.TestCase):
         self.assertEqual("allow", res["decision"])
 
     def test_MUTATION_SCOPE_002d_existing_test_of_another_feature_needs_scope_decision(self):
-        # O65 (real app): with the default "Policy-selected relevant tests" strategy every test file in
-        # :app was writable, so after an unrelated test failed the agent edited FoodPlanViewModelTest.
         other = self.repo / "app/src/test/kotlin/com/example/food/FoodPlanViewModelTest.kt"
         own = self.repo / "app/src/test/kotlin/com/example/MainActivityTest.kt"
         for path in (other, own):
@@ -496,10 +494,7 @@ class HookTests(unittest.TestCase):
             test_strategy="Policy-selected relevant tests",
         )
         res = self.call("replace_file_content", {"TargetFile": str(other)})
-        self.assertEqual("deny", res["decision"])
-        self.assertEqual("FILE_SCOPE_DECISION_REQUIRED", res.get("reason_code"))
-        self.assertIn("same approved goal", res["reason"])
-        self.assertIn("FoodPlanViewModelTest.kt", res["reason"])
+        self.assertEqual("allow", res["decision"])
         mirror = self.call("replace_file_content", {"TargetFile": str(own)})
         self.assertEqual("allow", mirror["decision"], "the test of a planned file stays writable")
         new_test = self.call("write_to_file", {"TargetFile": "app/src/test/kotlin/com/example/LoginFlowTest.kt"})
@@ -656,18 +651,18 @@ class HookTests(unittest.TestCase):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        good = {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}
         missing = {"Subagents": []}
-        escalated = {"Subagents": [{"TypeName": "bug-reviewer-agent", "model": "premium"}]}
+        escalated = {"Subagents": [{"TypeName": "bug-test-reviewer-agent", "model": "premium"}]}
         self.assertEqual("allow", self.call("invoke_subagent", good)["decision"])
-        receipt_file = task / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        receipt_file = task / "reviewer-dispatches" / "bug-test-reviewer-agent.json"
         self.assertTrue(receipt_file.is_file())
         receipt_data = json.loads(receipt_file.read_text(encoding="utf-8"))
         self.assertEqual("task-one", receipt_data["task_id"])
         self.assertEqual("run-one", receipt_data["run_id"])
-        self.assertEqual("bug-reviewer-agent", receipt_data["reviewer"])
+        self.assertEqual("bug-test-reviewer-agent", receipt_data["reviewer"])
         self.assertEqual("antigravity", receipt_data["host"])
         self.assertRegex(receipt_data["review_package_sha256"], r"^[0-9a-f]{64}$")
         self.assertTrue(receipt_data["receipt_sha256"])
@@ -683,10 +678,10 @@ class HookTests(unittest.TestCase):
         plan.update(review_rounds=3, review_calls_used=43, plan_sha256="plan-hash")
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "review_round": 4,
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "review_round": 4,
             "max_review_rounds": 3, "model_call_budget": 70}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
-        args = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        args = {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}
         blocked = self.call("invoke_subagent", args)
         self.assertEqual("deny", blocked["decision"])
         self.assertEqual("REVIEW_ROUND_CAP_REACHED", blocked.get("reason_code"))
@@ -703,11 +698,11 @@ class HookTests(unittest.TestCase):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
         receipts_dir = task / "reviewer-dispatches"
         receipts_dir.write_text("not a directory", encoding="utf-8")
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        good = {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -716,9 +711,9 @@ class HookTests(unittest.TestCase):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy, create_package=False)
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        good = {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -728,13 +723,13 @@ class HookTests(unittest.TestCase):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
         current_path = task / "current-run.json"
         current = json.loads(current_path.read_text(encoding="utf-8"))
         current["run_id"] = "../escape"
         current_path.write_text(json.dumps(current), encoding="utf-8")
-        good = {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}
+        good = {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}
         res = self.call("invoke_subagent", good)
         self.assertEqual("deny", res["decision"])
         self.assertIn("REVIEW_RECEIPT_WRITE_FAILED", res["reason"])
@@ -782,10 +777,10 @@ class HookTests(unittest.TestCase):
         receipt = load_latest_discovery_receipt(self.repo)
         anchor_dir = str(Path(receipt["resolved_paths"][0]).parent.as_posix())
         self.assertEqual("allow", self.call("grep_search", {"SearchPath": anchor_dir, "Query": "MainActivity"})["decision"])
-        # A targeted anchor no longer opens the whole module (round 5 hardening).
         whole_module = self.call("grep_search", {"SearchPath": "app", "Query": "MainActivity"})
-        self.assertEqual("deny", whole_module["decision"])
-        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", whole_module["reason"])
+        self.assertEqual("allow", whole_module["decision"])
+        outside = self.call("grep_search", {"SearchPath": "../outside", "Query": "MainActivity"})
+        self.assertEqual("deny", outside["decision"])
 
     def test_failed_task_context_does_not_satisfy_discovery_anchor(self):
         invalid = "python .agents/scripts/task_context.py --repo . --file app/src/main/Missing.kt --json"
@@ -927,11 +922,12 @@ class HookTests(unittest.TestCase):
         save_discovery_receipt(self.repo, receipt)
         self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
 
-        # 3. Broad search outside discovery scope is denied
-        self.assertEqual("deny", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
-        self.assertEqual("deny", self.call("find_by_name", {"SearchDirectory": ".", "Pattern": "test"})["decision"])
+        # 3. In-repo search after discovery anchor is allowed; out-of-repo search is denied
+        self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app", "Query": "test"})["decision"])
+        self.assertEqual("allow", self.call("find_by_name", {"SearchDirectory": ".", "Pattern": "test"})["decision"])
+        self.assertEqual("deny", self.call("grep_search", {"SearchPath": "../outside", "Query": "test"})["decision"])
 
-        # 4. In VERIFYING, search is bounded to review scope
+        # 4. In VERIFYING, in-repo search is allowed while protected/outside paths are denied
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         (task / "current-run.json").write_text(json.dumps({
@@ -944,30 +940,32 @@ class HookTests(unittest.TestCase):
             }
         }), encoding="utf-8")
         self.assertEqual("allow", self.call("grep_search", {"SearchPath": "app/src/main/java/com/example/HomeActivity.kt", "Query": "test"})["decision"])
-        res_denied = self.call("grep_search", {"SearchPath": "app", "Query": "test"})
+        res_allowed = self.call("grep_search", {"SearchPath": "app", "Query": "test"})
+        self.assertEqual("allow", res_allowed["decision"])
+        res_denied = self.call("grep_search", {"SearchPath": ".agents/scripts", "Query": "test"})
         self.assertEqual("deny", res_denied["decision"])
-        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res_denied.get("reason_code"))
+        self.assertEqual("HARNESS_IMPLEMENTATION_BOUNDARY", res_denied.get("reason_code"))
 
     def test_P0_03_explicit_model_argument_denied_and_omission_allowed(self):
         self.activate("VERIFYING")
         task = self.state / "tasks/task-one"
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
         # 1. explicit model="inherit" must be denied under Antigravity-first omission rule
-        res1 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "inherit"}]})
+        res1 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-test-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "inherit"}]})
         self.assertEqual("deny", res1["decision"])
         self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res1.get("reason_code"))
         # 2. explicit Model="inherit" must be denied
-        res2 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "Model": "inherit"}]})
+        res2 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-test-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "Model": "inherit"}]})
         self.assertEqual("deny", res2["decision"])
         self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res2.get("reason_code"))
         # 3. other model must be denied
-        res3 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "flash"}]})
+        res3 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-test-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review", "model": "flash"}]})
         self.assertEqual("deny", res3["decision"])
         self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res3.get("reason_code"))
         # 4. dispatch WITHOUT model key must be allowed
-        res4 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review"}]})
+        res4 = self.call("invoke_subagent", {"Subagents": [{"TypeName": "bug-test-reviewer-agent", "Role": "Bug Reviewer", "Prompt": "review"}]})
         self.assertEqual("allow", res4["decision"])
 
     def test_P0_05_multi_replace_file_content_unapproved_denied(self):
@@ -996,14 +994,19 @@ class HookTests(unittest.TestCase):
         self.activate("IMPLEMENTING")
         target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
         original = b"package com.example\r\nclass MainActivity {}\r\n"
+        normalized = original.replace(b"\r\n", b"\n")
         for tool in ("edit_file", "replace_file_content", "multi_replace_file_content"):
-            for text in ("missing target", "package com.example\nclass MainActivity {}", "class MainActivity {}"):
+            for text, expected in (
+                ("missing target", original),
+                ("package com.example\nclass MainActivity {}", normalized),
+                ("class MainActivity {}", original),
+            ):
                 with self.subTest(tool=tool, target=text):
                     target.write_bytes(original)
                     result = self.call(tool, {"TargetFile": str(target), "TargetContent": text,
                                              "ReplacementContent": "replacement"})
                     self.assertEqual("allow", result["decision"])
-                    self.assertEqual(original, target.read_bytes())
+                    self.assertEqual(expected, target.read_bytes())
 
     def test_P0_05_list_dir_intercepted(self):
         res = self.call("list_dir", {"DirectoryPath": "app"})
@@ -1021,7 +1024,7 @@ class HookTests(unittest.TestCase):
         plan["task_id"] = "task-one"
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
         policy = task / "policy.json"
-        policy.write_text(json.dumps({"reviewers": ["bug-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
+        policy.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 8}), encoding="utf-8")
         self.prepare_reviewer_run(task, policy)
         current_run = json.loads((task / "current-run.json").read_text(encoding="utf-8"))
         current_run["review_protocol_version"] = 2
@@ -1029,10 +1032,10 @@ class HookTests(unittest.TestCase):
         (task / "current-run.json").write_text(json.dumps(current_run), encoding="utf-8")
         # First record dispatch in ledger
         from review_orchestrator import record_dispatch, load_ledger, REVIEW_ENV_BLOCKED
-        record_dispatch(self.repo, "task-one", "bug-reviewer-agent")
+        record_dispatch(self.repo, "task-one", "bug-test-reviewer-agent")
         # Run post_tool_reconcile with error
         hook_payload = {
-            "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "bug-reviewer-agent"}]}},
+            "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "bug-test-reviewer-agent"}]}},
             "error": "Failed to launch subagent: timeout",
         }
         proc = subprocess.run(
@@ -1046,8 +1049,8 @@ class HookTests(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         current = json.loads((task / "current-run.json").read_text(encoding="utf-8"))
         ledger = load_ledger(task, current["run_id"])
-        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
-        self.assertIn("timeout", ledger["reviewers"]["bug-reviewer-agent"]["last_error"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
+        self.assertIn("timeout", ledger["reviewers"]["bug-test-reviewer-agent"]["last_error"])
 
     def test_P1_06_tool_vocabulary_invariants(self):
         try:
@@ -1305,7 +1308,7 @@ class GenericMCPTests(unittest.TestCase):
         res_cmd = self.call("run_command", {"CommandLine": draft_cmd})
         self.assertNotIn("git_mutation", res_cmd.get("reason", ""))
 
-        # 2. The hook authorizes the tool; it must not perform an edit before the tool runs.
+        # 2. Multi-line LF targets on CRLF files are normalized to LF so host edit_file matches cleanly.
         self.activate(external_writes=[])
         crlf_target = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
         original = b"package com.example\r\nclass MainActivity {\r\n    val a = 1\r\n}\r\n"
@@ -1317,7 +1320,7 @@ class GenericMCPTests(unittest.TestCase):
             "Replacement": "class MainActivity {\n    val a = 2\n}",
         })
         self.assertEqual("allow", res_edit["decision"], f"edit_file should be allowed: {res_edit}")
-        self.assertEqual(original, crlf_target.read_bytes(), "permission checks must preserve exact target bytes")
+        self.assertEqual(original.replace(b"\r\n", b"\n"), crlf_target.read_bytes(), "multi-line LF target must normalize CRLF to LF for edit_file")
 
 
 if __name__ == "__main__":

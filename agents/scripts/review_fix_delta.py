@@ -164,7 +164,7 @@ def compute_fix_delta(
         present = [{"path": path} for path in files if path in after or comparison is not None]
         if not present:
             # Only deletions since the review: the regression reviewer covers what they break.
-            return {"files": files, "reviewers": ["regression-impact-reviewer-agent"], **decision_basis}
+            return {"files": files, "reviewers": ["arch-regression-reviewer-agent"], **decision_basis}
         delta_class = classify(repo, task_changes=present, candidate_paths=[item["path"] for item in present],
                                progress=False, review_comparison=comparison)
         if not delta_class.get("surfaces"):
@@ -174,7 +174,7 @@ def compute_fix_delta(
                         task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan, review_scope="FIX_DELTA")
         reviewers = set(routed.get("reviewers") or [])
         if any(path not in after for path in files):
-            reviewers.add("regression-impact-reviewer-agent")
+            reviewers.add("arch-regression-reviewer-agent")
         return {"files": files, "reviewers": sorted(reviewers),
                 **decision_basis,
                 "comparison": "REVIEWED_TEXT" if comparison is not None else "FILE_SCOPE_FALLBACK"}

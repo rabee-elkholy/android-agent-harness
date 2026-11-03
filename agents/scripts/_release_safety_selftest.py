@@ -124,7 +124,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         version = (KIT / "agents/VERSION").read_text().strip()
         for filename, replacement, expected in (
             ("release_checksums.json", '{"schema_version":1,"algorithm":"sha256","files":{}}', "inventory"),
-            ("CITATION.cff", f'cff-version: {version}\nversion: {version}\n', "cff-version"),
+            ("CITATION.cff", f'cff-version: 9.9.9\nversion: {version}\n', "cff-version"),
         ):
             with self.subTest(filename=filename):
                 def read(path, *args, **kwargs):

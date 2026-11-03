@@ -1,6 +1,6 @@
 # Test Quality & Assertion Depth Guidelines
 
-This reference defines the quality standards enforced by `test-quality-reviewer-agent` when auditing unit and UI tests (`*Test.kt`).
+This reference defines the quality standards enforced by `bug-test-reviewer-agent` when auditing unit and UI tests (`*Test.kt`).
 
 ---
 

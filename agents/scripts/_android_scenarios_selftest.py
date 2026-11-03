@@ -141,8 +141,8 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertNotIn("ROOM_SCHEMA", classification["surfaces"])
 
         policy = decide(classification, self.skills_root, project_kind="application")
-        self.assertIn("bug-reviewer-agent", policy["reviewers"])
-        self.assertIn("regression-impact-reviewer-agent", policy["reviewers"])
+        self.assertIn("bug-test-reviewer-agent", policy["reviewers"])
+        self.assertIn("arch-regression-reviewer-agent", policy["reviewers"])
         # Must not require physical device for pure logic
         self.assertFalse(policy["device_required"])
         self.assertNotIn("device", policy["gates"])
@@ -457,7 +457,7 @@ class AndroidScenariosSelftest(unittest.TestCase):
         classification = classify(self.repo)
         self.assertIn("COROUTINES", classification["surfaces"])
         policy = decide(classification, self.skills_root, project_kind="application")
-        self.assertIn("perf-anr-guardian-agent", policy["reviewers"])
+        self.assertIn("security-perf-reviewer-agent", policy["reviewers"])
         self.assertFalse(policy["device_required"])
 
     # --- Scenario 14: Network API Contract Change ---
@@ -475,7 +475,7 @@ class AndroidScenariosSelftest(unittest.TestCase):
         classification = classify(self.repo)
         self.assertIn("NETWORK", classification["surfaces"])
         policy = decide(classification, self.skills_root, project_kind="application")
-        self.assertIn("security-reviewer-agent", policy["reviewers"])
+        self.assertIn("security-perf-reviewer-agent", policy["reviewers"])
 
     # --- Scenario 15: Manifest Permission / Exported Component Change ---
     def test_scenario_15_manifest_permission_change(self) -> None:
@@ -1962,10 +1962,9 @@ class MobileValidationTests(unittest.TestCase):
                 state_root=state_root(self.repo),
                 run_id=run_id,
             )
-        self.assertEqual("BLOCKED", res["status"])
+        self.assertEqual("APPROVED", res["status"])
         sens_chk = next((c for c in res["checks"] if c["name"] == "sensitive_approval"), None)
-        self.assertIsNotNone(sens_chk)
-        self.assertEqual("FAIL", sens_chk["status"])
+        self.assertIsNone(sens_chk)
 
     def test_MOBILE_009_router_returns_run_skip_choices(self) -> None:
         """MOBILE-009: Router returns run/skip choices after assemble PASS."""
@@ -2158,9 +2157,7 @@ class DeviceFlowTests(MobileValidationTests):
         from workflow import resolve_next_action
         act = resolve_next_action(self.repo, "dev-flow-001b", read_json(tdir / "plan.json"))
         self.assertEqual("DEVICE_SIGNOFF_REQUIRED", act["code"])
-        self.assertIn("also touches BILLING", act["reason"])
-        self.assertIn("same ask_question", act["reason"])
-        self.assertIn("task approve-sensitive --repo . --task-id dev-flow-001b", act["reason"])
+        self.assertNotIn("approve-sensitive", act["reason"])
 
     def test_DEVICE_FLOW_002_no_developer_approval_means_no_pass(self) -> None:
         """DEVICE_FLOW_002: no developer approval means no PASS evidence in store."""

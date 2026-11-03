@@ -41,6 +41,9 @@ RUNBLOCKING_PATTERN = re.compile(r"\brunBlocking\s*(\(|{)")
 UNIMPLEMENTED_STUB_PATTERN = re.compile(r"\b(TODO\s*\(|throw\s+NotImplementedError\s*\()")
 DOUBLE_BANG_PATTERN = re.compile(r"[a-zA-Z0-9_\)\]]\s*!!")
 DIAGNOSTIC_PROBE_PATTERN = re.compile(r"(?:\[HARNESS-PROBE\]|\bHARNESS_PROBE\b)")
+DEAD_CODE_WORKAROUND_PATTERN = re.compile(
+    r"(?:\bif\s*\(\s*(?:true|false)\s*\)|\|\|\s*false\b|&&\s*true\b|\brun\s*\{\s*run\s*\{|\b(?:private\s+)?fun\s+(?:unusedHelper|_vmKeep|_signInKeep)\s*\()"
+)
 CLASS_ENTRY_PATTERN = re.compile(
     r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
@@ -382,6 +385,14 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                 "line": idx,
                 "type": "STRAY_DIAGNOSTIC_PROBE",
                 "msg": f"Stray diagnostic probe detected: '{trimmed}'. Remove temporary probes before review/delivery.",
+            })
+
+        if not is_test and any(not _in_string_or_comment(line, m_dc.start()) for m_dc in DEAD_CODE_WORKAROUND_PATTERN.finditer(line)):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "DEAD_CODE_WORKAROUND",
+                "msg": f"Dead-code edit workaround detected in production code: '{trimmed}'. Cleanly edit or delete the target code block instead of leaving tautological branches or dummy functions.",
             })
 
         if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):

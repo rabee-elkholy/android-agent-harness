@@ -214,6 +214,11 @@ def validate_checkpoint_receipt(
     except Exception as exc:
         return False, f"cannot validate checkpoint against plan: {exc}", None
 
+    if receipt.get("kind") == "DEVELOPER_CONFIRMED_LINEAGE":
+        if not str(receipt.get("proof_reference_sha256") or "").strip():
+            return False, f"developer lineage checkpoint '{head[:8]}' missing proof_reference_sha256", None
+        return True, "", receipt
+
     if receipt.get("kind") == "REQUESTED_DELIVERY_COMMIT" and receipt.get("merge_delivery") is True:
         baseline = load_task_baseline(repo, task_id) or {}
         if not _matches_recorded_merge(repo, head, parent_head, baseline):
@@ -298,21 +303,76 @@ def is_valid_task_lineage(repo: Path, task_id: str, current_head: str) -> tuple[
     if current_head in valid_heads:
         return True, "valid accepted checkpoint descendant"
 
-    # Check for unauthorized merge commits
-    merges_proc = subprocess.run(
-        ["git", "rev-list", "--merges", f"{base_head}..{current_head}"],
-        cwd=str(repo),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if merges_proc.returncode == 0 and merges_proc.stdout.strip():
-        return False, "TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED: merge commit detected in task lineage"
-
     if _is_disjoint_sibling_commit_chain(repo, task_id, base_head, current_head, valid_heads, plan=plan):
-        return True, "valid disjoint sibling task commit lineage"
+        return True, "valid disjoint sibling commit chain"
 
-    return False, f"HEAD/branch lineage mismatch: commit {current_head[:8]} is not in accepted checkpoints"
+    return False, f"lineage check failed: commit '{current_head[:8]}' does not have a valid task checkpoint receipt"
+
+
+def accept_developer_confirmed_lineage(
+    repo: Path,
+    task_id: str,
+    plan: dict[str, Any],
+    *,
+    source: str,
+    proof_reference: str,
+) -> str | None:
+    """Record a developer-confirmed Git commit/merge descendant as an accepted checkpoint."""
+    if source not in ("conversation", "developer_terminal") or not str(proof_reference).strip():
+        return None
+    tdir = task_dir(repo, task_id)
+    base_head = plan.get("task_base_head") or (plan.get("repository") or {}).get("head", "")
+    current_head = git_text(repo, "rev-parse", "HEAD")
+    if not base_head or current_head == base_head:
+        return None
+    valid_heads = resolve_valid_checkpoint_heads(repo, task_id, base_head)
+    if current_head in valid_heads:
+        return current_head
+    accepted = str(plan.get("accepted_checkpoint_head") or "")
+    parent_head = accepted if accepted in valid_heads else base_head
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent_head, current_head],
+        cwd=str(repo), capture_output=True, check=False,
+    ).returncode != 0:
+        if subprocess.run(
+            ["git", "merge-base", "--is-ancestor", base_head, current_head],
+            cwd=str(repo), capture_output=True, check=False,
+        ).returncode != 0:
+            return None
+        parent_head = base_head
+    committed = subprocess.run(
+        ["git", "diff", "--no-renames", "--name-only", "-z", parent_head, current_head],
+        cwd=str(repo), capture_output=True, check=False,
+    )
+    committed_paths = sorted({
+        path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
+        for path in committed.stdout.split(b"\0") if path
+    }) if committed.returncode == 0 else []
+    manifest = build_manifest(repo)
+    receipt_data = {
+        "schema_version": 2,
+        "kind": "DEVELOPER_CONFIRMED_LINEAGE",
+        "task_id": task_id,
+        "plan_sha256": plan.get("plan_sha256"),
+        "task_base_head": base_head,
+        "parent_head": parent_head,
+        "checkpoint_head": current_head,
+        "checkpoint_paths": committed_paths,
+        "checkpoint_baseline_changes": manifest.get("changes") or [],
+        "source": source,
+        "proof_reference_sha256": canonical_sha256({"reference": str(proof_reference).strip()}),
+        "created_at": utc_now(),
+    }
+    receipt_data["receipt_sha256"] = compute_receipt_sha(receipt_data)
+    cdir = checkpoints_dir(tdir)
+    cdir.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(cdir / f"{current_head}.json", receipt_data)
+    plan["accepted_checkpoint_head"] = current_head
+    heads = list(plan.get("accepted_checkpoint_heads") or [])
+    if current_head not in heads:
+        heads.append(current_head)
+    plan["accepted_checkpoint_heads"] = heads
+    return current_head
 
 
 def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, Any]) -> str | None:

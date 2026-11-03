@@ -236,7 +236,7 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
             return False
         content = agent_file.read_text(encoding="utf-8")
         from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
-        from review_models import ANTIGRAVITY_MODEL_CHOICES, _parse_agent_frontmatter_model
+        from review_models import ANTIGRAVITY_MODEL_CHOICES, _antigravity_frontmatter_model
         src = (repo / ".agents" / "subagents" / f"{role}.json")
         if not src.is_file():
             src = (repo / "agents" / "subagents" / f"{role}.json")
@@ -244,7 +244,7 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
             return False
         import json as _json
         data = _json.loads(src.read_text(encoding="utf-8"))
-        fm_model = _parse_agent_frontmatter_model(content)
+        fm_model = _antigravity_frontmatter_model(repo, role)
         if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
             return False
         rendered = antigravity_agent_markdown(data, model=fm_model)
@@ -757,7 +757,7 @@ def _sync_tree_in_place(src: Path, dst: Path, *, keep: frozenset[str] = frozense
     """Make dst hold exactly src's files while every directory that survives keeps its identity.
 
     Real app: an update during an open Antigravity chat moved `.agents/` aside and created a new one.
-    The chat then reported `subagent "perf-anr-guardian-agent" not found` although the reviewer
+    The chat then reported `subagent "security-perf-reviewer-agent" not found` although the reviewer
     definitions were back in `.agents/subagents/`: the host had lost the directory it loaded them
     from. Files are now replaced one by one inside the existing directories. Top-level names in
     `keep` (live task state, caches) are left untouched.

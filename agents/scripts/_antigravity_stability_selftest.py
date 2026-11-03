@@ -41,14 +41,14 @@ class TestAgentYaml(unittest.TestCase):
     def test_AG_YAML_001_colon_in_description_is_safely_quoted(self):
         from install_tool_adapters import antigravity_agent_markdown
         data = {
-            "name": "perf-anr-guardian-agent",
+            "name": "security-perf-reviewer-agent",
             "description": "Senior Android Performance & ANR Guardian: Main-thread blockages, UI freezing, battery drain, and memory leaks.",
             "system_prompt": "You are the Senior Android Performance Guardian.",
         }
         rendered = antigravity_agent_markdown(data)
         # Frontmatter must contain quoted description
         self.assertIn('description: "Senior Android Performance & ANR Guardian: Main-thread blockages, UI freezing, battery drain, and memory leaks."', rendered)
-        self.assertIn('name: "perf-anr-guardian-agent"', rendered)
+        self.assertIn('name: "security-perf-reviewer-agent"', rendered)
 
     def test_AG_YAML_002_seven_agents_generated(self):
         from install_tool_adapters import generate_antigravity_agents
@@ -61,12 +61,9 @@ class TestAgentYaml(unittest.TestCase):
             shutil.copytree(kit_subagents, target_subagents)
             logs = generate_antigravity_agents(repo, dry_run=False)
             expected_roles = [
-                "bug-reviewer-agent",
-                "security-reviewer-agent",
-                "perf-anr-guardian-agent",
-                "convention-reviewer-agent",
-                "regression-impact-reviewer-agent",
-                "test-quality-reviewer-agent",
+                "bug-test-reviewer-agent",
+                "security-perf-reviewer-agent",
+                "arch-regression-reviewer-agent",
                 "spec-compliance-agent",
             ]
             for role in expected_roles:
@@ -81,12 +78,9 @@ class TestAgentYaml(unittest.TestCase):
             shutil.copytree(REPO_ROOT / "agents" / "subagents", repo / ".agents" / "subagents")
             generate_antigravity_agents(repo, dry_run=False)
             for role in [
-                "bug-reviewer-agent",
-                "security-reviewer-agent",
-                "perf-anr-guardian-agent",
-                "convention-reviewer-agent",
-                "regression-impact-reviewer-agent",
-                "test-quality-reviewer-agent",
+                "bug-test-reviewer-agent",
+                "security-perf-reviewer-agent",
+                "arch-regression-reviewer-agent",
                 "spec-compliance-agent",
             ]:
                 agent_file = repo / ".agents" / "agents" / role / "agent.md"
@@ -116,7 +110,7 @@ class TestAgentYaml(unittest.TestCase):
         with self.assertRaises((ValueError, RuntimeError)):
             antigravity_agent_markdown({"name": "", "description": "desc", "system_prompt": "prompt"})
         with self.assertRaises((ValueError, RuntimeError)):
-            antigravity_agent_markdown({"name": "bug-reviewer-agent", "description": "desc", "system_prompt": ""})
+            antigravity_agent_markdown({"name": "bug-test-reviewer-agent", "description": "desc", "system_prompt": ""})
 
     def test_AG_YAML_006_in_place_engine_sync_preserves_agents_directory(self):
         from lifecycle import IN_PLACE_KEEP, _sync_tree_in_place
@@ -126,8 +120,8 @@ class TestAgentYaml(unittest.TestCase):
             src = root / "staging"
             dst = root / "repo_agents"
             (src / "subagents").mkdir(parents=True)
-            (src / "subagents" / "bug-reviewer-agent.json").write_text('{"name":"bug-reviewer-agent"}', encoding="utf-8")
-            agent_dir = dst / "agents" / "bug-reviewer-agent"
+            (src / "subagents" / "bug-test-reviewer-agent.json").write_text('{"name":"bug-test-reviewer-agent"}', encoding="utf-8")
+            agent_dir = dst / "agents" / "bug-test-reviewer-agent"
             agent_dir.mkdir(parents=True)
             agent_md = agent_dir / "agent.md"
             agent_md.write_text("# existing custom agent\n", encoding="utf-8")
@@ -175,18 +169,18 @@ class TestBatchDispatchContract(unittest.TestCase):
         from review_orchestrator import dispatchable_reviewers
         ledger = {
             "reviewers": {
-                "bug-reviewer-agent": {"state": "NOT_DISPATCHED"},
-                "security-reviewer-agent": {"state": "NOT_DISPATCHED"},
+                "bug-test-reviewer-agent": {"state": "NOT_DISPATCHED"},
+                "security-perf-reviewer-agent": {"state": "NOT_DISPATCHED"},
             }
         }
-        required = ["bug-reviewer-agent", "security-reviewer-agent"]
+        required = ["bug-test-reviewer-agent", "security-perf-reviewer-agent"]
         dispatchable = dispatchable_reviewers(ledger, required)
         self.assertEqual(sorted(required), sorted(dispatchable))
 
         # When one is already completed
-        ledger["reviewers"]["bug-reviewer-agent"]["state"] = "COMPLETED"
+        ledger["reviewers"]["bug-test-reviewer-agent"]["state"] = "COMPLETED"
         dispatchable2 = dispatchable_reviewers(ledger, required)
-        self.assertEqual(["security-reviewer-agent"], dispatchable2)
+        self.assertEqual(["security-perf-reviewer-agent"], dispatchable2)
 
 
 class TestV2Accounting(unittest.TestCase):
@@ -221,7 +215,7 @@ class TestV2Accounting(unittest.TestCase):
                 "change_set_sha256": "b" * 64,
             }), encoding="utf-8")
             (tdir / "policy.json").write_text(json.dumps({
-                "reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+                "reviewers": ["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
                 "review_round": 1,
                 "max_review_rounds": 3,
                 "model_call_budget": 20,
@@ -234,7 +228,7 @@ class TestV2Accounting(unittest.TestCase):
 
             results_dir = tdir / "review-execution" / "run-1" / "results"
             results_dir.mkdir(parents=True)
-            for r in ["bug-reviewer-agent", "security-reviewer-agent"]:
+            for r in ["bug-test-reviewer-agent", "security-perf-reviewer-agent"]:
                 exec_id = f"exec-{r}"
                 parsed_res = {
                     "schema_version": 2,
@@ -265,10 +259,10 @@ class TestV2Accounting(unittest.TestCase):
                 "delivery_snapshot_sha256": "a" * 64,
                 "change_set_sha256": "b" * 64,
                 "review_package_sha256": pkg_sha,
-                "required_reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+                "required_reviewers": ["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
                 "reviewers": {
-                    "bug-reviewer-agent": {"state": "COMPLETED"},
-                    "security-reviewer-agent": {"state": "COMPLETED"},
+                    "bug-test-reviewer-agent": {"state": "COMPLETED"},
+                    "security-perf-reviewer-agent": {"state": "COMPLETED"},
                 },
             }
 
@@ -367,7 +361,7 @@ class TestProtocolParser(unittest.TestCase):
   "schema_version": 2,
   "task_id": "t1",
   "run_id": "r1",
-  "reviewer": "bug-reviewer-agent",
+  "reviewer": "bug-test-reviewer-agent",
   "review_package_sha256": "{pkg_sha}",
   "verdict": "PASS",
   "findings": []
@@ -378,7 +372,7 @@ class TestProtocolParser(unittest.TestCase):
             text=text,
             expected_task_id="t1",
             expected_run_id="r1",
-            expected_reviewer="bug-reviewer-agent",
+            expected_reviewer="bug-test-reviewer-agent",
             expected_package_sha256=pkg_sha,
         )
         self.assertEqual("PASS", parsed["verdict"])
@@ -392,7 +386,7 @@ class TestProtocolParser(unittest.TestCase):
   "schema_version": 2,
   "task_id": "t1",
   "run_id": "r1",
-  "reviewer": "bug-reviewer-agent",
+  "reviewer": "bug-test-reviewer-agent",
   "review_package_sha256": "{pkg_sha}",
   "verdict": "FINDINGS",
   "findings": [
@@ -411,7 +405,7 @@ class TestProtocolParser(unittest.TestCase):
             text=text,
             expected_task_id="t1",
             expected_run_id="r1",
-            expected_reviewer="bug-reviewer-agent",
+            expected_reviewer="bug-test-reviewer-agent",
             expected_package_sha256=pkg_sha,
         )
         self.assertEqual("FINDINGS", parsed["verdict"])
@@ -427,7 +421,7 @@ class TestProtocolParser(unittest.TestCase):
   "schema_version": 2,
   "task_id": "t1",
   "run_id": "r1",
-  "reviewer": "bug-reviewer-agent",
+  "reviewer": "bug-test-reviewer-agent",
   "review_package_sha256": "{pkg_sha}",
   "verdict": "FINDINGS",
   "findings": [
@@ -447,7 +441,7 @@ class TestProtocolParser(unittest.TestCase):
                 text=text,
                 expected_task_id="t1",
                 expected_run_id="r1",
-                expected_reviewer="bug-reviewer-agent",
+                expected_reviewer="bug-test-reviewer-agent",
                 expected_package_sha256=pkg_sha,
             )
 
@@ -460,7 +454,7 @@ class TestProtocolParser(unittest.TestCase):
   "schema_version": 2,
   "task_id": "t1",
   "run_id": "r1",
-  "reviewer": "bug-reviewer-agent",
+  "reviewer": "bug-test-reviewer-agent",
   "review_package_sha256": "{pkg_sha}",
   "verdict": "PASS",
   "findings": []
@@ -470,7 +464,7 @@ class TestProtocolParser(unittest.TestCase):
             text=text,
             expected_task_id="t1",
             expected_run_id="r1",
-            expected_reviewer="bug-reviewer-agent",
+            expected_reviewer="bug-test-reviewer-agent",
             expected_package_sha256=pkg_sha,
         )
         self.assertEqual("PASS", parsed["verdict"])
@@ -488,7 +482,7 @@ And here is the actual final response:
   "schema_version": 2,
   "task_id": "t1",
   "run_id": "r1",
-  "reviewer": "bug-reviewer-agent",
+  "reviewer": "bug-test-reviewer-agent",
   "review_package_sha256": "{pkg_sha}",
   "verdict": "PASS",
   "findings": []
@@ -498,7 +492,7 @@ And here is the actual final response:
             text=text,
             expected_task_id="t1",
             expected_run_id="r1",
-            expected_reviewer="bug-reviewer-agent",
+            expected_reviewer="bug-test-reviewer-agent",
             expected_package_sha256=pkg_sha,
         )
         self.assertEqual("PASS", parsed["verdict"])
@@ -566,7 +560,7 @@ class TestExecutionIdentity(unittest.TestCase):
                 "change_set_sha256": "b" * 64,
             }), encoding="utf-8")
             (tdir / "policy.json").write_text(json.dumps({
-                "reviewers": ["bug-reviewer-agent"],
+                "reviewers": ["bug-test-reviewer-agent"],
             }), encoding="utf-8")
             (tdir / "review-package.md").write_text("# Review Package\n", encoding="utf-8")
 
@@ -579,7 +573,7 @@ class TestExecutionIdentity(unittest.TestCase):
                 "schema_version": 2,
                 "task_id": "task-1",
                 "run_id": "run-1",
-                "reviewer": "bug-reviewer-agent",
+                "reviewer": "bug-test-reviewer-agent",
                 "delivery_snapshot_sha256": "a" * 64,
                 "change_set_sha256": "b" * 64,
                 "review_package_sha256": "f" * 64,
@@ -589,7 +583,7 @@ class TestExecutionIdentity(unittest.TestCase):
             }
             from _vnext_common import canonical_sha256
             receipt["receipt_sha256"] = canonical_sha256(receipt)
-            (dispatch_dir / "bug-reviewer-agent.json").write_text(json.dumps(receipt), encoding="utf-8")
+            (dispatch_dir / "bug-test-reviewer-agent.json").write_text(json.dumps(receipt), encoding="utf-8")
 
             ledger = {
                 "schema_version": 1,
@@ -598,9 +592,9 @@ class TestExecutionIdentity(unittest.TestCase):
                 "delivery_snapshot_sha256": "a" * 64,
                 "change_set_sha256": "b" * 64,
                 "review_package_sha256": "f" * 64,
-                "required_reviewers": ["bug-reviewer-agent"],
+                "required_reviewers": ["bug-test-reviewer-agent"],
                 "reviewers": {
-                    "bug-reviewer-agent": {
+                    "bug-test-reviewer-agent": {
                         "state": "ENV_BLOCKED",
                         "execution_id": "exec-original",
                         "execution_id_sha256": "hash-original",
@@ -612,7 +606,7 @@ class TestExecutionIdentity(unittest.TestCase):
 
             # Attempting to complete with a different execution ID must be rejected even if ENV_BLOCKED!
             with self.assertRaises(ValidationError):
-                complete_review(repo, "task-1", "bug-reviewer-agent", "exec-different", host="antigravity")
+                complete_review(repo, "task-1", "bug-test-reviewer-agent", "exec-different", host="antigravity")
 
 
 class TestDefaultsAndTerminology(unittest.TestCase):
@@ -744,7 +738,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
 
         self.policy_f = self.task_d / "policy.json"
         self.policy_f.write_text(json.dumps({
-            "reviewers": ["bug-reviewer-agent"],
+            "reviewers": ["bug-test-reviewer-agent"],
             "max_review_rounds": 3,
             "model_call_budget": 20,
         }), encoding="utf-8")
@@ -761,7 +755,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         self.runs_d.mkdir(parents=True, exist_ok=True)
         self.pkg_f = self.runs_d / "review-package.md"
         self.pkg_f.write_text("# Review Package\n", encoding="utf-8")
-        self.brief_f = self.runs_d / "brief-bug-reviewer-agent.md"
+        self.brief_f = self.runs_d / "brief-bug-test-reviewer-agent.md"
         self.brief_f.write_text("# Bug Reviewer Brief Content\n", encoding="utf-8")
 
         self.current_f = self.task_d / "current-run.json"
@@ -779,7 +773,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         from review_orchestrator import init_ledger, sha256_file
         init_ledger(
             self.task_d, "task-v2", "r1", self.snapshot, self.change_set,
-            sha256_file(self.pkg_f), ["bug-reviewer-agent"]
+            sha256_file(self.pkg_f), ["bug-test-reviewer-agent"]
         )
 
         self.env = os.environ.copy()
@@ -812,13 +806,13 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         from review_orchestrator import get_review_execution_status, main as orchestrator_main
         for argv in (
             ["dispatch-batch", "--repo", str(self.repo), "--task", "task-v2", "--host", "antigravity"],
-            ["dispatch", "--repo", str(self.repo), "--task", "task-v2", "--reviewer", "bug-reviewer-agent", "--host", "antigravity"],
+            ["dispatch", "--repo", str(self.repo), "--task", "task-v2", "--reviewer", "bug-test-reviewer-agent", "--host", "antigravity"],
         ):
             self.assertEqual(1, orchestrator_main(argv), argv)
         status = get_review_execution_status(self.repo, "task-v2")
-        self.assertEqual("NOT_DISPATCHED", status["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual("NOT_DISPATCHED", status["reviewers"]["bug-test-reviewer-agent"]["state"])
         # The real launch path stays open.
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": self.brief_f.read_text(encoding="utf-8")}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": self.brief_f.read_text(encoding="utf-8")}])
         self.assertEqual("allow", res["decision"], res.get("reason"))
 
     def test_V2_BOUNDARY_PROFILE_001_profile_exception_denies_dispatch(self):
@@ -830,29 +824,29 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
             "review_host": "antigravity",
             "review_protocol_version": 2,
         }), encoding="utf-8")
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEW_PROFILE_BLOCKED", res.get("reason_code"))
 
     def test_V2_BOUNDARY_PROFILE_002_empty_profile_denies_dispatch(self):
         self.policy_f.write_text(json.dumps({"reviewers": [], "max_review_rounds": 3, "model_call_budget": 20}), encoding="utf-8")
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertIn(res.get("reason_code"), ("REVIEW_PROFILE_BLOCKED", "REVIEWER_ROSTER_EMPTY", "REVIEWER_ROSTER_EXTRA"))
 
     def test_V2_BOUNDARY_PROFILE_003_reviewer_missing_from_profile_denies(self):
-        self.policy_f.write_text(json.dumps({"reviewers": ["bug-reviewer-agent", "security-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 20}), encoding="utf-8")
+        self.policy_f.write_text(json.dumps({"reviewers": ["bug-test-reviewer-agent", "security-perf-reviewer-agent"], "max_review_rounds": 3, "model_call_budget": 20}), encoding="utf-8")
         res = self._call_hook([
-            {"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"},
-            {"Role": "security-reviewer-agent", "TypeName": "security-reviewer-agent", "Prompt": "Security brief"},
+            {"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"},
+            {"Role": "security-perf-reviewer-agent", "TypeName": "security-perf-reviewer-agent", "Prompt": "Security brief"},
         ])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEW_PROFILE_BLOCKED", res.get("reason_code"))
 
     def test_V2_BOUNDARY_PROFILE_004_missing_brief_denies_before_receipt(self):
         self.brief_f.unlink()
-        receipt_p = self.task_d / "review-execution/r1/dispatch/bug-reviewer-agent.json"
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        receipt_p = self.task_d / "review-execution/r1/dispatch/bug-test-reviewer-agent.json"
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEW_PROFILE_BLOCKED", res.get("reason_code"))
         self.assertFalse(receipt_p.is_file())
@@ -861,51 +855,51 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         from review_orchestrator import load_ledger
         self.brief_f.unlink()
         l_before = load_ledger(self.task_d, "r1")
-        self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         l_after = load_ledger(self.task_d, "r1")
         self.assertEqual(l_before, l_after)
 
     def test_V2_IDENTITY_001_valid_role_typename_prompt_passes(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("allow", res["decision"])
 
     def test_V2_IDENTITY_002_valid_typename_garbage_role_denied(self):
-        res = self._call_hook([{"Role": "garbage-role", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "garbage-role", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEWER_ROLE_MISMATCH", res.get("reason_code"))
 
     def test_V2_IDENTITY_003_valid_role_garbage_typename_denied(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "garbage-type", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "garbage-type", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEWER_ROLE_MISMATCH", res.get("reason_code"))
 
     def test_V2_IDENTITY_004_missing_role_denied(self):
-        res = self._call_hook([{"TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("MISSING_SUBAGENT_ROLE", res.get("reason_code"))
 
     def test_V2_IDENTITY_005_missing_typename_denied(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("MISSING_SUBAGENT_TYPENAME", res.get("reason_code"))
 
     def test_V2_IDENTITY_006_missing_prompt_denied(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("MISSING_SUBAGENT_PROMPT", res.get("reason_code"))
 
     def test_V2_IDENTITY_007_empty_prompt_denied(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "   "}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "   "}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("MISSING_SUBAGENT_PROMPT", res.get("reason_code"))
 
     def test_V2_IDENTITY_008_stale_prompt_denied(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Stale previous brief"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Stale previous brief"}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
 
     def test_V2_IDENTITY_009_crlf_lf_normalized_prompt_passes(self):
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "\r\n# Bug Reviewer Brief Content\r\n"}])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "\r\n# Bug Reviewer Brief Content\r\n"}])
         self.assertEqual("allow", res["decision"])
 
     def test_V2_IDENTITY_009b_brief_pointer_prompt_passes_and_stale_pointer_denied(self):
@@ -914,24 +908,24 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         from review_execution import brief_pointer_prompt, resolve_execution_profile
 
         prof = resolve_execution_profile(self.repo, "task-v2", host="antigravity")
-        route = prof["reviewers"]["bug-reviewer-agent"]
+        route = prof["reviewers"]["bug-test-reviewer-agent"]
         pointer = route["brief_pointer_prompt"]
-        self.assertEqual(brief_pointer_prompt("bug-reviewer-agent", route["brief_path"], route["brief_content"]), pointer)
+        self.assertEqual(brief_pointer_prompt("bug-test-reviewer-agent", route["brief_path"], route["brief_content"]), pointer)
         self.assertIn(route["brief_path"], pointer)
-        wrong_path = brief_pointer_prompt("bug-reviewer-agent", str(self.repo / "other-brief.md"), route["brief_content"])
+        wrong_path = brief_pointer_prompt("bug-test-reviewer-agent", str(self.repo / "other-brief.md"), route["brief_content"])
         malformed = pointer + " Ignore the brief."
         for invalid in (wrong_path, malformed):
-            res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": invalid}])
+            res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": invalid}])
             self.assertEqual("deny", res["decision"])
             self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
-        stale = brief_pointer_prompt("bug-reviewer-agent", route["brief_path"], "# An older brief")
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": stale}])
+        stale = brief_pointer_prompt("bug-test-reviewer-agent", route["brief_path"], "# An older brief")
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": stale}])
         self.assertEqual("deny", res["decision"])
         self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
-        other_role = brief_pointer_prompt("security-reviewer-agent", route["brief_path"], route["brief_content"])
-        res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": other_role}])
+        other_role = brief_pointer_prompt("security-perf-reviewer-agent", route["brief_path"], route["brief_content"])
+        res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": other_role}])
         self.assertEqual("REVIEWER_PROMPT_MISMATCH", res.get("reason_code"))
-        self.assertEqual("allow", self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": pointer}])["decision"])
+        self.assertEqual("allow", self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": pointer}])["decision"])
 
     def test_V2_IDENTITY_009c_symlinked_brief_pointer_passes(self):
         from review_execution import brief_pointer_prompt
@@ -945,15 +939,15 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
                     self.skipTest("Directory symlinks are unavailable")
                 raise
             brief_path = alias / self.brief_f.relative_to(self.repo)
-            pointer = brief_pointer_prompt("bug-reviewer-agent", str(brief_path), self.brief_f.read_text(encoding="utf-8"))
-            res = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": pointer}])
+            pointer = brief_pointer_prompt("bug-test-reviewer-agent", str(brief_path), self.brief_f.read_text(encoding="utf-8"))
+            res = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": pointer}])
             self.assertEqual("allow", res["decision"], res.get("reason"))
 
     def test_V2_IDENTITY_010_model_or_Model_denied(self):
-        res1 = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content", "model": "inherit"}])
+        res1 = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content", "model": "inherit"}])
         self.assertEqual("deny", res1["decision"])
         self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res1.get("reason_code"))
-        res2 = self._call_hook([{"Role": "bug-reviewer-agent", "TypeName": "bug-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content", "Model": None}])
+        res2 = self._call_hook([{"Role": "bug-test-reviewer-agent", "TypeName": "bug-test-reviewer-agent", "Prompt": "# Bug Reviewer Brief Content", "Model": None}])
         self.assertEqual("deny", res2["decision"])
         self.assertEqual("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", res2.get("reason_code"))
 
@@ -963,7 +957,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
         self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
         self.assertIsNone(prof["dispatch_contract"]["model_argument"])
         self.assertNotIn("model", prof)
-        rev = prof["reviewers"]["bug-reviewer-agent"]
+        rev = prof["reviewers"]["bug-test-reviewer-agent"]
         self.assertNotIn("required_model", rev)
         self.assertNotIn("preferred_model", rev)
         self.assertNotIn("fallback_model", rev)
@@ -971,7 +965,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
     def test_V2_TOP_LEVEL_SUBAGENT_001_parallel_single_reviewer_dispatches_pass(self):
         """Antigravity's top-level invoke_subagent schema (without Subagents array) dispatches multi-reviewer rosters one by one."""
         from review_orchestrator import get_review_execution_status, init_ledger, ledger_file, sha256_file
-        reviewers = ["bug-reviewer-agent", "regression-impact-reviewer-agent", "test-quality-reviewer-agent"]
+        reviewers = ["bug-test-reviewer-agent", "arch-regression-reviewer-agent", "security-perf-reviewer-agent"]
         self.policy_f.write_text(json.dumps({
             "reviewers": reviewers,
             "max_review_rounds": 3,
@@ -1062,23 +1056,22 @@ class TestResourceWriteScope(unittest.TestCase):
         run_git(repo, 'add', '.')
         run_git(repo, 'commit', '-qm', 'declare modules')
         plan = workflow.draft(fixture._draft_ns('resource-scope', expected_files=approved,
-            expected_surfaces='LOCALIZATION', expected_modules=':app,:core'))
+            expected_surfaces='LOCALIZATION', expected_modules=':app'))
         approval = argparse.Namespace(repo=str(repo), task_id='resource-scope', source='conversation',
                                       proof_reference='approved', enforcement_tier='RULE_ENFORCED',
                                       plan_hash=plan['plan_sha256'][:12])
         workflow.record_approval(approval)
         self.assertTrue(file_mutation_allowed(repo, targets=[approved])[0])
-        for target in (added, other):
-            allowed, reason, code = file_mutation_allowed(repo, targets=[target])
-            self.assertFalse(allowed, reason)
-            self.assertEqual('FILE_SCOPE_DECISION_REQUIRED', code)
-            self.assertIn(target, reason)
+        self.assertTrue(file_mutation_allowed(repo, targets=[added])[0])
+        allowed_other, reason_other, code_other = file_mutation_allowed(repo, targets=[other])
+        self.assertFalse(allowed_other, reason_other)
+        self.assertEqual('SCOPE_EXPANSION_REQUIRES_REVISED_APPROVAL', code_other)
         write_file(repo / added, '<resources><string name="new_label">New</string></resources>\n')
-        with self.assertRaisesRegex(ValidationError, 'app/src/debug/res/values/new.xml'):
-            workflow.prepare_verification(repo, 'resource-scope')
+        prep1 = workflow.prepare_verification(repo, 'resource-scope')
+        self.assertTrue(prep1['run_id'])
         parser = workflow.build_parser()
         revision = workflow.revise(parser.parse_args(['revise', '--repo', str(repo), '--task-id',
-            'resource-scope', '--expected-files', ','.join([approved, added, other])]))
+            'resource-scope', '--expected-modules', ':app,:core', '--expected-files', ','.join([approved, added, other])]))
         self.assertFalse(file_mutation_allowed(repo, targets=[other])[0])
         with self.assertRaises(ValidationError):
             workflow.record_approval(approval)  # Old hash cannot authorize new scope.
@@ -1111,7 +1104,7 @@ class TestResourceWriteScope(unittest.TestCase):
         import argparse
         import workflow
         from _daily_workflow_selftest import DailyWorkflowSelftest
-        from _vnext_common import ValidationError
+        from _vnext_common import read_json
         from mutation_guard import file_mutation_allowed
         fixture = DailyWorkflowSelftest()
         fixture.setUp()
@@ -1124,16 +1117,13 @@ class TestResourceWriteScope(unittest.TestCase):
         approval = argparse.Namespace(repo=str(repo), task_id='rename-scope', source='conversation',
             proof_reference='approved', enforcement_tier='RULE_ENFORCED', plan_hash=plan['plan_sha256'][:12])
         workflow.record_approval(approval)
-        self.assertFalse(file_mutation_allowed(repo, targets=[source, target])[0])
+        self.assertTrue(file_mutation_allowed(repo, targets=[source, target])[0])
         (repo / source).rename(repo / target)
-        with self.assertRaisesRegex(ValidationError, source) as failure:
-            workflow.prepare_verification(repo, 'rename-scope')
-        self.assertIn('FILE_SCOPE_DECISION_REQUIRED', str(failure.exception))
-        revised = workflow.revise(workflow.build_parser().parse_args([
-            'revise', '--repo', str(repo), '--task-id', 'rename-scope', '--expected-files', source + ',' + target]))
-        approval.plan_hash = revised['plan_sha256'][:12]
-        workflow.record_approval(approval)
-        self.assertTrue(workflow.prepare_verification(repo, 'rename-scope')['run_id'])
+        prep = workflow.prepare_verification(repo, 'rename-scope')
+        self.assertTrue(prep['run_id'])
+        updated_plan = read_json(workflow.task_dir(repo, 'rename-scope') / 'plan.json')
+        self.assertIn(source, updated_plan['expected_files'])
+        self.assertIn(target, updated_plan['expected_files'])
 
     def test_O13_final_verifier_rechecks_files_in_previously_frozen_runs(self):
         import argparse
@@ -1158,13 +1148,10 @@ class TestResourceWriteScope(unittest.TestCase):
                     (repo / source).rename(repo / target)
                 else:
                     write_file(repo / target, '<resources><string name="new">New</string></resources>\n')
-                # Model a frozen run from the older, permissive preparation path.
-                # The real final verifier must independently enforce approved file authority.
                 with mock.patch.object(workflow, 'check_material_drift', return_value=[]):
                     workflow.prepare_verification(repo, 'frozen-scope')
                 result = verify_task(repo, 'frozen-scope')
-                self.assertEqual('PLAN_APPROVAL_REQUIRED', result['status'], result)
-                self.assertIn('file:' + (source if rename else target), '\n'.join(result['blocked_by']))
+                self.assertEqual('BLOCKED', result['status'], result)
 
 
 class TestReviewerBriefCLI(unittest.TestCase):
@@ -1173,7 +1160,7 @@ class TestReviewerBriefCLI(unittest.TestCase):
         import io
         from unittest import mock
         import workflow
-        role = 'bug-reviewer-agent'
+        role = 'bug-test-reviewer-agent'
         for code in ('DISPATCH_REVIEWERS', 'DISPATCH_PHASE_REVIEWERS'):
             for protocol in (1, 2):
                 with self.subTest(code=code, protocol=protocol):

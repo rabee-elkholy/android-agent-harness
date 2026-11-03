@@ -1,0 +1,45 @@
+{
+  "method": "25 alternating expanded/summary presentations of identical saved native payloads; includes JSON serialization, excludes discovery and model execution.",
+  "limitations": "No token, cost, host truncation threshold or end-to-end speedup claim. No source text or input paths included.",
+  "samples": [
+    {
+      "sample": 1,
+      "targets": 8,
+      "bytes": {
+        "expanded": 575505,
+        "summary": 417180
+      },
+      "reduction_percent": 27.51,
+      "presentation_median_ms": {
+        "expanded": 3.81,
+        "summary": 3.93
+      }
+    },
+    {
+      "sample": 2,
+      "targets": 8,
+      "bytes": {
+        "expanded": 658306,
+        "summary": 482667
+      },
+      "reduction_percent": 26.68,
+      "presentation_median_ms": {
+        "expanded": 4.04,
+        "summary": 4.11
+      }
+    },
+    {
+      "sample": 3,
+      "targets": 4,
+      "bytes": {
+        "expanded": 263800,
+        "summary": 197739
+      },
+      "reduction_percent": 25.04,
+      "presentation_median_ms": {
+        "expanded": 1.45,
+        "summary": 1.53
+      }
+    }
+  ]
+}

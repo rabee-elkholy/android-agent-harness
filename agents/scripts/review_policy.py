@@ -17,8 +17,7 @@ from skill_router import route  # noqa: E402
 SCHEMA_VERSION = 1
 PIPELINE_GATE_ORDER = ("preflight", "localization", "manifest", "unit_tests", "assemble", "device")
 FIVE_REVIEWERS = {
-    "bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent",
-    "perf-anr-guardian-agent", "regression-impact-reviewer-agent",
+    "bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent",
 }
 DEVICE_SURFACES = {
     "COMPOSE_UI", "XML_UI", "RESOURCE_UI", "NAVIGATION", "DEVICE_API", "MANIFEST_PERMISSION",
@@ -31,24 +30,24 @@ TEST_SURFACES = {
     "SENSITIVE_DATA", "CRYPTO", "TEST_ONLY",
 }
 
-UNKNOWN_APPROVED_REVIEWERS = {"regression-impact-reviewer-agent"}
+UNKNOWN_APPROVED_REVIEWERS = {"arch-regression-reviewer-agent"}
 
 ROUTING = {
-    "BUSINESS_LOGIC": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "PUBLIC_API": {"bug-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "COMPOSE_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "XML_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "RESOURCE_UI": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "NAVIGATION": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "COROUTINES": {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
-    "NETWORK": {"bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"},
-    "ROOM_SCHEMA": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "PERSISTENCE": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
-    "MANIFEST_PERMISSION": {"security-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "BUILD_CONFIG": {"security-reviewer-agent", "convention-reviewer-agent", "regression-impact-reviewer-agent"},
-    "NATIVE_CODE": {"bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
-    "DEVICE_API": {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
-    "ANALYTICS": {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+    "BUSINESS_LOGIC": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "PUBLIC_API": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "COMPOSE_UI": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "XML_UI": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "RESOURCE_UI": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "NAVIGATION": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "COROUTINES": {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "NETWORK": {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "ROOM_SCHEMA": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "PERSISTENCE": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
+    "MANIFEST_PERMISSION": {"security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "BUILD_CONFIG": {"security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "NATIVE_CODE": {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "DEVICE_API": {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+    "ANALYTICS": {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
     "BILLING": FIVE_REVIEWERS,
     "AUTH": FIVE_REVIEWERS,
     "SECURITY": FIVE_REVIEWERS,
@@ -310,19 +309,19 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     for surface in surfaces:
         selected = ROUTING.get(surface, set())
         if review_scope == "FIX_DELTA" and surface in {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}:
-            selected = {"bug-reviewer-agent", "security-reviewer-agent", "regression-impact-reviewer-agent"}
+            selected = {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"}
         require_reviewers(selected, surface)
     if risk_tier == "T5_CRITICAL" and review_scope != "FIX_DELTA":
         reviewers = set(FIVE_REVIEWERS)
         require_reviewers(FIVE_REVIEWERS, "T5_CRITICAL")
     if "TEST_ONLY" in surfaces:
-        require_reviewers({"test-quality-reviewer-agent"}, "TEST_ONLY")
+        require_reviewers({"bug-test-reviewer-agent"}, "TEST_ONLY")
     if planning_depth == "ARCHITECTURAL" and not micro and "UNKNOWN" not in surfaces:
-        require_reviewers({"spec-compliance-agent", "convention-reviewer-agent"}, "ARCHITECTURAL_PLAN")
+        require_reviewers({"spec-compliance-agent", "arch-regression-reviewer-agent"}, "ARCHITECTURAL_PLAN")
     if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM") and not micro and "UNKNOWN" not in surfaces:
-        require_reviewers({"convention-reviewer-agent"}, arch_intent)
+        require_reviewers({"arch-regression-reviewer-agent"}, arch_intent)
     if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):
-        require_reviewers({"convention-reviewer-agent"}, "CROSS_MODULE_CHANGE")
+        require_reviewers({"arch-regression-reviewer-agent"}, "CROSS_MODULE_CHANGE")
 
     is_conflict_task = str(task_kind or (plan or {}).get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
     if micro or is_conflict_task:
@@ -353,7 +352,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
                 raise ValidationError("approved verification contract requires enabled application device verification")
             intrinsic_device_required = True
         if any(c["method"] == "review" for c in required_criteria):
-            require_reviewers({"bug-reviewer-agent"}, "REQUIRED_REVIEW_CRITERION")
+            require_reviewers({"bug-test-reviewer-agent"}, "REQUIRED_REVIEW_CRITERION")
     device_required = (
         intrinsic_device_required
         and device_verification_mode != "disabled"
@@ -463,13 +462,13 @@ def decide_later_round(
     owners = set(finding_owners) & previous_required
     promoted = current_required - previous_required - still_carried
     rerun = owners | promoted
-    if owners - {"test-quality-reviewer-agent"} or fix_delta is None and (rerun or previous_required):
-        rerun.add("regression-impact-reviewer-agent")
+    if owners or fix_delta is None and (rerun or previous_required):
+        rerun.add("arch-regression-reviewer-agent")
     if fix_delta is None and "TEST_ONLY" in set(result.get("surfaces") or []):
-        rerun.add("test-quality-reviewer-agent")
+        rerun.add("bug-test-reviewer-agent")
     # A role remains required only if it is still applicable, was a finding
-    # owner, or is Regression/Test Quality mandated for the fix delta.
-    allowed = current_required | owners | {"regression-impact-reviewer-agent", "test-quality-reviewer-agent"}
+    # owner, or is Regression/Bug mandated for the fix delta.
+    allowed = current_required | owners | {"arch-regression-reviewer-agent", "bug-test-reviewer-agent"}
     rerun &= allowed
     carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
 
@@ -577,10 +576,9 @@ def reviewer_effort_for(
     sev = str(severity or "HIGH").upper()
 
     core_judgment_reviewers = {
-        "bug-reviewer-agent",
-        "security-reviewer-agent",
-        "perf-anr-guardian-agent",
-        "regression-impact-reviewer-agent",
+        "bug-test-reviewer-agent",
+        "security-perf-reviewer-agent",
+        "arch-regression-reviewer-agent",
     }
 
     if (
@@ -589,7 +587,7 @@ def reviewer_effort_for(
     ):
         return REVIEW_EFFORT_MAX
 
-    if reviewer == "security-reviewer-agent":
+    if reviewer == "security-perf-reviewer-agent":
         sensitive = {
             "AUTH",
             "BILLING",
@@ -608,24 +606,18 @@ def reviewer_effort_for(
         if (
             sev == "CRITICAL"
             or surfaces_set & sensitive
+            or (
+                sev == "HIGH"
+                and surfaces_set & {
+                    "NATIVE_CODE",
+                    "DEVICE_API",
+                    "COROUTINES",
+                }
+            )
         ):
             return REVIEW_EFFORT_DEEP
 
-    if reviewer == "perf-anr-guardian-agent":
-        if sev == "CRITICAL":
-            return REVIEW_EFFORT_DEEP
-
-        if (
-            sev == "HIGH"
-            and surfaces_set & {
-                "NATIVE_CODE",
-                "DEVICE_API",
-                "COROUTINES",
-            }
-        ):
-            return REVIEW_EFFORT_DEEP
-
-    if reviewer == "regression-impact-reviewer-agent":
+    if reviewer == "arch-regression-reviewer-agent":
         if sev == "CRITICAL":
             return REVIEW_EFFORT_DEEP
 
@@ -645,7 +637,7 @@ def reviewer_effort_for(
         ):
             return REVIEW_EFFORT_DEEP
 
-    if reviewer == "bug-reviewer-agent":
+    if reviewer == "bug-test-reviewer-agent":
         if sev == "CRITICAL":
             return REVIEW_EFFORT_DEEP
 

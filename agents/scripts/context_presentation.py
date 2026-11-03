@@ -24,9 +24,9 @@ def architecture_context(payload):
              "graph_fingerprint": (payload.get("graph_basis") or {}).get("graph_fingerprint"),
              "target_modules": [target["module"]] if target.get("module") else [],
              "source_sets": [target["source_set"]] if target.get("source_set") else [],
-             "local_families": sorted({p.get("family_id", "UNKNOWN") for p in profiles}),
+             "local_families": sorted({str(p.get("family_id") or "UNKNOWN") for p in profiles if isinstance(p, dict)}),
              "relevant_relationships": relationships[:12],
-             "representative_existing_patterns": sorted({x for p in profiles for x in p.get("paths", []) if isinstance(x, str)})[:5],
+             "representative_existing_patterns": sorted({x for p in profiles if isinstance(p, dict) for x in (p.get("paths") or []) if isinstance(x, str)})[:5],
              "affected_tests": (payload.get("tests") or [])[:8],
              "compatibility_boundaries": contract.get("compatibility_boundaries") or payload.get("interop_boundaries") or [],
              "warnings": payload.get("warnings") or [],
@@ -46,7 +46,54 @@ def architecture_context(payload):
     return value
 
 
-def present_context(repo, payload, *, since=None):
+def _summarize(payload):
+    """Bound advisory detail only; keep all safety fields and native payload intact."""
+    def row_summary(row):
+        row = dict(row)
+        omitted = {}
+        target = row.get("target")
+        if isinstance(target, dict) and "nodes" in target:
+            row["target"] = {k: v for k, v in target.items() if k != "nodes"}
+            omitted["target.nodes"] = len(target["nodes"])
+        for key in ("direct_dependencies", "direct_dependents", "tests"):
+            values = row.get(key)
+            if isinstance(values, list) and len(values) > 8:
+                row[key] = values[:8]
+                omitted[key] = len(values) - 8
+        if omitted:
+            row["omitted_details"] = omitted
+            row["detail_retrieval"] = "Repeat this exact query with --full for omitted advisory details. Omission grants no additional scope or complete test coverage."
+        return row
+
+    result = row_summary(payload)
+    if "results" in payload:
+        rows = [row_summary(row) for row in payload["results"]]
+        shared = {}
+        # References are field-local indexes into values included in this response.
+        # Different scoped instructions remain distinct; never union their scopes.
+        for key in ("graph_sync", "developer_instructions", "local_profiles",
+                    "architecture_contract", "project_notes", "read_ranges_note"):
+            values = []
+            indexes = {}
+            for row in rows:
+                if key not in row:
+                    continue
+                value = row.pop(key)
+                identity = _encoded(value)
+                if identity not in indexes:
+                    indexes[identity] = len(values)
+                    values.append(value)
+                row.setdefault("shared_context_refs", {})[key] = indexes[identity]
+            if values:
+                shared[key] = values
+        result["shared_context"] = shared
+        result["shared_context_note"] = "Each result's shared_context_refs maps a field to its index in shared_context[field]. Read those values as part of that result; all instructions and restrictions apply at their original scope."
+        result["results"] = rows
+    result["presentation"] = "SUMMARY"
+    return result
+
+
+def present_context(repo, payload, *, since=None, full=False):
     # Native dictionaries stay complete. Receipts remain independently validated.
     def semantic(row):
         result = {k: v for k, v in row.items() if k not in {"graph_sync", "context_id", "discovery"}}
@@ -58,9 +105,11 @@ def present_context(repo, payload, *, since=None):
         return result
     digest = hashlib.sha256(_encoded({"repo": str(Path(repo).resolve()), "context": semantic(payload)})).hexdigest()
     result = {**payload, "context_digest": digest, "presentation": "FULL"}
-    if since != digest or payload.get("status") not in {"RESOLVED", "BATCH_RESOLVED"}:
+    if full or since != digest or payload.get("status") not in {"RESOLVED", "BATCH_RESOLVED"}:
         if since:
             result["presentation_reason"] = "BASELINE_MISMATCH"
+        if not full and not since and payload.get("status") in {"RESOLVED", "BATCH_RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}:
+            return _summarize(result)
         return result
     # Keep safety, identity, current receipts, instructions and warnings intact.
     def compact(row):
@@ -79,6 +128,6 @@ def present_context(repo, payload, *, since=None):
         if "results" in row:
             row["results"] = [compact(r) for r in row["results"]]
         return row
-    result = compact(result)
+    result = _summarize(compact(result))
     result["presentation"] = "UNCHANGED"
     return result

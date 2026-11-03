@@ -13,7 +13,7 @@
 Open the Android project root in your coding agent (select **Google Antigravity** during setup) and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.1.60/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.0/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs Doctor verification (`doctor --install-check`).
@@ -22,7 +22,7 @@ Key configuration defaults for Google Antigravity:
 - **AI Host**: Select `Google Antigravity` (`antigravity`).
 - **Clean Install Only**: This architecture version supports deterministic clean installations.
 - **Reviewer Call Safety Cap**: Recommended clean-install value = `20` (acts as a safety ceiling, not a target).
-- **Installed Reviewer Subagents**: Seven dedicated custom reviewer agents are automatically generated under `.agents/agents/<reviewer>/agent.md`.
+- **Installed Reviewer Subagents**: Four dedicated custom reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) are automatically generated under `.agents/agents/<reviewer>/agent.md`.
 - **Model & Reasoning**: Inherited by omission from the parent agent; no manual model or reasoning configuration required.
 
 ## Terminal installation (alternative)

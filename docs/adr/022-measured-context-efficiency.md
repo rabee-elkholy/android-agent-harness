@@ -21,3 +21,19 @@ work is excluded from command elapsed totals. Tokens and cost remain unavailable
 Default-off and write failure preserve command behavior. Command ownership is
 captured before a command changes focus. No host hook schema, model policy, device
 behavior or task/router state changes.
+
+## Self-contained summary presentation
+
+Default JSON output uses SUMMARY. Identical batch fields are stored once per field
+in shared_context; each result retains field-local indexes in shared_context_refs.
+Different scoped instructions/contracts remain separate values, never a union.
+Warnings, receipt identities and scope, read ranges, expansion flags and outlines
+stay visible. Only raw target nodes and advisory neighbor/test lists are shortened,
+with counts and same-query --full recovery. Native resolver outputs and persistence
+are untouched; the semantic digest is calculated before presentation.
+
+The explicit --full path and mismatched --since return the expanded structure.
+Failed/partial batches remain expanded. A summary does not claim that omitted
+advisory details were read; matching --since remains caller-controlled and cannot
+prove delivery or retention. Mandatory content can exceed host output limits:
+there is no hard byte cap that discards safety data.

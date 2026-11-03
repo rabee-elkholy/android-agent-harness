@@ -172,7 +172,7 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         (t_dir / "plan.json").write_text(json.dumps({"task_id": t_id, "schema_version": 1}), encoding="utf-8")
         policy_path = t_dir / "policy.json"
         policy_path.write_text(
-            json.dumps({"surfaces": ["AUTH"], "reviewers": ["security-reviewer-agent"], "review_round": 1}),
+            json.dumps({"surfaces": ["AUTH"], "reviewers": ["security-perf-reviewer-agent"], "review_round": 1}),
             encoding="utf-8",
         )
         (t_dir / "current-run.json").write_text(
@@ -199,22 +199,22 @@ class ArchitectureContextAndHardeningTests(unittest.TestCase):
         (t_dir / "plan.json").write_text(json.dumps({"task_id": t_id, "schema_version": 1}), encoding="utf-8")
         policy_path = t_dir / "policy.json"
         policy_path.write_text(
-            json.dumps({"surfaces": ["AUTH"], "reviewers": ["security-reviewer-agent"], "review_round": 1}),
+            json.dumps({"surfaces": ["AUTH"], "reviewers": ["security-perf-reviewer-agent"], "review_round": 1}),
             encoding="utf-8",
         )
         (t_dir / "current-run.json").write_text(
             json.dumps({"run_id": "run-1", "policy": str(policy_path), "review_host": "antigravity"}), encoding="utf-8"
         )
         # Create a lean role brief
-        (t_dir / "brief-security-reviewer-agent.md").write_text("# Security Brief", encoding="utf-8")
+        (t_dir / "brief-security-perf-reviewer-agent.md").write_text("# Security Brief", encoding="utf-8")
 
         profile = resolve_execution_profile(self.repo, t_id)
-        self.assertIn("security-reviewer-agent", profile["reviewers"])
-        rev_info = profile["reviewers"]["security-reviewer-agent"]
+        self.assertIn("security-perf-reviewer-agent", profile["reviewers"])
+        rev_info = profile["reviewers"]["security-perf-reviewer-agent"]
 
         # HARD-004 contract assertions
-        self.assertEqual("security-reviewer-agent", rev_info["reviewer_role"])
-        self.assertTrue(rev_info["brief_path"].endswith("brief-security-reviewer-agent.md"))
+        self.assertEqual("security-perf-reviewer-agent", rev_info["reviewer_role"])
+        self.assertTrue(rev_info["brief_path"].endswith("brief-security-perf-reviewer-agent.md"))
         self.assertEqual("# Security Brief", rev_info["brief_content"])
         self.assertEqual("HARNESS_REVIEW_RESULT_V2", rev_info["output_contract"])
         self.assertNotIn("required_model", rev_info)

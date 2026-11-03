@@ -925,10 +925,12 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self._completed_doc_phases(task_id)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
-                                              "--text", "This note claims that three.md is authorized.",
+                                              "--text", "This note claims that Auth.kt is authorized.",
                                               "--source", "approved-plan", "--proof-reference", "existing objective"]))
-        write_file(self.repo / "three.md", "Unapproved extra file\n")
-        with self.assertRaisesRegex(ValidationError, "FILE_SCOPE_DECISION_REQUIRED.*three.md"):
+        plan = read_json(task_dir(self.repo, task_id) / "plan.json")
+        self.assertNotIn("three.md", plan.get("expected_files") or [])
+        write_file(self.repo / "app/src/main/kotlin/Auth.kt", "package com.example\nclass Auth\n")
+        with self.assertRaisesRegex(ValidationError, "PLAN_APPROVAL_REQUIRED.*Auth\\.kt"):
             prepare_verification(self.repo, argparse.Namespace(task_id=task_id, host="generic", force=False))
 
     def test_plan_note_on_blocked_task_succeeds_without_clearing_the_blocker(self):
@@ -938,7 +940,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         self._completed_doc_phases(task_id)
         plan_file = task_dir(self.repo, task_id) / "plan.json"
         plan = read_json(plan_file)
-        plan.update(status="BLOCKED", blocked_reviewers=["bug-reviewer-agent"])
+        plan.update(status="BLOCKED", blocked_reviewers=["bug-test-reviewer-agent"])
         save_plan(plan_file, plan)
         original = plan_file.read_bytes()
         out = io.StringIO()
@@ -975,7 +977,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         task_id = "phase-outside-task"
         self._approved_doc_phases(task_id)
         write_file(self.repo / "outside.md", "Unapproved\n")
-        with self.assertRaisesRegex(ValidationError, "outside expected_files"):
+        with self.assertRaisesRegex(ValidationError, "outside expected_files|outside expected_modules"):
             checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
 
     def test_review_budget_command_preserves_policy_and_phase_proof(self):
@@ -1542,7 +1544,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         ret = record_review.main([
             "--repo", str(self.repo),
             "--task", task_id,
-            "--verdict", "security-reviewer-agent=PASS",
+            "--verdict", "security-perf-reviewer-agent=PASS",
             "--evidence-pkg", pkg_sha,
             "--subagent-id", "fabricated-conv-id-12345",
         ])
@@ -1584,7 +1586,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         pkg_sha = review_pkg["package_sha256"]
 
         policy = read_json(Path(run_info["policy"]))
-        required_reviewers = list(policy.get("reviewers") or ["bug-reviewer-agent"])
+        required_reviewers = list(policy.get("reviewers") or ["bug-test-reviewer-agent"])
         self.assertGreater(len(required_reviewers), 0)
 
         app_data_dir = self.repo / ".test_app_data"
@@ -1685,7 +1687,7 @@ class DailyWorkflowSelftest(unittest.TestCase):
         pkg_sha = review_pkg["package_sha256"]
 
         policy = read_json(Path(run_info["policy"]))
-        required_reviewers = list(policy.get("reviewers") or ["security-reviewer-agent"])
+        required_reviewers = list(policy.get("reviewers") or ["security-perf-reviewer-agent"])
         primary = required_reviewers[0]
 
         finding_text = f"Security vulnerability identified:\n[HIGH] SQL injection vulnerability\nEVIDENCE pkg={pkg_sha[:12]} cites=1"
@@ -2600,7 +2602,7 @@ class AnalyticsAndSixTierTests(DailyWorkflowSelftest):
         p3 = decide(c3, KIT / "agents" / "skills", project_kind="application", plan=plan3)
         self.assertEqual("T3_SUBSYSTEM", p3["risk_tier"])
         self.assertEqual("STANDARD", p3["risk_lane"])
-        self.assertIn("convention-reviewer-agent", p3["reviewers"])
+        self.assertIn("arch-regression-reviewer-agent", p3["reviewers"])
         self.assertIn("unit_tests", p3["gates"])
 
         # T4_DATA_DEVICE: Room Schema (Targeted reviewers, not all 5; mandatory device)
@@ -2612,12 +2614,12 @@ class AnalyticsAndSixTierTests(DailyWorkflowSelftest):
         self.assertIn("room", p4["gates"])
         self.assertNotEqual(5, len(p4["reviewers"]))
 
-        # T5_CRITICAL: Billing / Auth / Security / Crypto (Full 5-Leaf Review)
+        # T5_CRITICAL: Billing / Auth / Security / Crypto (Full 3-Leaf Core Review)
         c5 = {"surfaces": ["BILLING"], "severity": "CRITICAL", "changed_files": 1, "changed_lines": 20}
         p5 = decide(c5, KIT / "agents" / "skills", project_kind="application")
         self.assertEqual("T5_CRITICAL", p5["risk_tier"])
         self.assertEqual("CRITICAL", p5["risk_lane"])
-        self.assertEqual(5, len(p5["reviewers"]))
+        self.assertEqual(3, len(p5["reviewers"]))
         self.assertTrue(p5["device_required"])
 
 
@@ -3417,7 +3419,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
             self.assertEqual("MOBILE_VALIDATION_DECISION", resolve_next_action(self.repo, "task-next-006b", plan)["code"])
 
     def test_NEXT_007_sensitive_approval_required_resolves_sensitive_approval(self) -> None:
-        """NEXT-007: When sensitive change is ready for final approval, resolve SENSITIVE_APPROVAL."""
+        """NEXT-007: When sensitive change passes required gates/reviews, resolve COMPLETE_TASK without redundant re-approval."""
         plan, tdir, policy, manifest = self._setup_verifying_task("task-next-007")
         current = read_json(tdir / "current-run.json")
         run_id = current["run_id"]
@@ -3431,14 +3433,11 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self._record_evidence(manifest, run_id, "preflight", "PASS")
 
         act = resolve_next_action(self.repo, "task-next-007", plan)
-        self.assertEqual("SENSITIVE_APPROVAL", act["code"])
-        self.assertEqual("DEVELOPER_ACTION", act["kind"])
-        self.assertIn("approve-sensitive", act["command"])
+        self.assertEqual("COMPLETE_TASK", act["code"])
+        self.assertEqual("HARNESS_COMMAND", act["kind"])
 
     def test_NEXT_007b_sensitive_surfaces_route_to_approval_before_complete(self) -> None:
-        """Real app: the run's surfaces had AUTH and BILLING but `policy.sensitive` was unset, so the router
-        said COMPLETE_TASK, complete failed on a missing sensitive_approval.json, and the router said
-        COMPLETE_TASK again. The router now asks what the final verifier requires."""
+        """Sensitive surfaces route directly to COMPLETE_TASK once gates and reviews pass."""
         plan, tdir, policy, manifest = self._setup_verifying_task("task-next-007b")
         current = read_json(tdir / "current-run.json")
         run_id = current["run_id"]
@@ -3452,16 +3451,11 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self._record_evidence(manifest, run_id, "preflight", "PASS")
 
         act = resolve_next_action(self.repo, "task-next-007b", plan)
-        self.assertEqual("SENSITIVE_APPROVAL", act["code"])
-        self.assertIn("touches AUTH, BILLING", act["reason"])
-        self.assertIn("task approve-sensitive --repo . --task-id task-next-007b", act["command"])
-        self._record_evidence(manifest, run_id, "sensitive_approval", "PASS")
-        self.assertNotEqual("SENSITIVE_APPROVAL", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
-        # A bare `sensitive` flag without a sensitive surface: approve-sensitive would refuse, so never ask.
+        self.assertEqual("COMPLETE_TASK", act["code"])
         policy["surfaces"] = ["XML_UI"]
         policy["sensitive"] = True
         write_policy_fixture(Path(current["policy"]), policy)
-        self.assertNotEqual("SENSITIVE_APPROVAL", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
+        self.assertEqual("COMPLETE_TASK", resolve_next_action(self.repo, "task-next-007b", plan)["code"])
 
     def test_NEXT_008_every_generated_command_accepted_by_guard(self) -> None:
         """NEXT-008: Every generated command is accepted by current guard under matching state."""
@@ -3649,7 +3643,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         current["review_models"] = transfer_models(current, "claude", list((current.get("review_models") or {}).get("reviewers") or []))
         current["review_host"] = "claude"
         atomic_write_json(tdir / "current-run.json", current)
-        policy.update({"gates": ["preflight"], "reviewers": ["bug-reviewer-agent"], "assemble_required": False,
+        policy.update({"gates": ["preflight"], "reviewers": ["bug-test-reviewer-agent"], "assemble_required": False,
                        "device_required": False, "severity": severity, "surfaces": surfaces})
         write_policy_fixture(Path(current["policy"]), policy)
         self._record_evidence(manifest, current["run_id"], "preflight", "PASS")
@@ -3660,7 +3654,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
     def test_ROUTE_CMD_010C_v1_high_severity_routes_to_developer_review_override(self) -> None:
         # Round 5 (D13): a HIGH change on a host without trusted transcripts reached COMPLETE_TASK and
         # failed at the verifier after every review had been paid for.
-        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        unverified = {"reviewers": ["bug-test-reviewer-agent"], "reports": [{"reviewer": "bug-test-reviewer-agent", "independent_execution_verified": False}]}
         plan, _ = self._v1_reviewed_task("route-v1-high", "HIGH", ["ROOM_SCHEMA"], unverified)
         act = resolve_next_action(self.repo, "route-v1-high", plan)
         self.assertEqual("REVIEW_OVERRIDE_REQUIRED", act["code"])
@@ -3668,7 +3662,7 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         self.assertIn("--override-reviews --source developer_terminal", act["command"])
 
     def test_ROUTE_CMD_010D_v1_sensitive_change_has_no_override_route(self) -> None:
-        unverified = {"reviewers": ["bug-reviewer-agent"], "reports": [{"reviewer": "bug-reviewer-agent", "independent_execution_verified": False}]}
+        unverified = {"reviewers": ["bug-test-reviewer-agent"], "reports": [{"reviewer": "bug-test-reviewer-agent", "independent_execution_verified": False}]}
         plan, _ = self._v1_reviewed_task("route-v1-sensitive", "CRITICAL", ["AUTH"], unverified)
         act = resolve_next_action(self.repo, "route-v1-sensitive", plan)
         self.assertEqual("SENSITIVE_REVIEW_PROOF_UNAVAILABLE", act["code"])
@@ -3968,7 +3962,7 @@ class MultiPhaseAndroidTests(DailyWorkflowSelftest):
         task_id = "phase-android-005"
         phases_def = [
             {"id": "p1", "title": "Phase 1 Logic", "expected_files": ["app/src/main/kotlin/com/example/P1.kt"]},
-            {"id": "p2", "title": "Phase 2 Security Boundary", "critical_boundary": True, "reviewers": ["security-reviewer-agent"], "expected_files": ["app/src/main/kotlin/com/example/Auth.kt"]},
+            {"id": "p2", "title": "Phase 2 Security Boundary", "critical_boundary": True, "reviewers": ["security-perf-reviewer-agent"], "expected_files": ["app/src/main/kotlin/com/example/Auth.kt"]},
         ]
         draft(argparse.Namespace(
             repo=str(self.repo),
@@ -4030,7 +4024,7 @@ class ReviewerPrecisionTests(unittest.TestCase):
         subagents_dir = Path(__file__).resolve().parent.parent / "subagents"
         self.assertTrue(subagents_dir.exists(), f"Subagents dir not found at {subagents_dir}")
         subagent_files = list(subagents_dir.glob("*.json"))
-        self.assertGreaterEqual(len(subagent_files), 8)
+        self.assertGreaterEqual(len(subagent_files), 6)
 
         for sf in subagent_files:
             data = json.loads(sf.read_text(encoding="utf-8"))
@@ -4084,7 +4078,7 @@ class ReviewerPrecisionTests(unittest.TestCase):
     def test_review_bound_002_convention_precision_drops_personal_preference(self):
         """REVIEW-BOUND-002: Convention reviewer system prompt forbids reporting personal aesthetic preferences as BLOCKER/MAJOR."""
         subagents_dir = Path(__file__).resolve().parent.parent / "subagents"
-        conv_file = subagents_dir / "convention-reviewer-agent.json"
+        conv_file = subagents_dir / "arch-regression-reviewer-agent.json"
         data = json.loads(conv_file.read_text(encoding="utf-8"))
         prompt = data.get("system_prompt", "")
         self.assertIn("personal preference", prompt.lower())
@@ -4093,7 +4087,7 @@ class ReviewerPrecisionTests(unittest.TestCase):
     def test_review_bound_003_graph_proves_shared_contract_bounded_inspection(self):
         """REVIEW-BOUND-003: Reviewer instructions mandate bounded inspection (maximum 2 hops) based on graph topology."""
         subagents_dir = Path(__file__).resolve().parent.parent / "subagents"
-        bug_file = subagents_dir / "bug-reviewer-agent.json"
+        bug_file = subagents_dir / "bug-test-reviewer-agent.json"
         data = json.loads(bug_file.read_text(encoding="utf-8"))
         prompt = data.get("system_prompt", "")
         self.assertIn("maximum 2 hops", prompt.lower())
@@ -5775,7 +5769,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
     def _setup_v2_task(self, task_id: str, reviewers: list[str] | None = None, review_round: int | None = None, content: str | None = None) -> tuple[dict, str, str, Path]:
         if reviewers is None:
-            reviewers = ["bug-reviewer-agent"]
+            reviewers = ["bug-test-reviewer-agent"]
         draft(argparse.Namespace(
             repo=str(self.repo),
             task_id=task_id,
@@ -5858,18 +5852,18 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy1 = read_json(Path(first["policy"]))
         manifest1 = read_json(Path(first["manifest"]))
         required = sorted(policy1["reviewers"])
-        self.assertIn("bug-reviewer-agent", required)
+        self.assertIn("bug-test-reviewer-agent", required)
         EvidenceStore(state_root(self.repo)).write(
             snapshot=manifest1["delivery_snapshot_sha256"], run_id=first["run_id"], name="reviews",
             producer="review_orchestrator", harness_version="1.1.11", change_set=manifest1["change_set_sha256"],
             status="FAIL", evidence={
                 "reviewers": required,
-                "reports": [{"reviewer": r, "verdict": "FINDINGS" if r == "bug-reviewer-agent" else "PASS"} for r in required],
-                "blocking_findings": [{"reviewer": "bug-reviewer-agent"}],
+                "reports": [{"reviewer": r, "verdict": "FINDINGS" if r == "bug-test-reviewer-agent" else "PASS"} for r in required],
+                "blocking_findings": [{"reviewer": "bug-test-reviewer-agent"}],
             },
         )
         plan = read_json(tdir / "plan.json")
-        plan.update(status="BLOCKED", review_rounds=1, blocked_reviewers=["bug-reviewer-agent"])
+        plan.update(status="BLOCKED", review_rounds=1, blocked_reviewers=["bug-test-reviewer-agent"])
         workflow.save_plan(tdir / "plan.json", plan)
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
 
@@ -5881,8 +5875,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual([text], policy2["fix_delta"]["files"])
         rerun = set(policy2["reviewers"])
         carried = {item["reviewer"] for item in policy2["carried_reviews"]}
-        self.assertIn("bug-reviewer-agent", rerun, "the finding owner reruns")
-        self.assertIn("regression-impact-reviewer-agent", rerun)
+        self.assertIn("bug-test-reviewer-agent", rerun, "the finding owner reruns")
+        self.assertIn("arch-regression-reviewer-agent", rerun)
         self.assertTrue(carried, "a reviewer the text change does not route keeps its PASS")
         self.assertFalse(rerun & carried)
         manifest2 = read_json(Path(second["manifest"]))
@@ -5899,7 +5893,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         policy3 = read_json(Path(third["policy"]))
         self.assertEqual(first["run_id"], policy3["later_round_source"]["run_id"], "built on the run that has reviews")
-        self.assertIn("bug-reviewer-agent", policy3["reviewers"])
+        self.assertIn("bug-test-reviewer-agent", policy3["reviewers"])
         manifest3 = read_json(Path(third["manifest"]))
         self.assertIsNone(validate_policy_artifact(
             self.repo, read_json(tdir / "plan.json"), policy3, state_root(self.repo), Path(third["policy"]),
@@ -5920,7 +5914,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
             self.repo, cleared_plan, forged_owners, state_root(self.repo), Path(third["policy"]),
             current_change_set=manifest3["change_set_sha256"], task_changes=manifest3.get("task_changes"),
         )[1]))
-        forged = dict(policy2, reviewers=["bug-reviewer-agent"])
+        forged = dict(policy2, reviewers=["bug-test-reviewer-agent"])
         forged["policy_sha256"] = canonical_sha256({k: v for k, v in forged.items() if k != "policy_sha256"})
         self.assertIsNotNone(validate_policy_artifact(
             self.repo, read_json(tdir / "plan.json"), forged, state_root(self.repo), Path(second["policy"]),
@@ -5998,13 +5992,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
             return reviewers
 
         first = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
-        finish_round(first, "bug-reviewer-agent")
+        finish_round(first, "bug-test-reviewer-agent")
         write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay today</string>\n</resources>\n")
         second = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         policy2 = read_json(Path(second["policy"]))
         carried2 = {item["reviewer"] for item in policy2["carried_reviews"]}
         self.assertTrue(carried2, "round 2 carries reviewers the text fix does not route")
-        owner2 = "regression-impact-reviewer-agent"
+        owner2 = "arch-regression-reviewer-agent"
         finish_round(second, owner2)
         write_file(self.repo / text, "<resources>\n    <string name=\"pay3\">Pay this week</string>\n</resources>\n")
         third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
@@ -6062,12 +6056,12 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual(80, effective_review_budget(self.repo, plan))
         self.assertEqual(2, len(list((tdir / "review-budget-history").glob("*.json"))))
         from review_orchestrator import record_dispatch, complete_review, finalize_review_execution
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         result = json.dumps({"schema_version": 2, "task_id": task_id, "run_id": current["run_id"],
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": sha256_file(active_review_package_path(self.repo, current)),
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": sha256_file(active_review_package_path(self.repo, current)),
             "verdict": "PASS", "findings": []})
         self._create_mock_transcript("approved-fourth-round", result)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "approved-fourth-round")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "approved-fourth-round")
         finalized = read_json(tdir / "plan.json")
         self.assertEqual(4, finalized["review_rounds"])
         self.assertEqual(44, finalized["review_calls_used"])
@@ -6090,11 +6084,11 @@ class ReviewOrchestrationTests(unittest.TestCase):
             snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
             producer="review_orchestrator", harness_version="1.1.25",
             change_set=current["change_set_sha256"], status="FAIL",
-            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-reviewer-agent"}]},
+            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-test-reviewer-agent"}]},
         )
         plan = read_json(tdir / "plan.json")
         plan["review_rounds"] = 3
-        plan["blocked_reviewers"] = ["bug-reviewer-agent"]
+        plan["blocked_reviewers"] = ["bug-test-reviewer-agent"]
         workflow.save_plan(tdir / "plan.json", plan)
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         before = {p.name: p.read_bytes() for p in tdir.glob("*.json")}
@@ -6126,11 +6120,11 @@ class ReviewOrchestrationTests(unittest.TestCase):
             snapshot=current["delivery_snapshot_sha256"], run_id=run_id, name="reviews",
             producer="review_orchestrator", harness_version="1.1.4",
             change_set=current["change_set_sha256"], status="FAIL",
-            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-reviewer-agent"}]},
+            evidence={"reports": [], "blocking_findings": [{"reviewer": "bug-test-reviewer-agent"}]},
         )
         plan = read_json(tdir / "plan.json")
         plan["review_rounds"] = 1
-        plan["blocked_reviewers"] = ["bug-reviewer-agent"]
+        plan["blocked_reviewers"] = ["bug-test-reviewer-agent"]
         workflow.save_plan(tdir / "plan.json", plan)
         workflow.resume(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         with mock.patch("workflow.save_plan", side_effect=OSError("simulated final plan write failure")):
@@ -6144,19 +6138,19 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertNotEqual(run_id, retry["run_id"])
         self.assertEqual("VERIFYING", read_json(tdir / "plan.json")["status"])
         policy = read_json(Path(retry["policy"]))
-        self.assertIn("bug-reviewer-agent", policy["reviewers"])
+        self.assertIn("bug-test-reviewer-agent", policy["reviewers"])
         self.assertEqual(run_id, policy["later_round_source"]["run_id"])
 
     def test_REVIEW_ORCH_001_dispatch_receipt_written_before_result(self) -> None:
         from review_orchestrator import record_dispatch, dispatch_receipt_file, load_ledger, REVIEW_DISPATCHED
         task_id = "test-orch-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        receipt = record_dispatch(self.repo, task_id, "bug-reviewer-agent")
-        r_file = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        receipt = record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
+        r_file = dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent")
         self.assertTrue(r_file.is_file())
         self.assertEqual(receipt["receipt_sha256"], read_json(r_file)["receipt_sha256"])
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
     def test_caption_fix_in_previously_reviewed_billing_file_does_not_repeat_full_roster(self):
         import workflow
@@ -6180,11 +6174,9 @@ class ReviewOrchestrationTests(unittest.TestCase):
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", content.replace('"Start"', '"Start!"'))
         current = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         policy = read_json(Path(current["policy"]))
-        self.assertNotIn("security-reviewer-agent", policy["reviewers"])
-        self.assertNotIn("perf-anr-guardian-agent", policy["reviewers"])
-        self.assertNotIn("convention-reviewer-agent", policy["reviewers"])
+        self.assertNotIn("security-perf-reviewer-agent", policy["reviewers"])
         self.assertLessEqual(len(policy["reviewers"]), 2)
-        self.assertIn("security-reviewer-agent", {item["reviewer"] for item in policy["carried_reviews"]})
+        self.assertIn("security-perf-reviewer-agent", {item["reviewer"] for item in policy["carried_reviews"]})
         from final_verifier import validate_policy_artifact
         manifest = read_json(Path(current["manifest"]))
         _, error, verdict = validate_policy_artifact(
@@ -6210,9 +6202,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
                    content.replace('"Start"', '"Start!"').replace("activity, params", "activity, otherParams"))
         third = prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id, host="antigravity"))
         third_policy = read_json(Path(third["policy"]))
-        self.assertIn("security-reviewer-agent", third_policy["reviewers"])
-        self.assertNotIn("perf-anr-guardian-agent", third_policy["reviewers"])
-        self.assertNotIn("convention-reviewer-agent", third_policy["reviewers"])
+        self.assertIn("security-perf-reviewer-agent", third_policy["reviewers"])
         from review_fix_delta import _input_path
         cached = _input_path(self.repo, task_id, third_policy["later_round_source"]["run_id"])
         cache = read_json(cached)
@@ -6253,7 +6243,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         task_id = "interrupted-spending"
         current, run_id, _, directory = self._setup_v2_task(task_id)
         before = read_json(directory / "plan.json")
-        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"])
+        record_dispatch_batch(self.repo, task_id, ["bug-test-reviewer-agent"])
         dispatched = read_json(directory / "plan.json")
         self.assertEqual(int(before.get("review_calls_used") or 0) + 1, dispatched["review_calls_used"])
         ledger_bytes = (directory / "review-execution" / run_id / "ledger.json").read_bytes()
@@ -6264,7 +6254,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual(before["approval"], after["approval"])
         self.assertEqual(before.get("review_rounds", 0), after.get("review_rounds", 0))
         self.assertEqual(ledger_bytes, (directory / "review-execution" / run_id / "ledger.json").read_bytes())
-        self.assertEqual("DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual("DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-test-reviewer-agent"]["state"])
 
     def test_legacy_orphan_final_dispatch_is_reconciled_without_rewriting_evidence(self):
         from review_orchestrator import init_ledger, save_ledger
@@ -6272,8 +6262,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         task_id = "legacy-orphan-spending"
         current, run_id, _, directory = self._setup_v2_task(task_id)
         ledger = init_ledger(directory, task_id, run_id, current["delivery_snapshot_sha256"],
-                             current["change_set_sha256"], "", ["bug-reviewer-agent"])
-        ledger["reviewers"]["bug-reviewer-agent"].update(state="DISPATCHED", dispatch_count=1)
+                             current["change_set_sha256"], "", ["bug-test-reviewer-agent"])
+        ledger["reviewers"]["bug-test-reviewer-agent"].update(state="DISPATCHED", dispatch_count=1)
         save_ledger(directory, run_id, ledger)
         ledger_path = directory / "review-execution" / run_id / "ledger.json"
         original = ledger_path.read_bytes()
@@ -6297,9 +6287,9 @@ class ReviewOrchestrationTests(unittest.TestCase):
         plan["review_calls_used"] = 100
         save_plan(directory / "plan.json", plan)
         with self.assertRaisesRegex(ValidationError, "REVIEW_BUDGET_EXHAUSTED"):
-            record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"])
-        self.assertEqual("NOT_DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-reviewer-agent"]["state"])
-        self.assertFalse((directory / "review-execution" / run_id / "dispatch/bug-reviewer-agent.json").exists())
+            record_dispatch_batch(self.repo, task_id, ["bug-test-reviewer-agent"])
+        self.assertEqual("NOT_DISPATCHED", load_ledger(directory, run_id)["reviewers"]["bug-test-reviewer-agent"]["state"])
+        self.assertFalse((directory / "review-execution" / run_id / "dispatch/bug-test-reviewer-agent.json").exists())
 
     def test_corrupt_orphan_ledger_blocks_resume_without_changing_plan(self):
         from review_orchestrator import init_ledger
@@ -6307,10 +6297,10 @@ class ReviewOrchestrationTests(unittest.TestCase):
         task_id = "corrupt-spending"
         current, run_id, _, directory = self._setup_v2_task(task_id)
         init_ledger(directory, task_id, run_id, current["delivery_snapshot_sha256"],
-                    current["change_set_sha256"], "", ["bug-reviewer-agent"])
+                    current["change_set_sha256"], "", ["bug-test-reviewer-agent"])
         ledger_path = directory / "review-execution" / run_id / "ledger.json"
         ledger = read_json(ledger_path)
-        ledger["reviewers"]["bug-reviewer-agent"]["state"] = "DISPATCHED"
+        ledger["reviewers"]["bug-test-reviewer-agent"]["state"] = "DISPATCHED"
         atomic_write_json(ledger_path, ledger)
         before = (directory / "plan.json").read_bytes()
         with self.assertRaisesRegex(ValidationError, "ledger sha mismatch"):
@@ -6320,7 +6310,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_002_missing_dispatch_cannot_be_synthesized_during_v2_ingest(self) -> None:
         from record_review import verify_independent_reviewer_execution
         task_id = "test-orch-002"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         app_data_dir = self.repo / ".test_app_data"
         old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
         os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data_dir)
@@ -6329,7 +6319,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
             t_dir.mkdir(parents=True, exist_ok=True)
             write_file(t_dir / "transcript.jsonl", '{"type": "MODEL", "content": "hello"}\n')
             verified, proof = verify_independent_reviewer_execution(
-                self.repo, task_id=task_id, run_id=run_id, reviewer="bug-reviewer-agent", package_sha256=pkg_sha, subagent_id="test-conv-id"
+                self.repo, task_id=task_id, run_id=run_id, reviewer="bug-test-reviewer-agent", package_sha256=pkg_sha, subagent_id="test-conv-id"
             )
             self.assertFalse(verified)
             self.assertIn("missing dispatch receipt", proof.get("reason", ""))
@@ -6342,8 +6332,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_003_receipt_is_task_run_package_bound(self) -> None:
         from review_orchestrator import record_dispatch, dispatch_receipt_file
         task_id = "test-orch-003"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        receipt = record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        receipt = record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         self.assertEqual(task_id, receipt["task_id"])
         self.assertEqual(run_id, receipt["run_id"])
         self.assertEqual(pkg_sha, receipt["review_package_sha256"])
@@ -6386,14 +6376,14 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_009_one_malformed_response_retry_required(self) -> None:
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_PROTOCOL_RETRY_REQUIRED
         task_id = "test-orch-009"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         self._create_mock_transcript("exec-009", "I am not json")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-009")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-009")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
-        self.assertEqual(1, ledger["reviewers"]["bug-reviewer-agent"]["protocol_attempts"])
+        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
+        self.assertEqual(1, ledger["reviewers"]["bug-test-reviewer-agent"]["protocol_attempts"])
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("RETRY_REVIEW_PROTOCOL", act["code"])
@@ -6401,19 +6391,19 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_010_second_malformed_response_failed_protocol(self) -> None:
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_FAILED_PROTOCOL
         task_id = "test-orch-010"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         # Attempt 1
         self._create_mock_transcript("exec-010", "malformed 1")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-010")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-010")
         # Attempt 2
         self._create_mock_transcript("exec-010", "malformed 2")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-010")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-010")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_FAILED_PROTOCOL, ledger["reviewers"]["bug-reviewer-agent"]["state"])
-        self.assertEqual(2, ledger["reviewers"]["bug-reviewer-agent"]["protocol_attempts"])
+        self.assertEqual(REVIEW_FAILED_PROTOCOL, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
+        self.assertEqual(2, ledger["reviewers"]["bug-test-reviewer-agent"]["protocol_attempts"])
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("REVIEW_PROTOCOL_BLOCKED", act["code"])
@@ -6421,12 +6411,12 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_011_provider_failure_ENV_BLOCKED(self) -> None:
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_ENV_BLOCKED
         task_id = "test-orch-011"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "nonexistent-transcript-id")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "nonexistent-transcript-id")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("REVIEW_ENV_BLOCKED", act["code"])
@@ -6434,15 +6424,15 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_012_all_completed_auto_finalize_reviews_evidence(self) -> None:
         from review_orchestrator import record_dispatch, complete_review
         task_id = "test-orch-012"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         valid_v2 = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-012", valid_v2)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-012")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-012")
         store = EvidenceStore(state_root(self.repo))
         evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
         self.assertEqual("PASS", evidence.get("status"))
@@ -6459,46 +6449,46 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_013_duplicate_completion_is_idempotent(self) -> None:
         from review_orchestrator import record_dispatch, complete_review
         task_id = "test-orch-013"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         valid_v2 = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-013", valid_v2)
-        res1 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013")
-        res2 = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-013")
+        res1 = complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-013")
+        res2 = complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-013")
         self.assertEqual(res1["verdict"], res2["verdict"])
         self.assertEqual(1, read_json(tdir / "plan.json")["review_calls_used"])
 
     def test_REVIEW_ORCH_014_different_result_for_same_completed_execution_is_rejected(self) -> None:
         from review_orchestrator import record_dispatch, complete_review
         task_id = "test-orch-014"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         valid_pass = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-014", valid_pass)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-014")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-014")
         diff_findings = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "FINDINGS", "findings": [{"id": "1", "severity": "HIGH", "message": "defect"}]
         })
         self._create_mock_transcript("exec-014", diff_findings)
         with self.assertRaises(ValidationError) as ctx:
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-014")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-014")
         self.assertIn("different result for same completed execution is rejected", str(ctx.exception))
 
     def test_REVIEW_ORCH_015_zero_polling(self) -> None:
         from review_orchestrator import record_dispatch
         task_id = "test-orch-015"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("WAIT_FOR_REVIEWERS", act["code"])
@@ -6508,21 +6498,21 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_ORCH_016_run_bound_receipt_paths(self) -> None:
         from review_orchestrator import record_dispatch, dispatch_receipt_file
         task_id = "test-orch-016"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
-        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
+        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent")
         self.assertTrue(bound_receipt.is_file())
-        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-test-reviewer-agent.json"
         self.assertFalse(legacy_receipt.is_file())
 
     def test_REVIEW_ORCH_017_legacy_v1_footer_still_readable(self) -> None:
         from record_review import _parse_response_text
         task_id = "test-orch-017"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         current["review_protocol_version"] = 1
         atomic_write_json(tdir / "current-run.json", current)
         text = f"Clean review.\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nPASS"
-        report = _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
+        report = _parse_response_text(self.repo, task_id, "bug-test-reviewer-agent", text, "dummy-sha")
         self.assertEqual("PASS", report["verdict"])
 
     def test_REVIEW_ORCH_017B_v1_run_reads_the_v2_block_installed_reviewers_emit(self) -> None:
@@ -6531,16 +6521,16 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # so no Claude review could ever be recorded.
         from record_review import _parse_response_text
         task_id = "test-orch-017b"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         current["review_protocol_version"] = 1
         atomic_write_json(tdir / "current-run.json", current)
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         text = "Reviewed the diff.\n```json\n" + json.dumps(block) + "\n```"
-        self.assertEqual("PASS", _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")["verdict"])
+        self.assertEqual("PASS", _parse_response_text(self.repo, task_id, "bug-test-reviewer-agent", text, "dummy-sha")["verdict"])
         wrong = dict(block, review_package_sha256="0" * 64)
         with self.assertRaises(ValidationError):
-            _parse_response_text(self.repo, task_id, "bug-reviewer-agent", "```json\n" + json.dumps(wrong) + "\n```", "dummy-sha")
+            _parse_response_text(self.repo, task_id, "bug-test-reviewer-agent", "```json\n" + json.dumps(wrong) + "\n```", "dummy-sha")
 
     @staticmethod
     def _claude_transcript(path: Path, final_text: str) -> Path:
@@ -6557,7 +6547,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         return path
 
     def _setup_claude_v1_task(self, task_id: str, reviewers: list[str] | None = None) -> tuple[dict, str, str, Path]:
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, reviewers or ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, reviewers or ["bug-test-reviewer-agent"])
         current["review_protocol_version"] = 1
         from review_models import transfer_models
         current["review_models"] = transfer_models(current, "claude", list((current.get("review_models") or {}).get("reviewers") or []))
@@ -6574,7 +6564,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # read Claude's JSONL transcripts. The transcript path is now the ingestion method.
         task_id = "claude-transcript"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         text = "Checked `run()` | callers < 3.\n```json\n" + json.dumps(block) + "\n```"
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
@@ -6583,8 +6573,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
             # A transcript the agent could write itself (inside the repository) is refused.
             inside = self._claude_transcript(self.repo / "reviews/agent-a1.output", text)
-            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={inside}"]))
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={inside}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
         evidence = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")
         self.assertEqual("PASS", evidence["status"])
         report = evidence["evidence"]["reports"][0]
@@ -6606,13 +6596,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "HIGH"
         write_policy_fixture(Path(current["policy"]), policy)
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
         self.addCleanup(shutil.rmtree, claude_home, True)
         transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-h1.jsonl", "```json\n" + json.dumps(block) + "\n```")
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
         report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
         self.assertFalse(report["independent_execution_verified"])
 
@@ -6625,7 +6615,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "HIGH"
         write_policy_fixture(Path(current["policy"]), policy)
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
         self.addCleanup(shutil.rmtree, claude_home, True)
@@ -6633,7 +6623,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         store = EvidenceStore(state_root(self.repo))
         snapshot = current["delivery_snapshot_sha256"]
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
         reviews_before = store.read(snapshot, run_id, "reviews")
         self.assertEqual("REVIEW_OVERRIDE_REQUIRED", resolve_next_action(self.repo, task_id)["code"])
         with mock.patch("builtins.print"):
@@ -6661,34 +6651,34 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_C_D3_background_task_output_is_accepted_and_fabrication_still_rejected(self) -> None:
         task_id = "claude-task-output"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
-        fabricated = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        fabricated = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                       "review_package_sha256": "0" * 64, "verdict": "PASS", "findings": []}
         session = Path(tempfile.mkdtemp(prefix="claude-", dir=tempfile.gettempdir()))
         self.addCleanup(shutil.rmtree, session, True)
         output = self._claude_transcript(session / "-app/session-1/tasks/a1.output", "```json\n" + json.dumps(fabricated) + "\n```")
         err = __import__("io").StringIO()
         with mock.patch("sys.stderr", err):
-            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={output}"]))
         self.assertIn("review_package_sha256", err.getvalue())
         genuine = dict(fabricated, review_package_sha256=pkg_sha)
         self._claude_transcript(output, "```json\n" + json.dumps(genuine) + "\n```")
         with mock.patch("builtins.print"):
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={output}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={output}"]))
 
     def test_C4_from_subagent_accepts_a_claude_agent_id(self) -> None:
         # A foreground Claude subagent returns its reply and agent id, not a transcript path; the agent
         # had no reliable way to name the file. The id is resolved inside Claude's projects directory.
         task_id = "claude-agent-id"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
         self.addCleanup(shutil.rmtree, claude_home, True)
         transcript = self._claude_transcript(claude_home / "projects/-app/session-9/subagents/agent-a7f3c21.jsonl",
                                              "```json\n" + json.dumps(block) + "\n```")
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=../../etc/passwd"]))
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-reviewer-agent=a7f3c21"]))
+            self.assertEqual(1, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-test-reviewer-agent=../../etc/passwd"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", "bug-test-reviewer-agent=a7f3c21"]))
         report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
         self.assertEqual(str(transcript.resolve()), report["transcript_path"])
         self.assertEqual("claude_subagent_transcript", report["provenance"])
@@ -6711,7 +6701,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # Claude has no dispatch hook, so no V1 receipt is ever written; the router asked to dispatch
         # every reviewer again even after some replies were recorded.
         task_id = "claude-v1-router"
-        roster = ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+        roster = ["arch-regression-reviewer-agent", "bug-test-reviewer-agent"]
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id, roster)
         plan = read_json(tdir / "plan.json")
         first = resolve_next_action(self.repo, task_id, plan, host="claude")
@@ -6719,52 +6709,52 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual(roster, first["reviewers"])
         self.assertIn("record_review.py --task", first["reason"])
         self.assertIn("--from-subagent", first["reason"])
-        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-reviewer-agent",
+        block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
         claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
         self.addCleanup(shutil.rmtree, claude_home, True)
         transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-b1.jsonl", "```json\n" + json.dumps(block) + "\n```")
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-reviewer-agent={transcript}"]))
+            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
         after = resolve_next_action(self.repo, task_id, read_json(tdir / "plan.json"), host="claude")
-        self.assertNotIn("bug-reviewer-agent", after.get("reviewers") or [])
-        self.assertEqual(["regression-impact-reviewer-agent"], after.get("pending_reviewers") or after.get("reviewers"))
+        self.assertNotIn("bug-test-reviewer-agent", after.get("reviewers") or [])
+        self.assertEqual(["arch-regression-reviewer-agent"], after.get("pending_reviewers") or after.get("reviewers"))
         self.assertIn("--from-subagent", after["reason"])
 
     def test_REVIEW_ORCH_018_v2_does_not_accept_footer_only_PASS(self) -> None:
         from record_review import _parse_response_text
         task_id = "test-orch-018"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         # protocol_version is 2
         text = f"Clean review.\nEVIDENCE pkg={pkg_sha[:12]} cites=0\nPASS"
         with self.assertRaises(ValidationError) as ctx:
-            _parse_response_text(self.repo, task_id, "bug-reviewer-agent", text, "dummy-sha")
+            _parse_response_text(self.repo, task_id, "bug-test-reviewer-agent", text, "dummy-sha")
         self.assertIn("HARNESS_REVIEW_RESULT_V2", str(ctx.exception))
 
     def test_REVIEW_ORCH_019_lead_direct_verdict_blocked_for_v2(self) -> None:
         task_id = "test-orch-019"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         ret = record_review.main([
             "--repo", str(self.repo),
             "--task", task_id,
-            "--verdict", "bug-reviewer-agent=PASS",
+            "--verdict", "bug-test-reviewer-agent=PASS",
             "--evidence-pkg", pkg_sha,
         ])
         self.assertEqual(1, ret)
 
     def test_REVIEW_ORCH_020_carried_review_behavior_preserved(self) -> None:
         task_id = "test-orch-020"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         # Complete review round 1
         valid_v2 = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         from review_orchestrator import record_dispatch, complete_review
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         self._create_mock_transcript("exec-020", valid_v2)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-020")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-020")
         # Verify reviews evidence recorded
         store = EvidenceStore(state_root(self.repo))
         evidence = store.read(current["delivery_snapshot_sha256"], run_id, "reviews")
@@ -6779,11 +6769,11 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_P0_03_arbitrary_lead_pass_cannot_be_submitted(self) -> None:
         """P0-3: Arbitrary lead PASS cannot be submitted via CLI or record_review."""
         task_id = "test-p03-lead"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         ret = record_review.main([
             "--repo", str(self.repo),
             "--task", task_id,
-            "--verdict", "bug-reviewer-agent=PASS",
+            "--verdict", "bug-test-reviewer-agent=PASS",
             "--evidence-pkg", pkg_sha,
         ])
         self.assertEqual(1, ret)
@@ -6814,7 +6804,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # Host cannot change mid-run for V2
         from review_orchestrator import complete_review
         with self.assertRaises(ValidationError) as ctx:
-            complete_review(self.repo, t1, "bug-reviewer-agent", "exec-1", host="gemini_cli")
+            complete_review(self.repo, t1, "bug-test-reviewer-agent", "exec-1", host="gemini_cli")
         self.assertIn("host cannot change mid-run", str(ctx.exception))
 
         # Mark t1 as CANCELED to clear active task for t2
@@ -6843,15 +6833,15 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """P1-5: State-locked review finalization is idempotent and ledger hashes stay stable."""
         from review_orchestrator import record_dispatch, complete_review, finalize_review_execution, load_ledger
         task_id = "test-p15-finalize"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         valid_v2 = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-p15", valid_v2)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p15")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-p15")
 
         ev1 = finalize_review_execution(self.repo, task_id, run_id)
         ledger1 = load_ledger(tdir, run_id)
@@ -6881,87 +6871,87 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """REVIEW-PROOF-FINAL-002: direct Python result injection unavailable without transcript."""
         from review_orchestrator import complete_review
         task_id = "test-proof-002"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         with self.assertRaises(TypeError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-002", override_text="fake")  # type: ignore
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-002", override_text="fake")  # type: ignore
         with self.assertRaises(TypeError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-002", _override_text="fake")  # type: ignore
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-002", _override_text="fake")  # type: ignore
 
     def test_REVIEW_PROOF_FINAL_003_missing_trusted_transcript_env_blocked(self) -> None:
         """REVIEW-PROOF-FINAL-003: missing trusted transcript -> ENV_BLOCKED."""
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_ENV_BLOCKED
         task_id = "test-proof-003"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "nonexistent-transcript-final")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "nonexistent-transcript-final")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
     def test_REVIEW_PROOF_FINAL_004_trusted_transcript_completion_accepted(self) -> None:
         """REVIEW-PROOF-FINAL-004: trusted transcript -> completion accepted."""
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_COMPLETED, REVIEW_INGESTED
         task_id = "test-proof-004"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         valid_v2 = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-proof-004", valid_v2)
-        res = complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-proof-004")
+        res = complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-proof-004")
         self.assertEqual("PASS", res["verdict"])
         ledger = load_ledger(tdir, run_id)
-        self.assertIn(ledger["reviewers"]["bug-reviewer-agent"]["state"], (REVIEW_COMPLETED, REVIEW_INGESTED))
+        self.assertIn(ledger["reviewers"]["bug-test-reviewer-agent"]["state"], (REVIEW_COMPLETED, REVIEW_INGESTED))
 
     def test_REVIEW_HOST_001_receipt_host_matches_current_run_host(self) -> None:
         """Review V2 dispatch receipt host strictly matches active current-run host."""
         from review_orchestrator import record_dispatch, dispatch_receipt_file
         task_id = "test-rhost-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         self.assertEqual("antigravity", current.get("review_host"))
-        receipt = record_dispatch(self.repo, task_id, "bug-reviewer-agent", host="antigravity")
+        receipt = record_dispatch(self.repo, task_id, "bug-test-reviewer-agent", host="antigravity")
         self.assertEqual("antigravity", receipt.get("host"))
-        saved = read_json(dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent"))
+        saved = read_json(dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent"))
         self.assertEqual("antigravity", saved.get("host"))
 
     def test_REVIEW_HOST_002_dispatch_caller_cannot_change_v2_host(self) -> None:
         """Dispatch caller cannot pass a host different from current-run review_host."""
         from review_orchestrator import record_dispatch
         task_id = "test-rhost-002"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         with self.assertRaises(ValidationError) as ctx:
-            record_dispatch(self.repo, task_id, "bug-reviewer-agent", host="other_host")
+            record_dispatch(self.repo, task_id, "bug-test-reviewer-agent", host="other_host")
         self.assertIn("review dispatch host mismatch", str(ctx.exception))
 
     def test_REVIEW_HOST_003_completion_rejects_mismatched_receipt_host(self) -> None:
         """Completion rejects dispatch receipt if its host does not match active review host."""
         from review_orchestrator import record_dispatch, complete_review, dispatch_receipt_file
         task_id = "test-rhost-003"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
-        r_file = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
+        r_file = dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent")
         r_data = read_json(r_file)
         r_data["host"] = "rogue_host"
         atomic_write_json(r_file, r_data)
 
         with self.assertRaises(ValidationError) as ctx:
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-rhost-003")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-rhost-003")
         self.assertIn("dispatch receipt host does not match active review host", str(ctx.exception))
 
     def test_REVIEW_HOST_004_execution_profile_receives_current_run_host(self) -> None:
         """pre_tool_safety resolves execution profile using current-run review_host."""
         task_id = "test-rhost-004"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
-        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-test-reviewer-agent.md"
         brief_content = brief_p.read_text(encoding="utf-8")
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
+                    {"TypeName": "bug-test-reviewer-agent", "Role": "bug-test-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -7072,7 +7062,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """REVIEW-HOST-ROUTER-001: Router resolve_next_action passes current-run review_host to resolve_execution_profile."""
         from workflow import resolve_next_action
         task_id = "test-router-host-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
 
         captured_hosts = []
@@ -7095,7 +7085,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual("generic", sig.parameters["host"].default)
 
         task_id = "test-router-host-002"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         prof = resolve_execution_profile(self.repo, task_id)
         self.assertEqual(current["review_host"], prof.get("host"))
 
@@ -7103,7 +7093,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """REVIEW-HOST-ROUTER-003: Explicit antigravity host still resolves Antigravity routes."""
         from review_execution import resolve_execution_profile
         task_id = "test-router-host-003"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
         self.assertEqual("antigravity", prof.get("host"))
 
@@ -7120,7 +7110,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_HOST_ANTIGRAVITY_001_hostless_prepare_denied_by_antigravity_hook(self) -> None:
         """REVIEW-HOST-ANTIGRAVITY-001: Hostless prepare-verification is denied by Antigravity safety hook."""
         task_id = "test-hostless-prep-001"
-        self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         commands = [
             "python .agents/scripts/workflow.py prepare-verification --repo . --task-id test-tid",
@@ -7152,7 +7142,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
     def test_REVIEW_HOST_ANTIGRAVITY_002_explicit_host_antigravity_allowed(self) -> None:
         """REVIEW-HOST-ANTIGRAVITY-002: Explicit --host antigravity is allowed by safety hook."""
         task_id = "test-hostless-prep-002"
-        self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         cmd = "python .agents/scripts/workflow.py prepare-verification --repo . --task-id test-tid --host antigravity"
         env = {
@@ -7204,7 +7194,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         from workflow import resolve_next_action
         from review_orchestrator import load_ledger, REVIEW_DISPATCHED
         task_id = "test-int-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
 
         # Exercise the public entrypoint, then feed its exact current content to the hook.
@@ -7219,24 +7209,24 @@ class ReviewOrchestrationTests(unittest.TestCase):
                     if line.startswith("NEXT_ACTION_INPUTS=")]
         self.assertEqual(1, len(payloads))
         dispatch = json.loads(payloads[0])
-        self.assertEqual(["bug-reviewer-agent"], dispatch["reviewers"])
+        self.assertEqual(["bug-test-reviewer-agent"], dispatch["reviewers"])
         self.assertEqual(run_id, dispatch["run_id"])
 
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
-        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-test-reviewer-agent.md"
         # The host-facing output no longer carries full brief texts: Antigravity keeps only the end of
         # long output, cut the prompts off and the agent made up brief hashes. The one-line pointer is
         # the contract now; the reviewer reads the brief file it names.
-        route = dispatch["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]
+        route = dispatch["review_execution_profile"]["reviewers"]["bug-test-reviewer-agent"]
         self.assertNotIn("brief_content", route)
         self.assertEqual(str(brief_p), route["brief_path"])
-        brief_content = dispatch["reviewer_prompts"]["bug-reviewer-agent"]
+        brief_content = dispatch["reviewer_prompts"]["bug-test-reviewer-agent"]
         self.assertEqual(route["brief_pointer_prompt"], brief_content)
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
+                    {"TypeName": "bug-test-reviewer-agent", "Role": "bug-test-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -7260,12 +7250,12 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual("allow", res.get("decision"))
 
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
         act2 = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("WAIT_FOR_REVIEWERS", act2["code"])
 
-        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-test-reviewer-agent.json"
         self.assertFalse(legacy_receipt.is_file())
 
     def test_REAL_FLOW_REVIEW_001(self) -> None:
@@ -7322,7 +7312,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         run_id = current["run_id"]
         policy = read_json(Path(current["policy"]))
         policy["gates"] = ["preflight", "assemble"]
-        policy["reviewers"] = ["bug-reviewer-agent"]
+        policy["reviewers"] = ["bug-test-reviewer-agent"]
         policy["assemble_required"] = True
         write_policy_fixture(Path(current["policy"]), policy)
 
@@ -7351,13 +7341,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
         # 6. Simulate actual pre_tool_safety invoke_subagent
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
-        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-reviewer-agent.md"
+        brief_p = active_review_package_path(self.repo, current).parent / "brief-bug-test-reviewer-agent.md"
         brief_content = brief_p.read_text(encoding="utf-8")
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": brief_content}
+                    {"TypeName": "bug-test-reviewer-agent", "Role": "bug-test-reviewer-agent", "Prompt": brief_content}
                 ]
             }
         }
@@ -7377,7 +7367,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
 
         # 7. Assert V2 ledger DISPATCHED
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_DISPATCHED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
         # 8. Router -> WAIT_FOR_REVIEWERS
         act2 = resolve_next_action(self.repo, task_id, plan)
@@ -7387,14 +7377,14 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # 9. Complete trusted reviewer(s)
         # Verify --text is rejected by public CLI
         with self.assertRaises(SystemExit):
-            orch_main(["complete", "--task", task_id, "--reviewer", "bug-reviewer-agent", "--execution-id", "e1", "--text", "fake"])
+            orch_main(["complete", "--task", task_id, "--reviewer", "bug-test-reviewer-agent", "--execution-id", "e1", "--text", "fake"])
 
         # Mock trusted transcript resolution
         valid_review_result = {
             "schema_version": 2,
             "task_id": task_id,
             "run_id": run_id,
-            "reviewer": "bug-reviewer-agent",
+            "reviewer": "bug-test-reviewer-agent",
             "review_package_sha256": pkg_sha,
             "verdict": "PASS",
             "findings": [],
@@ -7407,13 +7397,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         }) + "\n", encoding="utf-8")
 
         with mock.patch("review_orchestrator.resolve_trusted_review_source", return_value=mock_transcript):
-            orch_main(["complete", "--repo", str(self.repo), "--task", task_id, "--reviewer", "bug-reviewer-agent", "--execution-id", "trusted-conv-123"])
+            orch_main(["complete", "--repo", str(self.repo), "--task", task_id, "--reviewer", "bug-test-reviewer-agent", "--execution-id", "trusted-conv-123"])
 
         # 10. Auto-finalize aggregate evidence
         ev_rec = store.read(manifest["delivery_snapshot_sha256"], run_id, "reviews")
         self.assertEqual("PASS", ev_rec.get("status"))
         ledger_final = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_INGESTED, ledger_final["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_INGESTED, ledger_final["reviewers"]["bug-test-reviewer-agent"]["state"])
 
         # 11. Router -> ASSEMBLE
         act3 = resolve_next_action(self.repo, task_id, plan)
@@ -7423,10 +7413,10 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # - no repeated DISPATCH_REVIEWERS after actual launch
         self.assertNotEqual("DISPATCH_REVIEWERS", act2["code"])
         # - no legacy receipt for V2
-        legacy_receipt = tdir / "reviewer-dispatches" / "bug-reviewer-agent.json"
+        legacy_receipt = tdir / "reviewer-dispatches" / "bug-test-reviewer-agent.json"
         self.assertFalse(legacy_receipt.is_file())
         # - exact task/run/package binding
-        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent")
+        bound_receipt = dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent")
         self.assertTrue(bound_receipt.is_file())
         b_data = read_json(bound_receipt)
         self.assertEqual(task_id, b_data["task_id"])
@@ -7434,22 +7424,19 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual(pkg_sha, b_data["review_package_sha256"])
 
     def test_P0_01_core_reviewer_prompts_use_v2_contract(self) -> None:
-        """P0-01: Core 7 reviewer definitions must use V2 contract, no legacy PASS tokens, no EVIDENCE footer."""
+        """P0-01: Core 4 reviewer definitions must use V2 contract, no legacy PASS tokens, no EVIDENCE footer."""
         subagents_dir = KIT / "agents" / "subagents"
-        core_7 = (
-            "bug-reviewer-agent",
-            "security-reviewer-agent",
-            "perf-anr-guardian-agent",
-            "convention-reviewer-agent",
-            "regression-impact-reviewer-agent",
-            "test-quality-reviewer-agent",
+        core_4 = (
+            "bug-test-reviewer-agent",
+            "security-perf-reviewer-agent",
+            "arch-regression-reviewer-agent",
             "spec-compliance-agent",
         )
         legacy_pass_tokens = (
             "BUG_PASS", "SECURITY_PASS", "PERF_PASS", "CONVENTION_PASS",
             "REGRESSION_PASS", "TEST_PASS", "SPEC_PASS",
         )
-        for role in core_7:
+        for role in core_4:
             p = subagents_dir / f"{role}.json"
             self.assertTrue(p.is_file(), f"{role}.json missing")
             data = json.loads(p.read_text(encoding="utf-8"))
@@ -7477,13 +7464,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """P0-06: Malformed V2 result stores execution ID and rejects different execution ID on retry."""
         from review_orchestrator import record_dispatch, complete_review, load_ledger, REVIEW_PROTOCOL_RETRY_REQUIRED
         task_id = "test-p06-store-exec"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         self._create_mock_transcript("exec-p06-conv", "malformed not json")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-conv")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-p06-conv")
         ledger = load_ledger(tdir, run_id)
-        rev_entry = ledger["reviewers"]["bug-reviewer-agent"]
+        rev_entry = ledger["reviewers"]["bug-test-reviewer-agent"]
         self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, rev_entry["state"])
         self.assertEqual("exec-p06-conv", rev_entry.get("execution_id"))
         self.assertTrue(rev_entry.get("execution_id_sha256"))
@@ -7491,7 +7478,7 @@ class ReviewOrchestrationTests(unittest.TestCase):
         # Different execution ID must be rejected on retry
         self._create_mock_transcript("exec-p06-other", "also malformed")
         with self.assertRaises(ValidationError) as ctx:
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-other")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-p06-other")
         self.assertIn("different execution", str(ctx.exception).lower())
 
     def test_P0_06_deterministic_send_message_retry_action(self) -> None:
@@ -7499,17 +7486,17 @@ class ReviewOrchestrationTests(unittest.TestCase):
         from review_orchestrator import record_dispatch, complete_review
         from workflow import resolve_next_action
         task_id = "test-p06-action"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         self._create_mock_transcript("exec-p06-msg", "malformed response")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p06-msg")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-p06-msg")
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("RETRY_REVIEW_PROTOCOL", act.get("code"))
         self.assertEqual("HOST_ACTION", act.get("kind"))
         self.assertEqual("send_message", act.get("tool"))
-        self.assertEqual("bug-reviewer-agent", act.get("reviewer"))
+        self.assertEqual("bug-test-reviewer-agent", act.get("reviewer"))
         self.assertEqual("exec-p06-msg", act.get("recipient"))
         self.assertIn("HARNESS_REVIEW_RESULT_V2", act.get("message", ""))
         self.assertIn(task_id, act.get("message", ""))
@@ -7538,13 +7525,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         """P1-05: Protocol correction via send_message to same conversation does not charge a reviewer call."""
         from review_orchestrator import record_dispatch, complete_review, load_ledger
         task_id = "test-p105-budget"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
-        record_dispatch(self.repo, task_id, "bug-reviewer-agent")
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
+        record_dispatch(self.repo, task_id, "bug-test-reviewer-agent")
         ledger_before = load_ledger(tdir, run_id)
         calls_before = ledger_before.get("dispatched_calls_count", 1)
         self._create_mock_transcript("exec-p105", "malformed")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-p105")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-p105")
         ledger_after = load_ledger(tdir, run_id)
         self.assertEqual(calls_before, ledger_after.get("dispatched_calls_count", 1))
 
@@ -7645,8 +7632,14 @@ class VerifyingScopeTests(unittest.TestCase):
             "grep_search",
             {"SearchPath": "feature/billing/src/main/kotlin/com/example/Billing.kt", "Query": "charge"},
         )
-        self.assertEqual("deny", res["decision"])
-        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
+        res_denied = self._invoke_safety(
+            "grep_search",
+            {"SearchPath": ".agents/scripts", "Query": "charge"},
+        )
+        self.assertEqual("deny", res_denied["decision"])
+        self.assertEqual("HARNESS_IMPLEMENTATION_BOUNDARY", res_denied.get("reason_code"))
 
     def test_VERIFY_SCOPE_004_root_list_dir_denied(self) -> None:
         scope = {
@@ -7660,8 +7653,14 @@ class VerifyingScopeTests(unittest.TestCase):
             "list_dir",
             {"DirectoryPath": "."},
         )
-        self.assertEqual("deny", res["decision"])
-        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("LIST_DIR_ALLOWED", res.get("reason_code"))
+        res_denied = self._invoke_safety(
+            "list_dir",
+            {"DirectoryPath": ".agents/scripts"},
+        )
+        self.assertEqual("deny", res_denied["decision"])
+        self.assertEqual("HARNESS_IMPLEMENTATION_BOUNDARY", res_denied.get("reason_code"))
 
     def _invoke_in_conversation(self, conversation: str, tool_name: str, tool_args: dict) -> dict:
         self.env["HARNESS_HOOK_STATE"] = str(self.state / "hook-state.json")
@@ -7766,8 +7765,8 @@ class VerifyingScopeTests(unittest.TestCase):
             "grep_search",
             {"SearchPath": "feature/missing/Missing.kt", "Query": "test"},
         )
-        self.assertEqual("deny", res["decision"])
-        self.assertEqual("REVIEW_SCOPE_EXPANSION_REQUIRED", res.get("reason_code"))
+        self.assertEqual("allow", res["decision"])
+        self.assertEqual("VERIFIER_SEARCH_ALLOWED", res.get("reason_code"))
 
     def test_VERIFY_SCOPE_007_reviewer_still_can_inspect_required_contract_file(self) -> None:
         scope = {
@@ -7858,12 +7857,11 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         install_res = install(self.repo, KIT)
         self.assertTrue((self.repo / ".agents" / "hooks.json").is_file())
         self.assertTrue((self.repo / "GEMINI.md").is_file())
-        core_7 = (
-            "bug-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent",
-            "convention-reviewer-agent", "regression-impact-reviewer-agent",
-            "test-quality-reviewer-agent", "spec-compliance-agent",
+        core_4 = (
+            "bug-test-reviewer-agent", "security-perf-reviewer-agent",
+            "arch-regression-reviewer-agent", "spec-compliance-agent",
         )
-        for role in core_7:
+        for role in core_4:
             self.assertTrue((self.repo / ".agents" / "agents" / role / "agent.md").is_file())
 
         # Step 4: Doctor install-check passes
@@ -7904,11 +7902,11 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         self.assertEqual(2, current["review_protocol_version"])
         self.assertEqual("antigravity", current["review_host"])
 
-        # Configure 2 reviewers for the scenario: bug-reviewer-agent and security-reviewer-agent
+        # Configure 2 reviewers for the scenario: bug-test-reviewer-agent and security-perf-reviewer-agent
         import review_package
         policy = read_json(Path(current["policy"]))
         policy["gates"] = ["preflight"]
-        policy["reviewers"] = ["bug-reviewer-agent", "security-reviewer-agent"]
+        policy["reviewers"] = ["bug-test-reviewer-agent", "security-perf-reviewer-agent"]
         policy["assemble_required"] = False
         write_policy_fixture(Path(current["policy"]), policy)
         from review_orchestrator import ledger_file
@@ -7940,15 +7938,15 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         # Step 10 & 11: PreToolUse allows one invoke_subagent batch (no model/reasoning fields), dispatch receipts exist before invocation
         from review_execution import resolve_execution_profile
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-        prompt_bug = prof["reviewers"]["bug-reviewer-agent"]["brief_content"]
-        prompt_sec = prof["reviewers"]["security-reviewer-agent"]["brief_content"]
+        prompt_bug = prof["reviewers"]["bug-test-reviewer-agent"]["brief_content"]
+        prompt_sec = prof["reviewers"]["security-perf-reviewer-agent"]["brief_content"]
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": prompt_bug},
-                    {"TypeName": "security-reviewer-agent", "Role": "security-reviewer-agent", "Prompt": prompt_sec},
+                    {"TypeName": "bug-test-reviewer-agent", "Role": "bug-test-reviewer-agent", "Prompt": prompt_bug},
+                    {"TypeName": "security-perf-reviewer-agent", "Role": "security-perf-reviewer-agent", "Prompt": prompt_sec},
                 ]
             }
         }
@@ -7975,49 +7973,49 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
             REVIEW_COMPLETED, REVIEW_INGESTED, REVIEW_PROTOCOL_RETRY_REQUIRED, finalize_reviews,
         )
         # Dispatch receipts exist
-        self.assertTrue(dispatch_receipt_file(tdir, run_id, "bug-reviewer-agent").is_file())
-        self.assertTrue(dispatch_receipt_file(tdir, run_id, "security-reviewer-agent").is_file())
+        self.assertTrue(dispatch_receipt_file(tdir, run_id, "bug-test-reviewer-agent").is_file())
+        self.assertTrue(dispatch_receipt_file(tdir, run_id, "security-perf-reviewer-agent").is_file())
 
-        # Step 12: One reviewer returns correct V2 PASS (bug-reviewer-agent)
+        # Step 12: One reviewer returns correct V2 PASS (bug-test-reviewer-agent)
         v2_pass = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "bug-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "bug-test-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-bug-01", v2_pass)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", "exec-bug-01")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", "exec-bug-01")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
-        # Step 13: One reviewer returns malformed legacy output (security-reviewer-agent)
+        # Step 13: One reviewer returns malformed legacy output (security-perf-reviewer-agent)
         self._create_mock_transcript("exec-sec-01", "SECURITY_PASS\nEVIDENCE pkg=12345 cites=2")
         with self.assertRaises(ValidationError):
-            complete_review(self.repo, task_id, "security-reviewer-agent", "exec-sec-01")
+            complete_review(self.repo, task_id, "security-perf-reviewer-agent", "exec-sec-01")
 
         # Step 14: review complete moves only that reviewer to PROTOCOL_RETRY_REQUIRED
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["security-reviewer-agent"]["state"])
-        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_PROTOCOL_RETRY_REQUIRED, ledger["reviewers"]["security-perf-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_COMPLETED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
         # Step 15: Router returns exact send_message retry to same conversation
         act = resolve_next_action(self.repo, task_id, plan)
         self.assertEqual("RETRY_REVIEW_PROTOCOL", act["code"])
         self.assertEqual("send_message", act.get("tool"))
-        self.assertEqual("security-reviewer-agent", act.get("reviewer"))
+        self.assertEqual("security-perf-reviewer-agent", act.get("reviewer"))
         self.assertEqual("exec-sec-01", act.get("recipient"))
         self.assertEqual({"same_execution_id": True, "new_dispatch": False}, act.get("expected"))
 
         # Step 16 & 17: Corrected transcript returns V2 PASS; same execution ID completes; no new dispatch/call
         v2_pass_sec = json.dumps({
             "schema_version": 2, "task_id": task_id, "run_id": run_id,
-            "reviewer": "security-reviewer-agent", "review_package_sha256": pkg_sha,
+            "reviewer": "security-perf-reviewer-agent", "review_package_sha256": pkg_sha,
             "verdict": "PASS", "findings": []
         })
         self._create_mock_transcript("exec-sec-01", v2_pass_sec)
         calls_before = ledger.get("dispatched_calls_count", 2)
-        complete_review(self.repo, task_id, "security-reviewer-agent", "exec-sec-01")
+        complete_review(self.repo, task_id, "security-perf-reviewer-agent", "exec-sec-01")
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-perf-reviewer-agent"]["state"])
         self.assertEqual(calls_before, ledger.get("dispatched_calls_count", 2))
 
         # Step 18: Aggregate reviews finalize
@@ -8025,8 +8023,8 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         self.assertEqual("PASS", finalize_res["verdict"])
         self.assertEqual([], finalize_res["findings"])
         ledger = load_ledger(tdir, run_id)
-        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
-        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_INGESTED, ledger["reviewers"]["security-perf-reviewer-agent"]["state"])
 
         # Step 20: Final review evidence remains bound to run/package/snapshot/change set
         manifest = read_json(Path(current["manifest"]))
@@ -8084,7 +8082,7 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         current = read_json(tdir / "current-run.json")
         policy = read_json(Path(current["policy"]))
         policy["gates"] = []
-        policy["reviewers"] = ["bug-reviewer-agent"]
+        policy["reviewers"] = ["bug-test-reviewer-agent"]
         policy["assemble_required"] = False
         write_policy_fixture(Path(current["policy"]), policy)
         import review_package
@@ -8105,13 +8103,13 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
         # PreToolUse allows and creates dispatch receipt
         from review_execution import resolve_execution_profile
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-        prompt_bug = prof["reviewers"]["bug-reviewer-agent"]["brief_content"]
+        prompt_bug = prof["reviewers"]["bug-test-reviewer-agent"]["brief_content"]
         safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
         subagent_call = {
             "toolName": "invoke_subagent",
             "toolArgs": {
                 "Subagents": [
-                    {"TypeName": "bug-reviewer-agent", "Role": "bug-reviewer-agent", "Prompt": prompt_bug}
+                    {"TypeName": "bug-test-reviewer-agent", "Role": "bug-test-reviewer-agent", "Prompt": prompt_bug}
                 ]
             }
         }
@@ -8134,7 +8132,7 @@ class AntigravityEndToEndScenarioTests(unittest.TestCase):
 
         from review_orchestrator import load_ledger, REVIEW_ENV_BLOCKED
         ledger = load_ledger(tdir, current["run_id"])
-        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-reviewer-agent"]["state"])
+        self.assertEqual(REVIEW_ENV_BLOCKED, ledger["reviewers"]["bug-test-reviewer-agent"]["state"])
 
         plan = read_json(tdir / "plan.json")
         act = resolve_next_action(self.repo, task_id, plan)
@@ -8335,7 +8333,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
         current, run_id, _, directory = self._setup_v2_task(task_id)
         policy = read_json(Path(current["policy"]))
         plan = read_json(directory / "plan.json")
-        plan.update(review_rounds=4, review_calls_used=50, blocked_reviewers=["bug-reviewer-agent"])
+        plan.update(review_rounds=4, review_calls_used=50, blocked_reviewers=["bug-test-reviewer-agent"])
         workflow.save_plan(directory / "plan.json", plan)
         record_review_budget(argparse.Namespace(repo=str(self.repo), task_id=task_id, limit=70, round_limit=5,
             source="conversation", proof_reference="Approve 5 final rounds and 70 reviewer calls"))
@@ -8377,7 +8375,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_001_edit_after_freeze_returns_verification_stale_before_preflight(self) -> None:
         """STALE-NEXT-001: Edit after freeze returns VERIFICATION_STALE before preflight."""
         task_id = "test-stale-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
         store = EvidenceStore(state_root(self.repo))
         manifest = read_json(Path(current["manifest"]))
@@ -8398,7 +8396,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_002_edit_after_preflight_returns_stale_before_reviewer_dispatch(self) -> None:
         """STALE-NEXT-002: Edit after preflight returns stale before reviewer dispatch."""
         task_id = "test-stale-002"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
 
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// post preflight edit\nclass MainActivity\n")
@@ -8412,26 +8410,26 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_003_edit_while_reviewers_run_prevents_result_ingestion(self) -> None:
         """STALE-NEXT-003: Edit while reviewers run prevents result ingestion."""
         task_id = "test-stale-003"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         from review_orchestrator import record_dispatch_batch, complete_review
-        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+        record_dispatch_batch(self.repo, task_id, ["bug-test-reviewer-agent"], host="antigravity")
 
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// mid-review edit\nclass MainActivity\n")
 
         eid = "exec-mid-review-stale"
-        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
+        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-test-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
         self._create_mock_transcript(eid, valid_response)
 
         with self.assertRaises(ValidationError) as ctx:
-            complete_review(self.repo, task_id, "bug-reviewer-agent", eid, host="antigravity")
+            complete_review(self.repo, task_id, "bug-test-reviewer-agent", eid, host="antigravity")
         self.assertIn("STALE", str(ctx.exception).upper())
         from review_orchestrator import result_file
-        self.assertFalse(result_file(tdir, run_id, "bug-reviewer-agent").is_file())
+        self.assertFalse(result_file(tdir, run_id, "bug-test-reviewer-agent").is_file())
 
     def test_STALE_NEXT_004_external_input_identity_change_returns_stale(self) -> None:
         """STALE-NEXT-004: External input identity change returns stale."""
         task_id = "test-stale-004"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
         current["external_inputs_sha256"] = "x" * 64
         atomic_write_json(tdir / "current-run.json", current)
@@ -8443,7 +8441,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_005_unchanged_repo_continues_normal_action(self) -> None:
         """STALE-NEXT-005: Unchanged repo continues normal action."""
         task_id = "test-stale-005"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
 
         from workflow import resolve_next_action
@@ -8454,7 +8452,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_006_stale_run_consumes_zero_additional_reviewer_calls(self) -> None:
         """STALE-NEXT-006: Stale run consumes zero additional reviewer calls."""
         task_id = "test-stale-006"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         plan = read_json(tdir / "plan.json")
         initial_calls = plan.get("review_calls_used", 0)
 
@@ -8471,9 +8469,9 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_007_stale_run_never_returns_wait_for_reviewers(self) -> None:
         """STALE-NEXT-007: Stale run never returns WAIT_FOR_REVIEWERS as authoritative next action."""
         task_id = "test-stale-007"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         from review_orchestrator import record_dispatch_batch
-        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+        record_dispatch_batch(self.repo, task_id, ["bug-test-reviewer-agent"], host="antigravity")
 
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// stale edit\nclass MainActivity\n")
 
@@ -8486,7 +8484,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_008_resume_plus_prepare_verification_creates_distinct_run_id(self) -> None:
         """STALE-NEXT-008: Resume + prepare-verification creates a distinct run id."""
         task_id = "test-stale-008"
-        current1, run_id1, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current1, run_id1, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
 
         from workflow import resume, prepare_verification
         resume(argparse.Namespace(repo=str(self.repo), task_id=task_id, reason="recovering from stale"))
@@ -8505,7 +8503,7 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_NEXT_009_task_manifest_failure_is_not_treated_as_fresh(self) -> None:
         """Freshness must fail closed when the task-scoped change set cannot be rebuilt."""
         task_id = "test-stale-009"
-        current, _, _, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, _, _, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         self.assertTrue(current.get("task_change_set_sha256"))
 
         from workflow import resolve_next_action
@@ -8518,14 +8516,14 @@ class StaleRunVerificationTests(ReviewOrchestrationTests):
     def test_STALE_FINAL_001_final_reviewer_return_after_user_edit_cannot_be_ingested(self) -> None:
         """STALE-FINAL-001: Final reviewer return after user edit cannot be ingested as current evidence."""
         task_id = "test-stale-final-001"
-        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-reviewer-agent"])
+        current, run_id, pkg_sha, tdir = self._setup_v2_task(task_id, ["bug-test-reviewer-agent"])
         from review_orchestrator import record_dispatch_batch, complete_review, finalize_review_execution
-        record_dispatch_batch(self.repo, task_id, ["bug-reviewer-agent"], host="antigravity")
+        record_dispatch_batch(self.repo, task_id, ["bug-test-reviewer-agent"], host="antigravity")
 
         eid = "exec-final-stale"
-        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
+        valid_response = f'```json\n{{"schema_version": 2, "task_id": "{task_id}", "run_id": "{run_id}", "reviewer": "bug-test-reviewer-agent", "verdict": "PASS", "review_package_sha256": "{pkg_sha}", "summary": "Looks good", "findings": []}}\n```'
         self._create_mock_transcript(eid, valid_response)
-        complete_review(self.repo, task_id, "bug-reviewer-agent", eid, host="antigravity")
+        complete_review(self.repo, task_id, "bug-test-reviewer-agent", eid, host="antigravity")
 
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\n// post review edit\nclass MainActivity\n")
 
@@ -8970,29 +8968,29 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self.assertIn("plan_sha256", out)
         from workflow import _compact_for_host
         action = {
-            "code": "DISPATCH_REVIEWERS", "reviewer_prompts": {"bug-reviewer-agent": "Review ..."},
-            "reviewers": ["bug-reviewer-agent"], "reviewer_models": {"bug-reviewer-agent": "gemini-3.8-flash-high"},
-            "briefs": {"bug-reviewer-agent": "# Brief\nlong text"},
-            "inputs": {"review_execution_profile": {"reviewers": {"bug-reviewer-agent": {
+            "code": "DISPATCH_REVIEWERS", "reviewer_prompts": {"bug-test-reviewer-agent": "Review ..."},
+            "reviewers": ["bug-test-reviewer-agent"], "reviewer_models": {"bug-test-reviewer-agent": "gemini-3.8-flash-high"},
+            "briefs": {"bug-test-reviewer-agent": "# Brief\nlong text"},
+            "inputs": {"review_execution_profile": {"reviewers": {"bug-test-reviewer-agent": {
                 "brief_path": "b.md", "brief_content": "# Brief\nlong text", "brief_pointer_prompt": "Review ..."}}}},
             "expected": {},
         }
         compact = _compact_for_host(action)
         self.assertEqual(["reviewers", "reviewer_models", "reviewer_prompts"], list(compact)[-3:],
                          "reviewers, models, and prompts are the last things the host shows")
-        self.assertEqual({"bug-reviewer-agent": "see brief_path"}, compact["briefs"])
-        route = compact["inputs"]["review_execution_profile"]["reviewers"]["bug-reviewer-agent"]
+        self.assertEqual({"bug-test-reviewer-agent": "see brief_path"}, compact["briefs"])
+        route = compact["inputs"]["review_execution_profile"]["reviewers"]["bug-test-reviewer-agent"]
         self.assertNotIn("brief_content", route)
         self.assertEqual("Review ...", route["brief_pointer_prompt"])
-        self.assertIn("brief_content", action["inputs"]["review_execution_profile"]["reviewers"]["bug-reviewer-agent"],
+        self.assertIn("brief_content", action["inputs"]["review_execution_profile"]["reviewers"]["bug-test-reviewer-agent"],
                       "the router's own action is not changed")
         # Phase reviewers have no pointer; their hook matches the brief text, so it stays.
-        phase = {"code": "DISPATCH_PHASE_REVIEWERS", "briefs": {"bug-reviewer-agent": "# Brief\ntext"},
-                 "inputs": {"review_execution_profile": {"reviewers": {"bug-reviewer-agent": {"brief_content": "# Brief\ntext"}}}}}
+        phase = {"code": "DISPATCH_PHASE_REVIEWERS", "briefs": {"bug-test-reviewer-agent": "# Brief\ntext"},
+                 "inputs": {"review_execution_profile": {"reviewers": {"bug-test-reviewer-agent": {"brief_content": "# Brief\ntext"}}}}}
         self.assertEqual(phase, _compact_for_host(phase))
-        hint = _prompt_hint({"bug-reviewer-agent": "Review task t run r: read and follow brief.md"})
+        hint = _prompt_hint({"bug-test-reviewer-agent": "Review task t run r: read and follow brief.md"})
         self.assertIn("do not open the brief files", hint)
-        self.assertIn("bug-reviewer-agent: `Review task t run r: read and follow brief.md`", hint)
+        self.assertIn("bug-test-reviewer-agent: `Review task t run r: read and follow brief.md`", hint)
         self.assertEqual("", _prompt_hint({}))
 
     def test_ROUTER_RECORD_START_001_first_edit_is_preceded_by_a_test_record(self) -> None:
@@ -9048,7 +9046,7 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         self.assertEqual({"files": [], "reviewers": []}, _fix_delta(self.repo, task_id, "run-old", reviewed, plan))
         (self.repo / login).unlink()
         deleted = build_manifest(self.repo)
-        self.assertEqual({"files": [login], "reviewers": ["regression-impact-reviewer-agent"]},
+        self.assertEqual({"files": [login], "reviewers": ["arch-regression-reviewer-agent"]},
                          _fix_delta(self.repo, task_id, "run-old", deleted, plan))
 
     def test_ROUTER_TASK_BASE_MOVED_branch_switch_mid_task_goes_to_the_developer(self) -> None:
@@ -9750,7 +9748,7 @@ class AssetClassificationTests(unittest.TestCase):
         self.assertNotEqual("USER_DECISION_REQUIRED", pol["status"])
         self.assertIn("UNKNOWN", pol["surfaces"])
         self.assertEqual("T2_FEATURE", pol["risk_tier"])
-        self.assertEqual(["regression-impact-reviewer-agent"], pol["reviewers"])
+        self.assertEqual(["arch-regression-reviewer-agent"], pol["reviewers"])
         self.assertIn("assemble", pol["gates"])
         self.assertEqual("APPROVED_PLAN_FILES", pol.get("unknown_resolution"))
 

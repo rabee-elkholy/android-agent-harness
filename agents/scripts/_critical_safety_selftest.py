@@ -334,12 +334,12 @@ class CriticalSafetyTests(unittest.TestCase):
                 for body in ("MAJOR: unresolved data loss.\nBUG_PASS", "BUG_PASS\nBUG_PASS", "unresolved issue\nBUG_PASS"):
                     response.write_text(body + "\n" + footer + " cites=0")
                     try:
-                        report = record_review.response_to_report(root, "t", "bug-reviewer-agent", response)
+                        report = record_review.response_to_report(root, "t", "bug-test-reviewer-agent", response)
                     except ValidationError:
                         continue
                     self.assertNotEqual("PASS", report["verdict"])
                 response.write_text("\n\nBUG_PASS\n" + footer + " cites=0\n")
-                self.assertEqual("PASS", record_review.response_to_report(root, "t", "bug-reviewer-agent", response)["verdict"])
+                self.assertEqual("PASS", record_review.response_to_report(root, "t", "bug-test-reviewer-agent", response)["verdict"])
 
     def test_failed_gradle_needs_fresh_failures_from_the_test_task(self):
         xml = '<testsuite tests="1" failures="1"><testcase classname="A" name="a"><failure message="known"/></testcase></testsuite>'
@@ -1493,13 +1493,13 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
             first = {"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
                      "content": "sender=parent priority=MESSAGE_PRIORITY_HIGH content=exact brief\n</SYSTEM_MESSAGE>"}
             transcript.write_text(json.dumps(first) + "\n" + '{}\n' * 7 + "unrelated malformed tail\n", encoding="utf-8")
-            run = {"review_host": "antigravity", "briefs": {"bug-reviewer-agent": str(brief)}}
-            data = {"reviewers": {"bug-reviewer-agent": {"state": "DISPATCHED", "execution_id": "child", "parent_execution_id": "parent"}}}
+            run = {"review_host": "antigravity", "briefs": {"bug-test-reviewer-agent": str(brief)}}
+            data = {"reviewers": {"bug-test-reviewer-agent": {"state": "DISPATCHED", "execution_id": "child", "parent_execution_id": "parent"}}}
             with mock.patch.object(host, "resolve_transcript", return_value=transcript), \
                     mock.patch.object(host, "active_reviews", return_value=[(run, ledger)]), \
                     mock.patch.object(host, "_load_ledger", return_value=data), \
                     mock.patch.object(host, "StateLock", side_effect=AssertionError("already bound")):
-                self.assertEqual("bug-reviewer-agent", host.reviewer_context(root, "child", bind=True)["role"])
+                self.assertEqual("bug-test-reviewer-agent", host.reviewer_context(root, "child", bind=True)["role"])
                 with self.assertRaises(ValidationError):
                     host.reviewer_context(root, "different-child", bind=True)
                 transcript.write_text('{}\n', encoding="utf-8")
@@ -1511,12 +1511,12 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         changes = [{"path": "A.kt"}, {"path": "B.kt"}]
         policy = {"surfaces": ["COROUTINES", "BUSINESS_LOGIC"], "explanation": {"classification": {
             "COROUTINES": {"files": ["A.kt"]}, "BUSINESS_LOGIC": {"files": ["B.kt"]}}}}
-        guide = review_reading_guide(content, "perf-anr-guardian-agent", policy, changes)
+        guide = review_reading_guide(content, "security-perf-reviewer-agent", policy, changes)
         self.assertEqual(["A.kt"], guide["focus_files"])
         self.assertEqual([[1, 3], [4, 5], [8, 10]], guide["line_ranges"])
-        self.assertIsNone(review_reading_guide(content, "bug-reviewer-agent", policy, changes))
-        self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", {**policy, "surfaces": ["AUTH"]}, changes))
-        self.assertIsNone(review_reading_guide(content, "perf-anr-guardian-agent", policy, changes + [{"path": "missing.kt"}]))
+        self.assertIsNone(review_reading_guide(content, "bug-test-reviewer-agent", policy, changes))
+        self.assertIsNone(review_reading_guide(content, "security-perf-reviewer-agent", {**policy, "surfaces": ["AUTH"]}, changes))
+        self.assertIsNone(review_reading_guide(content, "security-perf-reviewer-agent", policy, changes + [{"path": "missing.kt"}]))
         # Passive surfaces (DOCS, LOCALIZATION, TEST_ONLY) and quoted/untracked paths are supported.
         mixed_content = (
             'header\n## Git diff\n```diff\ndiff --git "a/dir with space/A.kt" "b/dir with space/A.kt"\n+x\n'
@@ -1528,7 +1528,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
             "DOCS": {"files": ["README.md"]},
             "BUSINESS_LOGIC": {"files": ["B.kt"]},
         }}}
-        mixed_guide = review_reading_guide(mixed_content, "perf-anr-guardian-agent", mixed_policy, mixed_changes)
+        mixed_guide = review_reading_guide(mixed_content, "security-perf-reviewer-agent", mixed_policy, mixed_changes)
         self.assertEqual(["dir with space/A.kt"], mixed_guide["focus_files"])
 
     def test_active_reviews_skips_historical_plans_without_run_or_phase_markers(self):
@@ -1580,7 +1580,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
             auth_p = root / "app/src/main/java/com/example/AuthUseCase.kt"
             weight_p.parent.mkdir(parents=True)
             auth_p.write_text("package com.example\nclass AuthUseCase { fun login() {} }\n", encoding="utf-8")
-            weight_p.write_text("package com.example\nclass WeightUseCase { suspend fun save() { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {} } }\n", encoding="utf-8")
+            weight_p.write_text("package com.example\nclass WeightUseCase { fun save() = 1 }\n", encoding="utf-8")
             prev_states = {
                 "app/src/main/java/com/example/AuthUseCase.kt": {"exists": True, "sha256": "same-auth"},
                 "app/src/main/java/com/example/WeightUseCase.kt": {"exists": True, "sha256": "old-weight"},
@@ -1603,16 +1603,16 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
                 "phase_id": "p1",
                 "verdict": "FINDINGS",
                 "reviewers": {
-                    "perf-anr-guardian-agent": {"verdict": "FINDINGS", "findings": [{"id": "perf-001"}]},
-                    "security-reviewer-agent": {"verdict": "PASS", "findings": []},
+                    "bug-test-reviewer-agent": {"verdict": "FINDINGS", "findings": [{"id": "perf-001"}]},
+                    "security-perf-reviewer-agent": {"verdict": "PASS", "findings": []},
                 },
             }), encoding="utf-8")
             rerun, carried = pr._narrow_phase_review_roster(
-                root, "t1", "p1", ["perf-anr-guardian-agent", "security-reviewer-agent"], live_states,
+                root, "t1", "p1", ["bug-test-reviewer-agent", "security-perf-reviewer-agent"], live_states,
             )
-            self.assertEqual(["perf-anr-guardian-agent"], rerun)
+            self.assertEqual(["bug-test-reviewer-agent"], rerun)
             self.assertEqual(1, len(carried))
-            self.assertEqual("security-reviewer-agent", carried[0]["reviewer"])
+            self.assertEqual("security-perf-reviewer-agent", carried[0]["reviewer"])
 
     def test_antigravity_unknown_invocation_uses_small_read_only_reminder(self):
         import pre_invocation_reminder as reminder

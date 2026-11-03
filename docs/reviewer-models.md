@@ -14,11 +14,11 @@ or the requirement for independent review proof.
 
 When a task or phase review on Antigravity reaches `DISPATCH_REVIEWERS` / `DISPATCH_PHASE_REVIEWERS` with no explicit model bound (`source == "default"`), the router emits `before_first_dispatch` (`code = "SELECT_REVIEW_MODEL"`) with 5 developer choices:
 
-1. `flash-dynamic-task` (`--default flash-dynamic --scope task`): Gemini 3.8 Flash with dynamic thinking (`high` for `security-reviewer-agent`, `bug-reviewer-agent`, `perf-anr-guardian-agent`, or `DEEP`/`MAX` effort; `medium` for standard reviewers) for the whole task.
+1. `flash-dynamic-task` (`--default flash-dynamic --scope task`): Gemini 3.8 Flash with dynamic thinking (`high` for `security-perf-reviewer-agent`, `bug-test-reviewer-agent`, or `DEEP`/`MAX` effort; `medium` for standard reviewers) for the whole task.
 2. `flash-dynamic-once` (`--default flash-dynamic --scope run`): Gemini 3.8 Flash with dynamic thinking for this review run only (`review-models-run.json`).
 3. `inherit-task` (`--default inherit --scope task`): Chat conversation model (`Inherit`) for the whole task.
 4. `inherit-once` (`--default inherit --scope run`): Chat conversation model (`Inherit`) for this review run only.
-5. `hybrid-smart-task` (`--default hybrid-smart --scope task`): Smart Hybrid — Flash Dynamic for standard reviewers (`convention`, `test-quality`, `spec-compliance`, `regression-impact`) and Chat model (`Inherit`) for critical reviewers (`bug`, `perf-anr-guardian`, `security`) for the whole task.
+5. `hybrid-smart-task` (`--default hybrid-smart --scope task`): Smart Hybrid — Flash Dynamic for standard reviewers (`arch-regression-reviewer-agent`, `spec-compliance-agent`) and Chat model (`Inherit`) for critical reviewers (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`) for the whole task.
 
 The plan displays the current model setting and its source, and every router dispatch, wait, status, and completion output includes `reviewer_models` and formats each specialist as `<role> [<model>]` in both CLI output and chat updates. Approving the plan
 does not answer the model question. Keep an unanswered question pending when the
@@ -34,7 +34,7 @@ python .agents/harness.py review models set --host antigravity --task-id <id> --
 Or configure per-reviewer overrides and thinking levels explicitly:
 
 ```bash
-python .agents/harness.py review models set --host antigravity --task-id <id> --default flash@medium --reviewer security-reviewer-agent=pro@high --scope task --source conversation --proof-reference "Use Flash Medium by default and Pro High for security"
+python .agents/harness.py review models set --host antigravity --task-id <id> --default flash@medium --reviewer security-perf-reviewer-agent=pro@high --scope task --source conversation --proof-reference "Use Flash Medium by default and Pro High for security"
 ```
 
 ## Claude Code configuration
@@ -42,14 +42,14 @@ python .agents/harness.py review models set --host antigravity --task-id <id> --
 During Claude-only setup, choose a common alias or `custom` for a complete policy:
 
 ```json
-{"schema_version":1,"default":"sonnet","overrides":{"security-reviewer-agent":"opus"}}
+{"schema_version":1,"default":"sonnet","overrides":{"security-perf-reviewer-agent":"opus"}}
 ```
 
 After setup, inspect support and record a developer-requested project choice:
 
 ```bash
 python .agents/harness.py review models show --host claude
-python .agents/harness.py review models set --host claude --default sonnet --reviewer security-reviewer-agent=opus --source conversation --proof-reference "Use Sonnet for reviewers and Opus for security"
+python .agents/harness.py review models set --host claude --default sonnet --reviewer security-perf-reviewer-agent=opus --source conversation --proof-reference "Use Sonnet for reviewers and Opus for security"
 ```
 
 Precedence: run-scoped decision (`--scope run`, bound to current `run_id`), task decision (`--scope task`), project decision, setup answer, inheritance.

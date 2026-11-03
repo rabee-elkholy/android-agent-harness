@@ -1,5 +1,5 @@
 ---
-description: Static + optional device ANR audit via perf_guard and perf-anr-guardian-agent.
+description: Static + optional device ANR audit via perf_guard and security-perf-reviewer-agent.
 argument-hint: "[optional file paths]"
 ---
 

@@ -31,12 +31,15 @@ class EfficiencyTests(unittest.TestCase):
 
     def test_failure_never_compacted_and_architecture_bounded(self):
         for status in ('AMBIGUOUS','BATCH_PARTIAL','SOURCE_CHANGED_DURING_DISCOVERY'):
-            p={'status':status,'warnings':['x'*20000]}
+            p={'status':status,'warnings':['x'*20000],'local_profiles':[{'family_id':None,'paths':None},{'family_id':'MVVM_LIVE_DATA','paths':['a/b.kt']}]}
             a=present_context(Path('.'),p)
             self.assertEqual('FULL',present_context(Path('.'),p,since=a['context_digest'])['presentation'])
             arch=architecture_context(p)
             self.assertLess(len(json.dumps(arch).encode()),8192)
             self.assertFalse(arch['scope_authorization'])
+        small=architecture_context({'local_profiles':[{'family_id':None,'paths':None},{'family_id':'MVVM_LIVE_DATA','paths':['a/b.kt']}]})
+        self.assertEqual(['MVVM_LIVE_DATA','UNKNOWN'],small['local_families'])
+        self.assertEqual(['a/b.kt'],small['representative_existing_patterns'])
 
     def test_batch_shares_inputs_and_keeps_source_freshness(self):
         f=fixtures.ProjectIntelligenceTests();f.setUp()
@@ -50,11 +53,70 @@ class EfficiencyTests(unittest.TestCase):
             self.assertEqual(1,facts.call_count)
             self.assertEqual(1,notes.call_count)
             self.assertTrue(result['discovery'])
+            import subprocess, sys
+            command = [sys.executable, tc.__file__, '--repo', str(f.repo), '--json']
+            for file in files:
+                command.extend(['--file', file])
+            summary = json.loads(subprocess.check_output(command, text=True))
+            full = json.loads(subprocess.check_output(command + ['--full'], text=True))
+            self.assertEqual('SUMMARY', summary['presentation'])
+            self.assertEqual('FULL', full['presentation'])
+            self.assertEqual(summary['context_digest'], full['context_digest'])
+            self.assertIn('developer_instructions', summary['shared_context'])
+            self.assertEqual(2, len(summary['results']))
+            for row, expanded in zip(summary['results'], full['results']):
+                self.assertTrue(row['discovery'])
+                self.assertEqual(expanded.get('read_ranges'), row.get('read_ranges'))
+            repeated = json.loads(subprocess.check_output(command + ['--since', summary['context_digest']], text=True))
+            self.assertEqual('UNCHANGED', repeated['presentation'])
+            self.assertIn('shared_context', repeated)
+
             arch=result['results'][0]['architecture_context']
             self.assertEqual([':app'],arch['target_modules'])
             self.assertIn('main',arch['source_sets'])
             self.assertLess(len(json.dumps(arch).encode()),8192)
         finally:f.tearDown()
+
+    def test_summary_batch_shares_exact_values_without_scope_loss(self):
+        import copy
+        instructions = [{'text': 'Must preserve this instruction', 'scope': 'src'}]
+        rows = [{'status': 'RESOLVED', 'query': str(i),
+                 'developer_instructions': instructions,
+                 'warnings': ['keep warning'], 'discovery': {'resolved_paths': [str(i)]},
+                 'target': {'path': str(i), 'nodes': [{'large': 'x' * 5000}], 'outline': [str(i)]},
+                 'direct_dependents': [{'path': str(n), 'name': str(n)} for n in range(30)]}
+                for i in range(3)]
+        rows[-1]['developer_instructions'] = [{'text': 'Different scoped instruction'}]
+        payload = {'status': 'BATCH_RESOLVED', 'results': rows}
+        original = copy.deepcopy(payload)
+        summary = present_context(Path('.'), payload)
+        self.assertEqual('SUMMARY', summary['presentation'])
+        self.assertEqual(instructions, summary['shared_context']['developer_instructions'][0])
+        for before, after in zip(rows, summary['results']):
+            self.assertEqual(before['discovery'], after['discovery'])
+            self.assertEqual(before['warnings'], after['warnings'])
+            self.assertEqual(before['target']['outline'], after['target']['outline'])
+            self.assertEqual(22, after['omitted_details']['direct_dependents'])
+            self.assertLessEqual(len(after['direct_dependents']), 8)
+            ref = after['shared_context_refs']['developer_instructions']
+            self.assertEqual(before['developer_instructions'], summary['shared_context']['developer_instructions'][ref])
+        full = present_context(Path('.'), payload, full=True)
+        self.assertEqual(rows, full['results'])
+        self.assertEqual(full['context_digest'], summary['context_digest'])
+        self.assertEqual(original, payload)
+        self.assertLess(len(json.dumps(summary)), len(json.dumps(full)) / 2)
+        for status in ('BATCH_PARTIAL', 'BATCH_FAILED', 'SOURCE_CHANGED_DURING_DISCOVERY'):
+            failed = present_context(Path('.'), {**payload, 'status': status})
+            self.assertEqual('FULL', failed['presentation'])
+            self.assertEqual(rows, failed['results'])
+        # A change outside the displayed first eight entries still invalidates reuse.
+        changed = copy.deepcopy(payload)
+        changed['results'][0]['direct_dependents'][-1]['name'] = 'Changed'
+        stale = present_context(Path('.'), changed, since=summary['context_digest'])
+        self.assertEqual('FULL', stale['presentation'])
+        self.assertEqual('BASELINE_MISMATCH', stale['presentation_reason'])
+        self.assertEqual(changed['results'], stale['results'])
+
 
     def test_metrics_mixed_versions_privacy_and_no_nested_double_count(self):
         with tempfile.TemporaryDirectory() as td:
@@ -80,8 +142,11 @@ class EfficiencyTests(unittest.TestCase):
             first=json.loads(subprocess.check_output(command,text=True))
             with patch.dict(os.environ, {'ANTIGRAVITY_CONVERSATION_ID': 'same-session'}):
                 repeated = json.loads(subprocess.check_output(command, text=True))
-            self.assertEqual('FULL', repeated['presentation'])
+            self.assertEqual('SUMMARY', repeated['presentation'])
             self.assertEqual(first['context_digest'], repeated['context_digest'])
+            full=json.loads(subprocess.check_output(command+['--full'],text=True))
+            self.assertEqual('FULL',full['presentation'])
+            self.assertEqual(first['context_digest'],full['context_digest'])
             second=json.loads(subprocess.check_output(command+['--since',first['context_digest']],text=True))
             self.assertEqual('UNCHANGED',second['presentation'])
             self.assertTrue(second['discovery'])

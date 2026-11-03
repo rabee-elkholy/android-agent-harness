@@ -9,8 +9,9 @@ response delivery and ongoing retained-input availability. PostToolUse documents
 tool completion and an empty output object, not result replacement or delivery
 acknowledgement.
 
-Keep the ADR-022 explicit presentation contract. Default requests return full
-current context. Only an explicitly supplied matching digest requests compaction;
+Keep the ADR-022 explicit presentation contract. Default requests return self-contained current summaries (ADR-022); `--full`
+returns expanded advisory details. Only an explicitly supplied matching digest
+permits omission of unchanged context based on prior conversation visibility;
 callers must start full after summarization, pruning or uncertain resume.
 
 Retain this investigation as documentation only. The optional capability field

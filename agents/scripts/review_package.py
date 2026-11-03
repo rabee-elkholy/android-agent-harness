@@ -46,7 +46,7 @@ def review_reading_guide(content: str, reviewer: str, policy: dict, changes: lis
     """
     from review_policy import ROUTING
     from change_classifier import CRITICAL_SURFACES
-    if reviewer not in {"security-reviewer-agent", "perf-anr-guardian-agent", "convention-reviewer-agent"}:
+    if reviewer not in {"security-perf-reviewer-agent"}:
         return None
     surfaces = set(policy.get("surfaces") or [])
     if surfaces & (set(CRITICAL_SURFACES) | {"AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO", "UNKNOWN"}):
@@ -421,29 +421,17 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
 
 
 REVIEWER_ROLES = {
-    "bug-reviewer-agent": {
-        "title": "Bug & Logic Reviewer",
-        "focus": "Logic defects, null-safety, unhandled exceptions, race conditions, and incorrect state mutations.",
+    "bug-test-reviewer-agent": {
+        "title": "Bug, Logic & Test Quality Reviewer",
+        "focus": "Logic defects, null-safety, unhandled exceptions, race conditions, state mutations, dead-code workarounds, and unit test assertion quality.",
     },
-    "security-reviewer-agent": {
-        "title": "Security Specialist",
-        "focus": "Vulnerabilities, auth tokens, plaintext storage, cryptographic flaws, insecure network protocols, and export safety.",
+    "security-perf-reviewer-agent": {
+        "title": "Security & Performance/ANR Specialist",
+        "focus": "Vulnerabilities, auth tokens, plaintext storage, cryptographic flaws, export safety, empty UI handlers, and main-thread ANR / memory leak / Compose recomposition hazards.",
     },
-    "perf-anr-guardian-agent": {
-        "title": "Performance & ANR Guardian",
-        "focus": "Main-thread blocking, coroutine dispatch issues, excessive allocations, and memory leaks.",
-    },
-    "convention-reviewer-agent": {
-        "title": "Android Conventions & Architecture",
-        "focus": "Android architectural layer boundaries, ViewModel separation, dependency injection, and clean naming.",
-    },
-    "regression-impact-reviewer-agent": {
-        "title": "Regression & Blast-Radius Impact",
-        "focus": "Breaking contract changes, modified public declarations, impact on upstream callers and downstream dependents.",
-    },
-    "test-quality-reviewer-agent": {
-        "title": "Test Quality Specialist",
-        "focus": "Test coverage completeness, assertion depth, meaningful failure verification, and avoidance of dummy assertions.",
+    "arch-regression-reviewer-agent": {
+        "title": "Regression, Blast-Radius & Convention Specialist",
+        "focus": "Breaking contract changes, impact on upstream callers/downstream dependents, Android architectural layer boundaries, project-notes.md conventions, and clean imports/KDoc.",
     },
     "spec-compliance-agent": {
         "title": "Specification Compliance Specialist",
@@ -579,7 +567,7 @@ def generate_task_brief(
         ])
 
     routed = set(policy.get("reviewers") or [])
-    completeness_owner = "bug-reviewer-agent" if "bug-reviewer-agent" in routed else "regression-impact-reviewer-agent"
+    completeness_owner = "bug-test-reviewer-agent" if "bug-test-reviewer-agent" in routed else "arch-regression-reviewer-agent"
     if approach and reviewer == completeness_owner:
         # Real app: a task reached the commit question with half its approved approach undone (the paywall
         # part was postponed) and every reviewer passed it; nobody was shown the approach.
@@ -595,7 +583,7 @@ def generate_task_brief(
             "Evaluate the diff strictly on actual runtime behavior, architectural contracts, and objective code evidence within your specialty."
         )
     reuse_candidates = plan.get("reuse_candidates") or []
-    if reuse_candidates and reviewer in ("convention-reviewer-agent", "spec-compliance-agent"):
+    if reuse_candidates and reviewer in ("arch-regression-reviewer-agent", "spec-compliance-agent"):
         brief_lines.append(
             "- **Graph-Discovered Existing Reuse Candidates (Check for Duplicate Code / YAGNI)**:"
         )

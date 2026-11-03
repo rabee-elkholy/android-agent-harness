@@ -67,12 +67,9 @@ SUBAGENT_ORCHESTRATION_TOOLS = frozenset({
 })
 
 CORE_ROUTED_REVIEWERS = (
-    "bug-reviewer-agent",
-    "security-reviewer-agent",
-    "perf-anr-guardian-agent",
-    "convention-reviewer-agent",
-    "regression-impact-reviewer-agent",
-    "test-quality-reviewer-agent",
+    "bug-test-reviewer-agent",
+    "security-perf-reviewer-agent",
+    "arch-regression-reviewer-agent",
     "spec-compliance-agent",
 )
 

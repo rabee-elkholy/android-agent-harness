@@ -53,9 +53,8 @@ CLAUDE_MODEL_SOURCE = "https://code.claude.com/docs/en/sub-agents#supported-fron
 ANTIGRAVITY_MODEL_SOURCE = "https://antigravity.google/docs/subagents/#frontmatter-configuration-yaml"
 
 CRITICAL_HYBRID_REVIEWERS = (
-    "bug-reviewer-agent",
-    "perf-anr-guardian-agent",
-    "security-reviewer-agent",
+    "bug-test-reviewer-agent",
+    "security-perf-reviewer-agent",
 )
 
 ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {

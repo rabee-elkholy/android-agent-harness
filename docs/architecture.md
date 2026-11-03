@@ -46,7 +46,7 @@ The final verifier recomputes the current manifest and classification, validates
 
 ## Adaptive policy
 
-Low-risk localization/resource edits can skip semantic reviewers. Business logic normally selects correctness and regression review. UI adds convention coverage. Room schema changes use a focused DATA lane with the Room gate, tests, correctness review, and regression review. Coroutine/network/native changes add performance or security as appropriate. Billing, auth, cryptography, security, and sensitive-data changes select all five specialist roles plus a separate developer approval bound to the frozen final snapshot. The initial plan approval cannot satisfy that final approval. Tests add the test-quality reviewer.
+Low-risk localization/resource edits can skip semantic reviewers. Business logic and UI select `bug-test-reviewer-agent` (logic, nullability, coroutines, lifecycle/UI state, and unit test quality) and `arch-regression-reviewer-agent` (caller/navigation/schema regressions, conventions, architecture boundaries, KDoc, localization, and YAGNI/reuse). Room schema changes use a focused DATA lane with the Room gate, tests, `bug-test-reviewer-agent`, and `arch-regression-reviewer-agent`. Coroutine, network, native, security, billing, auth, cryptography, and sensitive-data changes add `security-perf-reviewer-agent` (security, privacy, auth/billing/crypto, exported components, ANR/main-thread I/O, memory leaks, Compose stability, and WakeLock/sensor/FGS lifecycle). Architectural plans additionally select `spec-compliance-agent`.
 
 Device verification is selected only for user-facing, device, permission, database, billing, or auth surfaces. Missing device/tooling is `ENV_BLOCKED`, not success.
 

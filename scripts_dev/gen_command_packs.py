@@ -13,7 +13,7 @@ packs = {
     "new-feature": ("Implement a new Android feature through explicit plan approval and adaptive delivery policy.", "[feature description]"),
     "preflight": ("Run the offline preflight and only the deterministic checks selected by the active policy.", ""),
     "check-strings": ("Fail on English/Arabic string key drift or hardcoded user-facing text; fix both locale files.", ""),
-    "perf-audit": ("Static + optional device ANR audit via perf_guard and perf-anr-guardian-agent.", "[optional file paths]"),
+    "perf-audit": ("Static + optional device ANR audit via perf_guard and security-perf-reviewer-agent.", "[optional file paths]"),
     "test-quality-audit": ("Audit modified unit/UI test files for assertion depth, dispatchers, and mocking integrity.", ""),
     "crash-triage": ("Pull physical-device fatals via logcat_doctor and hand them to qa-diagnostics-agent.", "[symptoms]"),
     "commit-msg": ("Draft a Conventional Commit message for Android Studio after every phase is Pass. The agent never commits.", ""),

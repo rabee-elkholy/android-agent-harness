@@ -230,7 +230,7 @@ class PublicCliSelftest(unittest.TestCase):
         task_dir.mkdir(parents=True, exist_ok=True)
 
         if reviewers is None:
-            reviewers = ["bug-reviewer-agent"]
+            reviewers = ["bug-test-reviewer-agent"]
 
         policy_obj = {
             "schema_version": 1,
@@ -278,7 +278,7 @@ class PublicCliSelftest(unittest.TestCase):
     def test_p0_t2_reviewer_gate_blocks_assemble_when_reviews_missing(self) -> None:
         """P0-T2: Assemble gate fails closed and does not run Gradle when required reviews are missing."""
         sentinel = _setup_fake_gradlew(self.repo)
-        self._setup_verifying_task(task_id="assemble-block-test", reviewers=["bug-reviewer-agent"])
+        self._setup_verifying_task(task_id="assemble-block-test", reviewers=["bug-test-reviewer-agent"])
 
         script = KIT / "agents" / "scripts" / "run_gradle_task.py"
         proc = subprocess.run(
@@ -307,7 +307,7 @@ class PublicCliSelftest(unittest.TestCase):
         change_set = "cs1234567890abcdef1234567890abcdef"
         state_dir, _ = self._setup_verifying_task(
             task_id="assemble-pass-test",
-            reviewers=["bug-reviewer-agent"],
+            reviewers=["bug-test-reviewer-agent"],
             snapshot=snapshot,
             run_id=run_id,
             change_set=change_set,
@@ -324,9 +324,9 @@ class PublicCliSelftest(unittest.TestCase):
             change_set=change_set,
             status="PASS",
             evidence={
-                "reviewers": ["bug-reviewer-agent"],
+                "reviewers": ["bug-test-reviewer-agent"],
                 "blocking_findings": [],
-                "reports": [{"reviewer": "bug-reviewer-agent", "status": "PASS"}],
+                "reports": [{"reviewer": "bug-test-reviewer-agent", "status": "PASS"}],
             },
         )
 
@@ -355,7 +355,7 @@ class PublicCliSelftest(unittest.TestCase):
         change_set = "cs1234567890abcdef1234567890abcdef"
         state_dir, _ = self._setup_verifying_task(
             task_id="incomplete-rev-test",
-            reviewers=["bug-reviewer-agent", "security-reviewer-agent"],
+            reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
             snapshot=snapshot,
             run_id=run_id,
             change_set=change_set,
@@ -372,7 +372,7 @@ class PublicCliSelftest(unittest.TestCase):
             change_set=change_set,
             status="PASS",
             evidence={
-                "reviewers": ["bug-reviewer-agent"],
+                "reviewers": ["bug-test-reviewer-agent"],
                 "blocking_findings": [],
             },
         )
@@ -399,7 +399,7 @@ class PublicCliSelftest(unittest.TestCase):
         change_set = "cs1234567890abcdef1234567890abcdef"
         state_dir, _ = self._setup_verifying_task(
             task_id="blocking-find-test",
-            reviewers=["bug-reviewer-agent"],
+            reviewers=["bug-test-reviewer-agent"],
             snapshot=snapshot,
             run_id=run_id,
             change_set=change_set,
@@ -415,8 +415,8 @@ class PublicCliSelftest(unittest.TestCase):
             change_set=change_set,
             status="PASS",
             evidence={
-                "reviewers": ["bug-reviewer-agent"],
-                "blocking_findings": [{"reviewer": "bug-reviewer-agent", "finding": "NPE in profile"}],
+                "reviewers": ["bug-test-reviewer-agent"],
+                "blocking_findings": [{"reviewer": "bug-test-reviewer-agent", "finding": "NPE in profile"}],
             },
         )
 
@@ -442,7 +442,7 @@ class PublicCliSelftest(unittest.TestCase):
         change_set = "cs1234567890abcdef1234567890abcdef"
         state_dir, _ = self._setup_verifying_task(
             task_id="corrupt-ev-test",
-            reviewers=["bug-reviewer-agent"],
+            reviewers=["bug-test-reviewer-agent"],
             snapshot=snapshot,
             run_id=run_id,
             change_set=change_set,
@@ -654,8 +654,8 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertEqual("STANDARD", pol_click["risk_lane"])
         self.assertEqual("UI_BEHAVIOR", pol_click["ui_verification_class"])
         self.assertTrue(pol_click["device_required"])
-        self.assertEqual(["bug-reviewer-agent", "regression-impact-reviewer-agent"], pol_click["reviewers"])
-        self.assertNotIn("convention-reviewer-agent", pol_click["reviewers"])
+        self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_click["reviewers"])
+        self.assertNotIn("security-perf-reviewer-agent", pol_click["reviewers"])
         self.assertIn("unit_tests", pol_click["gates"])
         self.assertIn("device", pol_click["gates"])
 
@@ -671,8 +671,8 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertEqual("STANDARD", pol_nav["risk_lane"])
         self.assertEqual("UI_BEHAVIOR", pol_nav["ui_verification_class"])
         self.assertTrue(pol_nav["device_required"])
-        self.assertIn("bug-reviewer-agent", pol_nav["reviewers"])
-        self.assertNotIn("convention-reviewer-agent", pol_nav["reviewers"])
+        self.assertIn("bug-test-reviewer-agent", pol_nav["reviewers"])
+        self.assertNotIn("security-perf-reviewer-agent", pol_nav["reviewers"])
 
         # Case 5: Foreground service (DEVICE_BEHAVIOR)
         cls_fg = {
@@ -698,7 +698,7 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertEqual("CRITICAL", pol_bill["risk_lane"])
         self.assertEqual("DEVICE_BEHAVIOR", pol_bill["ui_verification_class"])
         self.assertTrue(pol_bill["device_required"])
-        self.assertEqual(5, len(pol_bill["reviewers"]))
+        self.assertEqual(3, len(pol_bill["reviewers"]))
 
         # Case 7: Pure business logic (NONE)
         cls_logic = {
@@ -718,7 +718,7 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
             cls_click, self.skills_root, project_kind="application",
             plan={"planning_depth": "ARCHITECTURAL"}
         )
-        self.assertIn("convention-reviewer-agent", pol_arch["reviewers"])
+        self.assertIn("arch-regression-reviewer-agent", pol_arch["reviewers"])
         self.assertIn("spec-compliance-agent", pol_arch["reviewers"])
 
     def test_p1_b2_cli_policy_output_fields(self) -> None:
@@ -805,10 +805,11 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         res4 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/profile", "Query": "validateAge"})
         self.assertEqual("allow", res4["decision"])
 
-        # 6. Search outside discovered scope -> denied (DISCOVERY_SCOPE_EXPANSION_REQUIRED)
+        # 6. Search across in-repo paths after discovery anchor -> allowed; outside repo -> denied
         res5 = _invoke_hook("grep_search", {"SearchPath": "app/src/main/kotlin/feature/payments", "Query": "processPayment"})
-        self.assertEqual("deny", res5["decision"])
-        self.assertIn("DISCOVERY_SCOPE_EXPANSION_REQUIRED", res5["reason"])
+        self.assertEqual("allow", res5["decision"])
+        res_out = _invoke_hook("grep_search", {"SearchPath": "../outside", "Query": "processPayment"})
+        self.assertEqual("deny", res_out["decision"])
 
     def test_p1_b4_multi_phase_threshold(self) -> None:
         """P1-B4: Clean Architecture multi-file features stay single-phase; multi-module/migration requires phases."""
@@ -2098,8 +2099,8 @@ class NextStepAfterCommandSelftest(unittest.TestCase):
                 "command": "",
                 "reason": "Dispatch reviewers.",
                 "inputs": {
-                    "dispatch_reviewers": ["bug-reviewer-agent"],
-                    "briefs": {"bug-reviewer-agent": ".agents/state/tasks/t1/briefs/bug-reviewer-agent.md"},
+                    "dispatch_reviewers": ["bug-test-reviewer-agent"],
+                    "briefs": {"bug-test-reviewer-agent": ".agents/state/tasks/t1/briefs/bug-test-reviewer-agent.md"},
                 },
             },
         ]
@@ -2121,7 +2122,7 @@ class NextStepAfterCommandSelftest(unittest.TestCase):
         self.assertEqual(["t1"], built_packages)
         self.assertIn("NEXT_ACTION=DISPATCH_REVIEWERS: follow NEXT_ACTION_INPUTS below", text)
         self.assertIn("NEXT_ACTION_INPUTS=", text)
-        self.assertIn('"bug-reviewer-agent"', text)
+        self.assertIn('"bug-test-reviewer-agent"', text)
 
 
 class TaskFlagAliasSelftest(unittest.TestCase):

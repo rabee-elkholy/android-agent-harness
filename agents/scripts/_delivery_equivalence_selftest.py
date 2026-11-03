@@ -827,7 +827,7 @@ class MergeBoundaryRegressionTests(unittest.TestCase):
                     self.assertTrue(policy["device_required"])
                     self.assertTrue({"device", "assemble"} <= set(policy["gates"]))
                 else:
-                    self.assertEqual(["bug-reviewer-agent"], policy["reviewers"])
+                    self.assertEqual(["bug-test-reviewer-agent"], policy["reviewers"])
                     self.assertEqual("REQUIRED", policy["review_status"])
                     self.assertIsNone(policy["explanation"]["review_exemption"])
 

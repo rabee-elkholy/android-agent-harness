@@ -438,7 +438,7 @@ class ReviewerProofV42Tests(unittest.TestCase):
         task_id = "TASK-REV-001"
         run_id = "run-001"
         pkg_sha = "a" * 64
-        self._create_receipt(task_id, run_id, "security-reviewer-agent", pkg_sha)
+        self._create_receipt(task_id, run_id, "security-perf-reviewer-agent", pkg_sha)
 
         # Arbitrary temp file
         temp_dir = self.tmp / "arbitrary_temp"
@@ -450,7 +450,7 @@ class ReviewerProofV42Tests(unittest.TestCase):
             self.tmp,
             task_id=task_id,
             run_id=run_id,
-            reviewer="security-reviewer-agent",
+            reviewer="security-perf-reviewer-agent",
             package_sha256=pkg_sha,
             subagent_id="conv-123",
             transcript_path=fake_transcript,
@@ -465,7 +465,7 @@ class ReviewerProofV42Tests(unittest.TestCase):
         run_id = "run-002"
         pkg_sha = "b" * 64
         sub_id = "conv-trusted-456"
-        self._create_receipt(task_id, run_id, "security-reviewer-agent", pkg_sha, subagent_id=sub_id)
+        self._create_receipt(task_id, run_id, "security-perf-reviewer-agent", pkg_sha, subagent_id=sub_id)
 
         # Place transcript in canonical test-injected brain root
         t_dir = self.app_data / "brain" / sub_id / ".system_generated" / "logs"
@@ -477,7 +477,7 @@ class ReviewerProofV42Tests(unittest.TestCase):
             self.tmp,
             task_id=task_id,
             run_id=run_id,
-            reviewer="security-reviewer-agent",
+            reviewer="security-perf-reviewer-agent",
             package_sha256=pkg_sha,
             subagent_id=sub_id,
         )
@@ -491,13 +491,13 @@ class ReviewerProofV42Tests(unittest.TestCase):
         task_id = "TASK-REV-003"
         run_id = "run-003"
         pkg_sha = "c" * 64
-        self._create_receipt(task_id, run_id, "security-reviewer-agent", pkg_sha)
+        self._create_receipt(task_id, run_id, "security-perf-reviewer-agent", pkg_sha)
 
         ok, proof = verify_independent_reviewer_execution(
             self.tmp,
             task_id=task_id,
             run_id=run_id,
-            reviewer="security-reviewer-agent",
+            reviewer="security-perf-reviewer-agent",
             package_sha256=pkg_sha,
             subagent_id="../../escaped/path",
         )
@@ -510,14 +510,14 @@ class ReviewerProofV42Tests(unittest.TestCase):
         task_id = "TASK-REV-004"
         run_id = "run-004"
         pkg_sha = "d" * 64
-        self._create_receipt(task_id, run_id, "security-reviewer-agent", pkg_sha, subagent_id="bound-sub-1")
+        self._create_receipt(task_id, run_id, "security-perf-reviewer-agent", pkg_sha, subagent_id="bound-sub-1")
 
         # Caller provides different subagent_id
         ok, proof = verify_independent_reviewer_execution(
             self.tmp,
             task_id=task_id,
             run_id=run_id,
-            reviewer="security-reviewer-agent",
+            reviewer="security-perf-reviewer-agent",
             package_sha256=pkg_sha,
             subagent_id="other-sub-2",
         )
@@ -559,7 +559,7 @@ class ReviewerProofV42Tests(unittest.TestCase):
         resp_file.write_text(f"VERDICT: PASS\nEVIDENCE pkg={pkg_sha} cites=0\nAll good.\n", encoding="utf-8")
 
         # Import via --response without valid subagent conversation id for all required reviewers
-        for r in ["bug-reviewer-agent", "convention-reviewer-agent", "security-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"]:
+        for r in ["bug-test-reviewer-agent", "arch-regression-reviewer-agent", "security-perf-reviewer-agent"]:
             ret = record_review.main([
                 "--repo", str(self.tmp),
                 "--task", task_id,

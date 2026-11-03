@@ -114,7 +114,7 @@ class GuidanceTests(unittest.TestCase):
             run_file.parent.mkdir(parents=True)
             run_file.write_text(json.dumps({"run_id": "run-1", "review_host": "codex", "review_protocol_version": 1}), encoding="utf-8")
             verified, proof = verify_independent_reviewer_execution(
-                repo, task_id="task-1", run_id="run-1", reviewer="bug-reviewer-agent",
+                repo, task_id="task-1", run_id="run-1", reviewer="bug-test-reviewer-agent",
                 package_sha256="a" * 64, subagent_id="fake-antigravity-id",
             )
             self.assertFalse(verified)
@@ -933,7 +933,7 @@ class PolicyTests(RepoCase):
         policy = decide(classification, KIT / "agents" / "skills")
         self.assertEqual("DATA", policy["risk_lane"])
         self.assertEqual(
-            {"bug-reviewer-agent", "regression-impact-reviewer-agent"},
+            {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
             set(policy["reviewers"]),
         )
         self.assertIn("room", policy["gates"])
@@ -964,26 +964,27 @@ class PolicyTests(RepoCase):
         self.assertFalse(policy["micro_eligible"])
 
     def test_later_round_reruns_only_findings_regression_and_promotions(self) -> None:
+        arch_plan = {"planning_depth": "ARCHITECTURAL"}
         prior_classification = {
             "classification_sha256": "a" * 64, "surfaces": ["PUBLIC_API"],
             "severity": "MEDIUM", "confidence": "HIGH", "changed_files": 1,
             "changed_lines": 4, "has_delete_or_rename": False,
         }
-        previous = decide(prior_classification, KIT / "agents/skills")
+        previous = decide(prior_classification, KIT / "agents/skills", plan=arch_plan)
         fixed = dict(prior_classification)
         fixed.update({"classification_sha256": "b" * 64, "surfaces": ["PUBLIC_API", "COROUTINES"]})
         later = decide_later_round(
             fixed, KIT / "agents/skills", previous_policy=previous,
-            finding_owners=["bug-reviewer-agent"],
-            passed_reviewers=["convention-reviewer-agent", "regression-impact-reviewer-agent"],
+            finding_owners=["bug-test-reviewer-agent"],
+            passed_reviewers=["arch-regression-reviewer-agent", "spec-compliance-agent"],
             source_snapshot="s" * 64, source_change_set="c" * 64, source_run_id="run-old",
-            round_number=2,
+            round_number=2, plan=arch_plan,
         )
         self.assertEqual(
-            {"bug-reviewer-agent", "perf-anr-guardian-agent", "regression-impact-reviewer-agent"},
+            {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
             set(later["reviewers"]),
         )
-        self.assertEqual(["convention-reviewer-agent"], [item["reviewer"] for item in later["carried_reviews"]])
+        self.assertEqual(["spec-compliance-agent"], [item["reviewer"] for item in later["carried_reviews"]])
 
     def test_missing_required_skill_blocks_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1439,6 +1440,8 @@ class LifecycleTests(RepoCase):
                         dest = checkout / rel
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes((KIT / rel).read_bytes())
+                    elif rel:
+                        (checkout / rel).unlink(missing_ok=True)
             proc_untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=str(KIT), capture_output=True, text=True, check=False)
             if proc_untracked.returncode == 0:
                 for line in proc_untracked.stdout.splitlines():
@@ -1447,6 +1450,8 @@ class LifecycleTests(RepoCase):
                         dest = checkout / rel
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         dest.write_bytes((KIT / rel).read_bytes())
+                    elif rel:
+                        (checkout / rel).unlink(missing_ok=True)
             _validate_kit(checkout)
             release = subprocess.run(
                 [sys.executable, str(checkout / "scripts_dev/validate_release.py")],
@@ -1749,23 +1754,20 @@ class LifecycleTests(RepoCase):
         ).strip())
 
     def test_P0_02_antigravity_custom_agent_files_installed(self) -> None:
-        """P0-02: Clean install with Antigravity host must write .agents/agents/<reviewer>/agent.md for 7 core reviewers."""
+        """P0-02: Clean install with Antigravity host must write .agents/agents/<reviewer>/agent.md for 4 core reviewers."""
         self._answers()
         answers_path = self.repo / ".harness-setup/answers.json"
         answers = json.loads(answers_path.read_text(encoding="utf-8"))
         answers["tools"] = ["antigravity"]
         write(answers_path, json.dumps(answers))
         result = install(self.repo, KIT)
-        core_7 = (
-            "bug-reviewer-agent",
-            "security-reviewer-agent",
-            "perf-anr-guardian-agent",
-            "convention-reviewer-agent",
-            "regression-impact-reviewer-agent",
-            "test-quality-reviewer-agent",
+        core_4 = (
+            "bug-test-reviewer-agent",
+            "security-perf-reviewer-agent",
+            "arch-regression-reviewer-agent",
             "spec-compliance-agent",
         )
-        for role in core_7:
+        for role in core_4:
             agent_file = self.repo / ".agents" / "agents" / role / "agent.md"
             self.assertTrue(agent_file.is_file(), f"{agent_file} must exist")
             text = agent_file.read_text(encoding="utf-8")
@@ -1806,7 +1808,7 @@ class LifecycleTests(RepoCase):
         """P1-03: If adapter configuration throws midway, partially created adapter files are rolled back."""
         self._answers()
         def fail_configure(*args, **kwargs):
-            partial = self.repo / ".agents" / "agents" / "bug-reviewer-agent" / "agent.md"
+            partial = self.repo / ".agents" / "agents" / "bug-test-reviewer-agent" / "agent.md"
             partial.parent.mkdir(parents=True, exist_ok=True)
             partial.write_text("partial", encoding="utf-8")
             raise RuntimeError("simulated adapter failure")
@@ -2796,11 +2798,11 @@ class EndToEndWorkflowTests(RepoCase):
         run_id = current["run_id"]
         stage_dir = self.repo / f".agents/tasks/{task_id}/staged-reviews/{run_id}"
         stage_dir.mkdir(parents=True, exist_ok=True)
-        rep = verdict_to_report(self.repo, task_id, "bug-reviewer-agent", "FINDINGS", message="Critical bug", severity="HIGH", evidence_pkg=meta["package_sha256"][:12])
-        rep_file = stage_dir / "bug-reviewer-agent.json"
+        rep = verdict_to_report(self.repo, task_id, "bug-test-reviewer-agent", "FINDINGS", message="Critical bug", severity="HIGH", evidence_pkg=meta["package_sha256"][:12])
+        rep_file = stage_dir / "bug-test-reviewer-agent.json"
         rep_file.write_text(json.dumps(rep), encoding="utf-8")
-        rep_reg = verdict_to_report(self.repo, task_id, "regression-impact-reviewer-agent", "PASS", evidence_pkg=meta["package_sha256"][:12])
-        rep_reg_file = stage_dir / "regression-impact-reviewer-agent.json"
+        rep_reg = verdict_to_report(self.repo, task_id, "arch-regression-reviewer-agent", "PASS", evidence_pkg=meta["package_sha256"][:12])
+        rep_reg_file = stage_dir / "arch-regression-reviewer-agent.json"
         rep_reg_file.write_text(json.dumps(rep_reg), encoding="utf-8")
 
         ev_path = ingest(self.repo, task_id, [rep_file, rep_reg_file])
@@ -3041,7 +3043,7 @@ class EndToEndWorkflowTests(RepoCase):
         package, _ = build_package(self.repo, task_id)
         # Omission of --evidence-pkg must fail
         proc = subprocess.run(
-            [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", "bug-reviewer-agent", "--verdict", "PASS"],
+            [sys.executable, str(self.repo / ".agents/scripts/record_review.py"), "--task", task_id, "--reviewer", "bug-test-reviewer-agent", "--verdict", "PASS"],
             cwd=self.repo, capture_output=True, text=True, check=False,
         )
         self.assertNotEqual(0, proc.returncode)
@@ -3395,21 +3397,21 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
 
         # 1. Natural language prose with PASS and cites=0 -> PASS
         text1 = "PASS\nNo ANR risks or main thread blocking.\nEVIDENCE pkg=4f27663ba9eb cites=0"
-        verdict, cites, pkg_out = _extract_evidence_and_verdict("perf-anr-guardian-agent", text1, pkg)
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("security-perf-reviewer-agent", text1, pkg)
         self.assertEqual(verdict, "PASS")
         self.assertEqual(cites, 0)
         self.assertEqual(pkg_out, pkg)
 
         # 2. Token PASS with colon in EVIDENCE -> PASS
         text2 = "BUG_PASS\nAll checks clean.\nEVIDENCE: pkg=4f27663ba9eb cites=0"
-        verdict, cites, pkg_out = _extract_evidence_and_verdict("bug-reviewer-agent", text2, pkg)
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("bug-test-reviewer-agent", text2, pkg)
         self.assertEqual(verdict, "PASS")
         self.assertEqual(cites, 0)
         self.assertEqual(pkg_out, pkg)
 
         # 3. Explicit FAIL with findings -> FINDINGS
         text3 = "VERDICT: FAIL\nFound SQL injection vulnerability.\nEVIDENCE pkg=4f27663ba9eb cites=1"
-        verdict, cites, pkg_out = _extract_evidence_and_verdict("security-reviewer-agent", text3, pkg)
+        verdict, cites, pkg_out = _extract_evidence_and_verdict("security-perf-reviewer-agent", text3, pkg)
         self.assertEqual(verdict, "FINDINGS")
         self.assertEqual(cites, 1)
 
@@ -3436,7 +3438,7 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
                 "plan_id": "plan-uuid-1234",
                 "task_id": "test-task",
                 "status": "BLOCKED",
-                "blocked_reviewers": ["bug-reviewer-agent", "security-reviewer-agent"],
+                "blocked_reviewers": ["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
             }
             plan_file.write_text(json.dumps({
                 "task_id": "test-task",
@@ -3449,7 +3451,7 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
             allowed, reason = command_allowed(repo, "python .agents/scripts/run_gradle_task.py :app:assembleDebug")
             self.assertFalse(allowed)
             self.assertIn("Task test-task is BLOCKED", reason)
-            self.assertIn("bug-reviewer-agent, security-reviewer-agent", reason)
+            self.assertIn("bug-test-reviewer-agent, security-perf-reviewer-agent", reason)
             self.assertIn("workflow.py resume --repo . --task-id test-task", reason)
 
     def test_preflight_alias_script_exists(self) -> None:
@@ -3909,7 +3911,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_REVIEW_SETUP_004_all_reviewers_inherit_model(self) -> None:
         from review_execution import resolve_execution_profile
         task_id = "t_setup_004"
-        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy = {"reviewers": ["security-perf-reviewer-agent", "arch-regression-reviewer-agent"], "surfaces": ["AUTH"]}
         policy_file = self.repo / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
         current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
@@ -3928,7 +3930,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_REVIEW_SETUP_005_antigravity_dispatch_contract_null_reasoning(self) -> None:
         from review_execution import resolve_execution_profile
         task_id = "t_setup_005"
-        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"], "severity": "HIGH"}
+        policy = {"reviewers": ["security-perf-reviewer-agent", "arch-regression-reviewer-agent"], "surfaces": ["AUTH"], "severity": "HIGH"}
         policy_file = self.repo / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
         current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
@@ -3937,7 +3939,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         plan_file = self.repo / f".agents/state/tasks/{task_id}/plan.json"
         plan_file.write_text(json.dumps({"task_id": task_id, "plan_sha256": "psha"}), encoding="utf-8")
         prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
-        sec_rev = prof["reviewers"]["security-reviewer-agent"]
+        sec_rev = prof["reviewers"]["security-perf-reviewer-agent"]
         self.assertEqual("DEEP", sec_rev["reasoning_intent"])
         self.assertEqual("HOST_CONTROL_UNAVAILABLE", sec_rev["reasoning"]["resolution"])
         self.assertIsNone(sec_rev["dispatch_contract"]["reasoning_argument"])
@@ -3946,7 +3948,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_REVIEW_SETUP_006_legacy_env_routes_ignored(self) -> None:
         from review_execution import resolve_execution_profile
         task_id = "t_setup_006"
-        policy = {"reviewers": ["security-reviewer-agent", "convention-reviewer-agent"], "surfaces": ["AUTH"]}
+        policy = {"reviewers": ["security-perf-reviewer-agent", "arch-regression-reviewer-agent"], "surfaces": ["AUTH"]}
         policy_file = self.repo / "policy.json"
         policy_file.write_text(json.dumps(policy), encoding="utf-8")
         current_file = self.repo / f".agents/state/tasks/{task_id}/current-run.json"
@@ -3957,8 +3959,8 @@ class CleanInstallV2SpecificationTests(RepoCase):
         with mock.patch.dict("os.environ", {"HARNESS_MODEL_ROUTES": json.dumps({"antigravity": {"STRONG": "pro"}}), "HARNESS_ALLOW_MODEL_ESCALATION": "1"}):
             prof = resolve_execution_profile(self.repo, task_id, host="antigravity")
             self.assertEqual("INHERIT_PARENT_BY_OMISSION", prof["model_policy"])
-            self.assertNotIn("required_model", prof["reviewers"]["security-reviewer-agent"])
-            self.assertNotIn("preferred_model", prof["reviewers"]["security-reviewer-agent"])
+            self.assertNotIn("required_model", prof["reviewers"]["security-perf-reviewer-agent"])
+            self.assertNotIn("preferred_model", prof["reviewers"]["security-perf-reviewer-agent"])
 
     # -------------------------------------------------------------
     # 57. Kit Location Regression Tests

@@ -573,7 +573,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         "prompt": t(lang, "review_models"),
         "options": [{"id": model, "label": model} for model in ("inherit", "sonnet", "opus", "haiku", "custom")],
         "conditional_text_input": {"when_option": "custom", "answer_key": "review_model_policy_text",
-                                   "prompt": 'Enter policy JSON: {"schema_version":1,"default":"sonnet","overrides":{"security-reviewer-agent":"opus"}}', "required": True},
+                                   "prompt": 'Enter policy JSON: {"schema_version":1,"default":"sonnet","overrides":{"security-perf-reviewer-agent":"opus"}}', "required": True},
     })
     return _reorder_with_previous_answers(qs, repo, lang, d)
 

@@ -357,7 +357,9 @@ def phase_review_freshness(
     if run_meta.get("task_base_head") != plan.get("task_base_head", ""):
         return False, "task baseline lineage changed"
     if run_meta.get("accepted_checkpoint_head") != plan.get("accepted_checkpoint_head", ""):
-        return False, "accepted checkpoint lineage changed"
+        accepted_heads = {str(h).strip() for h in (plan.get("accepted_checkpoint_heads") or []) if str(h).strip()}
+        if str(plan.get("accepted_checkpoint_head") or "").strip() not in accepted_heads:
+            return False, "accepted checkpoint lineage changed"
 
     expected_hashes = run_meta.get("phase_file_hashes") or {}
     for p, exp_hash in expected_hashes.items():
@@ -532,8 +534,10 @@ def is_phase_review_needed(
     if all(is_documentation_path(p) for p in non_harness):
         return False, []
 
-    # Explicit flag can disable or force
-    if explicit_flag is False or target_phase.get("scoped_phase_review_enabled") is False:
+    # Scoped mid-phase subagent reviews are opt-in only. By default, phased tasks
+    # run deterministic preflight/compile/unit_tests at checkpoint-phase and defer
+    # subagent review to the single final verification pass.
+    if explicit_flag is not True and target_phase.get("scoped_phase_review_enabled") is not True:
         return False, []
 
     if phase_policy is None:
@@ -586,39 +590,33 @@ def is_phase_review_needed(
     policy_reviewers = list(phase_policy.get("reviewers") or [])
     if not policy_reviewers:
         if explicit_flag is True:
-            return True, ["bug-reviewer-agent"]
+            return True, ["bug-test-reviewer-agent"]
         return False, []
 
     selected: list[str] = []
 
-    if "security-reviewer-agent" in policy_reviewers and (
-        any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "token"))
-        or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO"))
+    if "security-perf-reviewer-agent" in policy_reviewers and (
+        any(k in phase_name or k in phase_desc or k in paths_str for k in ("auth", "security", "crypto", "token", "coroutine", "flow", "dispatch", "thread", "channel", "service", "background", "job"))
+        or any(s in surfaces for s in ("SECURITY", "AUTH", "CRYPTO", "PERFORMANCE", "COROUTINES", "THREADING"))
     ):
-        selected.append("security-reviewer-agent")
+        selected.append("security-perf-reviewer-agent")
 
-    if "perf-anr-guardian-agent" in policy_reviewers and (
-        any(k in paths_str for k in ("coroutine", "flow", "dispatch", "thread", "channel", "service", "background", "job"))
-        or any(s in surfaces for s in ("PERFORMANCE", "COROUTINES", "THREADING"))
-    ):
-        selected.append("perf-anr-guardian-agent")
-
-    if "convention-reviewer-agent" in policy_reviewers and (
+    if "arch-regression-reviewer-agent" in policy_reviewers and (
         any(k in phase_name or k in phase_desc for k in ("convention", "architecture", "structure"))
         or any(s in surfaces for s in ("CONVENTIONS", "ARCHITECTURE"))
     ):
-        selected.append("convention-reviewer-agent")
+        selected.append("arch-regression-reviewer-agent")
 
-    if "test-quality-reviewer-agent" in policy_reviewers and (
+    if "bug-test-reviewer-agent" in policy_reviewers and (
         any(k in phase_name or k in paths_str for k in ("test", "selftest"))
         or any(s in surfaces for s in ("TESTS", "TESTING"))
     ):
-        selected.append("test-quality-reviewer-agent")
+        selected.append("bug-test-reviewer-agent")
 
-    for r in policy_reviewers:
+    for r in ("bug-test-reviewer-agent", *policy_reviewers):
         if len(selected) >= 2:
             break
-        if r not in selected:
+        if r in policy_reviewers and r not in selected:
             selected.append(r)
 
     return True, selected[:2]
@@ -698,10 +696,7 @@ def _narrow_phase_review_roster(
 
     # Check if any modified file directly routes a passed specialist (excluding baseline bug/regression)
     specialty_surfaces = {
-        "security-reviewer-agent": {"SECURITY", "AUTH", "CRYPTO", "SENSITIVE_DATA", "BILLING"},
-        "perf-anr-guardian-agent": {"PERFORMANCE", "COROUTINES", "THREADING", "DEVICE_API", "NATIVE_CODE"},
-        "convention-reviewer-agent": {"CONVENTIONS", "ARCHITECTURE"},
-        "test-quality-reviewer-agent": {"TEST_ONLY", "TESTS", "TESTING"},
+        "security-perf-reviewer-agent": {"SECURITY", "AUTH", "CRYPTO", "SENSITIVE_DATA", "BILLING", "PERFORMANCE", "COROUTINES", "THREADING", "DEVICE_API", "NATIVE_CODE"},
     }
     mod_paths_lower = " ".join(p.lower() for p in modified_since_prev)
     rerun: list[str] = []
@@ -713,7 +708,7 @@ def _narrow_phase_review_roster(
         spec_surfs = specialty_surfaces.get(r)
         if spec_surfs is not None:
             touched_specialty = bool(delta_surfaces & spec_surfs)
-            if r == "security-reviewer-agent" and any(k in mod_paths_lower for k in ("auth", "security", "crypto", "token", "keystore", "billing")):
+            if r == "security-perf-reviewer-agent" and any(k in mod_paths_lower for k in ("auth", "security", "crypto", "token", "keystore", "billing")):
                 touched_specialty = True
             if not touched_specialty:
                 carried.append({
@@ -776,7 +771,7 @@ def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: d
     used = effective_review_calls_used(repo, plan)
     from review_budget import effective_review_budget
     cap = effective_review_budget(repo, plan)
-    expected_final = (reserve or {}).get("reviewers") or plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+    expected_final = (reserve or {}).get("reviewers") or plan.get("expected_final_reviewers") or ["bug-test-reviewer-agent", "arch-regression-reviewer-agent"]
     reserved = max(MIN_RESERVED_FINAL_REVIEWERS, int((reserve or {}).get("reserved_calls") or len(expected_final)))
     if used + dispatch_count + reserved > cap:
         return False, (
@@ -1119,7 +1114,7 @@ def _record_phase_dispatch_batch_locked(
     used_calls = settle_final_review_calls(repo, plan)
     from review_budget import effective_review_budget
     safety_cap = effective_review_budget(repo, plan)
-    expected_final = plan.get("expected_final_reviewers") or ["bug-reviewer-agent", "regression-impact-reviewer-agent"]
+    expected_final = plan.get("expected_final_reviewers") or ["bug-test-reviewer-agent", "arch-regression-reviewer-agent"]
     checkpoint_file = phase_dir(tdir, phase_id) / "checkpoint.json"
     reserve = (read_json(checkpoint_file).get("final_review_reserve") or {}) if checkpoint_file.is_file() else {}
     reserved_final = max(MIN_RESERVED_FINAL_REVIEWERS, int(reserve.get("reserved_calls") or len(expected_final)))

@@ -228,8 +228,17 @@ def _final_context(repo, task_id, plan):
     error = policy_integrity_error(policy, Path(run["policy"]))
     if error:
         raise ValidationError(error)
-    live = build_task_manifest(repo, load_task_baseline(repo, task_id), expected_files=plan.get("expected_files"),
-                               task_base_head=plan.get("task_base_head") or (plan.get("repository") or {}).get("head"))
+    task_baseline = load_task_baseline(repo, task_id)
+    live = build_task_manifest(
+        repo,
+        task_baseline,
+        expected_files=plan.get("expected_files"),
+        task_base_head=(
+            plan.get("task_base_head")
+            or ((task_baseline or {}).get("repository") or {}).get("head")
+            or (plan.get("repository") or {}).get("head")
+        ),
+    )
     fresh = all(live.get(key) == manifest.get(key) for key in (
         "delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"))
     from workflow import verification_engine_freshness
