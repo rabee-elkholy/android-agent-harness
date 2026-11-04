@@ -39,6 +39,6 @@ host supplies proof the agent cannot synthesize. See [Tool support](tool-support
 
 | Integration | Safety contract |
 |---|---|
-| Zoho Sprints | Built-in stdio MCP; user-level credentials; plan-scoped writes; idempotent `operation_id`; no automatic Done/Solved/Closed |
-| GitHub Projects | Optional `gh` adapter; `gh` owns authentication |
-| Jira/Linear | Registration guidance only; no bundled credentials |
+| Universal PM MCP (`zoho-projects_mcp`, `zoho-sprints`, `atlassian-mcp-server` / Jira, Linear, Monday.com, GitHub, ClickUp, Asana, Trello) | Runtime zero-config MCP discovery (`pm discover`); mandatory preview and developer approval (`pm authorize`); Bug/Issue descriptions protected from overwrite/empty replacement; no automatic `Done`/`Solved`/`Closed` without `--allow-close`; 5-section RTL/LTR QA reports with zero code-identifier leakage (`pm prepare-report`) |
+| Google Workspace CLIs & Generic MCP Tools | Evaluated independently of code task plan state (`ADR-017`); read-only commands allowed; mutations route through host confirmation (`ask`/`force_ask`); secret and signing files hard-denied |
+| Incident Reporting (`report-issue`) | Organized local Zero-PII JSON + Markdown bundles (`.agents/state/incidents/`); consent-first `ask_question` prompt before submitting allowlisted non-PII metadata to GitHub Issues (optional `--always-auto-submit`) |

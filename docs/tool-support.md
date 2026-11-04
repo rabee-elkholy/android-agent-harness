@@ -29,9 +29,7 @@ Setup writes adapters only for selected tools and records every managed path in
 configuration. Existing managed files are backed up; uninstall previews its
 exact targets and restores pre-install content when applied.
 
-Zoho setup may merge the `zoho-sprints` command and user-config path into the
-project's supported MCP files. Tokens stay in the user profile and are never
-copied to the repository or review evidence.
+External PM MCP servers (`zoho-projects_mcp`, `zoho-sprints`, `atlassian-mcp-server`, Linear, Monday.com, GitHub, ClickUp, Asana, Trello) are discovered dynamically at runtime (`python .agents/harness.py pm discover`). Tokens remain in the host/user profile and are never copied to the repository or review evidence.
 
 ## Commands
 
@@ -52,6 +50,11 @@ python harness_cli.py repair --repo /path/to/project --kit /path/to/pinned/kit
 python harness_cli.py update --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project
 python harness_cli.py uninstall --repo /path/to/project --apply
+python .agents/harness.py task heal --task-id feature-1 --prepare-fresh-run
+python .agents/harness.py pm discover --json
+python .agents/harness.py pm authorize --proof-reference "update pm"
+python .agents/harness.py report-issue --list
+python .agents/harness.py report-issue --submit --incident-id <id>
 ```
 
 `task-context` is a trusted read-only inspection command. It performs a live,

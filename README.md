@@ -18,6 +18,35 @@ The model focuses on engineering. The harness handles workflow state, proof, and
 
 ---
 
+## Navigation
+
+- [Key Architectural Pillars](#key-architectural-pillars)
+- [Why It Exists & Failure Modes Checked](#why-it-exists)
+- [Daily Developer Experience & Multi-Phase Flow](#what-daily-use-looks-like)
+- [Quick Start (Chat & Terminal)](#quick-start)
+- [6-Tier Dynamic Risk Model](#6-tier-risk-model)
+- [Persistent Project Knowledge & Truth Hierarchy](#persistent-project-knowledge)
+- [Antigravity-First Architecture & Review Protocol V2](#antigravity-first-architecture--review-protocol-v2)
+- [Universal Multi-Provider PM MCP & Resilient Self-Healing](#universal-pm-mcp--resilient-self-healing)
+- [Supported AI Hosts & Enforcement Matrix](#supported-hosts--enforcement-model)
+- [Documentation Map & FAQ](#faq)
+
+---
+
+## Key Architectural Pillars
+
+| Pillar | What It Solves | How the Harness Enforces It |
+|---|---|---|
+| **Graph-Backed AST & Symbol Discovery** | Blind grep loops and token-heavy full-file reads across large multi-module repos | Single-pass symbol/dependency graph (`task-context` & `graph`) across Kotlin (`.kt`), Java (`.java`), Android XML (`.xml`), and KMP/iOS Swift (`.swift`), plus codebase reuse candidate detection (`reuse_candidates`). |
+| **Single-Approval Lifecycle & Scope Guard** | Silent scope creep, unapproved refactors, and mid-task confirmation fatigue | One initial plan approval (`plan_sha256` + single-use nonce) covers all phases. Native `PreToolUse` hooks (`hooks.json`) block unapproved file writes while automatically extending in-scope task files at phase/verification checkpoints. |
+| **6-Tier Dynamic Risk & Epistemic Review V2** | Over-reviewing trivial edits or under-reviewing critical Auth/Billing/Room changes | Classifies the final diff from `T0_TRIVIAL` (0 reviewers, instant delivery for docs/prose) to `T5_CRITICAL`, dispatching 3 consolidated domain specialists (`bug-test-reviewer-agent`, `arch-regression-reviewer-agent`, `security-perf-reviewer-agent`) under Goldfish epistemic isolation (`HARNESS_REVIEW_RESULT_V2`). |
+| **Android & KMP Domain Gates** | Room migration crashes, missing locale strings, UI-to-DAO layer bypass, and KMP leaks | Deterministic preflight checks for Room schema migrations, localized string/plural parity (`values-*`), `UI_TO_DATA_SOURCE_BYPASS`, KMP `commonMain` purity (`android.*` / JVM leak blocking), and exported component permission guards. |
+| **Cryptographic Evidence & Physical Device Proof** | Claiming "tests pass" from stale runs or shipping broken UI without device checks | Every test run, review verdict, APK artifact hash, `device install-start` foreground observation, and live `e2e` phone session is bound to `delivery_snapshot_sha256` and `change_set_sha256`. Any post-verification edit invalidates stale proof. |
+| **Self-Healing State & Consent-First Zero-PII Telemetry** | Wedged task state after developer Android Studio edits or unexpected crashes | Automatic stable checkpoint snapshots (`task heal`), preview-bound incremental scope decisions (`task change-decision`), and organized local Zero-PII incident reports (`.agents/state/incidents/<id>.md`) with consent-first `ask_question` GitHub reporting. |
+| **Universal Zero-Config PM MCP Integration** | Accidental ticket closures, overwritten Bug descriptions, or leaked code identifiers in QA reports | Auto-discovers installed PM MCPs (Zoho Projects, Zoho Sprints, Jira, Linear, Monday.com, GitHub, ClickUp, Asana, Trello), enforces mandatory preview-and-approval (`pm authorize`), protects original Bug descriptions, blocks automatic `Done`/`Closed` transitions, and generates 5-section RTL/LTR functional QA reports. |
+
+---
+
 ## Why it exists
 
 AI coding agents are good at writing code, but production Android work has a second problem: keeping the agent aligned over time.
@@ -163,7 +192,7 @@ Task A
 Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.3/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.4/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -186,7 +215,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.2.3 --single-branch \
+git clone --depth 1 --branch v1.2.4 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -395,6 +424,24 @@ For design, migration, compatibility and security decisions the agent asks the d
 - **Same-Conversation Protocol Recovery**: Malformed initial reviewer responses trigger exact `send_message` corrections within the same conversation ID, preventing runaway subagent spawns.
 - **PostToolUse Launch Reconciliation**: Subagent invocation errors are trapped by native `PostToolUse` hooks, transitioning pending reviewers to `ENV_BLOCKED` and returning actionable diagnostic guidance.
 - **Mutation Interception**: Installed `.agents/hooks.json` commands check supported tool writes (`multi_replace_file_content`, `replace_file_content`, `write_to_file`) against approved scope and phases. This is a host hook boundary, not an operating-system sandbox.
+
+---
+
+## Universal PM MCP & Resilient Self-Healing
+
+### 1. Universal Zero-Config Multi-Provider PM MCP Engine
+The harness dynamically discovers and inspects external Project Management MCP servers installed in the AI host (`zoho-projects_mcp`, `zoho-sprints`, `atlassian-mcp-server` / Jira, Linear, Monday.com, GitHub Projects, ClickUp, Asana, and Trello) without bundling vendor credentials inside the repository:
+- **Mandatory Preview & Approval (`PM_PREVIEW_AND_APPROVAL_REQUIRED`)**: Before any tracker mutation, the agent presents the exact target item ID, status change, and comment/description payload to the developer and records explicit authorization (`python .agents/harness.py pm authorize --proof-reference "<developer approval>"`).
+- **Non-Destructive Tracker Guardrails**: Original Bug/Issue descriptions are strictly protected from being overwritten or cleared (QA reports are posted as comments on Bugs and updated in descriptions on Tasks/Stories). Terminal states (`Done`, `Closed`, `Solved`) and opaque transition IDs are blocked unless the developer explicitly grants `--allow-close`.
+- **5-Section RTL/LTR Functional QA Reports**: `python .agents/harness.py pm prepare-report` generates structured HTML/Markdown QA handoff reports in the project's configured tracker language without leaking internal source filenames, class names, or stack traces.
+
+### 2. Self-Healing Task State & Last-Known-Good Snapshot Rollback
+- **Automatic Checkpoint Snapshots**: At every stable lifecycle boundary (`APPROVED`, `IMPLEMENTING`, `checkpoint-phase`, `VERIFYING`, `READY_FOR_DELIVERY`), the harness persists a cryptographically verified snapshot under `.agents/state/tasks/<id>/snapshots/` bound to the task identity, plan hash, and execution nonce.
+- **One-Command State Recovery (`task heal`)**: If `current-run.json` becomes stale or a developer modifies verified files before committing, `python .agents/harness.py task heal --task-id <id> --prepare-fresh-run` steps internal state back to the nearest valid checkpoint while preserving application source code, Git history, completed phases, and passed reviewer accounting.
+
+### 3. Organized Local Zero-PII Incident Reports & Consent-First Submission
+- **Local Zero-PII Diagnostics**: Unhandled harness exceptions or self-healing events are captured locally in `.agents/state/incidents/<incident_id>.json` and a human-readable `.agents/state/incidents/<incident_id>.md` report with strict Zero-PII redaction (scrubbing emails, phone numbers, IPv4 addresses, local paths, and tokens).
+- **Developer Consent via `ask_question`**: Public reporting never runs silently by default. On an unexpected incident, the harness instructs the agent to ask the developer via `ask_question` whether to submit the allowlisted anonymous metadata once (`python .agents/harness.py report-issue --submit --incident-id <id>`), enable always-auto-submit (`--submit --always-auto-submit`), or keep the report local only.
 
 ---
 

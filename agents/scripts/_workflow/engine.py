@@ -4025,6 +4025,44 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
+    except Exception as exc:
+        import traceback
+        tb_text = traceback.format_exc()
+        repo_path = Path(getattr(args, "repo", ".") or ".").resolve()
+        t_id = str(getattr(args, "task_id", "") or "")
+        t_state = ""
+        try:
+            if t_id:
+                t_state = str(_load_plan(repo_path, t_id).get("status") or "")
+        except (OSError, ValueError, ValidationError):
+            t_state = ""
+        try:
+            from incident_reporter import record_incident
+            inc = record_incident(
+                repo_path,
+                code="UNEXPECTED_EXCEPTION",
+                command=f"workflow.py {getattr(args, 'action', '')}",
+                message=f"{type(exc).__name__}: {exc}",
+                task_id=t_id,
+                task_state=t_state,
+                traceback_text=tb_text,
+            )
+            inc_id = inc.get("incident_id", "")
+            guidance = inc.get("ask_question_guidance") or {}
+            sub = inc.get("submission") or {}
+            print(f"[FAIL] Unexpected harness exception ({type(exc).__name__}: {exc})", file=sys.stderr)
+            print(f"INCIDENT_RECORDED={inc_id}", file=sys.stderr)
+            print(f"INCIDENT_LOCAL_REPORT=.agents/state/incidents/{inc_id}.md", file=sys.stderr)
+            if sub.get("status") in {"REPORTED", "DEDUPLICATED_EXISTING_ISSUE"}:
+                print(f"INCIDENT_AUTO_SUBMITTED={sub.get('issue_url', '')}", file=sys.stderr)
+            elif guidance:
+                print("TOOL_CALL_REQUIRED=ask_question", file=sys.stderr)
+                print(f"INCIDENT_SUBMIT_ONCE={guidance.get('submit_once_command', '')}", file=sys.stderr)
+                print(f"INCIDENT_SUBMIT_ALWAYS={guidance.get('submit_always_command', '')}", file=sys.stderr)
+                print(f"NEXT_INSTRUCTIONS={guidance.get('instructions', '')}", file=sys.stderr)
+        except Exception:
+            print(tb_text, file=sys.stderr)
+        return 1
     if args.action == "prepare-verification":
         print(f"HARNESS_RUN_ID={result['run_id']}")
         print(f"HARNESS_DELIVERY_SNAPSHOT={result['delivery_snapshot_sha256']}")

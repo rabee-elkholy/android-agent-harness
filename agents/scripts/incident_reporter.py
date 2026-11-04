@@ -42,6 +42,51 @@ def _incidents_dir(repo: Path) -> Path:
     return root
 
 
+def _preferences_path(repo: Path) -> Path:
+    return state_root(repo) / "incident-preferences.json"
+
+
+def is_auto_submit_enabled(repo: Path) -> bool:
+    """Return True only when the developer explicitly opted into automatic incident submission."""
+    if os.environ.get("HARNESS_AUTO_SUBMIT_INCIDENTS") == "1":
+        return True
+    pref_file = _preferences_path(repo)
+    if pref_file.is_file():
+        try:
+            data = read_json(pref_file)
+            return bool(data.get("auto_submit_incidents") is True)
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+def set_auto_submit_preference(repo: Path, enabled: bool) -> dict[str, Any]:
+    """Persist the developer's preference for automatic anonymous incident submission."""
+    pref_file = _preferences_path(repo)
+    pref_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "auto_submit_incidents": bool(enabled),
+        "updated_at": utc_now(),
+    }
+    atomic_write_json(pref_file, payload)
+    return payload
+
+
+def _strict_zero_pii_text(text: str, repo: Path | None = None) -> str:
+    """Strictly scrub PII, paths, emails, phones, IPs, URLs, and tokens from local diagnostic strings."""
+    cleaned = _sanitize_text(text, repo)
+    # Scrub emails
+    cleaned = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "<REDACTED_EMAIL>", cleaned)
+    # Scrub phone-like sequences (+country or 10-15 digits)
+    cleaned = re.sub(r"\+[0-9][0-9\s-]{7,16}[0-9]", "<REDACTED_PHONE>", cleaned)
+    # Scrub IPv4 addresses
+    cleaned = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "<REDACTED_IP>", cleaned)
+    # Scrub Windows/Unix absolute paths that remain outside <REPO_ROOT> / <USER_HOME>
+    cleaned = re.sub(r"[A-Za-z]:[\\/][^\s\"':,;<>|]+", "<LOCAL_PATH>", cleaned)
+    return cleaned
+
+
 def _installed_version(repo: Path) -> str:
     for candidate in (repo / ".agents" / "VERSION", repo / "agents" / "VERSION"):
         if candidate.is_file():
@@ -187,6 +232,75 @@ def format_issue_markdown(incident: dict[str, Any]) -> str:
     ])
 
 
+def format_local_incident_markdown(incident: dict[str, Any]) -> str:
+    """Render an organized, strictly Zero-PII Markdown summary for local inspection."""
+    public = _public_incident(incident)
+    lines = [
+        f"# Harness Incident Report: `{incident.get('incident_id')}`",
+        "",
+        "## 1. Zero-PII Metadata",
+        f"- **Incident ID**: `{incident.get('incident_id')}`",
+        f"- **Fingerprint**: `{public['fingerprint_sha256']}`",
+        f"- **Code**: `{public['code']}`",
+        f"- **Harness Version**: `v{public['harness_version']}`",
+        f"- **Host / OS / Python**: `{public['host']}` / `{public['os']}` / `{public['python_version']}`",
+        f"- **Task State**: `{public['task_state']}`",
+        f"- **Auto-Healed**: `{public['healed']}`",
+        f"- **Created At (UTC)**: `{incident.get('created_at')}`",
+        f"- **Sanitized Command**: `{incident.get('command')}`",
+        "",
+        "## 2. Sanitized Diagnostic Summary (Zero-PII)",
+        f"```text",
+        str(incident.get("message") or "No message recorded."),
+        "```",
+    ]
+    frames = incident.get("engine_frames") or []
+    if frames:
+        lines.extend([
+            "",
+            "## 3. Harness Engine Frames (Client Code Stripped)",
+            "```text",
+            *frames,
+            "```",
+        ])
+    lines.extend([
+        "",
+        "## 4. Reporting Actions",
+        f"- **Submit once**: `python .agents/harness.py report-issue --submit --incident-id {incident.get('incident_id')}`",
+        f"- **Submit & enable always-auto-submit**: `python .agents/harness.py report-issue --submit --incident-id {incident.get('incident_id')} --always-auto-submit`",
+        f"- **Disable auto-submit**: `python .agents/harness.py report-issue --disable-auto-submit`",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def build_incident_question_guidance(incident: dict[str, Any]) -> dict[str, Any]:
+    """Build structured ask_question guidance so the agent asks the developer whether to submit."""
+    inc_id = str(incident.get("incident_id") or "")
+    fp_short = str(incident.get("fingerprint_sha256") or "")[:10]
+    code = str(incident.get("code") or "UNEXPECTED_EXCEPTION")
+    msg = str(incident.get("message") or "")[:180]
+    return {
+        "code": "INCIDENT_REPORT_DECISION_REQUIRED",
+        "kind": "DEVELOPER_ACTION",
+        "tool": "ask_question",
+        "incident_id": inc_id,
+        "fingerprint_short": fp_short,
+        "local_json": f".agents/state/incidents/{inc_id}.json",
+        "local_markdown": f".agents/state/incidents/{inc_id}.md",
+        "submit_once_command": f"python .agents/harness.py report-issue --submit --incident-id {inc_id}",
+        "submit_always_command": f"python .agents/harness.py report-issue --submit --incident-id {inc_id} --always-auto-submit",
+        "instructions": (
+            f"An unexpected harness incident (`{inc_id}`, `{code}`) was saved locally with strict Zero-PII redaction at "
+            f"`.agents/state/incidents/{inc_id}.md` (`{msg}`). "
+            "Ask the developer via `ask_question` whether to submit this anonymous report to GitHub Issues with 3 options: "
+            "1) `(Recommended) Submit anonymous report to GitHub` -> run `submit_once_command`, "
+            "2) `Always auto-submit anonymous reports` -> run `submit_always_command`, "
+            "3) `Keep local only (do not submit)` -> take no submission action."
+        ),
+    }
+
+
 def _is_test_or_ci_environment() -> bool:
     if os.environ.get("HARNESS_FORCE_AUTO_REPORT") == "1":
         return False
@@ -215,15 +329,15 @@ def record_incident(
     healed: bool = False,
     heal_action: str = "",
     extra: dict[str, Any] | None = None,
-    auto_submit: bool = True,
+    auto_submit: bool | None = None,
 ) -> dict[str, Any]:
     """Record a sanitized local incident report and optionally submit to GitHub Issues."""
     repo = Path(repo).resolve()
     inc_dir = _incidents_dir(repo)
     effective_msg = message or error_message or title
     effective_state = task_state or task_status
-    clean_msg = _sanitize_text(effective_msg, repo)
-    clean_cmd = _sanitize_text(command, repo)
+    clean_msg = _strict_zero_pii_text(effective_msg, repo)
+    clean_cmd = _strict_zero_pii_text(command, repo)
     frames = _extract_engine_frames(traceback_text, repo)
     fp = compute_incident_fingerprint(
         code=code,
@@ -247,6 +361,7 @@ def record_incident(
                     existing_payload = read_json(existing_file)
                     existing_payload["status"] = "DUPLICATE"
                     existing_payload["issue_url"] = build_github_issue_url(existing_payload)
+                    existing_payload["ask_question_guidance"] = build_incident_question_guidance(existing_payload)
                     return existing_payload
                 except (OSError, ValueError):
                     pass
@@ -261,12 +376,13 @@ def record_incident(
     clean_extra: dict[str, Any] = {}
     if isinstance(extra, dict):
         for k, v in extra.items():
+            clean_key = _strict_zero_pii_text(str(k), repo)
             if isinstance(v, (str, int, float, bool)) or v is None:
-                clean_extra[str(k)] = _sanitize_text(str(v), repo) if isinstance(v, str) else v
+                clean_extra[clean_key] = _strict_zero_pii_text(str(v), repo) if isinstance(v, str) else v
             elif isinstance(v, (list, dict)):
-                clean_extra[str(k)] = json.loads(_sanitize_text(json.dumps(v, ensure_ascii=False), repo))
+                clean_extra[clean_key] = json.loads(_strict_zero_pii_text(json.dumps(v, ensure_ascii=False), repo))
     if title:
-        clean_extra.setdefault("title", _sanitize_text(title, repo))
+        clean_extra.setdefault("title", _strict_zero_pii_text(title, repo))
     if next_action:
         clean_extra.setdefault("next_action", str(next_action))
 
@@ -292,9 +408,15 @@ def record_incident(
         "epoch": ts,
     }
     incident["issue_url"] = build_github_issue_url(incident)
+    incident["ask_question_guidance"] = build_incident_question_guidance(incident)
 
     incident_path = inc_dir / f"{incident_id}.json"
     atomic_write_json(incident_path, incident)
+    try:
+        md_path = inc_dir / f"{incident_id}.md"
+        md_path.write_text(format_local_incident_markdown(incident), encoding="utf-8", newline="\n")
+    except OSError:
+        pass
 
     items.append({
         "incident_id": incident_id,
@@ -306,18 +428,22 @@ def record_incident(
         "heal_action": incident["heal_action"],
         "created_at": incident["created_at"],
         "path": str(incident_path.name),
+        "markdown_path": f"{incident_id}.md",
     })
     if len(items) > MAX_STORED_INCIDENTS:
         for stale in items[:-MAX_STORED_INCIDENTS]:
             stale_file = inc_dir / str(stale.get("path") or "")
+            stale_md = inc_dir / str(stale.get("markdown_path") or f"{stale.get('incident_id')}.md")
             try:
                 stale_file.unlink(missing_ok=True)
+                stale_md.unlink(missing_ok=True)
             except OSError:
                 pass
         items = items[-MAX_STORED_INCIDENTS:]
     atomic_write_json(index_path, {"schema_version": 1, "updated_at": utc_now(), "incidents": items})
 
-    if auto_submit and not _is_test_or_ci_environment():
+    effective_auto_submit = is_auto_submit_enabled(repo) if auto_submit is None else bool(auto_submit)
+    if effective_auto_submit and not _is_test_or_ci_environment():
         submit_res = submit_incident_to_github(repo, incident, timeout_seconds=4.0)
         incident["submission"] = submit_res
         atomic_write_json(incident_path, incident)
@@ -493,6 +619,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--latest", action="store_true", help="Inspect or report the most recent incident")
     parser.add_argument("--incident-id", default=None, help="Specific incident ID to inspect or submit")
     parser.add_argument("--submit", action="store_true", help="Submit the selected incident to GitHub Issues via gh CLI")
+    parser.add_argument("--always-auto-submit", action="store_true", help="Enable automatic anonymous incident submission for future errors in this project")
+    parser.add_argument("--disable-auto-submit", action="store_true", help="Disable automatic incident submission and always ask first")
     parser.add_argument("--dry-run", action="store_true", help="Preview the GitHub Issue payload without network submission")
     parser.add_argument("--target-repo", default=UPSTREAM_REPO, help="Upstream GitHub repository for issue submission")
     parser.add_argument("--record-message", default=None, help="Manually record a new incident with this diagnostic message")
@@ -502,6 +630,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo = Path(args.repo).resolve()
+
+    if args.always_auto_submit:
+        set_auto_submit_preference(repo, True)
+    elif args.disable_auto_submit:
+        pref = set_auto_submit_preference(repo, False)
+        if not args.submit and not args.record_message and not args.list:
+            if args.json:
+                print(json.dumps(pref, indent=2, ensure_ascii=False))
+            else:
+                print("AUTO_SUBMIT_INCIDENTS=false")
+            return 0
 
     if args.record_message:
         inc = record_incident(

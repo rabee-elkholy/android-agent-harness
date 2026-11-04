@@ -70,6 +70,8 @@ Partial plan revisions reconstruct omitted architecture choices from the saved c
 
 Explicit surface lists cannot suppress `TEST_ONLY` for declared Android/KMP test paths, including files that do not exist yet. This keeps test-review requirements visible at initial approval and through revisions. New UI implementation choices must be declared before approval; filename heuristics do not prove whether an Activity will use Compose or Views. Later mandatory-skill reconciliation still blocks a previously undeclared toolkit.
 
-## Enforcement boundary
+## Enforcement boundary and self-healing
 
 The compact host hook protects harness scripts/state, requires an active approved plan for mutations, blocks raw Gradle/ADB, agent-driven Git mutations, live network probes, shell indirection, and unplanned tracker writes. Hosts without executable hook support receive the same policy as instructions and are honestly reported as `RULE_ENFORCED`.
+
+At stable lifecycle boundaries (`APPROVED`, `IMPLEMENTING`, `checkpoint-phase`, `VERIFYING`, `READY_FOR_DELIVERY`), the engine records verified checkpoints (`snapshots/stable-<stage>.json`) bound to the task identity, plan hash, and execution nonce. `python .agents/harness.py task heal` validates snapshot identity and rolls internal task state back to the last known-good checkpoint without altering application source code or Git history. Unexpected engine exceptions or self-healing events write organized Zero-PII JSON and Markdown reports under `.agents/state/incidents/` and prompt the developer via `ask_question` before submitting allowlisted diagnostic metadata to GitHub Issues.

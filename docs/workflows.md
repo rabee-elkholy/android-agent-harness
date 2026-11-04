@@ -10,7 +10,10 @@ All workflows use the central lifecycle in `.agents/scripts/workflow.py`.
 | `preflight` | Fast static checks | Localization/Room/lint run only when relevant |
 | `perf-audit` | Inspect performance risk | Evidence-driven; device profiling is optional unless policy requires it |
 | `test-quality-audit` | Inspect test value | Does not replace execution evidence |
-| `zoho-sprints` | Read or explicitly update tickets | Writes only after `update zoho` |
+| `zoho-sprints` | Read or explicitly update tickets | Writes only after `update zoho` / `pm authorize` |
+| `phone-e2e` | Live agent-driven phone E2E execution | Interactive scenarios (`e2e start/observe/tap/step/finish`) on the installed build |
+| `android-ui` | Compose preview & physical Device Hub diagnostics | Advisory rendering (`android-ui list/render/hub`) without replacing gates |
+| `android-inspection` | Semantic declaration, usages, and official docs lookup | Bounded diagnostic lookup via `android-inspect` |
 
 ## Standard sequence
 

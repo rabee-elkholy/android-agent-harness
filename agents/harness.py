@@ -34,7 +34,7 @@ def _run(script: str, args: list[str]) -> int:
     read_only = read_only or (script == "run_device.py" and args == ["status"])
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
-    read_only = read_only or (script == "incident_reporter.py" and bool({"--list", "--dry-run"} & set(args)))
+    read_only = read_only or script == "incident_reporter.py"
     # Merge checks the execution sessions of every source before applying; preview is read-only.
     read_only = read_only or (script == "workflow.py" and args[:1] == ["merge"])
     # The bounded verification runner owns its execution lease, including when
@@ -153,7 +153,37 @@ def main(argv: list[str] | None = None) -> int:
     monotonic = time.monotonic()
     from task_metrics import metric_task_id
     metric_owner = metric_task_id(REPO_ROOT, args)
-    code = _main(args)
+    try:
+        code = _main(args)
+    except Exception as exc:
+        import traceback
+        tb_text = traceback.format_exc()
+        try:
+            from incident_reporter import record_incident
+            inc = record_incident(
+                REPO_ROOT,
+                code="UNEXPECTED_EXCEPTION",
+                command=f"harness.py {' '.join(args[:2])}".strip(),
+                message=f"{type(exc).__name__}: {exc}",
+                task_id=metric_owner or "",
+                traceback_text=tb_text,
+            )
+            inc_id = inc.get("incident_id", "")
+            guidance = inc.get("ask_question_guidance") or {}
+            sub = inc.get("submission") or {}
+            print(f"[FAIL] Unexpected harness exception ({type(exc).__name__}: {exc})", file=sys.stderr)
+            print(f"INCIDENT_RECORDED={inc_id}", file=sys.stderr)
+            print(f"INCIDENT_LOCAL_REPORT=.agents/state/incidents/{inc_id}.md", file=sys.stderr)
+            if sub.get("status") in {"REPORTED", "DEDUPLICATED_EXISTING_ISSUE"}:
+                print(f"INCIDENT_AUTO_SUBMITTED={sub.get('issue_url', '')}", file=sys.stderr)
+            elif guidance:
+                print("TOOL_CALL_REQUIRED=ask_question", file=sys.stderr)
+                print(f"INCIDENT_SUBMIT_ONCE={guidance.get('submit_once_command', '')}", file=sys.stderr)
+                print(f"INCIDENT_SUBMIT_ALWAYS={guidance.get('submit_always_command', '')}", file=sys.stderr)
+                print(f"NEXT_INSTRUCTIONS={guidance.get('instructions', '')}", file=sys.stderr)
+        except Exception:
+            print(tb_text, file=sys.stderr)
+        return 1
     # Explicit opt-in: feature-off does not read tasks or scan metrics history.
     if os.environ.get("HARNESS_LOCAL_METRICS") == "1" and args and args[0] in {"task", "task-context", "verify-steps", "phase-review", "preflight", "test", "assemble", "compile", "device", "review", "journey"}:
         try:

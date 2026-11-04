@@ -1390,6 +1390,53 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertTrue(pm.validate_pm_mutation("jira", "add_comment", {"body": "test"}, {}, {})[0])
         self.assertTrue(pm.validate_pm_mutation("jira", "update_issue", {"status": "In Progress"}, {}, {})[0])
 
+    def test_incident_local_markdown_zero_pii_and_consent_flow_by_default(self):
+        import incident_reporter as ir
+        secret_msg = "Crash for user alice@example.com phone +201099887766 ip 192.168.1.55 at C:\\Users\\alice\\Project\\Main.kt"
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents").mkdir()
+            self.assertFalse(ir.is_auto_submit_enabled(repo))
+            inc = ir.record_incident(
+                repo,
+                code="UNEXPECTED_EXCEPTION",
+                command="workflow.py status",
+                message=secret_msg,
+                traceback_text="NameError: " + secret_msg,
+            )
+            self.assertEqual("RECORDED", inc["status"])
+            self.assertNotIn("submission", inc)
+            self.assertIn("ask_question_guidance", inc)
+            md_path = repo / ".agents" / "state" / "incidents" / f"{inc['incident_id']}.md"
+            self.assertTrue(md_path.is_file())
+            md_text = md_path.read_text(encoding="utf-8")
+            self.assertNotIn("alice@example.com", md_text)
+            self.assertNotIn("201099887766", md_text)
+            self.assertNotIn("192.168.1.55", md_text)
+            self.assertNotIn("C:\\Users\\alice", md_text)
+            self.assertIn("<REDACTED_EMAIL>", md_text)
+            pref = ir.set_auto_submit_preference(repo, True)
+            self.assertTrue(pref["auto_submit_incidents"])
+            self.assertTrue(ir.is_auto_submit_enabled(repo))
+
+    def test_router_next_delivery_splits_approach_without_name_error(self):
+        from _workflow import router as r_mod
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            plan = {
+                "task_id": "t-deliv",
+                "status": "READY_FOR_DELIVERY",
+                "requested_outcome": "Apply string contract",
+                "approach": "Update string parser; add fallback handling.\nVerify Arabic strings",
+                "expected_files": ["app/src/main/Strings.kt"],
+            }
+            with mock.patch.object(r_mod._engine, "build_manifest", return_value={"delivery_snapshot_sha256": ""}), \
+                 mock.patch.object(r_mod._engine, "_ready_external_inputs_changed", return_value=False), \
+                 mock.patch.object(r_mod._engine, "_find_uncommitted_task_files", return_value=["app/src/main/Strings.kt"]):
+                res = r_mod._next_delivery(repo, "t-deliv", plan, "antigravity", "--repo . --task-id t-deliv", "", "READY_FOR_DELIVERY", {})
+            self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", res["code"])
+            self.assertIn("- Update string parser.", res["suggested_commit_block"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

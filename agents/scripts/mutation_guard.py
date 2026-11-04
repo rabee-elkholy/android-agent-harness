@@ -280,7 +280,8 @@ def _is_harness_cache_path(raw: str) -> bool:
 def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     return (
-        name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"], ["repair"])
+        name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"], ["repair"], ["report-issue"])
+        or name == "incident_reporter"
         or name in {"harness_cli", "android-harness"} and args[:2] in (["context", "note"], ["context", "instruct"])
         or name == "repair"
         or name == "setup_wizard" and args[:1] == ["write"]

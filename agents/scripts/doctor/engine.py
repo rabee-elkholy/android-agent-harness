@@ -675,53 +675,6 @@ class HarnessDoctor:
                 if any(fnmatchcase(name, pattern) for pattern in patterns):
                     yield Path(current) / name
 
-    def _detect_project_domains(self) -> set[str]:
-        detected = set()
-        skip_parts = {".git", ".gradle", "build", ".harness-backup", "node_modules", "__pycache__"}
-        text_corpus = ""
-        for p in self._repo_files(("*.gradle*",), skip_parts):
-            if any(x in p.parts for x in skip_parts):
-                continue
-            try:
-                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except (OSError, ValueError):
-                pass
-
-        toml_path = self.repo / "gradle" / "libs.versions.toml"
-        if toml_path.is_file():
-            try:
-                text_corpus += toml_path.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except (OSError, ValueError):
-                pass
-
-        for p in self._repo_files(("AndroidManifest.xml",), skip_parts):
-            if any(x in p.parts for x in skip_parts):
-                continue
-            try:
-                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
-            except (OSError, ValueError):
-                pass
-
-        scanned_kt = 0
-        max_kt_files = 500
-        for p in self._repo_files(("*.kt",), skip_parts):
-            if scanned_kt >= max_kt_files:
-                break
-            if any(x in p.parts for x in skip_parts):
-                continue
-            try:
-                text_corpus += p.read_text(encoding="utf-8", errors="ignore") + "\n"
-                scanned_kt += 1
-            except Exception:
-                continue
-
-        for domain_name, config in KNOWN_DOMAINS.items():
-            for sig in config["signatures"]:
-                if sig.lower() in text_corpus.lower():
-                    detected.add(domain_name)
-                    break
-        return detected
-
     def check_skills_and_workflows(self) -> None:
         category = "6. Skills & Workflows"
         workflows_dir = self.agents_dir / "workflows"
@@ -756,41 +709,15 @@ class HarnessDoctor:
         tailored_refs = [r for r in all_refs if r not in CORE_REFERENCES]
 
         if self.is_raw_kit:
-            self.log(category, "Tailored Domain Coverage", "PASS", "Kit template mode (domain discovery active on client Android apps).")
             self.log(category, "Domain Reference Indexing", "PASS", "Foundation scenarios indexed in daily-scenarios.md.")
             return
 
-        detected_domains = self._detect_project_domains()
-        uncovered_domains = []
-        covered_domains = []
-
-        for domain_name, config in KNOWN_DOMAINS.items():
-            if domain_name in detected_domains:
-                prefixes = config["expected_prefixes"]
-                has_tailored = any(any(ref.startswith(p) for p in prefixes) for ref in tailored_refs)
-                if has_tailored:
-                    matching = [ref for ref in tailored_refs if any(ref.startswith(p) for p in prefixes)]
-                    covered_domains.append(f"{domain_name} -> {', '.join(matching)}")
-                else:
-                    uncovered_domains.append(f"{domain_name} (suggested: '{config['sample_file']}')")
-
-        details = []
         if tailored_refs:
-            details.append(f"Active tailored guides ({len(tailored_refs)}): {', '.join(tailored_refs)}")
-        if covered_domains:
-            details.append(f"Domain integrations confirmed: {'; '.join(covered_domains)}")
-
-        if not uncovered_domains:
-            msg = f"Deep domain integration verified: {len(tailored_refs)} tailored reference guide(s) active."
-            self.log(category, "Tailored Domain Coverage", "PASS", msg, details=details if details else None)
-        else:
-            details.extend([f"Uncovered domain detected: {d}" for d in uncovered_domains])
             self.log(
                 category,
                 "Tailored Domain Coverage",
                 "PASS",
-                f"Optional tailoring available for {len(uncovered_domains)} detected project domain(s); no delivery capability is blocked.",
-                details=details,
+                f"{len(tailored_refs)} additional reference guide(s) active: {', '.join(tailored_refs)}",
             )
 
         daily_scenarios_path = ref_dir / "daily-scenarios.md"

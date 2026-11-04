@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.4] - 2026-11-04
+
+### Consent-first Zero-PII incident reporting via `ask_question`, organized local incident Markdown reports, router delivery fix, and Doctor output cleanup
+
+- **Consent-First Incident Reporting (`ask_question`) & Persistent Auto-Submit Preference (`agents/scripts/incident_reporter.py`, `agents/scripts/_workflow/engine.py`, `agents/harness.py`, `agents/tool-adapters/GEMINI.md.template`)**: Catch unhandled exceptions in `workflow.py` and `harness.py`, save local diagnostic bundles automatically, and default to asking the developer via `ask_question` (`TOOL_CALL_REQUIRED=ask_question`) whether to submit the anonymous report once (`--submit`), enable always-auto-submit (`--submit --always-auto-submit` persisted in `.agents/state/incident-preferences.json`), or keep the report local only.
+- **Organized Zero-PII Local Markdown & JSON Reports (`agents/scripts/incident_reporter.py`)**: Write a structured, human-readable `.agents/state/incidents/<incident_id>.md` report alongside `<incident_id>.json` with strict Zero-PII scrubbing (`_strict_zero_pii_text` redacting emails, phone numbers, IPv4 addresses, local filesystem paths, and tokens/keys) while keeping GitHub Issue exports strictly restricted to allowlisted non-PII metadata.
+- **Router `READY_FOR_DELIVERY` Regex Import Fix (`agents/scripts/_workflow/router.py`, `agents/scripts/_pm_selftest.py`)**: Add missing `import re` in `agents/scripts/_workflow/router.py` so `_next_delivery` splits multi-step `approach` text into commit bullets without raising `NameError`.
+- **Doctor Tailored Reference Check Cleanup (`agents/scripts/doctor/engine.py`)**: Remove the legacy `_detect_project_domains()` heuristic and `Uncovered domain detected` suggestions from `HarnessDoctor` now that `project-context` and `Advisory Project Intelligence` automatically cover domain conventions.
+
 ## [1.2.3] - 2026-11-04
 
 ### Protect public incident reports, snapshot recovery, and tracker mutations
