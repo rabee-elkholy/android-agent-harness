@@ -140,7 +140,7 @@ class GuidanceTests(unittest.TestCase):
 
     def test_repository_constitution_guard(self) -> None:
         constitution = (KIT / "PROJECT_CONSTITUTION.md").read_text(encoding="utf-8")
-        for pointer in ("AGENTS.md", "GEMINI.md", "CLAUDE.md"):
+        for pointer in ("AGENTS.md", "GEMINI.md"):
             self.assertIn("PROJECT_CONSTITUTION.md", (KIT / pointer).read_text(encoding="utf-8"))
         for marker in (
             "Stricter proof, not heavier workflow", "Approval-first", "Human Git Authority",

@@ -5,8 +5,8 @@
 | Dimension | Supported shape | Behavior outside the boundary |
 |---|---|---|
 | Build | Gradle Wrapper; Kotlin/Groovy DSL | Non-Gradle Android builds are refused |
-| Code | Kotlin, Java, mixed, Compose, XML, hybrid, KMP (`commonMain`/`androidMain`/`iosMain`), iOS Swift (`.swift` graph & task-context) | Unknown material surfaces require a developer decision |
-| Modules | Application, library-only, multi-module, dynamic feature, Android/KMP target | Library-only projects disable APK/device gates |
+| Code | Native Android (`Kotlin`, `Java`, `Compose`, `XML`, hybrid) & **KMM / KMP (Kotlin Multiplatform Mobile)** (`commonMain`, `androidMain`, `iosMain`, `expect`/`actual`, Compose Multiplatform, and iOS `.swift` graph & `task-context`) | Unknown material surfaces require a developer decision |
+| Modules | Single-module Android, multi-module Android, library-only, dynamic feature, and **KMM / KMP topologies** (`:shared`, `:composeApp`, `:androidApp`, `:iosApp`) | Library-only projects disable APK/device gates |
 | Variants | Default debug, discovered flavor, or exact combined variant entered during setup | Missing/ambiguous variant is a setup blocker |
 | Architecture | Existing project architecture, DI, persistence, and conventions | The harness does not convert architecture implicitly |
 | Tests | Repositories with tests, no tests, or explicit baseline debt | A required test gate cannot pass with zero executed tests |

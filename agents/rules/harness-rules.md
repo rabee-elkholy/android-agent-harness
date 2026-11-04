@@ -15,13 +15,13 @@ This is the authoritative always-loaded contract. Route detailed Android guidanc
 - **Single-shot Proceed invariant**: Proceed appears only for initial task approval. One approval covers all stated phases without pausing between phases.
 - **Direct follow-up execution**: approved in-scope fixes execute immediately; new plan/Proceed only if behavior, sensitive surface, contract, external write, or blast radius materially expands.
 - **Review corrections are not replanning**: resume the same task (`workflow.py resume`) before fixes, then freeze fresh final verification and execute only its routed reviewers. Completed semantic phase checkpoints remain historical proof; clarify existing decisions with `task plan-note --task-id <id> --text "<clarification>" --source conversation --proof-reference "<decision>"` (never edit `plan.md` manually; narrative `revise` on an approved task requires `--material-change-reason "<actual requirement expansion>"`).
-- **Host continuation**: use `task continue --task-id <id> --host <actual-host>` (stop former writer before `--source-stopped`; include `--expect-session`).
+- **Host continuation**: use `task continue --task-id <id> --host antigravity` (stop former writer before `--source-stopped`; include `--expect-session`).
 - Durable context (`context note` / `context instruct` with `--replace`, `--remove`, `--supersedes`) is administrative: clarify ambiguity first, then organize and translate into clear, self-contained English before saving. Always follow `.agents/project-context/project-notes.md` and `developer-instructions.json`. Commit, push, release, tracker mutation, app uninstall/data clear, downgrade, purchase, and publication are never implicit.
 - **Unified Chat & Question UI/UX (Language-Adaptive)**:
   - **Dynamic Language & RTL Hygiene**: Match the developer's active conversation language for all headings, table headers, and labels. In any right-to-left (RTL) language, start every paragraph, bullet, and numbered item with a word in that language and wrap every file name, symbol, command, path, and English technical term in `` `backticks` ``.
   - **6 Canonical Task Cards** (no emoji, no duplicate summaries): (1) **Plan Approval** (`[plan.md](<PLAN_DOCUMENT_URI>)` + translated `APPROVAL_BRIEF` bullets inside `ask_question`, never in a code block), (2) **Reviewer Dispatch** (`| Reviewer | Model | Status |` with only the role name in `Reviewer` and active model in `Model`; on partial completion `WAIT_FOR_REVIEWERS` / `WAIT_FOR_PHASE_REVIEWERS`, output at most one short progress line like `1/3` without listing pending reviewer names), (3) **Review Verdict** (`| Reviewer | Model | Verdict | Findings |` after finalize), (4) **Mobile Walkthrough & Sign-Off** (3 sections: Navigation & Preconditions, `| # | Action | Expected Result |` table with <=5 rows, Edge Cases, with NO file-change summary wall, in chat or directly inside `ask_question` in the SAME turn), (5) **Ready for Delivery & Commit** (verified files in backticks + copyable fenced `text` Conventional Commit block with subject and bullet body, included in chat and inside `ask_question`), and (6) **Decision & Escalation Modal (`ask_question`)** (concise bold heading + bulleted context for `SELECT_REVIEW_MODEL`, `MOBILE_VALIDATION_DECISION`, stale/scope decisions, or pre-planning clarifications).
 
-Lifecycle (`PLAN -> BUILD -> VERIFY -> SHIP -> DONE`): Follow `NEXT_ACTION`/`NEXT_REASON`; query `python .agents/harness.py task status --task-id <id> --next --brief --json` only when missing. `verify-steps --task-id <id> --host <actual-host>` runs consecutive deterministic steps and stops at failures, reviews, or decisions (`STOPPED` is not completion). Never fabricate approval or evidence.
+Lifecycle (`PLAN -> BUILD -> VERIFY -> SHIP -> DONE`): Follow `NEXT_ACTION`/`NEXT_REASON`; query `python .agents/harness.py task status --task-id <id> --next --brief --json` only when missing. `verify-steps --task-id <id> --host antigravity` runs consecutive deterministic steps and stops at failures, reviews, or decisions (`STOPPED` is not completion). Never fabricate approval or evidence.
 
 ## 2. Discovery and harness boundary
 
@@ -77,7 +77,7 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Context note | `python .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) |
 | Task guidance | `python .agents/harness.py task status --task-id <id> --next` |
 | Policy diagnosis | `python .agents/harness.py policy --json` |
-| Consecutive verification steps | `python .agents/harness.py verify-steps --task-id <id> --host <actual-host>` |
+| Consecutive verification steps | `python .agents/harness.py verify-steps --task-id <id> --host antigravity` |
 | Preflight | `python .agents/harness.py preflight` |
 | Unit tests | `python .agents/harness.py test` |
 | Review package | `python .agents/harness.py review package --task-id <id>` |

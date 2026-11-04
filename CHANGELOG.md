@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.5] - 2026-11-04
+
+### Antigravity-dedicated architecture, removal of legacy root IDE clutter, and first-class Native Android & KMM/KMP positioning
+
+- **Google Antigravity Exclusive Runtime & Default Host (`agents/scripts/wizard/questions.py`, `agents/rules/harness-rules.md`, `agents/tool-adapters/AGENTS.md.template`)**: Make `antigravity` the default and sole interactive AI host choice in the setup wizard (`i14` defaults automatically to `["antigravity"]`), unify canonical rules and command catalogs around `--host antigravity` and Review Protocol V2 (`review complete` / `review finalize`), and remove all non-Antigravity root files and dot-directories (`CLAUDE.md`, `CODEX.md`, `QWEN.md`, `.clinerules`, `.goosehints`, `.windsurfrules`, `.claude/`, `.cursor/`, `.windsurf/`, `.roo/`, `.amazonq/`, `.continue/`, `.junie/`, `.kilocode/`, and `.github/copilot-instructions.md`) while retaining internal ownership-manifest compatibility shims for clean updates.
+- **First-Class Native Android & KMM / KMP (Kotlin Multiplatform Mobile) Positioning (`README.md`, `pyproject.toml`, `CITATION.cff`, `docs/compatibility-matrix.md`, `docs/quickstart.md`, `docs/tool-support.md`, `docs/reviewer-models.md`)**: Highlight comprehensive support for both Native Android (`Kotlin`, `Java`, `Jetpack Compose`, `XML`) and KMM/KMP (`commonMain` platform purity guards, `androidMain`/`iosMain` `expect`/`actual` contracts, unified `.kt`/`.java`/`.xml`/iOS `.swift` symbol graph & `task-context`, and `:shared`/`:composeApp`/`:androidApp` topologies).
+- **Descriptive Conventional Commit Release Discipline (`scripts_dev/release_version.py`, `scripts_dev/publish_validated_release.py`, `AGENTS.md`)**: Support `chore(release): vX.Y.Z — <headline>` release commit subjects and split functional/documentation commits from release version-bump commits so repository file listings always display descriptive engineering commit messages.
+
 ## [1.2.4] - 2026-11-04
 
 ### Consent-first Zero-PII incident reporting via `ask_question`, organized local incident Markdown reports, router delivery fix, and Doctor output cleanup

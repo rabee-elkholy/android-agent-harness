@@ -53,19 +53,19 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         },
     ]
-    tool_opts = []
-    for tid in TOOL_IDS:
-        lbl = labels[tid]
-        if tid == "antigravity" and (d.get("antigravity") or not d.get("tools")):
-            lbl += " (Recommended)"
-        tool_opts.append({"id": tid, "label": lbl})
-    tool_opts.append({"id": "all", "label": labels["all"]})
+    tool_opts = [
+        {
+            "id": "antigravity",
+            "label": f"{labels['antigravity']} (Recommended)",
+        }
+    ]
     qs.append(
         {
             "id": "i14",
             "station": 1,
             "station_title": "Workspace & AI Tooling",
-            "required": True,
+            "required": False,
+            "default": ["antigravity"],
             "allow_multiple": True,
             "prompt": t(lang, "i14"),
             "options": tool_opts,
@@ -824,7 +824,11 @@ def normalize(raw: dict, facts: dict) -> dict:
             "networking": net_val,
             "locales": loc_val,
         }
-    tools = raw.get("i14") or []
+    tools = raw.get("i14") if "i14" in raw else ["antigravity"]
+    if not tools and "i14" not in raw:
+        tools = ["antigravity"]
+    elif not tools:
+        tools = []
     if isinstance(tools, str):
         tools = [x.strip() for x in tools.split(",") if x.strip()]
     if "all" in tools:
@@ -1155,6 +1159,8 @@ def existing_defaults(repo: Path) -> dict[str, object]:
         defaults["review_model_policy_text"] = json.dumps(policy)
     if isinstance(tools, list) and tools:
         defaults["i14"] = list(tools)
+    else:
+        defaults["i14"] = ["antigravity"]
     return defaults
 
 

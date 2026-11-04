@@ -1,21 +1,13 @@
 # Tool support
 
-The harness has one engine and thin host adapters. The canonical rules are
-`.agents/rules/harness-rules.md`; adaptive decisions come only from
-`.agents/scripts/review_policy.py`.
+Android Agent Harness is purpose-built for **Google Antigravity**, with one deterministic engine (`harness-rules.md` + `review_policy.py`) and optional backward-compatible templates for legacy `AGENTS.md` readers.
 
 ## Capability matrix
 
 | Host | Installed entry points | Effective enforcement |
 |---|---|---|
-| **Google Antigravity** | `GEMINI.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Primary production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and invoke_subagent pre/post calls; Review Protocol V2 with 4 custom reviewer subagents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) |
-| Claude Code | `CLAUDE.md`, `.claude/settings.json`, commands, named agents, `PreToolUse` bridge | `HARD_ENFORCED` for covered mutations where the installed hook runs; conversational approval remains `RULE_ENFORCED` |
-| GitHub Copilot | instructions, prompts, optional `preToolUse` bridge | `RULE_ENFORCED`: Rule guidance + downstream verification gate |
-| Gemini CLI | `GEMINI.md` | `RULE_ENFORCED`: Downstream verification gate (legacy compatibility path) |
-| Codex | `AGENTS.md`, `CODEX.md`, prompt commands | `RULE_ENFORCED` |
-| Cursor | always-on `.mdc` rule and MCP path-only merge | `RULE_ENFORCED` |
-| Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose, Qwen | Host-specific rule pointer | `RULE_ENFORCED` |
-| Other `AGENTS.md` readers | `AGENTS.md` | Prompt/rule enforcement only |
+| **Google Antigravity** (Dedicated Primary Runtime) | `GEMINI.md`, `AGENTS.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Dedicated production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and `invoke_subagent` pre/post calls; Review Protocol V2 with 4 custom reviewer subagents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) |
+| Legacy / Optional Compatibility Templates (Claude Code, Codex, Copilot, Cursor, etc.) | `CLAUDE.md`, `CODEX.md`, `.cursor/rules` (when explicitly selected) | `HARD_ENFORCED` only for covered mutations where an installed hook runs; conversational approval and V1 review ingestion remain `RULE_ENFORCED` |
 
 `HARD_ENFORCED` describes only mutation classes actually intercepted by a
 host-native hook. It never means an OS sandbox or cryptographic proof of who

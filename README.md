@@ -1,16 +1,17 @@
 # Android Agent Harness
 
-> **Stricter proof, not heavier daily workflow.**
+> **Stricter proof, not heavier daily workflow — purpose-built for Google Antigravity on Native Android & KMM / KMP (Kotlin Multiplatform Mobile).**
 
-Android Agent Harness is an approval-first engineering layer for AI coding tools working on real Android codebases.
+Android Agent Harness is an approval-first **Android & KMM / KMP (Kotlin Multiplatform Mobile)** engineering layer purpose-built for **Google Antigravity**.
 
-It gives agents bounded project context, records the approved architecture and scope, checks the resulting changes, and requires the test, build, review, or device evidence selected by policy.
+It gives Antigravity bounded AST and symbol context across Native Android (`Kotlin`, `Java`, `Jetpack Compose`, `XML`) and Multiplatform projects (`commonMain`, `androidMain`, `iosMain`, `composeApp`, and iOS `.swift`), records the approved architecture and scope, intercepts out-of-scope file mutations via native `hooks.json`, orchestrates parallel epistemically isolated reviewer subagents (`HARNESS_REVIEW_RESULT_V2`), and binds every test, build, review, and physical device check to cryptographic delivery snapshots.
 
 The model focuses on engineering. The harness handles workflow state, proof, and safety boundaries.
 
 [![CI](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?label=release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
 [![PyPI](https://img.shields.io/pypi/v/android-agent-harness)](https://pypi.org/project/android-agent-harness/)
+[![Targets](https://img.shields.io/badge/Android%20%7C%20KMM%20%2F%20KMP-Kotlin%20%7C%20Java%20%7C%20Compose%20%7C%20Swift-7F52FF)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
 [![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14-blue)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
 [![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-success)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
 [![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE)
@@ -189,7 +190,7 @@ Task A
 
 ### Chat installation (recommended)
 
-Open your Android project in your AI coding agent (Claude Code, Codex, Gemini CLI / Antigravity, Cursor, Windsurf, Roo Code, or Copilot) and provide this bootstrap prompt:
+Open your Android project in **Google Antigravity** and provide this bootstrap prompt:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.4/docs/install-or-update-prompt.md and follow all instructions.
@@ -378,8 +379,13 @@ The harness rehydrates and matches repo-local context; the chat provider itself 
 
 ---
 
-## Android-specific protection
+## Android & KMM / KMP (Kotlin Multiplatform) protection
 
+- **KMM / KMP Multiplatform & Source-Set Purity (`commonMain` / `androidMain` / `iosMain`)**:
+  - **Source-set isolation**: Blocks accidental platform leaks (`android.*`, `java.io.*`, or JVM-only APIs inside `commonMain`) during preflight and specialist reviews.
+  - **Cross-platform symbol graph (`Kotlin` + `Swift`)**: Indexes `.kt`, `.java`, `.xml`, and iOS `.swift` declarations and call sites in `task-context` and `graph` so shared KMM domain/data changes automatically surface both Android (`androidMain` / `composeApp`) and iOS (`iosMain` / `iosApp`) usages.
+  - **`expect` / `actual` contract verification**: Tracks multiplatform boundary declarations across `commonMain`, `androidMain`, and `iosMain` to prevent broken platform implementations.
+  - **KMM / Compose Multiplatform APK & module awareness**: Automatically discovers and validates standard Android (`:app` -> `app-debug.apk`) and KMM / Compose Multiplatform (`:composeApp` -> `composeApp-debug.apk`, `:androidApp` -> `androidApp-debug.apk`, `:shared`) topologies.
 - **Room database & schemas**: Source-based checks for version changes, numeric migration paths, Kotlin/Java embedded types, risky schema changes, and unconditional destructive fallback. These heuristics do not replace Room schema export validation or migration tests.
 - **Compose, XML & resources**: String parity across locales (`values/`, `values-ar/`, etc.), plural/placeholder validation, ViewBinding lifecycle leak checks, and Compose UI state handling.
 - **Coroutines, ANR & threading**: Pattern-based checks for selected blocking calls, coroutine scope risks, and exception-handling patterns. Static checks cannot establish freedom from ANRs or concurrency bugs.
@@ -447,18 +453,14 @@ The harness dynamically discovers and inspects external Project Management MCP s
 
 ## Supported hosts / enforcement model
 
+Android Agent Harness is dedicated to **Google Antigravity** as its native target runtime:
+
 | Host | Adapter | Mutation Interception | Review proof | Downstream verifier |
 |---|---|---|---|---|
-| **Google Antigravity** | `agents/hooks.json`, custom agents (`.agents/agents/`), rules, skills | Native hooks (`HARD_ENFORCED`) | Trusted transcript Review V2 | Yes |
-| **Claude Code** | `.claude/settings.json`, rules | Installed pre-tool hooks where available | V1 response ingestion; independence not natively verified | Yes |
-| **Codex** | Root `AGENTS.md`, `.codex/` instructions | Rule/sandbox dependent | V1 response ingestion; independence not natively verified | Yes |
-| **Cursor** | `.cursorrules` / `.cursor/rules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
-| **Windsurf** | `.windsurfrules` | `RULE_ENFORCED` | V1 response ingestion | Yes |
-| **GitHub Copilot** | `.github/copilot-instructions.md`, installed pre-tool hook adapter | Hook-backed where supported and detected; otherwise rule-enforced | V1 response ingestion | Yes |
-| **Gemini CLI** | Rules, instructions | `RULE_ENFORCED` | V1 response ingestion | Yes |
-| **Roo Code / Continue** | Mode instructions, system rules | `RULE_ENFORCED` | V1 response ingestion | Yes |
+| **Google Antigravity** (Primary & Dedicated Target) | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, custom reviewer subagents (`.agents/agents/`), rules, skills | Native hooks (`HARD_ENFORCED`) | Trusted transcript Review V2 (`HARNESS_REVIEW_RESULT_V2`) | Yes |
+| Legacy / External `AGENTS.md` Readers | Optional compatibility templates (`CLAUDE.md`, `CODEX.md`, `.cursor/rules`) | Rule-enforced (`RULE_ENFORCED`) unless host hook is active | V1 response ingestion | Yes |
 
-Host-native hooks can intercept some mutation classes where supported. Other hosts rely on rule enforcement plus deterministic downstream verification. The harness reports the detected enforcement level honestly.
+On **Google Antigravity**, installed native hooks (`hooks.json`) intercept supported file mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and subagent boundaries (`invoke_subagent`). The harness always reports the detected enforcement tier (`HARD_ENFORCED` vs `RULE_ENFORCED`) honestly.
 
 See [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) for full integration details.
 
@@ -557,8 +559,8 @@ No. Android Studio remains the primary IDE for Android development, debugging, a
 **2. Does this make the AI autonomous?**
 No. The harness is approval-first. All task scopes and risk classifications require explicit developer approval before modifications begin, and delivery requires verified evidence.
 
-**3. Can it work with mixed Java/Kotlin/XML/Compose codebases?**
-Yes. It derives local architectural evidence per module and source set and checks changes against the approved architecture. Ambiguous or unsupported patterns can require developer clarification.
+**3. Can it work with KMM / KMP (Kotlin Multiplatform Mobile) and mixed Java/Kotlin/XML/Compose/Swift codebases?**
+Yes. It natively supports both standard Android apps and KMM / KMP projects (`commonMain`, `androidMain`, `iosMain`, `:shared`, `:composeApp`, `:androidApp`, and iOS `.swift` files). It derives local architectural evidence per module and source set, checks `commonMain` platform purity, and verifies changes against the approved architecture.
 
 **4. Does every task run many reviewers?**
 No. The 6-tier risk model dynamically assigns verification: trivial edits (T0) and low-risk changes (T1) skip reviewer subagents entirely. Specialized reviewers run only when justified by the final classified blast radius.
@@ -566,8 +568,8 @@ No. The 6-tier risk model dynamically assigns verification: trivial edits (T0) a
 **5. Does every task require a device?**
 No. Device deployment and mobile verification are required only for tiers and changes involving device-facing surfaces (such as T4/T5 with Room, permissions, or system services) or when explicitly requested.
 
-**6. Can I use Codex / Gemini / Claude / Copilot?**
-Yes. Native tool adapters and instruction templates are provided for Claude Code, Gemini CLI / Antigravity, GitHub Copilot, Cursor, Windsurf, Roo Code, and others.
+**6. Why is the harness focused on Google Antigravity?**
+Specializing in Google Antigravity enables deep native integration: `HARD_ENFORCED` pre-tool and post-tool hooks (`hooks.json`), parallel subagent orchestration (`invoke_subagent`) with native SQLite execution proof (`HARNESS_REVIEW_RESULT_V2`), interactive `ask_question` decision cards, and Android Studio / Device Hub / Compose Preview diagnostics (`android-ui`, `android-inspect`). Legacy adapter templates remain in the kit for backward compatibility during updates.
 
 **7. Does the harness commit/push code?**
 Installed client-project workflows leave Git mutations to the developer and normally leave edits unstaged. Maintenance of this harness repository may use Git or publish only when its maintainer explicitly authorizes those actions.

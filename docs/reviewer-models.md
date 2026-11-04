@@ -6,9 +6,8 @@ or the requirement for independent review proof.
 
 | Host | Supported choices | Enforcement |
 |---|---|---|
-| Claude Code | `inherit`, `sonnet`, `opus`, `haiku` | Rule-enforced native Agent/Task model argument; account access is host-dependent |
-| Antigravity | `inherit`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `model`/`Model` unless matching explicit tier is selected |
-| Other adapters | `inherit` | Host-managed; inheritance is not independently verified |
+| **Google Antigravity** (Primary Runtime) | `inherit`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `model`/`Model` unless matching explicit tier is selected; native SQLite metadata verified |
+| Legacy / Compatibility Adapters (Claude Code, etc.) | `inherit` (`sonnet`, `opus`, `haiku` on Claude Code) | Host-managed or rule-enforced native Agent/Task model argument |
 
 ## Antigravity pre-review interactive choices (`SELECT_REVIEW_MODEL`)
 

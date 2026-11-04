@@ -4,13 +4,13 @@
 
 - Python 3.10 or newer;
 - Git checkout;
-- root Gradle Wrapper in the Android/KMP project;
+- root Gradle Wrapper in the **Native Android** or **KMM / KMP (Kotlin Multiplatform Mobile)** project (`:app`, `:composeApp`, `:androidApp`, `:shared`);
 - JDK/Android SDK only when selected build gates need them;
 - ADB device only when the adaptive policy selects device verification.
 
 ## Chat installation (recommended)
 
-Open the Android project root in your coding agent (select **Google Antigravity** during setup) and paste:
+Open the Android project root in **Google Antigravity** (`antigravity` is selected automatically by default during setup) and paste:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.4/docs/install-or-update-prompt.md and follow all instructions.
