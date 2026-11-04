@@ -42,3 +42,18 @@ Do not open a public issue. Use
 [GitHub Private Vulnerability Reporting](https://github.com/rabee-elkholy/android-agent-harness/security/advisories/new)
 and include reproduction steps, operating system, Python version, host adapter,
 and sanitized logs.
+
+## Incident reporting and recovery
+
+Public incident bodies, titles and prefilled links export only allowlisted metadata
+(version, known host/OS/category/state, a fingerprint and a healed flag). Raw
+messages, command arguments, stack traces and arbitrary extra fields stay local,
+including when an older incident is submitted. Local redaction is best-effort;
+review local logs before sharing them. The metadata export does not certify local
+logs as free of personal information.
+
+State recovery rejects snapshots with mismatched task identity, unsupported schema,
+invalid plan hash or unbound active approval. Invalid snapshots cannot overwrite a
+corrupt plan. PM status/transition IDs without verified meaning require explicit
+close authority; an accompanying caller-supplied name is insufficient. Existing
+Bug/Issue descriptions are protected even when the replacement is empty or null.

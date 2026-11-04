@@ -12,6 +12,8 @@ Asana, Trello, and any schema-discovered PM MCP in Antigravity):
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any, Mapping
 from integrations.base import ExternalIntegration
 from pm_discovery import BUILTIN_PM_CATALOG, classify_pm_tool, identify_pm_provider
@@ -108,22 +110,34 @@ class UniversalPmIntegration(ExternalIntegration):
         allow_close = bool(grant and grant.get("allow_close"))
 
         # 1. Terminal Status Protection (Done / Closed / Solved / Resolved)
-        status_candidates = [
-            str(args.get(k) or "").strip().lower()
-            for k in ("status", "status_name", "transition_name", "state")
-            if args.get(k)
-        ]
-        # Also inspect nested fields (e.g. Jira fields={"status": {"name": "Done"}} or transition={"name": "Done"})
+        status_candidates = []
         fields_obj = args.get("fields")
-        if isinstance(fields_obj, Mapping):
-            st_obj = fields_obj.get("status")
-            if isinstance(st_obj, Mapping) and st_obj.get("name"):
-                status_candidates.append(str(st_obj.get("name")).strip().lower())
-            elif isinstance(st_obj, str):
-                status_candidates.append(st_obj.strip().lower())
-        trans_obj = args.get("transition")
-        if isinstance(trans_obj, Mapping) and trans_obj.get("name"):
-            status_candidates.append(str(trans_obj.get("name")).strip().lower())
+
+        # Names supplied alongside an ID are not trusted provider metadata. An
+        # opaque target needs explicit close authority until the adapter can
+        # establish its nonterminal meaning from authoritative provider state.
+        opaque = False
+        for container in (args, fields_obj if isinstance(fields_obj, Mapping) else {}):
+            for key, value in container.items():
+                normalized = str(key).replace("_", "").lower()
+                if normalized in {"statusid", "stateid", "transitionid"}:
+                    opaque = True
+                elif normalized in {"status", "state", "transition", "statusname", "statename", "transitionname"}:
+                    if isinstance(value, Mapping):
+                        if isinstance(value.get("name"), str):
+                            status_candidates.append(value["name"].strip().lower())
+                        if "id" in value or not isinstance(value.get("name"), str):
+                            opaque = True
+                    elif isinstance(value, str):
+                        status_candidates.append(value.strip().lower())
+                        if not value.strip() or value.strip().isdigit() or re.fullmatch(r"[0-9a-fA-F-]{32,36}", value.strip()):
+                            opaque = True
+                    else:
+                        opaque = True
+        if not allow_close and (opaque or (tool_class == "UPDATE_STATUS" and not status_candidates)):
+            return False, ("PM_STATUS_UNVERIFIED: The target status/transition is opaque. "
+                           "Use a supported named nonterminal status or obtain explicit developer close authority; "
+                           "a caller-supplied name alongside an ID does not prove its meaning.")
 
         for st in status_candidates:
             if st in TERMINAL_STATUS_VALUES and not allow_close:
@@ -153,11 +167,13 @@ class UniversalPmIntegration(ExternalIntegration):
 
         is_bug_update = (
             tl in ("zohoprojects_update_issue", "update_issue", "update_bug")
+            or ("issue" in tl and any(verb in tl for verb in ("update", "edit"))
+                and "create" not in tl and "comment" not in tl)
             or (item_type in ("bug", "defect", "issue") and tool_class in ("UPDATE_DESCRIPTION", "WRITE") and "create" not in tl and "comment" not in tl)
         )
-        has_desc_override = bool(
-            args.get("description")
-            or (isinstance(fields_obj, Mapping) and fields_obj.get("description"))
+        has_desc_override = (
+            "description" in args
+            or (isinstance(fields_obj, Mapping) and "description" in fields_obj)
         )
         if is_bug_update and has_desc_override:
             return (

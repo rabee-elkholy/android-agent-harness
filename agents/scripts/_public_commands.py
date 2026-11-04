@@ -97,7 +97,7 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
      "description": "Prepare a universal functional QA report and MCP call recipe for any discovered PM provider."},
     {"command": "report-issue", "read_only": False,
      "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
-     "description": "List, record, or submit sanitized Zero-PII harness incident reports to GitHub Issues."},
+     "description": "Inspect local incident diagnostics or submit allowlisted metadata to GitHub Issues."},
     {"command": "task merge", "read_only": False,
      "valid_states": ["AWAITING_DEVELOPER_APPROVAL"],
      "required_inputs": ["task_id", "from_task_id"], "model_facing": True,

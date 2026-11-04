@@ -1270,6 +1270,7 @@ class PmLifecycleTests(unittest.TestCase):
             "ready_delivery_snapshot_sha256": "deadbeef",
         }
         plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+        plan["approval"]["plan_sha256"] = plan["plan_sha256"]
         save_plan(tdir / "plan.json", plan)
         save_stable_snapshot(self.repo, tid, "ready_for_delivery", plan=plan)
         snap = load_stable_snapshot(self.repo, tid, "ready_for_delivery")
@@ -1282,6 +1283,112 @@ class PmLifecycleTests(unittest.TestCase):
         healed_plan = read_json(tdir / "plan.json")
         self.assertEqual("IMPLEMENTING", healed_plan["status"])
         self.assertEqual(3, healed_plan["review_calls_used"])
+
+
+class ReviewRegressionTests(unittest.TestCase):
+    def test_incident_export_excludes_free_text_in_all_submission_paths(self):
+        import incident_reporter as ir
+        from urllib.parse import unquote_plus
+        from types import SimpleNamespace
+        secret = "customer@example.test +201012345678 PrivateCustomerName"
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            incident = ir.record_incident(repo, code=secret, command=secret,
+                message=secret, extra={secret: secret}, heal_action=secret,
+                task_state=secret, traceback_text="ValueError: " + secret, auto_submit=False)
+            incident.update(host=secret, os=secret, incident_id=secret, created_at=secret,
+                            issue_url="https://example.test/?private=" + secret)
+            self.assertNotIn("customer@example.test", ir.format_issue_markdown(incident))
+            self.assertNotIn("PrivateCustomerName", unquote_plus(ir.build_github_issue_url(incident)))
+            preview = ir.submit_incident_to_github(repo, incident, dry_run=True)
+            self.assertNotIn("PrivateCustomerName", json.dumps(preview))
+            with mock.patch.object(ir.shutil, "which", return_value="gh"), mock.patch.object(
+                ir.subprocess, "run", side_effect=[SimpleNamespace(returncode=0, stdout="[]"),
+                SimpleNamespace(returncode=0, stdout="https://github.com/example/issues/1")]) as run:
+                ir.submit_incident_to_github(repo, incident)
+            self.assertNotIn("PrivateCustomerName", str(run.call_args_list))
+
+    def test_snapshot_rejects_wrong_identity_schema_and_plan_hash(self):
+        from self_heal import heal_task_state, load_stable_snapshot, save_stable_snapshot
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td); tdir = repo / ".agents/state/tasks/task-a"
+            plan = {"task_id": "task-a", "status": "CANCELLED", "requested_outcome": "test"}
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+            save_plan(tdir / "plan.json", plan)
+            self.assertIsNotNone(save_stable_snapshot(repo, "task-a", "cancelled"))
+            good = load_stable_snapshot(repo, "task-a")
+            self.assertIsNotNone(good)
+            for mutate in (lambda x: x.update(task_id="task-b"),
+                           lambda x: x["plan"].update(task_id="task-b"),
+                           lambda x: x.update(schema_version=99),
+                           lambda x: x["plan"].update(requested_outcome="different")):
+                bad = json.loads(json.dumps(good)); mutate(bad)
+                atomic_write_json(tdir / "snapshots/stable-latest.json", bad)
+                (tdir / "plan.json").write_text("{broken", encoding="utf-8")
+                self.assertIsNone(load_stable_snapshot(repo, "task-a"))
+                self.assertEqual("UNRECOVERABLE", heal_task_state(repo, "task-a")["status"])
+                self.assertEqual("{broken", (tdir / "plan.json").read_text())
+            self.assertIsNone(load_stable_snapshot(repo, "task-a", "../../../escape"))
+            atomic_write_json(tdir / "snapshots/stable-latest.json", good)
+            with mock.patch("incident_reporter.record_incident"):
+                self.assertEqual("HEALED", heal_task_state(repo, "task-a")["status"])
+            self.assertEqual("task-a", read_json(tdir / "plan.json")["task_id"])
+
+    def test_snapshot_requires_bound_approval_and_run_identity(self):
+        from self_heal import save_stable_snapshot, load_stable_snapshot
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            plan = {"task_id": "task", "status": "IMPLEMENTING", "requested_outcome": "test",
+                    "execution_nonce": "nonce", "approval": {"single_use_nonce": "nonce"}}
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+            self.assertIsNone(save_stable_snapshot(repo, "task", "implementing", plan=plan))
+            plan["approval"]["plan_sha256"] = plan["plan_sha256"]
+            self.assertIsNotNone(save_stable_snapshot(repo, "task", "implementing", plan=plan))
+            self.assertIsNone(save_stable_snapshot(repo, "task", "implementing", plan=plan,
+                                                  current_run={"task_id": "other"}))
+            self.assertIsNotNone(load_stable_snapshot(repo, "task"))
+            plan["execution_nonce"] = "wrong"
+            self.assertIsNone(save_stable_snapshot(repo, "task", "implementing", plan=plan))
+
+    def test_legacy_incident_url_is_rebuilt_on_load(self):
+        import incident_reporter as ir
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents").mkdir()
+            incident = ir.record_incident(repo, code="MANUAL_REPORT", command="test", auto_submit=False)
+            incident["issue_url"] = "https://github.com/issues/new?body=private-customer"
+            incident["message"] = "private-customer"
+            atomic_write_json(repo / ".agents/state/incidents" / (incident["incident_id"] + ".json"), incident)
+            for identifier in (None, incident["incident_id"]):
+                self.assertNotIn("private-customer", ir.load_incident(repo, identifier)["issue_url"])
+
+    def test_pm_nested_named_terminal_states_and_provider_issue_names(self):
+        from integrations.universal_pm import UniversalPmIntegration
+        pm = UniversalPmIntegration()
+        for container in ({"status_name": "Done"}, {"transition_name": "Closed"},
+                          {"status": {"name": "Done"}}, {"state": {"name": "Closed"}},
+                          {"fields": {"state": "Resolved"}}, {"fields": {"transition": {"name": "Done"}}}):
+            with self.subTest(container=container):
+                self.assertFalse(pm.validate_pm_mutation("jira", "update_issue", container, {}, {})[0])
+                self.assertTrue(pm.validate_pm_mutation("jira", "update_issue", container, {}, {"allow_close": True})[0])
+        for tool in ("editJiraIssue", "jira_update_issue", "linear_update_issue"):
+            self.assertFalse(pm.validate_pm_mutation("jira", tool, {"fields": {"description": ""}}, {}, {})[0])
+        self.assertTrue(pm.validate_pm_mutation("jira", "create_issue", {"description": ""}, {}, {})[0])
+
+    def test_pm_rejects_opaque_status_ids_and_empty_description(self):
+        from integrations.universal_pm import UniversalPmIntegration
+        pm = UniversalPmIntegration()
+        for args in ({"transition": {"id": "31"}}, {"transition": {"id": "31", "name": "In Progress"}},
+                     {"status_id": "31"}, {"stateId": "abc-123"}, {"status": 31},
+                     {"fields": {"status": {"id": "31"}}}):
+            with self.subTest(args=args):
+                self.assertFalse(pm.validate_pm_mutation("jira", "transition_issue", args, {}, {"allow_close": False})[0])
+                self.assertTrue(pm.validate_pm_mutation("jira", "transition_issue", args, {}, {"allow_close": True})[0])
+        for value in ("", None, {}, []):
+            for args in ({"description": value}, {"fields": {"description": value}}):
+                self.assertFalse(pm.validate_pm_mutation("jira", "update_issue", args, {}, {"allow_close": True})[0])
+        self.assertTrue(pm.validate_pm_mutation("jira", "add_comment", {"body": "test"}, {}, {})[0])
+        self.assertTrue(pm.validate_pm_mutation("jira", "update_issue", {"status": "In Progress"}, {}, {})[0])
 
 
 if __name__ == "__main__":

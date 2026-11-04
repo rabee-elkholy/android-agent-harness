@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,11 +34,13 @@ from _vnext_common import (  # noqa: E402
     task_dir,
     utc_now,
 )
-from plan_authority import save_plan  # noqa: E402
+from plan_authority import save_plan, validate_plan_hash  # noqa: E402
 
 
 def _snapshots_dir(repo: Path, task_id: str) -> Path:
     d = task_dir(repo, task_id) / "snapshots"
+    if d.is_symlink() or not d.resolve().is_relative_to(task_dir(repo, task_id).resolve()):
+        raise ValidationError("snapshot directory escapes task storage")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -77,12 +80,36 @@ def save_stable_snapshot(
             "phase_state": phase_state,
             "current_run": current_run,
         }
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", clean_stage) or not _valid_snapshot(payload, task_id):
+            return None
         stage_path = snap_dir / f"stable-{clean_stage}.json"
         atomic_write_json(stage_path, payload)
         atomic_write_json(snap_dir / "stable-latest.json", payload)
         return stage_path
-    except (OSError, ValueError, ValidationError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ValidationError):
         return None
+
+
+def _valid_snapshot(data: Any, task_id: str) -> bool:
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        return False
+    plan = data.get("plan")
+    if data.get("task_id") != task_id or not isinstance(plan, dict) or plan.get("task_id") != task_id:
+        return False
+    if not validate_plan_hash(plan)[0]:
+        return False
+    approval = plan.get("approval")
+    if plan.get("status") in {"APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"}:
+        if not isinstance(approval, dict) or approval.get("plan_sha256") != plan.get("plan_sha256"):
+            return False
+        nonce = approval.get("single_use_nonce")
+        if not nonce or (plan.get("status") != "APPROVED" and plan.get("execution_nonce") != nonce):
+            return False
+    for key in ("phase_state", "current_run"):
+        value = data.get(key)
+        if value is not None and (not isinstance(value, dict) or value.get("task_id") != task_id):
+            return False
+    return True
 
 
 def load_stable_snapshot(repo: Path, task_id: str, stage: str = "latest") -> dict[str, Any] | None:
@@ -91,11 +118,13 @@ def load_stable_snapshot(repo: Path, task_id: str, stage: str = "latest") -> dic
         snap_dir = task_dir(repo, task_id) / "snapshots"
         clean_stage = str(stage or "latest").strip().lower().replace("_", "-")
         target = snap_dir / f"stable-{clean_stage}.json"
-        if not target.is_file():
+        if (not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", clean_stage)
+                or target.is_symlink() or not target.resolve().is_relative_to(task_dir(repo, task_id).resolve())
+                or not target.is_file() or target.stat().st_size > 4 * 1024 * 1024):
             return None
         data = read_json(target)
-        return data if isinstance(data, dict) and isinstance(data.get("plan"), dict) else None
-    except (OSError, ValueError, ValidationError):
+        return data if _valid_snapshot(data, task_id) else None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ValidationError):
         return None
 
 

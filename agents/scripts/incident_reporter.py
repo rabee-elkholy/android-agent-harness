@@ -6,8 +6,8 @@ bundles under `.agents/state/incidents/` and optionally submits deduplicated
 GitHub Issues to `rabee-elkholy/android-agent-harness` via `gh` CLI (or emits a
 pre-filled GitHub Issue URL when `gh` is unavailable).
 
-Standard library Python only. Never includes project source code, user secrets,
-or unredacted absolute filesystem paths.
+Standard library Python only. Public exports use allowlisted metadata only.
+Local diagnostic text is best-effort redacted and may contain sensitive data.
 """
 from __future__ import annotations
 
@@ -121,8 +121,42 @@ def compute_incident_fingerprint(
     return canonical_sha256(payload)
 
 
+def _public_incident(incident: dict[str, Any]) -> dict[str, Any]:
+    """Export only bounded diagnostic metadata, including for old local reports.
+
+    Redaction is best-effort for local logs; arbitrary strings never belong in
+    automatic public reports. Rebuild the URL too: legacy URLs contain raw text.
+    """
+    def choice(key, allowed, default="unknown"):
+        value = incident.get(key)
+        return value if isinstance(value, str) and value in allowed else default
+
+    def version(key):
+        value = incident.get(key)
+        return value if isinstance(value, str) and re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", value) else "unknown"
+
+    fp = incident.get("fingerprint_sha256")
+    if not isinstance(fp, str) or not re.fullmatch(r"[0-9a-f]{64}", fp):
+        fp = "unknown"
+    os_name = str(incident.get("os") or "").split("-", 1)[0]
+    return {
+        "fingerprint_sha256": fp,
+        "harness_version": version("harness_version"),
+        "python_version": version("python_version"),
+        "host": choice("host", {"antigravity", "claude", "codex", "cli", "gemini"}),
+        "os": os_name if os_name in {"Linux", "Windows", "Darwin"} else "unknown",
+        "code": choice("code", {"HARNESS_CONTRADICTION", "AUTO_HEAL_TRIGGERED", "HARNESS_INCIDENT",
+                                "UNEXPECTED_EXCEPTION", "MANUAL_REPORT"}, "HARNESS_INCIDENT"),
+        "task_state": choice("task_state", {"DRAFT", "PENDING_APPROVAL", "APPROVED", "IMPLEMENTING",
+                             "VERIFYING", "READY_FOR_DELIVERY", "DELIVERED", "CANCELLED"}, "UNKNOWN"),
+        "healed": incident.get("healed") is True,
+        "command": "harness",
+    }
+
+
 def build_github_issue_url(incident: dict[str, Any], target_repo: str = UPSTREAM_REPO) -> str:
     """Construct a pre-filled GitHub Issue URL for one-click developer or agent reporting."""
+    incident = _public_incident(incident)
     fp_short = str(incident.get("fingerprint_sha256") or "")[:10]
     code = str(incident.get("code") or "INCIDENT")
     version = str(incident.get("harness_version") or "unknown")
@@ -139,44 +173,18 @@ def build_github_issue_url(incident: dict[str, Any], target_repo: str = UPSTREAM
 
 def format_issue_markdown(incident: dict[str, Any]) -> str:
     """Render a clean, sanitized Markdown report suitable for GitHub Issues."""
-    fp = str(incident.get("fingerprint_sha256") or "")
-    lines = [
-        "### Automated Harness Incident Report",
-        "",
-        f"- **Fingerprint**: `fingerprint:{fp}`",
-        f"- **Incident ID**: `{incident.get('incident_id', '')}`",
-        f"- **Harness Version**: `{incident.get('harness_version', 'unknown')}`",
-        f"- **Host / OS / Python**: `{incident.get('host', 'unknown')}` / `{incident.get('os', 'unknown')}` / `{incident.get('python_version', 'unknown')}`",
-        f"- **Code**: `{incident.get('code', 'UNKNOWN')}`",
-        f"- **Command**: `{incident.get('command', '')}`",
-        f"- **Task State**: `{incident.get('task_state', 'NONE')}`",
-        f"- **Auto-Healed**: `{incident.get('healed', False)}` ({incident.get('heal_action', 'none')})",
-        f"- **Recorded At (UTC)**: `{incident.get('created_at', '')}`",
-        "",
-        "#### Diagnostic Summary",
-        "```text",
-        str(incident.get("message") or "").strip()[:1500],
-        "```",
-    ]
-    frames = incident.get("engine_frames") or []
-    if frames:
-        lines.extend([
-            "",
-            "#### Sanitized Engine Frames",
-            "```text",
-            "\n".join(str(f) for f in frames[:15]),
-            "```",
-        ])
-    extra = incident.get("extra")
-    if isinstance(extra, dict) and extra:
-        lines.extend([
-            "",
-            "#### Additional Context",
-            "```json",
-            json.dumps(extra, indent=2, ensure_ascii=False)[:1500],
-            "```",
-        ])
-    return "\n".join(lines) + "\n"
+    public = _public_incident(incident)
+    return "\n".join([
+        "### Harness Incident Metadata", "",
+        f"- **Fingerprint**: `fingerprint:{public['fingerprint_sha256']}`",
+        f"- **Harness Version**: `{public['harness_version']}`",
+        f"- **Host / OS / Python**: `{public['host']}` / `{public['os']}` / `{public['python_version']}`",
+        f"- **Code**: `{public['code']}`",
+        f"- **Task State**: `{public['task_state']}`",
+        f"- **Auto-Healed**: `{public['healed']}`", "",
+        "Free-text diagnostics, command arguments, paths, timestamps and extra data remain local.",
+        "Local logs may contain sensitive information; review them before sharing.", "",
+    ])
 
 
 def _is_test_or_ci_environment() -> bool:
@@ -238,6 +246,7 @@ def record_incident(
                 try:
                     existing_payload = read_json(existing_file)
                     existing_payload["status"] = "DUPLICATE"
+                    existing_payload["issue_url"] = build_github_issue_url(existing_payload)
                     return existing_payload
                 except (OSError, ValueError):
                     pass
@@ -325,6 +334,7 @@ def submit_incident_to_github(
     timeout_seconds: float = 8.0,
 ) -> dict[str, Any]:
     """Submit an incident to GitHub Issues via `gh` CLI with fingerprint deduplication."""
+    incident = _public_incident(incident)
     inc_dir = _incidents_dir(repo)
     reported_path = inc_dir / "reported-index.json"
     try:
@@ -456,7 +466,9 @@ def load_incident(repo: Path, incident_id: str | None = None) -> dict[str, Any] 
         candidate = inc_dir / (incident_id if incident_id.endswith(".json") else f"{incident_id}.json")
         if candidate.is_file():
             try:
-                return read_json(candidate)
+                incident = read_json(candidate)
+                incident["issue_url"] = build_github_issue_url(incident)
+                return incident
             except (OSError, ValueError):
                 return None
     items = list_incidents(repo)
@@ -466,7 +478,9 @@ def load_incident(repo: Path, incident_id: str | None = None) -> dict[str, Any] 
     latest_path = inc_dir / str(latest_entry.get("path") or f"{latest_entry.get('incident_id')}.json")
     if latest_path.is_file():
         try:
-            return read_json(latest_path)
+            incident = read_json(latest_path)
+            incident["issue_url"] = build_github_issue_url(incident)
+            return incident
         except (OSError, ValueError):
             return None
     return None
