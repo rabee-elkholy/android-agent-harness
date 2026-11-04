@@ -33,6 +33,16 @@ def api(repository: str, path: str, *, allow_missing: bool = False):
     return json.loads(output) if output is not None else None
 
 
+def is_release_commit_subject(subject: str, tag: str) -> bool:
+    """Return True if the commit subject is an explicit release commit for `tag`."""
+    pattern = (
+        rf"^(?:chore\(release\):\s*{re.escape(tag)}(?:\s*(?:—|-|:)\s*\S.*)?|"
+        rf"release\({re.escape(tag)}\):\s*\S.*|"
+        rf"release:\s*{re.escape(tag)}(?:\s*(?:—|-|:)\s*\S.*)?)$"
+    )
+    return bool(re.match(pattern, str(subject or "").strip()))
+
+
 def publish(repository: str, sha: str, ci_run: str) -> bool:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40}", sha) or not ci_run.isdigit():
         raise RuntimeError("invalid release repository, commit or CI run identity")
@@ -43,7 +53,7 @@ def publish(repository: str, sha: str, ci_run: str) -> bool:
         raise RuntimeError("invalid release version")
     tag = "v" + version
     title = command("git", "log", "-1", "--format=%s").strip()
-    if title != "release: " + tag:
+    if not is_release_commit_subject(title, tag):
         print("No explicit release commit; publication skipped.")
         return False
     run = api(repository, "actions/runs/" + ci_run)

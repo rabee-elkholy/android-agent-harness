@@ -345,6 +345,25 @@ class ReleaseSafetyTests(unittest.TestCase):
             errors = validation.validate_release(KIT, version)
         self.assertTrue(any("relative link" in err for err in errors), errors)
 
+    def test_release_commit_subject_accepts_descriptive_conventional_formats(self):
+        for valid_subj in (
+            "chore(release): v1.2.5 — Consent-first incident reporting",
+            "chore(release): v1.2.5",
+            "release(v1.2.5): consent-first incident reporting",
+            "release: v1.2.5 — consent-first incident reporting",
+            "release: v1.2.5",
+        ):
+            with self.subTest(valid_subj=valid_subj):
+                self.assertTrue(automatic_release.is_release_commit_subject(valid_subj, "v1.2.5"))
+        for invalid_subj in (
+            "feat(incidents): add consent-first reporting",
+            "chore(release): v1.2.4 — wrong version",
+            "release: v1.2.50",
+            "",
+        ):
+            with self.subTest(invalid_subj=invalid_subj):
+                self.assertFalse(automatic_release.is_release_commit_subject(invalid_subj, "v1.2.5"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -65,7 +65,7 @@
     "agents/scripts/_project_intelligence_selftest.py": "0f8117e3d1c8ea6b74f584b557bf531fcb2482081d3f1078c99a6539ef8a8a9e",
     "agents/scripts/_public_cli_selftest.py": "23610078906c1cc7e035bfa954d99f42e8df40acaa62d155a4557318b6966f9d",
     "agents/scripts/_public_commands.py": "3aa974d2ce8907f49c5a437e8f3d6c70cd04942be0f09aa0a8ad6ac59a41dc5f",
-    "agents/scripts/_release_safety_selftest.py": "9f9eccb55e7f584f43d2bb4c9d1c58d9f3ff3b4b3d13b4763d67d6c85e51072f",
+    "agents/scripts/_release_safety_selftest.py": "c4578e68aa058cffbdd000e3fef211ca94237985c10fe368bf562551506fdff4",
     "agents/scripts/_repo_files.py": "69fab31be58f2fcef0dacb44d75b93b6a1f3192fcad1f514217ea2219b837818",
     "agents/scripts/_review_models_selftest.py": "264162e5e44d4acfa6432457924e7e2f8d41f66c1912eafb3d1bb242c7a713d5",
     "agents/scripts/_security_selftest.py": "8a5b7fbb26990a37006239518391cab5660318951c26dc2327af8be6521b1bf9",

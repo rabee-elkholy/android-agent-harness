@@ -595,7 +595,12 @@ def main(argv: list[str] | None = None) -> int:
         ]
         run_cmd(["git", "add", *stage_paths])
 
-        commit_msg = f"release: v{target_version}"
+        headline = title.split(": ", 1)[1].strip() if ": " in title else ""
+        if headline and headline != f"Release v{target_version}":
+            short_headline = headline[:72].rstrip(" .,;:-")
+            commit_msg = f"chore(release): v{target_version} — {short_headline}"
+        else:
+            commit_msg = f"chore(release): v{target_version}"
         res_commit = run_cmd(["git", "commit", "-m", commit_msg], check=False)
         combined_commit_out = (res_commit.stdout or "") + "\n" + (res_commit.stderr or "")
         if res_commit.returncode == 0:
