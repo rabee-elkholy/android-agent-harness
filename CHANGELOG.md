@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.3] - 2026-11-04
+
+### Protect public incident reports, snapshot recovery, and tracker mutations
+
+- Export only allowlisted diagnostic metadata in GitHub incident titles, bodies and prefilled links, including reports stored by older versions. Keep free-text messages, command arguments, stack traces and arbitrary extra fields local; document that local redaction is best-effort.
+- Reject recovery snapshots with mismatched task identity, unsupported schema, invalid plan hashes, unbound approvals or mismatched execution nonces. Bound snapshot paths and reads, and preserve the original corrupt plan when recovery evidence is invalid.
+- Block opaque PM status/transition IDs without explicit close authority, even when accompanied by a caller-supplied nonterminal name. Apply terminal-state protection to nested named states and supported name aliases.
+- Protect Bug/Issue descriptions from empty or null replacement, including provider-prefixed and camelCase issue-update tools.
+- Add regression coverage for incident export/submission paths, legacy links, snapshot identity/approval validation and tracker policy edge cases. All 34 local suites (57 processes) and the fix commit's 12 CI jobs passed; release publication separately requires CI for the release commit.
+
 ## [1.2.2] - 2026-11-03
 
 ### Universal multi-provider PM MCP engine, self-healing task state rollback, automated Zero-PII incident reporting, and frictionless documentation workflows
