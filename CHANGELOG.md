@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## [1.2.6] - 2026-11-05
 
-- Add task-owned debug instrumentation, bounded device diagnostics and a whole-worktree delivery guard for temporary Kotlin/Java logs.
+### Task-scoped debug instrumentation, bounded device diagnostics, and whole-worktree delivery guard
+
+- **Task-Scoped Debug Instrumentation & Write-Ahead Ledger (`agents/scripts/debug_instrumentation.py`, `agents/scripts/debug_source.py`, `agents/scripts/_debug_instrumentation_selftest.py`)**: Add `python .agents/harness.py debug` (`status`, `add`, `strip`, `arm`, `install`, `logs`) with a write-ahead ledger (`PENDING` -> compare-before-replace atomic file update -> `APPLIED`), strict lexer-verified insertion boundaries inside braced Kotlin/Java blocks, safe variable/property expression validation, byte-exact line removal (`debug strip`) that preserves developer edits and line endings, automatic cleanup on `task cancel`, and `DEBUG_REGRESSION_TEST_REQUIRED` enforcement for non-`BUG` tasks that required runtime instrumentation.
+- **Bounded Device Diagnostics, Sub-Second Log Windowing, and APK Identity Verification (`agents/scripts/debug_device.py`, `agents/scripts/logcat_doctor.py`, `agents/scripts/pre_tool_safety.py`, `agents/scripts/mutation_guard.py`)**: Add sub-second `debug arm` epoch capture (`date +%s.%N` with `+1.000s` integer-clock fallback), package/PID crash attribution in `debug logs` (`AndroidRuntime` `Process:` and `Start proc` lifecycle tracking), `build_key` and on-device APK SHA-256 identity checks (`confirmed` / `different` / `unknown`) to skip redundant rebuilds and installs during reproduction loops, R8 `android.util.Log` stripping warnings, and read-only `adb logcat` filter pipe support (`Select-String`, `grep`, `findstr`).
+- **Whole-Worktree Delivery Guard & Verification Hardening (`agents/scripts/debug_instrumentation.py`, `agents/scripts/delivery_equivalence.py`, `agents/scripts/_workflow/engine.py`, `agents/scripts/final_verifier.py`)**: Block `checkpoint-phase`, `prepare-verification`, and `final_verifier` whenever any task ledger holds active/conflicting debug entries or any tracked/untracked `.kt`/`.java` source contains `HARNESS-DEBUG` / `HarnessDbg` markers, and harden shared-worktree delivery equivalence checks across concurrent tasks.
 
 ## [1.2.5] - 2026-11-04
 
