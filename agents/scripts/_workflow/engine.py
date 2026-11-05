@@ -1262,7 +1262,6 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
     from debug_instrumentation import assert_clean, regression_guard
-    assert_clean(repo, plan)
     from review_budget import settle_final_review_calls
     settle_final_review_calls(repo, plan)
     phases = plan.get("phases") or []
@@ -1296,6 +1295,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                     f"HEAD/branch lineage mismatch: repository HEAD commit changed from '{base_repo.get('head')[:12]}' "
                     f"to '{cur_head[:12]}' after task approval ({lineage_msg})"
                 )
+    assert_clean(repo, plan)
     with step_progress("Building delivery manifest & snapshot"):
         sublog("Loading task baseline and building manifest...")
         task_baseline = load_task_baseline(repo, args.task_id)

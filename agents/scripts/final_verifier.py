@@ -566,9 +566,7 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         plan = read_json(plan_path)
         policy = read_json(policy_path)
         recorded_manifest = read_json(manifest_path)
-        from debug_instrumentation import assert_clean
-        assert_clean(repo, plan)
-    except (HarnessError, OSError) as exc:
+    except ValidationError as exc:
         return _blocked("BLOCKED", [str(exc)], checks)
 
     valid_plan, expected_plan_hash = validate_plan_hash(
@@ -621,6 +619,12 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         reasons.append(f"lingering scratch scripts detected in repository: {', '.join(p.name for p in lingering_scratch)}")
     if reasons:
         return _blocked("STALE", reasons, checks)
+
+    from debug_instrumentation import assert_clean
+    try:
+        assert_clean(repo, plan)
+    except (HarnessError, OSError) as exc:
+        return _blocked("BLOCKED", [str(exc)], checks)
 
     task_directory = plan_path.parent
     snapshot = str(current["delivery_snapshot_sha256"])
