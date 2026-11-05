@@ -1,4 +1,4 @@
-# Android Agent Harness — Public Command Contract
+# Android Agent Harness â€” Public Command Contract
 
 > **Core Invariant**: During normal Android application tasks, installed harness engine source under `.agents/scripts/**` is an implementation detail. Do not inspect or recursively read harness Python implementation before executing a documented harness command. Use this documented public command contract and its output directly.
 
@@ -11,7 +11,7 @@ Resolve project topology, feature boundaries, callers, callees, UI screens, View
 
 ### Command
 ```bash
-# Public façade (preferred)
+# Public faÃ§ade (preferred)
 python .agents/harness.py graph --feature <feature_name> --json
 python .agents/harness.py graph --find <SymbolName> --json
 python .agents/harness.py task-context --file <path> --json   # or --symbol <name>
@@ -465,3 +465,13 @@ When an exception occurs:
 | **Final Verify** | `python .agents/harness.py task verify --repo . --task-id <id>` | Read-only delivery verification check |
 | **Deliver Task** | `python .agents/harness.py task deliver --repo . --task-id <id>` | Finalize delivery state after git commit |
 | **Zoho Delivery Sync**| `python .agents/harness.py zoho delivery-sync --task-id <id>` | Sync delivery report & resolution to linked Zoho item |
+
+## Debug instrumentation
+
+Run `python .agents/harness.py debug status` for the focused task. During IMPLEMENTING:
+`debug add --file app/src/main/java/Main.kt --before "submit()" --label restore --value count=count --hypothesis "Missing targets"`.
+An ambiguous source location is rejected. Use `debug install [--device SERIAL]`, reproduce once, then
+`debug logs`. Alternatively run `debug arm` before launching from Studio. The session uses device time.
+`debug strip [--attempt ID]` removes matching owned lines. Delivery checks the entire build tree.
+Resolve a changed diagnostic line manually. An external editor does not participate in the task lock.
+Identity is confirmed only for matching installed APK hashes. Diagnostic evidence cannot satisfy RED.

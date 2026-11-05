@@ -100,6 +100,17 @@ class HookTests(unittest.TestCase):
         (task / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
         (self.state / "active-task.json").write_text(json.dumps({"task_id": "task-one", "plan_path": str(task / "plan.json")}), encoding="utf-8")
 
+    def test_debug_command_states(self):
+        def run(action):
+            return self.call("run_command", {"CommandLine": "python .agents/harness.py debug " + action})["decision"]
+        self.assertEqual("allow", run("status"))
+        self.assertEqual("deny", run("add --file App.kt"))
+        self.activate()
+        self.assertEqual("allow", run("install"))
+        self.activate("VERIFYING")
+        self.assertEqual("allow", run("arm"))
+        self.assertEqual("deny", run("strip"))
+
     def prepare_reviewer_run(self, task: Path, policy: Path, *, create_package: bool = True) -> Path:
         run_id = "run-one"
         snapshot = "a" * 64
@@ -1358,6 +1369,46 @@ class GenericMCPTests(unittest.TestCase):
             "Replacement": "POST Users/Login updated",
         })
         self.assertEqual("allow", res_untracked["decision"], res_untracked)
+
+    def test_adb_logcat_read_only_commands_and_filter_pipes_allowed(self):
+        """Bounded adb logcat commands (and safe filter pipes) are allowed in any state; streaming/mutating adb is denied."""
+        allowed_commands = (
+            "adb logcat -d -t 500",
+            "adb logcat -t 200",
+            "adb -s RF8M1234567 logcat -d -v threadtime -s PersonalDataViewModel:D *:S",
+            'adb logcat -d -e "PersonalDataViewModel|LoginFlow|restore|clear"',
+            "adb logcat -c",
+            "adb shell pidof com.madarsoft.fitness",
+            'adb logcat -d -t 500 | Select-String -Pattern "PersonalDataViewModel|LoginFlow|restore|clear"',
+            "adb logcat -d -t 500 | Select-Object -Last 100",
+            'adb logcat -d -t 300 | grep -i "fatal"',
+            'python .agents/scripts/logcat_doctor.py --lines 500 --grep "LoginFlow"',
+        )
+        for state in (None, "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+            if state:
+                self.activate(status=state)
+            for cmd in allowed_commands:
+                with self.subTest(state=state, cmd=cmd):
+                    res = self.call("run_command", {"CommandLine": cmd})
+                    self.assertEqual("allow", res["decision"], f"{cmd} in {state} should be allowed: {res}")
+
+        denied_commands = (
+            "adb logcat",
+            "adb logcat -s MyTag:D",
+            "adb logcat -d -f /sdcard/log.txt",
+            "adb logcat -d -G 16M",
+            "adb logcat -d | Remove-Item app",
+            "adb logcat -d | Select-String -Path .agents/scripts/workflow.py -Pattern def",
+            'adb logcat -d | Select-String -Pattern "a\\" | Remove-Item x "',
+            "adb install app-debug.apk",
+            "adb shell pm clear com.madarsoft.fitness",
+        )
+        for cmd in denied_commands:
+            with self.subTest(cmd=cmd):
+                res = self.call("run_command", {"CommandLine": cmd})
+                self.assertEqual("deny", res["decision"], f"{cmd} must be denied: {res}")
+        bare_res = self.call("run_command", {"CommandLine": "adb logcat"})
+        self.assertIn("-d", bare_res.get("reason", ""))
 
 
 if __name__ == "__main__":

@@ -92,6 +92,7 @@ def filter_forensics(raw_logs: str) -> dict:
     return {
         "fatals": fatal_blocks,
         "warning_logs": warning_logs[-20:],
+        "app_logs": app_logs[-50:],
         "app_logs_count": len(app_logs),
     }
 
@@ -100,6 +101,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Logcat Doctor & Crash Triage for this Android app")
     parser.add_argument("-d", "--device", default=None, help="Physical device serial (default: first non-emulator adb device)")
     parser.add_argument("--lines", type=int, default=1000, help="Number of logcat lines to fetch")
+    parser.add_argument("-e", "--grep", default=None, help="Case-insensitive regex pattern to filter recent logcat lines")
+    parser.add_argument("-t", "--tag", default=None, help="Filter recent logcat lines by tag substring")
     args = parser.parse_args()
 
     policy = str(DEVICE_TARGET_POLICY)
@@ -140,6 +143,20 @@ def main() -> int:
             print(f"   {item}")
 
     print(f"\n[*] Total {PRODUCT_NAME} app log entries: {forensics['app_logs_count']}")
+    if args.grep or args.tag:
+        matched = raw.splitlines()
+        if args.tag:
+            matched = [line for line in matched if args.tag.lower() in line.lower()]
+        if args.grep:
+            pattern = re.compile(args.grep, re.IGNORECASE)
+            matched = [line for line in matched if pattern.search(line)]
+        print(f"\n[*] Filtered Logcat Matches ({len(matched)} total, showing last {min(len(matched), 100)}):")
+        for line in matched[-100:]:
+            print(f"   {line}")
+    elif forensics.get("app_logs"):
+        print(f"\n[*] Recent {PRODUCT_NAME} App Logs (last {len(forensics['app_logs'])}):")
+        for line in forensics["app_logs"]:
+            print(f"   {line}")
     print("==================================================")
     return 0 if not forensics["fatals"] else 2
 

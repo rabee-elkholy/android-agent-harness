@@ -885,11 +885,21 @@ class DailyWorkflowSelftest(unittest.TestCase):
                                     "--source", "conversation", "--proof-reference", "remove that badge"])
         self.assertEqual(0, result)
         self.assertEqual(original, {p: p.read_bytes() for p in original})
-        self.assertIn("The approved follow-up removes the optional badge.", (directory / "plan.md").read_text(encoding="utf-8"))
+        plan_doc_text = (directory / "plan.md").read_text(encoding="utf-8")
+        self.assertIn("The approved follow-up removes the optional badge.", plan_doc_text)
+        self.assertLess(
+            plan_doc_text.index("The approved follow-up removes the optional badge."),
+            plan_doc_text.index("## Full approval payload (redacted)"),
+            "plan-notes must appear near the top of plan.md right below ## Approach, not buried after the raw JSON payload",
+        )
         self.assertEqual("RUN_PREFLIGHT", resolve_next_action(self.repo, task_id, host="generic")["code"])
-        package, _ = review_package.build_package(self.repo, task_id)
+        package, pkg_meta = review_package.build_package(self.repo, task_id)
         frozen = package.read_bytes()
         self.assertIn(b"The approved follow-up removes the optional badge.", frozen)
+        for brief_path_str in (pkg_meta.get("briefs") or {}).values():
+            brief_text = Path(brief_path_str).read_text(encoding="utf-8")
+            self.assertIn("Mid-Task Developer Refinements (`plan-notes`", brief_text)
+            self.assertIn("The approved follow-up removes the optional badge.", brief_text)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, workflow.main(["plan-note", "--repo", str(self.repo), "--task-id", task_id,
                                               "--text", "A later explanation does not rewrite a dispatched package.",

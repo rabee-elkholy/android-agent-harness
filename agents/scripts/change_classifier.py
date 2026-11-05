@@ -92,7 +92,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"idtoken|authtoken|bearertoken|oauth_token|auth_token"
             r")\b"
             r"|(?<!\bis)(?<!\bhas)(?<!\bwas)\b(?:authentication|authorization)\b"
-            r"|\b(?:class|interface|object|fun)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
+            r"|\b(?:class|interface|object)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
+            r"|\bfun\s+(?!(?:is|has|was|can|should)_?(?:login|logged_?in|signin|sign_in|signed_?in|logout|signout|auth))\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*(?<!navigation)(?<!screen)(?<!route)(?<!dialog)(?<!live)(?<!visible)(?<!visibility)(?<!enabled)\b"
             r"|\b(?:authenticate|authorize|login|sign_?in|logout|sign_?out)[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
@@ -442,9 +443,10 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
         if pattern.search(type_name):
             return surface, type_name
     # Generic multi-purpose repositories/data sources (e.g., UserRepository, ProfileRepository,
-    # SettingsManager) often contain one auth/session helper alongside dozens of non-sensitive
-    # profile or goal methods; do not label every caller sensitive via whole-file 1-hop scanning.
-    if GENERIC_MULTI_PURPOSE_DEPENDENCY_RE.search(type_name):
+    # SettingsManager) and non-sensitive screen ViewModels/Presenters often contain one session
+    # or login-state getter alongside dozens of feature methods; do not label every caller
+    # sensitive via whole-file 1-hop scanning.
+    if GENERIC_MULTI_PURPOSE_DEPENDENCY_RE.search(type_name) or type_name.lower().endswith(("viewmodel", "presenter", "controller")):
         return None
 
     # Check cache

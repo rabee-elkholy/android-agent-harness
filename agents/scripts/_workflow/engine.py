@@ -20,6 +20,7 @@ __file__ = str(Path(__file__).resolve().parents[1] / "workflow.py")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _live_process import enable_line_buffered_stdio, live_print, step_progress, sublog  # noqa: E402
 from _vnext_common import (  # noqa: E402
+    HarnessError,
     ValidationError,
     active_review_package_path,
     state_root,
@@ -312,8 +313,8 @@ def _load_plan(repo: Path, task_id: str) -> dict:
     return read_json(_plan_path(repo, task_id))
 
 
-def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict) -> list[str]:
-    manifest = build_manifest(repo)
+def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict, live_manifest: dict | None = None) -> list[str]:
+    manifest = live_manifest if live_manifest is not None else build_manifest(repo)
     changes_list_live = manifest.get("changes") or []
     current_changes = {str(c.get(k) or "") for c in changes_list_live for k in ("path", "old_path")}
     if not current_changes:
@@ -1260,6 +1261,8 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("verification preparation requires an IMPLEMENTING plan")
+    from debug_instrumentation import assert_clean, regression_guard
+    assert_clean(repo, plan)
     from review_budget import settle_final_review_calls
     settle_final_review_calls(repo, plan)
     phases = plan.get("phases") or []
@@ -1311,6 +1314,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         sublog("Classifying task changes...")
         classification = classify(repo, task_id=args.task_id, task_changes=manifest.get("task_changes"))
         sublog(f"Surfaces: {', '.join(classification.get('surfaces') or []) or 'none'}")
+    regression_guard(repo, plan, manifest)
     carried_run = _carry_verification_run(repo, args.task_id, plan, manifest, classification)
     if carried_run is not None:
         return carried_run
@@ -1719,6 +1723,13 @@ def cancel(args: argparse.Namespace) -> dict:
     proof = str(getattr(args, "proof_reference", None) or "").strip()
     if source == "conversation" and not proof:
         raise ValidationError("cancel --source conversation needs --proof-reference with the developer's words")
+    from debug_instrumentation import strip
+    try:
+        conflicts = strip(repo, plan)
+    except (HarnessError, OSError) as exc:
+        conflicts = [str(exc)]
+    if conflicts:
+        print(f"Debug cleanup requires manual resolution: {conflicts}", file=sys.stderr)
     plan["status"] = "CANCELLED"
     plan["approval"] = None
     plan["execution_nonce"] = None
@@ -1864,6 +1875,7 @@ def finalize_ready_delivery(
     plan: dict | None = None,
     *,
     require_clean_tree: bool = False,
+    live_manifest: dict | None = None,
 ) -> tuple[dict, bool]:
     """Centralized delivery finalizer.
 
@@ -1881,21 +1893,21 @@ def finalize_ready_delivery(
     if plan.get("status") != "READY_FOR_DELIVERY":
         raise ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not READY_FOR_DELIVERY")
 
+    ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
+    manifest = live_manifest if live_manifest is not None else (build_manifest(repo) if (require_clean_tree or ready_snapshot) else None)
     if require_clean_tree:
-        dirty = _find_uncommitted_task_files(repo, task_id, plan)
+        dirty = _find_uncommitted_task_files(repo, task_id, plan, live_manifest=manifest)
         if dirty:
             raise ValidationError(
                 f"cannot deliver task '{task_id}' with dirty working tree; verified task files remain uncommitted: {', '.join(sorted(dirty))}"
             )
 
-    ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
-    live_identity = repository_identity(repo)
+    live_identity = (manifest or {}).get("repository") or repository_identity(repo)
     for field in ("root_sha256", "git_common_dir_sha256", "branch"):
         approved_value = (plan.get("repository") or {}).get(field)
         if approved_value and live_identity.get(field) != approved_value:
             raise ValidationError(f"delivery repository identity mismatch: {field}")
-    if ready_snapshot:
-        manifest = build_manifest(repo)
+    if ready_snapshot and manifest is not None:
         if plan.get("ready_run_id"):
             from delivery_equivalence import _ready_manifest
             _, frozen, _ = _ready_manifest(repo, task_id, plan)
@@ -1972,18 +1984,17 @@ def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | N
         return plan, "DELIVERED"
     if status_val != "READY_FOR_DELIVERY":
         return plan, status_val
-    dirty = _find_uncommitted_task_files(repo, tid, plan)
+    manifest = build_manifest(repo)
+    dirty = _find_uncommitted_task_files(repo, tid, plan, live_manifest=manifest)
     if dirty:
         return plan, "DIRTY_UNCOMMITTED"
     ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
-    if ready_snapshot:
-        manifest = build_manifest(repo)
-        if manifest.get("delivery_snapshot_sha256") != ready_snapshot:
-            from delivery_equivalence import evaluate_post_ready_changes
-            eval_res = evaluate_post_ready_changes(repo, tid, plan, manifest)
-            if not eval_res.get("is_benign"):
-                return plan, "SNAPSHOT_MISMATCH"
-    plan, _ = finalize_ready_delivery(repo, tid, plan, require_clean_tree=True)
+    if ready_snapshot and manifest.get("delivery_snapshot_sha256") != ready_snapshot:
+        from delivery_equivalence import evaluate_post_ready_changes
+        eval_res = evaluate_post_ready_changes(repo, tid, plan, manifest)
+        if not eval_res.get("is_benign"):
+            return plan, "SNAPSHOT_MISMATCH"
+    plan, _ = finalize_ready_delivery(repo, tid, plan, require_clean_tree=True, live_manifest=manifest)
     return plan, "DELIVERED"
 
 
@@ -2556,6 +2567,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     plan = _load_plan(repo, args.task_id)
     if plan.get("status") != "IMPLEMENTING":
         raise ValidationError("phase checkpoint requires an IMPLEMENTING plan")
+    from debug_instrumentation import assert_clean
+    assert_clean(repo, plan)
     phases = plan.get("phases") or []
     if not phases:
         raise ValidationError("plan does not define any phases")
@@ -2623,8 +2636,17 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
                     str(c.get("path") or "").replace("\\", "/").strip("/")
                     for c in read_json(done_file).get("manifest_delta") or [] if isinstance(c, dict)
                 )
-        owned = normalize_expected_files(repo, target_phase.get("expected_files") or plan.get("expected_files") or [])
-        empty_later_phase = bool(owned) and set(owned) <= covered
+        phase_owned = normalize_expected_files(repo, target_phase.get("expected_files") or [])
+        owned = phase_owned or normalize_expected_files(repo, plan.get("expected_files") or [])
+        if bool(owned) and set(owned) <= covered:
+            empty_later_phase = True
+        elif not phase_owned and owned:
+            all_exist = all((repo / p).exists() for p in owned)
+            empty_later_phase = (
+                all_exist
+                and len(owned) > len(phases)
+                and len(covered & set(owned)) >= len(phases)
+            )
     if not phase_changes and not empty_later_phase:
         raise ValidationError(f"phase checkpoint failed: no file changes detected for phase '{phase_id}'")
 

@@ -879,6 +879,59 @@ class MergeBoundaryRegressionTests(unittest.TestCase):
             atomic_write_json(octopus_path, receipt)
             self.assertFalse(validate_checkpoint_receipt(root, "merge-task", base, octopus_path, set())[0])
 
+    def test_raw_string_and_backtick_test_name_allow_unused_import_removal_only(self):
+        before = (
+            b"package com.example\n\n"
+            b"import com.example.auth.LoginResponse\n"
+            b"import org.junit.Test\n\n"
+            b"class FoodPlanViewModelTest {\n"
+            b"    @Test\n"
+            b"    fun `trainingDays object contract syncs across LoginResponse and cache`() {\n"
+            b'        val fixture = """\n'
+            b'            {"training_days": "3_days"}\n'
+            b'        """.trimIndent()\n'
+            b"    }\n"
+            b"}\n"
+        )
+        after = (
+            b"package com.example\n\n"
+            b"import org.junit.Test\n\n"
+            b"class FoodPlanViewModelTest {\n"
+            b"    @Test\n"
+            b"    fun `trainingDays object contract syncs across LoginResponse and cache`() {\n"
+            b'        val fixture = """\n'
+            b'            {"training_days": "3_days"}\n'
+            b'        """.trimIndent()\n'
+            b"    }\n"
+            b"}\n"
+        )
+        self.assertEqual(
+            (True, "UNUSED_IMPORT_REMOVED"),
+            classify_file_equivalence(before, after, "app/src/test/java/com/example/FoodPlanViewModelTest.kt")[:2],
+        )
+        # Any whitespace or content edit inside the raw string must still fail closed.
+        modified_raw = after.replace(b'{"training_days": "3_days"}', b'{"training_days":  "3_days"}')
+        self.assertEqual(
+            (False, "BODY_MODIFIED"),
+            classify_file_equivalence(before, modified_raw, "app/src/test/java/com/example/FoodPlanViewModelTest.kt")[:2],
+        )
+
+    def test_external_user_doc_allows_desktop_when_home_has_global_agents_dir(self):
+        from unittest.mock import patch
+        import pre_tool_safety
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp) / "Users" / "dev"
+            (fake_home / ".agents").mkdir(parents=True)
+            desktop_doc = fake_home / "Desktop" / "notes.md"
+            desktop_doc.parent.mkdir(parents=True)
+            desktop_doc.write_text("# Notes\n", encoding="utf-8")
+            nested_repo_doc = fake_home / "Desktop" / "nested_repo" / "notes.md"
+            (nested_repo_doc.parent / ".git").mkdir(parents=True)
+            nested_repo_doc.write_text("# Repo Notes\n", encoding="utf-8")
+            with patch.object(Path, "home", return_value=fake_home):
+                self.assertTrue(pre_tool_safety._is_external_user_doc(desktop_doc, desktop_doc.resolve()))
+                self.assertFalse(pre_tool_safety._is_external_user_doc(nested_repo_doc, nested_repo_doc.resolve()))
+
 
 if __name__ == "__main__":
     unittest.main()

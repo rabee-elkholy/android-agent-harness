@@ -168,7 +168,14 @@ def _changes(old: dict | None, new: dict) -> list[str]:
     return lines or ["- No reviewable field changed (binding or tree state only)."]
 
 
-def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, previous: dict | None = None) -> str:
+def render_plan_document(
+    repo: Path,
+    plan: dict,
+    *,
+    policy: dict | None = None,
+    previous: dict | None = None,
+    task_directory: Path | None = None,
+) -> str:
     from plan_authority import plan_payload
 
     SENSITIVE_SURFACES = {"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"}
@@ -226,6 +233,13 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
         "## Approach",
         "",
         *_format_structured_block(plan.get("approach")),
+    ]
+    if task_directory is not None:
+        from plan_notes import note_section
+        clarifications_block = note_section(task_directory, plan).strip()
+        if clarifications_block:
+            lines += ["", clarifications_block]
+    lines += [
         "",
         f"## Files ({len(files)})",
         "",
@@ -360,7 +374,6 @@ def render_plan_document(repo: Path, plan: dict, *, policy: dict | None = None, 
 
 def write_plan_document(repo: Path, task_directory: Path, plan: dict, *, policy: dict | None = None, previous: dict | None = None) -> Path:
     path = plan_document_path(task_directory)
-    from plan_notes import note_section
-    document = render_plan_document(repo, plan, policy=policy, previous=previous)
-    atomic_write_bytes(path, (document + note_section(task_directory, plan)).encode("utf-8"))
+    document = render_plan_document(repo, plan, policy=policy, previous=previous, task_directory=task_directory)
+    atomic_write_bytes(path, document.encode("utf-8"))
     return path

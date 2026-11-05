@@ -832,6 +832,13 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
     # Generate lean briefs
     briefs: dict[str, str] = {}
     from review_package import REVIEWER_ROLES
+    phase_note_lines: list[str] = []
+    if metadata.get("plan_clarifications"):
+        try:
+            from plan_notes import brief_note_lines
+            phase_note_lines = brief_note_lines(tdir, _load_plan(repo, task_id))
+        except (OSError, ValueError, KeyError, ValidationError):
+            phase_note_lines = []
     for rev in selected_reviewers:
         r_info = REVIEWER_ROLES.get(rev, {
             "title": rev,
@@ -845,13 +852,16 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             f"- **Phase**: {target_phase.get('name', phase_id)}",
             f"- **Description**: {target_phase.get('description', '')}",
             f"- **Focus**: {r_info['focus']}",
+            *phase_note_lines,
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
             "",
             "## 2. Review Package Reference",
             f"`{package_path}`",
+            "- **Parallel Tool Batching (Fast Execution)**: Issue multiple `view_file` / `read_file` calls in parallel within a single turn (4-8 ranges/files at once) rather than one read per turn.",
+            "- **Self-Contained Plan Context**: Never search for or read `plan.md` or `plan.json`; Section 1 above already contains the approved phase objective and any recorded `plan-notes`.",
             "",
             "## 3. Structured Result Reporting Protocol (HARNESS_REVIEW_RESULT_V2)",
-            "End with exactly one machine-readable JSON code block matching schema_version 2:",
+            "Do NOT call `send_message` (it is blocked by the safety hook). Output your review report directly in your response text and end with exactly one machine-readable JSON code block matching schema_version 2:",
             "```json",
             json.dumps({
                 "schema_version": 2,

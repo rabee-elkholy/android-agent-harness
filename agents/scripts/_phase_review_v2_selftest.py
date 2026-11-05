@@ -1363,6 +1363,25 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertEqual(["p1", "p2"], read_json(task_dir(self.repo, task_id) / "phase-state.json")["completed_phases"])
         # An empty first phase is still refused (test_AUDIT_001b).
 
+    def test_N1_later_phase_covered_with_untouched_existing_reference_file_can_complete(self) -> None:
+        write_file(self.repo / "docs/ref.md", "# Existing Reference\n")
+        task_id = draft(argparse.Namespace(
+            repo=str(self.repo), task_id="phase-covered-ref", prompt="Phased docs", outcome="Write docs",
+            kind="FEATURE", expected_files="docs/usage.md,docs/next.md,docs/ref.md",
+            phases=[{"id": "p1", "name": "Docs"}, {"id": "p2", "name": "More docs"}],
+        ))["task_id"]
+        record_approval(argparse.Namespace(
+            repo=str(self.repo), task_id=task_id, source="conversation",
+            proof_reference="approve", enforcement_tier="RULE_ENFORCED",
+        ))
+        write_file(self.repo / "docs/usage.md", "# Usage\n")
+        write_file(self.repo / "docs/next.md", "# Next\n")
+        checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p1"))
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id))
+        result = checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
+        self.assertEqual("CHECKPOINT_PASS", result["status"])
+        self.assertEqual(["p1", "p2"], read_json(task_dir(self.repo, task_id) / "phase-state.json")["completed_phases"])
+
     def test_AUDIT_011_docs_only_phase_checkpoints_without_gradle(self) -> None:
         task_id = self._create_phased_task([
             {"id": "p1", "name": "Documentation", "expected_files": ["docs/usage.md"]},

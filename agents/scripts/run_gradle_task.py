@@ -399,7 +399,24 @@ def run_gradle(task_args: list[str], *, outcome: dict | None = None, cwd: Path |
         return EXIT_ENV
 
 
-def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None) -> int:
+def diagnostic_assemble(repo: Path, task: str) -> dict:
+    from build_execution import build_lock
+    from mutation_guard import active_plan
+    from plan_authority import require_mutation
+    from _variants import resolve_assemble_task
+    require_mutation(active_plan(repo))
+    if task != resolve_assemble_task(repo):
+        raise ValueError("Expected configured assemble task")
+    diagnostic = {}
+    with build_lock(repo):
+        code = _run_gradle_locked([task], cwd=repo, diagnostic=diagnostic)
+    if code or not diagnostic.get("artifact_set"):
+        raise ValueError(f"Diagnostic assemble failed ({code})")
+    return diagnostic["artifact_set"]
+
+
+def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd: Path | str | None = None,
+                       diagnostic: dict | None = None) -> int:
     enable_line_buffered_stdio()
     if outcome is not None:
         outcome.clear()
@@ -410,6 +427,9 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
     run_root = Path(cwd).resolve() if cwd else REPO_ROOT
 
     def record(status: str, exit_code: int, env_class: str = "", detail: str = "", **extra) -> None:
+        if diagnostic is not None:
+            diagnostic.update(extra)
+            return
         write_gate_result(artifact_name, {
             "schema_version": 1,
             "task": task_label,

@@ -1068,6 +1068,10 @@ def cmd_device(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "run_device.py", forward)
 
 
+def cmd_debug(args: argparse.Namespace) -> int:
+    return _dispatch_pipeline_script(args, "debug_instrumentation.py", args.debug_args)
+
+
 def cmd_android_inspect(args: argparse.Namespace) -> int:
     forward = list(args.inspect_args)
     if forward[:1] == ["--"]:
@@ -1097,6 +1101,7 @@ def cmd_phase_review(args: argparse.Namespace) -> int:
 FULL_SELFTEST_SUITES = (
     "_efficiency_selftest.py",
     "_android_ui_selftest.py",
+    "_debug_instrumentation_selftest.py",
     "_android_inspect_selftest.py",
     "_change_decision_selftest.py",
     "_review_models_selftest.py",
@@ -1662,6 +1667,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
     sp.add_argument("journey_args", nargs=argparse.REMAINDER)
     sp.set_defaults(func=cmd_journey)
+
+    sp = sub.add_parser("debug", help="Task-scoped debug instrumentation and device diagnostics.")
+    sp.add_argument("--repo", help="Project root.")
+    sp.add_argument("--kit", help="Kit checkout.")
+    sp.add_argument("debug_args", nargs=argparse.REMAINDER)
+    sp.set_defaults(func=cmd_debug)
 
     sp = sub.add_parser("android-inspect", help="Optional Studio semantic inspection and official Android documentation.", formatter_class=argparse.RawDescriptionHelpFormatter, description="Actions: capabilities, declaration, usages, analyze, studio-status, docs-search, docs-fetch.\nUse <action> --help for adapter options.")
     sp.add_argument("--repo", help="Project root.")

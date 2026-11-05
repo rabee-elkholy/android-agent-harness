@@ -31,6 +31,7 @@ def _run(script: str, args: list[str]) -> int:
     from host_continuation import assert_execution_session
     from evidence_store import StateLock
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
+    read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
     read_only = read_only or (script == "run_device.py" and args == ["status"])
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
@@ -221,11 +222,13 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|android-ui|android-inspect|journey|e2e|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
     command = args.pop(0)
+    if command == "debug":
+        return _run("debug_instrumentation.py", args)
     if command == "android-inspect":
         return _run("android_inspect.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "android-ui":

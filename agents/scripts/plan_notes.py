@@ -12,9 +12,12 @@ def register_parser(sub, common):
     parser.set_defaults(handler=record_note)
 
 
-def note_section(directory, plan):
-    lines = []
-    for path in sorted((directory / "plan-notes").glob("*.json")):
+def load_plan_notes(directory, plan):
+    notes = []
+    notes_dir = directory / "plan-notes"
+    if not notes_dir.is_dir():
+        return notes
+    for path in sorted(notes_dir.glob("*.json")):
         row = read_json(path)
         if (not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("task_id") != plan["task_id"]
                 or row.get("source") not in {"conversation", "developer_terminal", "approved-plan"}
@@ -23,13 +26,41 @@ def note_section(directory, plan):
                 or row.get("receipt_sha256") != canonical_sha256({k: v for k, v in row.items() if k != "receipt_sha256"})):
             raise ValidationError("invalid plan clarification receipt")
         if row.get("plan_sha256") == plan.get("plan_sha256"):
-            from _vnext_common import redact_text
-            lines.append(f"- {redact_text(row['text'])} (source: {row['source']}; decision: {redact_text(row['proof_reference'])})")
-    if not lines:
+            notes.append((str(row.get("created_at") or ""), path.name, row))
+    notes.sort(key=lambda item: (item[0], item[1]))
+    return [item[2] for item in notes]
+
+
+def brief_note_lines(directory, plan):
+    notes = load_plan_notes(directory, plan)
+    if not notes:
+        return []
+    from _vnext_common import redact_text
+    lines = [
+        "- **Mid-Task Developer Refinements (`plan-notes` — supersede conflicting initial Outcome/Approach narrative details within approved file scope)**:",
+    ]
+    for row in notes:
+        lines.append(
+            f"  * {redact_text(row['text'])} (source: `{row['source']}`; decision: `{redact_text(row['proof_reference'])}`)"
+        )
+    return lines
+
+
+def note_section(directory, plan):
+    notes = load_plan_notes(directory, plan)
+    if not notes:
         return ""
-    return "\n\n## Clarifications (no additional authority)\n\n" + (
-        "These notes explain existing decisions. They do not replace the approved requirements, "
-        "grant scope, waive checks, accept edits or certify reviewer PASS.\n\n"
+    from _vnext_common import redact_text
+    lines = [
+        f"- {redact_text(row['text'])} (source: {row['source']}; decision: {redact_text(row['proof_reference'])})"
+        for row in notes
+    ]
+    return "\n\n## Clarifications & Mid-Task Developer Refinements (in-scope only; no new file/surface authority)\n\n" + (
+        "These recorded developer clarifications and mid-task refinements update or supersede conflicting narrative details "
+        "in the initial `Outcome` / `Approved Approach` within the already-approved file and surface scope. "
+        "They do not replace hard scope/gate requirements, grant scope, waive checks, accept edits, or certify reviewer PASS; "
+        "however, reviewers must evaluate completeness and contract expectations against these updated developer decisions rather than "
+        "flagging superseded initial-plan narrative items.\n\n"
     ) + "\n".join(lines) + "\n"
 
 

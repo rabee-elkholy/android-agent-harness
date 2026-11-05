@@ -233,9 +233,21 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         extras.append(clarifications)
     if delta_paths is not None:
         source_run = (policy.get("later_round_source") or {}).get("run_id")
+        prior_pkg_hint = ""
+        if source_run:
+            try:
+                prev_manifest = read_json(directory / f"manifest-{source_run}.json")
+                prev_pkg = active_review_package_path(repo, {
+                    "run_id": source_run,
+                    "delivery_snapshot_sha256": prev_manifest["delivery_snapshot_sha256"],
+                })
+                if prev_pkg.is_file():
+                    prior_pkg_hint = f" (prior package path: `{prev_pkg}`)"
+            except (OSError, ValueError, KeyError, ValidationError):
+                prior_pkg_hint = ""
         extras.append(f"\n## Changes since reviewed run {source_run}\nThis follow-up diff covers only the new edits. "
                       "Prior PASS coverage is retained through the bound carried_reviews references. "
-                      "Recheck assigned unresolved findings and directly affected contracts; use the prior package for integration context.\n")
+                      f"Recheck assigned unresolved findings and directly affected contracts; use the prior package{prior_pkg_hint} only when needed for integration context.\n")
     for rel in sorted(secret_paths):
         extras.append(f"\n## REDACTED FILE {rel}\n[Content redacted because the path may contain secrets.]\n")
     for item in changes:
@@ -529,6 +541,13 @@ def generate_task_brief(
         f"- **Expected Surfaces**: {', '.join(expected_surfaces) or 'NONE'}",
         f"- **Expected Modules**: {', '.join(expected_modules) or 'NONE'}",
     ]
+    try:
+        from plan_notes import brief_note_lines
+        note_lines = brief_note_lines(task_dir(repo, task_id), plan)
+        if note_lines:
+            brief_lines.extend(note_lines)
+    except (OSError, ValueError, KeyError, ValidationError):
+        pass
     contract = plan.get("architecture_contract")
     if contract:
         brief_lines.extend([
@@ -545,15 +564,23 @@ def generate_task_brief(
         ])
     if metadata.get("plan_clarifications_sha256"):
         brief_lines.append(
-            "- **Plan clarifications**: Read the frozen Clarifications section in the package when assessing plan completeness. "
-            "Check its cited existing decisions; explanatory notes alone cannot expand scope, waive checks or clear findings."
+            "- **Plan clarifications**: Read the frozen Clarifications section in the package and the `Mid-Task Developer Refinements (plan-notes)` above when assessing plan completeness and contract changes. "
+            "In-scope developer refinements recorded in `plan-notes` supersede conflicting initial Outcome/Approved Approach details (never flag an unimplemented initial-plan detail or contract regression when it matches a recorded developer note); however, notes alone cannot expand file/surface scope, waive deterministic gates, or excuse objective code defects."
         )
     brief_lines.extend([
         "",
         "## 2. Reviewer Specialty & Directives",
         f"- **Role Focus**: {role_info['focus']}",
-        "- **Target Changed Paths**:",
     ])
+    delta_files = [str(f) for f in ((policy.get("fix_delta") or {}).get("files") or []) if str(f).strip()]
+    if delta_files:
+        brief_lines.append("- **Follow-Up Delta Files (Modified Since Prior Run — Focus Here First)**:")
+        for df in delta_files[:20]:
+            brief_lines.append(f"  * `{df}`")
+        brief_lines.append(
+            "  * *(Follow-up review round: evaluate the delta diff in the package and any unresolved finding validations below without re-reading unchanged task files unless required to verify an unresolved finding.)*"
+        )
+    brief_lines.append("- **Target Changed Paths**:")
     focus_paths = reading_guide["focus_files"] if reading_guide else changed_paths
     for p in focus_paths[:20]:
         brief_lines.append(f"  * `{p}`")
@@ -572,8 +599,9 @@ def generate_task_brief(
         # Real app: a task reached the commit question with half its approved approach undone (the paywall
         # part was postponed) and every reviewer passed it; nobody was shown the approach.
         brief_lines.extend([
-            "- **Plan completeness (you own this check)**: compare every item of the Approved Approach with the "
-            "diff. An item the diff does not implement is a HIGH finding titled `plan item not implemented`, "
+            "- **Plan completeness (you own this check)**: compare every item of the Approved Approach (as updated by any recorded "
+            "`Mid-Task Developer Refinements (plan-notes)` above) with the diff. An item the diff does not implement—and that was NOT "
+            "superseded or dropped by a recorded developer `plan-note`—is a HIGH finding titled `plan item not implemented`, "
             "naming the item; do not accept a deferral the developer did not approve.",
         ])
     elif _is_blind_goldfish_role(reviewer, routed, completeness_owner):
@@ -606,6 +634,8 @@ def generate_task_brief(
         "",
         "## 5. Evidence-Bounded Review Directives",
         "- Start with review package.",
+        "- **Parallel Tool Batching (Fast Execution)**: Issue multiple `view_file` / `read_file` tool calls in parallel within a single turn (4-8 ranges or files at once) instead of reading one file or range per turn.",
+        "- **Self-Contained Plan Context**: Never search for or read `plan.md` or `plan.json`; Section 2 above already contains the complete Approved Objective, Approved Approach, and recorded `Mid-Task Developer Refinements (plan-notes)`.",
         "- Inspect source only when needed to verify a concrete claim.",
         "- Stay inside review_scope.",
         "- Maximum default graph expansion: 2 hops.",
@@ -615,7 +645,7 @@ def generate_task_brief(
         "- PASS means no blocking finding found within the bounded reviewed evidence, not global proof of perfection.",
         "",
         "## 6. Structured Result Reporting Protocol (HARNESS_REVIEW_RESULT_V2)",
-        "Your final output MUST end with exactly one machine-readable JSON code block matching schema_version 2:",
+        "Do NOT call `send_message` (it is blocked by the safety hook). Output your review report and final machine-readable JSON code block directly in your assistant response text, ending with:",
         "```json",
         json.dumps({
             "schema_version": 2,

@@ -33,3 +33,15 @@ When local reproduction is genuinely impossible, enter `EVIDENCE_LIMITED` mode b
 4. **Risk & Verification**: Potential side effects and how the developer should verify in production/staging.
 
 Never stall indefinitely demanding impossible local reproduction when `EVIDENCE_LIMITED` conditions apply.
+
+## Temporary instrumentation
+
+During IMPLEMENTING, use one hypothesis per attempt when existing evidence does not explain the bug.
+Use the public debug command to insert a labeled statement before a complete statement in a braced
+function or control body. Prefer local scalar counts, flags or state names. Property getters and
+string conversion can run application code. Avoid payloads, credentials and personal data.
+Use debug install to assemble if required, install, arm and launch. For Android Studio, arm before Run.
+Ask the developer to reproduce and end the turn. Read debug logs on their reply. Keep RED proof separate.
+Strip before checkpointing or preparing verification. Resolve conflicts in the owner task.
+A pre-existing bug found on a verified build requires an evidence-backed developer decision about
+a separate task or scope extension. Resume before editing. Add a regression test for a diagnosed fix.

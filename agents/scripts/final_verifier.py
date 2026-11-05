@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import ValidationError, canonical_sha256, read_json, sha256_file  # noqa: E402
+from _vnext_common import HarnessError, ValidationError, canonical_sha256, read_json, sha256_file  # noqa: E402
 from delivery_manifest import build_manifest  # noqa: E402
 from change_classifier import classify  # noqa: E402
 from evidence_store import EvidenceStore  # noqa: E402
@@ -566,7 +566,9 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
         plan = read_json(plan_path)
         policy = read_json(policy_path)
         recorded_manifest = read_json(manifest_path)
-    except ValidationError as exc:
+        from debug_instrumentation import assert_clean
+        assert_clean(repo, plan)
+    except (HarnessError, OSError) as exc:
         return _blocked("BLOCKED", [str(exc)], checks)
 
     valid_plan, expected_plan_hash = validate_plan_hash(

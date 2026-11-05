@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -112,6 +112,20 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             resolved = Path(installed).resolve()
             if not resolved.is_relative_to(Path(repo).resolve()):
                 trusted.add(resolved)
+        if executable in {"adb", "adb.exe"}:
+            sdk_roots = [os.environ.get("ANDROID_HOME"), os.environ.get("ANDROID_SDK_ROOT")]
+            sdk_roots.extend([
+                str(Path.home() / "AppData/Local/Android/Sdk"),
+                str(Path.home() / "Library/Android/sdk"),
+                str(Path.home() / "Android/Sdk"),
+            ])
+            for sdk_root in sdk_roots:
+                if not sdk_root:
+                    continue
+                for adb_name in ("adb.exe", "adb"):
+                    sdk_adb = (Path(sdk_root).expanduser() / "platform-tools" / adb_name).resolve()
+                    if not sdk_adb.is_relative_to(Path(repo).resolve()):
+                        trusted.add(sdk_adb)
         if candidate not in trusted:
             return "", []
     if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb"}:
@@ -168,6 +182,109 @@ def is_read_only_git_branch(args: list[str]) -> bool:
     return True
 
 
+LOGCAT_VALUE_FLAGS = frozenset({
+    "-b", "--buffer", "-t", "-T", "-v", "--format", "-e", "--regex", "-m", "--max-count", "--pid", "--uid", "-D",
+})
+LOGCAT_FORBIDDEN_FLAGS = frozenset({
+    "-f", "--file", "--filename", "-r", "--rotate-kbytes", "-n", "--rotate-count", "-P", "--prune", "-G",
+})
+LOGCAT_FORBIDDEN_PREFIXES = (
+    "--file=", "--filename=", "--rotate-kbytes=", "--rotate-count=", "--prune=", "--buffer-size=",
+)
+
+
+def _strip_adb_global_flags(args: list[str]) -> list[str]:
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg in {"-d", "-e", "-a"}:
+            idx += 1
+        elif arg in {"-s", "-t", "-H", "-P", "-L"}:
+            if idx + 1 >= len(args):
+                return []
+            idx += 2
+        elif any(arg.startswith(prefix) and len(arg) > len(prefix) for prefix in ("-s", "-t", "-H", "-P", "-L")):
+            idx += 1
+        else:
+            break
+    return args[idx:]
+
+
+def is_read_only_adb(args: list[str]) -> bool:
+    """True when an `adb` invocation only performs bounded logcat or PID inspection."""
+    rest = _strip_adb_global_flags(args)
+    if not rest:
+        return False
+    sub = rest[0].lower()
+    if sub in {"version", "help", "--help", "-h"} and len(rest) == 1:
+        return True
+    if sub == "shell":
+        if len(rest) == 3 and rest[1].lower() == "pidof" and bool(re.fullmatch(r"[A-Za-z0-9._]+", rest[2])):
+            return True
+        if len(rest) >= 2 and rest[1].lower() == "logcat":
+            logcat_args = rest[2:]
+        else:
+            return False
+    elif sub == "logcat":
+        logcat_args = rest[1:]
+    else:
+        return False
+
+    has_bounded_exit = False
+    i = 0
+    while i < len(logcat_args):
+        arg = logcat_args[i]
+        if arg == "--":
+            break
+        if arg in LOGCAT_FORBIDDEN_FLAGS or arg.startswith(LOGCAT_FORBIDDEN_PREFIXES):
+            return False
+        if arg in {"-d", "--dump", "-c", "--clear", "-g", "--buffer-size", "-S", "--statistics", "-h", "--help"}:
+            has_bounded_exit = True
+            i += 1
+            continue
+        if arg in {"-t", "-m", "--max-count"}:
+            if i + 1 >= len(logcat_args):
+                return False
+            has_bounded_exit = True
+            i += 2
+            continue
+        if arg.startswith("--max-count="):
+            has_bounded_exit = True
+            i += 1
+            continue
+        if arg in LOGCAT_VALUE_FLAGS:
+            if i + 1 >= len(logcat_args):
+                return False
+            i += 2
+            continue
+        if arg.startswith("--"):
+            if any(arg.startswith(p) for p in ("--buffer=", "--format=", "--regex=", "--pid=", "--uid=")):
+                i += 1
+                continue
+            if arg in {"--dividers", "--print"}:
+                i += 1
+                continue
+            return False
+        if arg.startswith("-") and len(arg) > 1:
+            short_flags = arg[1:]
+            if any(ch in short_flags for ch in "frnPG"):
+                return False
+            if any(ch in short_flags for ch in "dcgSh"):
+                has_bounded_exit = True
+            if "t" in short_flags or "m" in short_flags:
+                has_bounded_exit = True
+                if short_flags.endswith(("t", "m")) and i + 1 < len(logcat_args) and not logcat_args[i + 1].startswith("-"):
+                    i += 2
+                    continue
+            elif short_flags.endswith(("b", "T", "v", "e")) and i + 1 < len(logcat_args):
+                i += 2
+                continue
+            i += 1
+            continue
+        i += 1
+    return has_bounded_exit
+
+
 def _valid_context_targets(args: list[str]) -> bool:
     selectors = [arg.split("=", 1)[0] for arg in args if arg.split("=", 1)[0] in {"--file", "--symbol"}]
     return 1 <= len(selectors) <= 8 and len(set(selectors)) == 1 and not any(arg.startswith("--out") for arg in args)
@@ -202,14 +319,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return len(args) == 2 and not args[1].startswith("-")
         return True
     if name == "adb":
-        if not args:
-            return False
-        sub = args[0].lower()
-        if sub in {"logcat", "devices", "version", "help"}:
-            return not any(arg.startswith(("-f", "--filename")) for arg in args)
-        if sub == "shell" and len(args) >= 2 and args[1].lower() in {"getprop", "dumpsys"}:
-            return True
-        return False
+        return is_read_only_adb(args)
     if name in {"gradlew", "gradlew.bat", "gradle"}:
         return bool(args) and args[0].lower() in {"dependencies", "tasks", "projects", "properties", "help", "--help", "-h"}
     if name == "powershell-read":
@@ -236,6 +346,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
     if name in {"harness_cli", "android-harness"}:
+        if args[:2] in (["debug", "status"], ["debug", "logs"]):
+            return True
         if args == ["device", "status"]:
             return True
         if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"]):
@@ -782,6 +894,80 @@ def _quote_mask(command: str) -> str | None:
     return None if quote else "".join(out)
 
 
+def _powershell_quote_mask(command: str) -> str | None:
+    """Same-length copy of the command with quoted text blanked under PowerShell quote rules."""
+    out, quote = [], ""
+    for ch in command:
+        if quote:
+            out.append(ch if ch == quote else "_")
+            if ch == quote:
+                quote = ""
+        else:
+            if ch in "\"'":
+                quote = ch
+            out.append(ch)
+    return None if quote else "".join(out)
+
+
+LOGCAT_PIPE_FILTERS = {"select-string", "sls", "select-object", "select", "findstr", "grep", "rg", "head", "tail"}
+
+
+def _is_read_only_logcat_filter(stage: str) -> bool:
+    visible = _operator_text_any_shell(stage)
+    if visible is None or SHELL_LAUNDERING.search(visible) or re.search(r"[;&\n(){}]", visible):
+        return False
+    tokens = _tokens(stage)
+    if not tokens:
+        return False
+    exe = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
+    if exe not in LOGCAT_PIPE_FILTERS:
+        return False
+    for token in tokens[1:]:
+        low = token.lower()
+        if low.startswith(("--pre", "--hostname-bin", "--file", "-outvariable", "-ov", "-path", "-literalpath", "-inputobject", "/f:", "/g:")):
+            return False
+        if exe in {"grep", "rg"} and (low == "-f" or (low.startswith("-") and not low.startswith("--") and "f" in low[1:])):
+            return False
+    return True
+
+
+def _strip_adb_logcat_pipes(command: str, repo: Path | str = ".") -> str | None:
+    """Strip trailing read-only filter pipes (`| Select-String ...`, `| grep ...`) from `adb logcat` commands."""
+    posix_mask = _quote_mask(command)
+    ps_mask = _powershell_quote_mask(command)
+    if posix_mask is None or ps_mask is None:
+        return None
+    for op_re in (r"(?<!\|)\|(?!\|)", r"(?<!&)&(?!&)", r";", r"[<>]", r"\n"):
+        if [m.start() for m in re.finditer(op_re, posix_mask)] != [m.start() for m in re.finditer(op_re, ps_mask)]:
+            return None
+    segments = _split_segments(command)
+    if not segments:
+        return None
+    saw_pipe = False
+    cleaned: list[str] = []
+    for seg in segments:
+        seg_mask = _quote_mask(seg)
+        if seg_mask is None:
+            return None
+        cuts = [m.start() for m in re.finditer(r"(?<!\|)\|(?!\|)", seg_mask)]
+        if not cuts:
+            cleaned.append(seg)
+            continue
+        saw_pipe = True
+        first_stage = seg[:cuts[0]].strip()
+        first_op = _operator_text_any_shell(first_stage)
+        if first_op is None or SHELL_LAUNDERING.search(first_op) or re.search(r"[;&\n(){}]", first_op):
+            return None
+        entry_name, entry_args = _entry(first_stage, repo)
+        if entry_name != "adb" or not is_read_only_adb(entry_args):
+            return None
+        stages = [seg[start + 1:end].strip() for start, end in zip(cuts, cuts[1:] + [len(seg)])]
+        if not stages or not all(_is_read_only_logcat_filter(stage) for stage in stages):
+            return None
+        cleaned.append(first_stage)
+    return "; ".join(cleaned) if saw_pipe else None
+
+
 READ_ONLY_FILTERS = {"head", "tail", "grep", "rg"}
 
 
@@ -905,6 +1091,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         core = _claude_shell_core(repo, normalized)
         if core and core != normalized:
             return command_allowed(repo, core)
+    adb_core = _strip_adb_logcat_pipes(normalized, repo)
+    if adb_core and adb_core != normalized:
+        return command_allowed(repo, adb_core)
     operator_text = (
         _without_single_quoted_text(normalized) if _posix_shell_host() else _operator_text_any_shell(normalized)
     )
@@ -930,8 +1119,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, "every command segment is authorized"
     if segments:
         normalized = segments[0]
-    raw_entry, _ = _entry(normalized, repo)
-    if raw_entry in {"adb", "gradlew", "gradlew.bat", "gradle"}:
+    raw_entry, raw_args = _entry(normalized, repo)
+    if raw_entry in {"gradlew", "gradlew.bat", "gradle"} or (raw_entry == "adb" and not is_read_only_adb(raw_args)):
         return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
     entry, model_args = _entry(normalized, repo)
     if entry == "android_ui" or (entry in {"harness_cli", "android-harness"} and model_args[:1] == ["android-ui"]):
@@ -980,6 +1169,16 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             try:
                 from host_continuation import assert_execution_session
                 assert_execution_session(Path(repo), plan.get("task_id"))
+            except ValidationError as exc:
+                return False, str(exc)
+    if raw_entry in {"harness_cli", "android-harness"} and raw_args[:1] == ["debug"]:
+        action = raw_args[1:2]
+        if action in (["arm"], ["add"], ["strip"], ["install"]):
+            try:
+                plan = active_plan(repo)
+                if action != ["arm"]:
+                    require_mutation(plan)
+                return True, "Task diagnostic command; engine checks source ownership and session"
             except ValidationError as exc:
                 return False, str(exc)
     zoho = _zoho_lifecycle_decision(repo, normalized)

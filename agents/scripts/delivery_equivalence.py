@@ -193,9 +193,11 @@ def _split_kotlin_java(text: str, suffix: str = ".kt") -> tuple[str, list[str], 
 def _safe_source_whitespace(text: str) -> str | None:
     """Strip line tails only when outside ordinary source literals.
 
-    Raw strings/text blocks are excluded by the caller. An unbalanced literal or
-    an unsupported multiline template remains strict rather than guessed safe.
+    Raw strings/text blocks are excluded so literal trailing spaces are preserved.
+    An unbalanced literal or an unsupported multiline template remains strict.
     """
+    if '"""' in text:
+        return None
     result = []
     block_depth = 0
     for line in text.split("\n"):
@@ -212,7 +214,7 @@ def _safe_source_whitespace(text: str) -> str | None:
                 else:
                     i += 1
             elif quote:
-                if line[i] == "\\":
+                if line[i] == "\\" and quote != "`":
                     i += 2
                 elif line[i] == quote:
                     quote = None
@@ -224,7 +226,7 @@ def _safe_source_whitespace(text: str) -> str | None:
             elif line.startswith("/*", i):
                 block_depth = 1
                 i += 2
-            elif line[i] in ('"', "'"):
+            elif line[i] in ('"', "'", "`"):
                 quote = line[i]
                 i += 1
             else:
@@ -268,12 +270,26 @@ def _tokenize_kotlin_java_body(text: str) -> list[str] | None:
             if depth > 0:
                 return None
             tokens.append(text[start:i])
-        elif ch in ('"', "'"):
+        elif text.startswith('"""', i):
+            start = i
+            i += 3
+            while i < n:
+                if text.startswith('"""', i):
+                    i += 3
+                    while i < n and text[i] == '"':
+                        i += 1
+                    break
+                else:
+                    i += 1
+            else:
+                return None
+            tokens.append(text[start:i])
+        elif ch in ('"', "'", "`"):
             quote = ch
             start = i
             i += 1
             while i < n:
-                if text[i] == "\\":
+                if text[i] == "\\" and quote != "`":
                     i += 2
                 elif text[i] == quote:
                     i += 1
@@ -301,13 +317,26 @@ def _is_unused_import_removal(removed_imports: list[str], body: str) -> bool:
     """Return True only when every removed import is a simple non-wildcard import unused in body."""
     if not removed_imports:
         return False
+    tokens = _tokenize_kotlin_java_body(body)
     for imp in removed_imports:
-        m = re.match(rf"^import[ \t]+({QUALIFIED})[ \t]*;?$", imp.strip())
+        m = re.match(rf"^import[ \t]+(?:static[ \t]+)?({QUALIFIED})(?:[ \t]+as[ \t]+({IDENTIFIER}))?[ \t]*;?$", imp.strip())
         if not m:
             return False
-        leaf = m.group(1).rsplit(".", 1)[-1]
-        if not leaf or re.search(rf"\b{re.escape(leaf)}\b", body):
+        leaf = m.group(2) or m.group(1).rsplit(".", 1)[-1]
+        if not leaf:
             return False
+        if tokens is None:
+            if re.search(rf"\b{re.escape(leaf)}\b", body):
+                return False
+            continue
+        pattern = re.compile(rf"\b{re.escape(leaf)}\b")
+        for tok in tokens:
+            if tok == leaf or tok == f"`{leaf}`":
+                return False
+            if tok.startswith("/**") and pattern.search(tok):
+                return False
+            if tok.startswith('"') and "$" in tok and pattern.search(tok):
+                return False
     return True
 
 
@@ -324,7 +353,7 @@ def classify_file_equivalence(verified_bytes: bytes, live_bytes: bytes, rel_path
         return False, "BINARY_DIFF", "Non-UTF-8 source difference."
     if any(ch in before + after for ch in ("\0", "\v", "\f")):
         return False, "BINARY_DIFF", "Unsupported control character in source."
-    if '"""' in before or '"""' in after:
+    if suffix not in IMPORTS and ('"""' in before or '"""' in after):
         return False, "BODY_MODIFIED", "Raw strings/text blocks require exact verified bytes."
     before = before.replace("\r\n", "\n")
     after = after.replace("\r\n", "\n")

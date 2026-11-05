@@ -70,8 +70,23 @@ class GraphNode:
     imports: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, compact: bool = False) -> dict[str, Any]:
+        if not compact:
+            return asdict(self)
+        meta = {k: v for k, v in (self.metadata or {}).items() if k != "same_package_refs"}
+        out: dict[str, Any] = {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "file_path": self.file_path,
+            "module": self.module,
+            "package": self.package,
+        }
+        if self.declarations:
+            out["declarations"] = self.declarations[:12]
+        if meta:
+            out["metadata"] = meta
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GraphNode:
@@ -867,9 +882,9 @@ class DependencyGraph:
         lines.append('}')
         return "\n".join(lines)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, compact: bool = False) -> dict[str, Any]:
         return {
-            "nodes": [n.to_dict() for n in self.nodes.values()],
+            "nodes": [n.to_dict(compact=compact) for n in self.nodes.values()],
             "edges": [e.to_dict() for e in self.edges],
         }
 

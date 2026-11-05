@@ -74,6 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sync", action="store_true", help="Force full cache resynchronization")
     parser.add_argument("--repo", default=None, help="Android/KMP project root (default: auto-discover)")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON (alias for --format json)")
+    parser.add_argument("--full", action="store_true", help="Include raw imports and same-package reference arrays in JSON output")
     parser.add_argument("--stats", action="store_true", help="Display graph cache statistics")
     return parser.parse_args(argv)
 
@@ -416,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.format == "dot":
         output_text = graph_to_render.to_dot(title="Android Project Code Graph")
     elif args.format == "json":
-        payload = graph_to_render.to_dict()
+        payload = graph_to_render.to_dict(compact=not getattr(args, "full", False))
         if receipt:
             payload["discovery"] = receipt
         if notes_info.get("has_custom_notes"):

@@ -5,6 +5,17 @@ from typing import Any
 
 
 PUBLIC_COMMANDS: list[dict[str, Any]] = [
+    *({"command": f"debug {action}", "read_only": action == "status",
+       "valid_states": states, "required_inputs": inputs, "model_facing": True,
+       "description": description}
+      for action, states, inputs, description in (
+          ("status", ["ANY"], [], "Inspect task diagnostic entries."),
+          ("add", ["IMPLEMENTING"], ["file", "anchor", "label"], "Insert a temporary diagnostic statement."),
+          ("strip", ["IMPLEMENTING"], [], "Remove matching task-owned diagnostic statements."),
+          ("install", ["IMPLEMENTING"], [], "Install, arm and launch a diagnostic build."),
+          ("arm", ["IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"], [], "Start a device-time log window."),
+          ("logs", ["ANY"], [], "Read bounded diagnostic logs; record only when a task exists."),
+      )),
     {'command': 'android-inspect capabilities', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': [], 'model_facing': True, 'description': 'Probe optional Android CLI inspection support; no setup or updates.'},
     {'command': 'android-inspect studio-status', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': [], 'model_facing': True, 'description': 'Check running Studio connectivity; not lint or build proof.'},
     {'command': 'android-inspect declaration', 'read_only': True, 'valid_states': ['ANY'], 'required_inputs': ['symbol'], 'model_facing': True, 'description': 'Project-bound semantic declaration lookup; optional --file context.'},

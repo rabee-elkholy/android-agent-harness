@@ -75,6 +75,9 @@ EPHEMERAL_GENERATED_RE = re.compile(
 DENY_HINTS = {
     "draft_force": "To correct a plan that awaits approval, run `python .agents/scripts/workflow.py revise --repo . --task-id <id>` "
                    "with the corrected arguments. To replace a different live task, ask the developer to cancel it.",
+    "raw_adb": "To read logcat, pass -d or -t <lines> so adb logcat dumps and exits (e.g. `adb logcat -d -t 500` or "
+               "`adb logcat -d -t 500 | Select-String -Pattern \"...\"`). For device status or app install/launch, use "
+               "`python .agents/harness.py device status` or `python .agents/harness.py device install-start`.",
 }
 DANGEROUS = (
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)(?![\w-])", re.I)),
@@ -231,6 +234,38 @@ def _read_only_git_branch_command(command: str) -> bool:
             return False
         saw_branch = True
     return saw_branch
+
+
+def _read_only_adb_command(command: str) -> bool:
+    """True when every `adb` match in `command` is a bounded read-only `adb logcat` or `pidof` command."""
+    try:
+        from mutation_guard import (
+            SHELL_LAUNDERING,
+            _entry,
+            _operator_text_any_shell,
+            _split_segments,
+            _strip_adb_logcat_pipes,
+            is_read_only_adb,
+        )
+    except Exception:
+        return False
+    normalized = _strip_adb_logcat_pipes(command or "", REPO) or (command or "")
+    outside_quotes = _operator_text_any_shell(normalized)
+    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes):
+        return False
+    segments = _split_segments(normalized)
+    if not segments:
+        return False
+    adb_re = re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*adb(?:\.exe)?\b", re.I)
+    saw_adb = False
+    for seg in segments:
+        if not adb_re.search(seg):
+            continue
+        name, args = _entry(seg, REPO)
+        if name != "adb" or not is_read_only_adb(args):
+            return False
+        saw_adb = True
+    return saw_adb
 
 
 CANCEL_REQUEST_FILE = "cancel-requested.json"
@@ -440,7 +475,13 @@ def _is_external_user_doc(raw: Path, resolved: Path) -> bool:
         return False
     try:
         for parent in (resolved.parent, *resolved.parents):
-            if (parent / ".agents").exists() or (parent / ".git").exists():
+            if (
+                (parent / ".git").exists()
+                or (parent / ".harness-setup").exists()
+                or (parent / ".agents" / "harness.py").exists()
+                or (parent / ".agents" / "VERSION").exists()
+                or (parent / ".agents" / "state").exists()
+            ):
                 return False
     except OSError:
         return False
@@ -592,9 +633,11 @@ def _handle_command(command: str) -> None:
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
-            if code in ("tracker_write", "git_mutation") and _audited_harness_command(command):
+            if code in ("tracker_write", "git_mutation", "raw_adb") and _audited_harness_command(command):
                 continue
             if code == "git_mutation" and _read_only_git_branch_command(command):
+                continue
+            if code in ("raw_adb", "adb_destructive") and _read_only_adb_command(command):
                 continue
             hint = f" {DENY_HINTS[code]}" if code in DENY_HINTS else ""
             emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)

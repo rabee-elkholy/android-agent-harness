@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add task-owned debug instrumentation, bounded device diagnostics and a whole-worktree delivery guard for temporary Kotlin/Java logs.
+
 ## [1.2.5] - 2026-11-04
 
 ### Antigravity-dedicated architecture, removal of legacy root IDE clutter, and first-class Native Android & KMM/KMP positioning

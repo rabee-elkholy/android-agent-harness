@@ -1059,6 +1059,32 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
         result = classify(self.repo)
         self.assertNotIn("CRYPTO", result["surfaces"])
 
+    def test_is_login_getter_and_shared_onboarding_viewmodel_do_not_false_positive_as_auth(self) -> None:
+        """Boolean login-state getters (isLogin/isLoginLive) and navigation helpers in shared ViewModels/Fragments do not trigger AUTH."""
+        from change_classifier import classify
+        vm = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "OnboardingViewModel.kt"
+        frag = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "example" / "ApplicationGoalFragment.kt"
+        vm.write_text(
+            "package com.example\n\nclass OnboardingViewModel {\n    var painAreas: List<String> = emptyList()\n    fun isLogin(): Boolean = true\n    fun isLoginLive(): Boolean = true\n}\n",
+            encoding="utf-8",
+        )
+        frag.write_text(
+            "package com.example\n\nclass ApplicationGoalFragment {\n    private lateinit var viewModel: OnboardingViewModel\n    private fun nextScreenLoginAndNavigation() {}\n}\n",
+            encoding="utf-8",
+        )
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-q", "-m", "onboarding baseline")
+        vm.write_text(
+            "package com.example\n\nclass OnboardingViewModel {\n    var painAreas: List<String> = listOf(\"back\")\n    fun isLogin(): Boolean = true\n    fun isLoginLive(): Boolean = true\n}\n",
+            encoding="utf-8",
+        )
+        frag.write_text(
+            "package com.example\n\nclass ApplicationGoalFragment {\n    private lateinit var viewModel: OnboardingViewModel\n    fun bindGoal() { viewModel.painAreas = listOf(\"knee\") }\n    private fun nextScreenLoginAndNavigation() {}\n}\n",
+            encoding="utf-8",
+        )
+        result = classify(self.repo)
+        self.assertNotIn("AUTH", result["surfaces"])
+
 
 class PhaseDRepairSelftest(unittest.TestCase):
     def setUp(self) -> None:

@@ -449,19 +449,25 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
     live_snapshot = str(live_manifest.get("delivery_snapshot_sha256") or "")
     external_changed = _engine._ready_external_inputs_changed(repo, task_id, ready_run_id, live_manifest)
     sibling_only_drift = False
+    equivalence: dict[str, Any] | None = None
     if ready_snapshot and live_snapshot and ready_snapshot != live_snapshot:
         from delivery_equivalence import evaluate_post_ready_changes
         equivalence = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
-        sibling_only_drift = equivalence.get("is_benign") and equivalence.get("reason") in (
-            "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
-            "UNTRACKED_DOCUMENTATION_NOTES_ONLY",
+        sibling_only_drift = bool(
+            equivalence.get("is_benign")
+            and equivalence.get("reason")
+            in (
+                "DISJOINT_SIBLING_TASK_CHANGES_ONLY",
+                "UNTRACKED_DOCUMENTATION_NOTES_ONLY",
+            )
         )
     if ready_snapshot and live_snapshot and (ready_snapshot != live_snapshot or external_changed) and not sibling_only_drift:
-        dirty = _engine._find_uncommitted_task_files(repo, task_id, plan)
+        dirty = _engine._find_uncommitted_task_files(repo, task_id, plan, live_manifest=live_manifest)
         if not dirty:
-            from delivery_equivalence import evaluate_post_ready_changes
-            eval_res = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
-            if eval_res.get("is_benign"):
+            if equivalence is None:
+                from delivery_equivalence import evaluate_post_ready_changes
+                equivalence = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
+            if equivalence.get("is_benign"):
                 identity = f"--repo . --task-id {task_id}"
                 return {
                     "code": "DELIVER",
@@ -469,7 +475,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                     "command": f"python .agents/harness.py task deliver {identity}",
                     "blocking": True,
                     "reason": (
-                        f"Developer git commit accepted with benign normalization ({eval_res.get('diff_summary')}). "
+                        f"Developer git commit accepted with benign normalization ({equivalence.get('diff_summary')}). "
                         "Finalize verified delivery state."
                     ),
                     "inputs": {"repo": ".", "task_id": task_id},
@@ -480,10 +486,11 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
         named = ", ".join(changed[:10]) if changed else ("external build inputs" if external_changed else "files outside the task's list")
         diff_detail = ""
         if not dirty:
-            from delivery_equivalence import evaluate_post_ready_changes
-            eval_res = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
-            if eval_res.get("diff_summary"):
-                diff_detail = f" Detected differences: {eval_res['diff_summary']}."
+            if equivalence is None:
+                from delivery_equivalence import evaluate_post_ready_changes
+                equivalence = evaluate_post_ready_changes(repo, task_id, plan, live_manifest)
+            if equivalence.get("diff_summary"):
+                diff_detail = f" Detected differences: {equivalence['diff_summary']}."
 
         return {
             "code": "DELIVERY_STALE_AFTER_COMMIT",
@@ -511,7 +518,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "expected": {"success_statuses": ["IMPLEMENTING"]},
         }
 
-    dirty = _engine._find_uncommitted_task_files(repo, task_id, plan)
+    dirty = _engine._find_uncommitted_task_files(repo, task_id, plan, live_manifest=live_manifest)
     if dirty:
         kind = str(plan.get("task_kind") or "AUTO").upper()
         outcome = str(plan.get("requested_outcome") or "deliver verified changes").strip().rstrip(".")
@@ -560,6 +567,8 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             if mixed else ""
         )
 
+        from plan_notes import load_plan_notes
+        recorded_notes = load_plan_notes(_engine.task_dir(repo, task_id), plan)
         approach_text = str(plan.get("approach") or plan.get("implementation_approach") or "").strip()
         commit_bullets: list[str] = []
         if approach_text:
@@ -569,10 +578,20 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                     commit_bullets.append(f"- {cleaned_part}.")
                 if len(commit_bullets) >= 4:
                     break
+        for note in recorded_notes:
+            note_text = " ".join(str(note.get("text") or "").split()).strip().rstrip(".")
+            if note_text:
+                bullet = f"- Refinement: {note_text}."
+                if bullet not in commit_bullets:
+                    commit_bullets.append(bullet)
         if not commit_bullets:
             for d_file in sorted(dirty)[:5]:
                 commit_bullets.append(f"- Update `{d_file}`.")
         suggested_commit_full = suggested_commit + "\n\n" + "\n".join(commit_bullets)
+        refinement_commit_note = (
+            "Mid-task developer refinements (plan-notes) were recorded on this task: ensure the Conventional Commit subject and bullets reflect the final verified implementation and omit any initial-plan items superseded by developer refinements.\n"
+            if recorded_notes else ""
+        )
 
         return {
             "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
@@ -600,6 +619,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "instructions": (
                 f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
+                + refinement_commit_note
                 + f"Suggested commit:\n```text\n{suggested_commit_full}\n```\n"
                 "Format the Commit & Delivery Card in the developer's active conversation language:\n"
                 "(1) Verified files list (every file path in `backticks`, noting any pre-existing edits),\n"
