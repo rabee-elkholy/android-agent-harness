@@ -73,7 +73,7 @@ class GraphNode:
     def to_dict(self, compact: bool = False) -> dict[str, Any]:
         if not compact:
             return asdict(self)
-        meta = {k: v for k, v in (self.metadata or {}).items() if k != "same_package_refs"}
+        meta = {k: v for k, v in (self.metadata or {}).items() if k not in ("same_package_refs", "xml_refs")}
         out: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
@@ -1224,7 +1224,7 @@ def parse_xml_file(path: Path, repo: Path) -> list[tuple[GraphNode, list[str]]]:
         file_path=rel_path,
         module=module_id,
         declarations=[name],
-        metadata={"xml": True, "is_nav": is_nav, "language": "XML"},
+        metadata={"xml": True, "is_nav": is_nav, "language": "XML", "xml_refs": referenced_symbols},
     )
     return [(node, referenced_symbols)]
 
@@ -1477,7 +1477,7 @@ class GraphEngine:
             ],
         }
 
-    def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
+    def sync(self, force_full: bool = False, *, persist: bool = True, trust_stat: bool = False) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
         if force_full:
             self.graph = DependencyGraph()
@@ -1538,23 +1538,53 @@ class GraphEngine:
         modified: list[str] = []
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
         files_hashed = 0
+        metadata_changed = False
 
         for rel, path in current_files.items():
             try:
                 st = path.stat()
                 mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+                ctime_ns = getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9))
                 size = st.st_size
-            except Exception:
+                dev = getattr(st, "st_dev", 0)
+                ino = getattr(st, "st_ino", 0)
+            except (OSError, ValueError):
                 mtime_ns = 0
+                ctime_ns = 0
                 size = 0
+                dev = 0
+                ino = 0
 
             cached_hash = self.file_hashes.get(rel)
-            # Restored timestamps and same-size edits are common after source
-            # replacement. Metadata is diagnostic, never proof of unchanged bytes.
-            # Hash every source, but keep expensive parsing incremental.
-            curr_hash = self.compute_file_hash(path)
-            files_hashed += 1
-            self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
+            meta = self.file_metadata.get(rel) or {}
+            if (
+                trust_stat
+                and not force_full
+                and cached_hash is not None
+                and size > 0
+                and meta.get("size") == size
+                and meta.get("mtime_ns") == mtime_ns
+                and meta.get("ctime_ns") == ctime_ns
+                and meta.get("dev") == dev
+                and meta.get("ino") == ino
+            ):
+                curr_hash = cached_hash
+            else:
+                # Default mode (trust_stat=False) hashes every source so restored
+                # timestamps and same-size edits are always caught.
+                curr_hash = self.compute_file_hash(path)
+                files_hashed += 1
+                new_meta = {
+                    "size": size,
+                    "mtime_ns": mtime_ns,
+                    "ctime_ns": ctime_ns,
+                    "dev": dev,
+                    "ino": ino,
+                    "hash": curr_hash,
+                }
+                if meta != new_meta:
+                    metadata_changed = True
+                self.file_metadata[rel] = new_meta
 
             if cached_hash is None:
                 added.append(rel)
@@ -1642,12 +1672,31 @@ class GraphEngine:
                             if target_node and target_node.file_path != node.file_path:
                                 self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
 
-            for xnode, refs in xml_connections:
+            xml_refs_by_id: dict[str, list[str]] = {
+                xnode.id: list(refs) for xnode, refs in xml_connections
+            }
+            for node in list(self.graph.nodes.values()):
+                if (node.metadata or {}).get("xml") and node.id not in xml_refs_by_id:
+                    stored_refs = (node.metadata or {}).get("xml_refs")
+                    if isinstance(stored_refs, list):
+                        xml_refs_by_id[node.id] = list(stored_refs)
+
+            for xnode_id, refs in xml_refs_by_id.items():
+                if xnode_id not in self.graph.nodes:
+                    continue
                 for ref in refs:
-                    if ref in self.symbol_to_node_id:
-                        self.graph.add_edge(xnode.id, self.symbol_to_node_id[ref], kind=EdgeKind.RENDERS.value)
+                    target_id = (
+                        self.fqn_to_node_id.get(ref)
+                        or (ref if ref in self.graph.nodes else None)
+                        or self.symbol_to_node_id.get(ref)
+                    )
+                    if not target_id and "." in ref:
+                        short_ref = ref.rsplit(".", 1)[-1]
+                        target_id = self.symbol_to_node_id.get(short_ref)
+                    if target_id and target_id != xnode_id and not target_id.startswith("layout:"):
+                        self.graph.add_edge(xnode_id, target_id, kind=EdgeKind.RENDERS.value)
                     elif f"layout:{ref}" in self.graph.nodes:
-                        self.graph.add_edge(xnode.id, f"layout:{ref}", kind=EdgeKind.CONTAINS.value)
+                        self.graph.add_edge(xnode_id, f"layout:{ref}", kind=EdgeKind.CONTAINS.value)
 
             if persist:
                 self.save_cache()
@@ -1657,6 +1706,8 @@ class GraphEngine:
             self._rebuild_file_index()
             if persist:
                 self.save_cache()
+        elif metadata_changed and persist:
+            self.save_cache()
 
         return {
             "added": len(added),

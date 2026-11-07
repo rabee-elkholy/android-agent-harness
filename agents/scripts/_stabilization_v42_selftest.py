@@ -1980,6 +1980,52 @@ class MissingBaselineGuidanceTests(unittest.TestCase):
             )
             self.assertIn("failed for a reason other than failing tests (exit code 1)", detail)
 
+    def test_phase_compile_and_tests_batch_multi_module_and_fallback_on_failure(self) -> None:
+        from _workflow import engine as wf_engine
+        (self.tmp / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        phase_dir = self.tmp / ".agents" / "state" / "tasks" / "t1" / "phases" / "1"
+        phase_dir.mkdir(parents=True, exist_ok=True)
+        modules = [":core:model", ":feature:auth"]
+        calls: list[list[str]] = []
+
+        def fake_gradle_pass(task_args: list[str], *, cwd=None, outcome=None):
+            calls.append(list(task_args))
+            return 0
+
+        def fake_resolve(repo, mod, *, task_type="compile", phase_changes=None):
+            return f"{mod}:compileDebugKotlin" if task_type == "compile" else f"{mod}:testDebugUnitTest"
+
+        with mock.patch.object(wf_engine, "resolve_module_gradle_task", side_effect=fake_resolve), \
+             mock.patch("run_tests_gate.evaluate_unit_test_execution", return_value=(True, "PASS", {"status": "PASS", "baseline_ignored": 0, "total_failed": 0})), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=fake_gradle_pass):
+            ok_c, detail_c = wf_engine.check_phase_compile(self.tmp, modules)
+            ok_t, detail_t = wf_engine.check_phase_tests(self.tmp, phase_dir, modules, True)
+        self.assertTrue(ok_c)
+        self.assertTrue(ok_t)
+        self.assertEqual([
+            [":core:model:compileDebugKotlin", ":feature:auth:compileDebugKotlin"],
+            [":core:model:testDebugUnitTest", ":feature:auth:testDebugUnitTest"],
+        ], calls)
+
+        calls.clear()
+
+        def fake_gradle_fail_second(task_args: list[str], *, cwd=None, outcome=None):
+            calls.append(list(task_args))
+            if len(task_args) > 1 or task_args[0].startswith(":feature:auth"):
+                return 1
+            return 0
+
+        with mock.patch.object(wf_engine, "resolve_module_gradle_task", side_effect=fake_resolve), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=fake_gradle_fail_second):
+            ok_fail, detail_fail = wf_engine.check_phase_compile(self.tmp, modules)
+        self.assertFalse(ok_fail)
+        self.assertIn(":feature:auth:compileDebugKotlin", detail_fail)
+        self.assertEqual([
+            [":core:model:compileDebugKotlin", ":feature:auth:compileDebugKotlin"],
+            [":core:model:compileDebugKotlin"],
+            [":feature:auth:compileDebugKotlin"],
+        ], calls)
+
 
 def _gradle_tests_only_failed(code: int, test_failure_only: bool = True):
     """Mimic run_gradle's outcome attribution for a finished Gradle test run."""

@@ -56,6 +56,54 @@ def _compact_message() -> str:
     return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. Up to 3 disjoint tasks may coexist (`task draft` / `task switch --task-id <id>`); only cancel when explicitly asked (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
 
 
+def _current_task_state() -> tuple[str, str]:
+    try:
+        from mutation_guard import active_plan
+        plan = active_plan(REPO)
+    except (ImportError, OSError, ValueError, KeyError):
+        plan = {}
+    if not plan:
+        return ("", "IDLE")
+    return (str(plan.get("task_id") or "unknown"), str(plan.get("status") or "UNKNOWN"))
+
+
+def _unchanged_state_message(task_id: str, status: str) -> str:
+    if not task_id or status == "IDLE":
+        return "Android Harness: Idle (no active task)."
+    return f"Harness [Task {task_id}: {status}]: State unchanged; continue following active {status} rules and NEXT_ACTION."
+
+
+def _has_seen_state(conversation_id: str, state_key: str) -> bool:
+    if not conversation_id:
+        return False
+    cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
+    try:
+        if cache_path.is_file():
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get(conversation_id) == state_key:
+                return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def _record_seen_state(conversation_id: str, state_key: str) -> None:
+    if not conversation_id:
+        return
+    cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
+    try:
+        data: dict[str, str] = {}
+        if cache_path.is_file():
+            raw = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
+        data[conversation_id] = state_key
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(data), encoding="utf-8")
+    except (OSError, ValueError):
+        return
+
+
 def _update_notice() -> str:
     """Newer-release notice at the start of a conversation (cached, at most once a day, never raises)."""
     try:
@@ -70,10 +118,26 @@ def main() -> None:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
         invocation = payload.get("invocationNum") if isinstance(payload, dict) else None
+        conversation_id = str(
+            (payload.get("conversationId") or payload.get("conversation_id") or "")
+            if isinstance(payload, dict) else ""
+        ).strip()
         initial = type(invocation) is int and invocation in (0, 1)
-        msg = _message() if initial else _compact_message()
         if initial:
-            msg = f"{msg} {_update_notice()}".strip()
+            msg = f"{_message()} {_update_notice()}".strip()
+            if conversation_id:
+                tid, st = _current_task_state()
+                _record_seen_state(conversation_id, f"{tid}:{st}")
+        elif conversation_id:
+            tid, st = _current_task_state()
+            state_key = f"{tid}:{st}"
+            if _has_seen_state(conversation_id, state_key):
+                msg = _unchanged_state_message(tid, st)
+            else:
+                msg = _compact_message()
+                _record_seen_state(conversation_id, state_key)
+        else:
+            msg = _compact_message()
         print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
     except Exception:
         print("{}")
@@ -81,3 +145,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

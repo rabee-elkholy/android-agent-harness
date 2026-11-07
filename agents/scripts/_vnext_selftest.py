@@ -841,6 +841,11 @@ class PolicyTests(RepoCase):
             "    val isSignedIn: Boolean = false,\n"
             "    val isAuthenticated: Boolean = false,\n"
             "    val isPasswordVisible: Boolean = false,\n"
+            "    val passwordLabel: String = \"\",\n"
+            "    val passwordTitle: String = \"\",\n"
+            "    val passwordPlaceholder: String = \"\",\n"
+            "    val purchaseDate: String = \"\",\n"
+            "    val purchaseHistory: List<String> = emptyList(),\n"
             ")\n",
         )
         write(
@@ -852,12 +857,20 @@ class PolicyTests(RepoCase):
             "    // Do not show offer banner if user purchased subscription or is not logged in\n"
             "    val isOfferCardVisible = !uiState.isPurchased && !uiState.isSubscribed && uiState.isLoggedIn && !uiState.isPasswordVisible\n"
             "    val icon = \"ic_camera\"\n"
+            "    fun purchaseDate(raw: String) = raw\n"
             "}\n",
         )
         result = classify(self.repo)
         for forbidden in ("BILLING", "AUTH", "SENSITIVE_DATA", "CRYPTO", "DEVICE_API", "SECURITY"):
             self.assertNotIn(forbidden, result["surfaces"], f"Passive UI state/comment falsely triggered {forbidden}")
         self.assertEqual("MEDIUM", result["severity"])
+
+        # True positives must remain CRITICAL
+        write(self.repo / "app/src/main/kotlin/RealBilling.kt", "package com.example\nfun purchaseSubscription(sku: String) {}\n")
+        self.assertIn("BILLING", classify(self.repo)["surfaces"])
+        (self.repo / "app/src/main/kotlin/RealBilling.kt").unlink()
+        write(self.repo / "app/src/main/kotlin/RealPassword.kt", "package com.example\ndata class Credentials(val password: String)\n")
+        self.assertIn("SENSITIVE_DATA", classify(self.repo)["surfaces"])
 
     def test_entity_field_change_in_bounded_context_triggers_room_schema(self) -> None:
         write(

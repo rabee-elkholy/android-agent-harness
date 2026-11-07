@@ -2405,15 +2405,31 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
     if not gradle_wrapper:
         return True, "NOT_REQUIRED"
     from run_gradle_task import run_gradle
+    resolved_tasks: list[tuple[str, str]] = []
     for m in modules:
         try:
             compile_task = resolve_module_gradle_task(repo, m, task_type="compile", phase_changes=phase_changes)
         except ValidationError as exc:
             return False, str(exc)
+        resolved_tasks.append((m, compile_task))
+    if not resolved_tasks:
+        return True, "PASS"
+    if len(resolved_tasks) == 1:
+        m, compile_task = resolved_tasks[0]
         res = run_gradle([compile_task], cwd=repo)
         if res != 0:
             return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
-    return True, "PASS"
+        return True, "PASS"
+    unique_tasks = list(dict.fromkeys(t for _, t in resolved_tasks))
+    batch_res = run_gradle(unique_tasks, cwd=repo)
+    if batch_res == 0:
+        return True, "PASS"
+    for m, compile_task in resolved_tasks:
+        res = run_gradle([compile_task], cwd=repo)
+        if res != 0:
+            return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
+    m0, t0 = resolved_tasks[0]
+    return False, f"compile failed for module '{m0}' with task '{t0}' (exit code {batch_res})"
 
 
 def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: str | None) -> list[dict]:
@@ -2502,6 +2518,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     total_ignored = 0
     total_failed = 0
 
+    runnable: list[tuple[str, str]] = []
     for m in modules:
         # A module with no unit-test sources whose phase changes are all resources cannot produce
         # test evidence; demanding it dead-ends any phase touching a resource-only module (N3).
@@ -2525,8 +2542,42 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
             task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
         except ValidationError as exc:
             return False, str(exc)
+        runnable.append((m, task))
 
-        is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
+    is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
+
+    if len(runnable) > 1:
+        reports_before_map = {m: (None if is_mock else report_signatures(repo, task)) for m, task in runnable}
+        batch_outcome: dict = {}
+        unique_tasks = list(dict.fromkeys(task for _, task in runnable))
+        batch_res = run_gradle_fn(unique_tasks, cwd=repo, outcome=batch_outcome)
+        batch_all_ok = True
+        batch_mod_data: dict[str, tuple[bool, str, dict]] = {}
+        for m, task in runnable:
+            ok, detail, data = evaluate_unit_test_execution(
+                repo=repo,
+                task=task,
+                code=batch_res,
+                reports_before=reports_before_map[m],
+                outcome=batch_outcome,
+                task_start=task_start,
+            )
+            batch_mod_data[m] = (ok, detail, data)
+            if not ok:
+                batch_all_ok = False
+        if batch_all_ok:
+            for m, _task in runnable:
+                _, _, data = batch_mod_data[m]
+                total_ignored += data.get("baseline_ignored", 0)
+                total_failed += data.get("total_failed", 0)
+                aggregated_evidence["modules"][m] = data
+            aggregated_evidence["baseline_ignored"] = total_ignored
+            aggregated_evidence["total_failed"] = total_failed
+            aggregated_evidence["evidence_identity_sha256"] = evidence_identity
+            atomic_write_json(test_file, aggregated_evidence)
+            return True, "PASS"
+
+    for m, task in runnable:
         reports_before = None if is_mock else report_signatures(repo, task)
         outcome: dict = {}
         res = run_gradle_fn([task], cwd=repo, outcome=outcome)
@@ -3293,7 +3344,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="action", required=True)
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
-    common.add_argument("--task-id", required=True)
+    common.add_argument("--task-id", "--task", dest="task_id", required=True)
     from host_continuation import continue_task
     command = sub.add_parser("continue", parents=[common])
     command.add_argument("--host", required=True, help="Receiving host; never rewrites the project's preferred host")
@@ -3382,18 +3433,18 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_cmd.set_defaults(handler=cmd_reconcile_delivery)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
-    status_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
+    status_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active task if omitted)")
     status_cmd.add_argument("--next", action="store_true", help="Include the safest next lifecycle command without executing it")
     status_cmd.add_argument("--brief", action="store_true", help="Show lifecycle identity, spending and the exact next action without repeating the full plan")
     status_cmd.add_argument("--host", default=None, help="Host running this task; binds routed review commands")
     status_cmd.set_defaults(handler=status)
     command = sub.add_parser("recover-stale")
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
-    command.add_argument("--task-id", default="")
+    command.add_argument("--task-id", "--task", dest="task_id", default="")
     command.set_defaults(handler=recover_stale)
     command = sub.add_parser("switch", help="Focus a live task without changing its approval or verification state")
     command.add_argument("--repo", default=".")
-    command.add_argument("--task-id", required=True)
+    command.add_argument("--task-id", "--task", dest="task_id", required=True)
     command.set_defaults(handler=recover_active)
     from task_merge import merge_plans
     command = sub.add_parser("merge", parents=[common], allow_abbrev=False, help="Preview consolidation of two or three never-started plans into a new pending task")
@@ -3405,11 +3456,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.set_defaults(handler=merge_plans)
     command = sub.add_parser("recover-active")
     command.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
-    command.add_argument("--task-id", required=True, help="Task ID to restore as active task")
+    command.add_argument("--task-id", "--task", dest="task_id", required=True, help="Task ID to restore as active task")
     command.set_defaults(handler=recover_active)
     heal_cmd = sub.add_parser("heal", help="Self-heal a stale or corrupted task state back to the nearest valid stable step")
     heal_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
-    heal_cmd.add_argument("--task-id", default="", help="Task ID (defaults to active task if omitted)")
+    heal_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active task if omitted)")
     heal_cmd.add_argument("--reason", default="", help="Reason for self-healing rollback")
     heal_cmd.add_argument("--prepare-fresh-run", action="store_true", help="Immediately prepare a fresh delta verification run after healing")
     heal_cmd.add_argument("--host", default=None, help="Host environment when preparing a fresh verification run")
