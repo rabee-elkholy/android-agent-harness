@@ -1021,7 +1021,18 @@ def cmd_compile(args: argparse.Namespace) -> int:
     forward = list(args.gradle_args)
     if forward[:1] == ["--"]:
         forward = forward[1:]
-    if not forward:
+    if forward == ["--ios"]:
+        kit = ensure_kit(getattr(args, "kit", None))
+        repo = find_repo(args.repo) if getattr(args, "repo", None) else Path.cwd().resolve()
+        sys.path.insert(0, str(_script_root(kit)))
+        from _variants import resolve_ios_compile_task
+        task, note = resolve_ios_compile_task(repo)
+        if not task:
+            print(f"[WARN] {note}", file=sys.stderr)
+            return 3
+        print(f"[*] {note}")
+        forward = [task]
+    elif not forward:
         kit = ensure_kit(getattr(args, "kit", None))
         repo = find_repo(args.repo) if getattr(args, "repo", None) else Path.cwd().resolve()
         sys.path.insert(0, str(_script_root(kit)))

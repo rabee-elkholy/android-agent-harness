@@ -32,7 +32,7 @@ def _run(script: str, args: list[str]) -> int:
     from evidence_store import StateLock
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
-    read_only = read_only or (script == "run_device.py" and args in (["status"], ["ios-status"]))
+    read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
     read_only = read_only or script == "incident_reporter.py"

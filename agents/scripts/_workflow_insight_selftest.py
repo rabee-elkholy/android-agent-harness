@@ -516,13 +516,30 @@ class WorkflowInsightTests(unittest.TestCase):
             self.assertFalse(ok_ea)
             self.assertIn("expected fun formatPrice/2, found fun formatPrice/1", msg_ea)
 
-            # Fix iosMain via appleMain intermediate hierarchy + matching arity
+            # Fix iosMain via appleMain intermediate hierarchy + matching arity + nested generics & quoted default param comma
+            common_f.write_text(
+                "package shared\nexpect class PlatformUUID\n"
+                'expect fun formatPrice(amount: Double, currency: String = ", "): String\n'
+                '@Deprecated("old", ReplaceWith("sortedCustom()"))\n'
+                "expect fun <T : Comparable<T>> List<T>.sortedCustom(): List<T>\n"
+                "expect fun Map<String, List<Int>>.flattenValues(): List<Int>\n",
+                encoding="utf-8",
+            )
+            android_f.write_text(
+                "package shared\nimport java.util.UUID\nactual typealias PlatformUUID = UUID\n"
+                'actual fun formatPrice(amount: Double, currency: String): String = "$amount $currency"\n'
+                "actual fun <T : Comparable<T>> List<T>.sortedCustom(): List<T> = this.sorted()\n"
+                "actual fun Map<String, List<Int>>.flattenValues(): List<Int> = values.flatten()\n",
+                encoding="utf-8",
+            )
             ios_f.unlink()
             apple_f = repo / "shared/src/appleMain/kotlin/Apple.kt"
             apple_f.parent.mkdir(parents=True, exist_ok=True)
             apple_f.write_text(
                 "package shared\nimport platform.Foundation.NSUUID\nactual typealias PlatformUUID = NSUUID\n"
-                "actual fun formatPrice(amount: Double, currency: String): String = \"$amount $currency\"\n",
+                'actual fun formatPrice(amount: Double, currency: String): String = "$amount $currency"\n'
+                "actual fun <T : Comparable<T>> List<T>.sortedCustom(): List<T> = this.sorted()\n"
+                "actual fun Map<String, List<Int>>.flattenValues(): List<Int> = values.flatten()\n",
                 encoding="utf-8",
             )
             ok_ea2, msg_ea2 = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/Common.kt"])
@@ -538,6 +555,7 @@ class WorkflowInsightTests(unittest.TestCase):
             sqm_rel = "shared/src/commonMain/sqldelight/migrations/1.sqm"
             gql_rel = "shared/src/commonMain/graphql/GetUser.graphql"
             swift_rel = "iosApp/iosApp/PaywallView.swift"
+            swift_clean_rel = "iosApp/iosApp/CleanCommentView.swift"
             swift_test_rel = "iosApp/iosAppTests/PaywallTests.swift"
             for rel, content in (
                 (sq_rel, "CREATE TABLE userEntity (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL);\n"),
@@ -549,6 +567,13 @@ class WorkflowInsightTests(unittest.TestCase):
                     '    let apiUrl = "http://insecure.example.com/pay"\n'
                     '    var body: some View { Text("Pay") }\n'
                     '    func buy() { fatalError("TODO: implement StoreKit purchase") }\n'
+                    '}\n',
+                ),
+                (
+                    swift_clean_rel,
+                    'import SwiftUI\nstruct CleanCommentView: View {\n'
+                    '    let secureUrl = "https://api.example.com" // legacy: "http://old.example.com" fatalError("TODO")\n'
+                    '    var body: some View { Text("OK") }\n'
                     '}\n',
                 ),
                 (
@@ -579,6 +604,9 @@ class WorkflowInsightTests(unittest.TestCase):
             issue_types = {iss["type"] for iss in issues}
             self.assertIn("INSECURE_CLEARTEXT_TRAFFIC", issue_types)
             self.assertIn("UNIMPLEMENTED_STUB", issue_types)
+
+            clean_issues = fast_kt_lint.lint_swift_file(repo / swift_clean_rel)
+            self.assertEqual([], clean_issues)
 
             test_issues = fast_kt_lint.lint_swift_file(repo / swift_test_rel)
             self.assertEqual([], test_issues)
@@ -624,6 +652,8 @@ class WorkflowInsightTests(unittest.TestCase):
             for ro_cmd in (
                 "xcrun simctl list devices available -j",
                 "xcodebuild -version",
+                "xcodebuild -list -project iosApp/iosApp.xcodeproj",
+                "xcodebuild -showdestinations -project iosApp/iosApp.xcodeproj -scheme iosApp",
                 "swift --version",
                 "python .agents/harness.py device ios-status",
                 "python .agents/harness.py compile --ios",

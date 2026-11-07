@@ -556,9 +556,43 @@ def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> 
                 "msg": f"Invisible Bidi control / Trojan Source character detected in code: '{trimmed}'. Invisible directional formatting characters are prohibited (CVE-2021-42574).",
             })
 
+        if trimmed.startswith("//"):
+            if DIAGNOSTIC_PROBE_PATTERN.search(trimmed):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "STRAY_DIAGNOSTIC_PROBE",
+                    "msg": f"Stray diagnostic probe detected: '{trimmed}'. Remove temporary probes before review/delivery.",
+                })
+            continue
+
+        # Strip trailing `// ...` comment outside string literals so commented-out URLs or TODO notes are not flagged
+        code_only_chars: list[str] = []
+        in_str = False
+        ci = 0
+        while ci < len(line):
+            ch = line[ci]
+            if in_str:
+                code_only_chars.append(ch)
+                if ch == "\\" and ci + 1 < len(line):
+                    ci += 1
+                    code_only_chars.append(line[ci])
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                    code_only_chars.append(ch)
+                elif line[ci:ci + 2] == "//":
+                    break
+                else:
+                    code_only_chars.append(ch)
+            ci += 1
+        code_line = "".join(code_only_chars)
+
         if not is_test:
             for sec_name, sec_re in SECRET_PATTERNS:
-                if sec_re.search(line):
+                if sec_re.search(code_line):
                     issues.append({
                         "file": str(file_path),
                         "line": idx,
@@ -567,7 +601,7 @@ def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> 
                     })
                     break
 
-            for m_url in CLEARTEXT_URL_PATTERN.finditer(line):
+            for m_url in CLEARTEXT_URL_PATTERN.finditer(code_line):
                 host = m_url.group(1).lower().split(":")[0]
                 if host not in CLEARTEXT_WHITELIST_HOSTS and not any(host.endswith("." + wh) for wh in CLEARTEXT_WHITELIST_HOSTS):
                     issues.append({
@@ -578,7 +612,7 @@ def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> 
                     })
                     break
 
-            if SWIFT_STUB_PATTERN.search(line) and not trimmed.startswith("//"):
+            if SWIFT_STUB_PATTERN.search(code_line):
                 issues.append({
                     "file": str(file_path),
                     "line": idx,
