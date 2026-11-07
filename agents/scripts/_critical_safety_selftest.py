@@ -1478,7 +1478,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         import time
         import ensure_hook_selftest as checker
         with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
+            root = Path(td).resolve()
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             (scripts / "dummy.py").write_text("x = 1\n", encoding="utf-8")
