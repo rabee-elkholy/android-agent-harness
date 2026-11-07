@@ -1482,7 +1482,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             (scripts / "dummy.py").write_text("x = 1\n", encoding="utf-8")
-            cache_file = root / "state" / "hook_selftest.json"
+            cache_file = root / "cache" / "hook_selftest.json"
 
             # 1. Hook mode with stale cache spawns background worker and returns immediately (<2s) without running selftest synchronously
             spawned: list[str] = []

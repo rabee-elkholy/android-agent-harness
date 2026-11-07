@@ -26,7 +26,7 @@ except ImportError:
 AGENTS = Path(__file__).resolve().parent.parent
 SCRIPTS = AGENTS / "scripts"
 SELFTEST = SCRIPTS / "_hook_selftest.py"
-CACHE = AGENTS / "state" / "hook_selftest.json"
+CACHE = AGENTS / "cache" / "hook_selftest.json"
 _fingerprint_files: dict = {}
 
 
@@ -190,14 +190,14 @@ def _write_running_lock(pid: int, fingerprint: str) -> None:
     from _vnext_common import atomic_write_json
     try:
         atomic_write_json(_running_lock_path(), {"pid": pid, "fingerprint": fingerprint, "started_at": time.time()})
-    except Exception:
+    except (OSError, ValueError):
         pass
 
 
 def _clear_running_lock() -> None:
     try:
         _running_lock_path().unlink(missing_ok=True)
-    except Exception:
+    except OSError:
         pass
 
 
@@ -226,7 +226,7 @@ def _spawn_background_selftest(fingerprint: str) -> bool:
         )
         _write_running_lock(proc.pid, fingerprint)
         return True
-    except Exception:
+    except (OSError, ValueError):
         return False
 
 
@@ -238,7 +238,7 @@ def seed_cache_for_agents(agents_dir: Path, *, ok: bool = True) -> None:
         AGENTS = agents_dir.resolve()
         SCRIPTS = AGENTS / "scripts"
         SELFTEST = SCRIPTS / "_hook_selftest.py"
-        CACHE = AGENTS / "state" / "hook_selftest.json"
+        CACHE = AGENTS / "cache" / "hook_selftest.json"
         fp = harness_fingerprint()
         _write_cache(fp, ok)
     finally:

@@ -858,7 +858,7 @@ def _warm_project_graph(repo: Path) -> tuple[bool, str | None]:
             from ensure_hook_selftest import seed_cache_for_agents
             if (repo / ".agents" / "scripts").is_dir():
                 seed_cache_for_agents(repo / ".agents", ok=True)
-        except Exception:
+        except (OSError, ValueError, ImportError):
             pass
         return True, None
     except Exception as exc:
