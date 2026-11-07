@@ -19,6 +19,14 @@ _SOURCE_SET_DIRS = (
     "iosArm64Main",
     "iosSimulatorArm64Main",
     "iosX64Main",
+    "appleMain",
+    "nativeMain",
+    "mobileMain",
+    "jvmMain",
+    "desktopMain",
+    "jvmAndAndroidMain",
+    "jsMain",
+    "wasmJsMain",
 )
 
 # Canonical Gradle test source sets (Android + KMP: test, androidTest, testFixtures, sharedTest,
@@ -26,7 +34,7 @@ _SOURCE_SET_DIRS = (
 TEST_SOURCE_SET_RE = re.compile(
     r"^(?:(?:test|androidtest|testfixtures|sharedtest|instrumentationtest)(?:[a-z0-9_]*)"
     r"|[a-z0-9_]*(?:unittest|instrumentedtest|hosttest)"
-    r"|(?:common|jvm|android|ios|iosarm64|iossimulatorarm64|iosx64|js|wasmjs|native|apple|macos|linux|mingw)test)$",
+    r"|(?:common|jvm|android|desktop|ios|iosarm64|iossimulatorarm64|iosx64|js|wasmjs|native|apple|macos|linux|mingw)test)$",
     re.IGNORECASE,
 )
 
@@ -53,9 +61,15 @@ def is_kmp_or_android_test_path(rel_path: str) -> bool:
                     return True
     else:
         for part in parts[:-1]:
-            if part in {"test", "tests", "androidtest", "testfixtures", "sharedtest", "instrumentationtest", "commontest", "iostest", "androidunittest", "androidhosttest"}:
+            if part in {
+                "test", "tests", "androidtest", "testfixtures", "sharedtest",
+                "instrumentationtest", "commontest", "iostest", "androidunittest",
+                "androidhosttest", "iosapptests", "iosappuitests", "uitests",
+            }:
                 return True
-    if lower.endswith(("test.kt", "test.java", "tests.kt", "tests.java")):
+            if lower.endswith(".swift") and part.endswith(("tests", "uitests")):
+                return True
+    if lower.endswith(("test.kt", "test.java", "tests.kt", "tests.java", "test.swift", "tests.swift")):
         return True
     return False
 
@@ -194,40 +208,78 @@ _KMP_MODIFIER_GROUP = (
 
 _EXPECT_DECL_RE = re.compile(
     rf"(?m)^[ \t]*(?:@[A-Za-z0-9_.]+\s*(?:\([^)]*\))?\s*)*{_KMP_MODIFIER_GROUP}expect\s+{_KMP_MODIFIER_GROUP}"
-    r"(class|interface|object|fun|val|var)\s+(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.]+(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
+    r"(class|interface|object|fun|val|var)\s+(?:<[^>]+>\s*)?(?:([A-Za-z0-9_.]+)(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
 )
 
 _ACTUAL_DECL_RE = re.compile(
     rf"(?m)^[ \t]*(?:@[A-Za-z0-9_.]+\s*(?:\([^)]*\))?\s*)*{_KMP_MODIFIER_GROUP}actual\s+{_KMP_MODIFIER_GROUP}"
-    r"(class|interface|object|typealias|fun|val|var)\s+(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.]+(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
+    r"(class|interface|object|typealias|fun|val|var)\s+(?:<[^>]+>\s*)?(?:([A-Za-z0-9_.]+)(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
+)
+
+_KMP_ANDROID_JVM_PKG_GROUP = (
+    r"(?:android\.(?:content|view|os|util|app|widget|graphics|database|net|provider|webkit|hardware|media|telephony|bluetooth|location|nfc|security|service|text|transition|animation|accessibilityservice)"
+    r"|dalvik\.[A-Za-z0-9_]+"
+    r"|java\.(?:io|net|sql|awt|nio|rmi|beans|lang\.reflect|util\.concurrent)"
+    r"|javax\.swing)\.[A-Za-z0-9_.*]+"
+)
+_KMP_IOS_NATIVE_PKG_GROUP = (
+    r"(?:platform\.(?:UIKit|Foundation|darwin|posix|CoreFoundation|CoreGraphics|QuartzCore|Security|StoreKit|AVFoundation|CoreLocation|CoreBluetooth|UserNotifications|WebKit|MapKit|Metal)"
+    r"|kotlinx\.cinterop)\.[A-Za-z0-9_.*]+"
+)
+
+_KMP_FORBIDDEN_ANDROID_JVM_IMPORT_RE = re.compile(
+    rf"(?m)^[ \t]*import[ \t]+({_KMP_ANDROID_JVM_PKG_GROUP})"
+)
+
+_KMP_FORBIDDEN_IOS_NATIVE_IMPORT_RE = re.compile(
+    rf"(?m)^[ \t]*import[ \t]+({_KMP_IOS_NATIVE_PKG_GROUP})"
 )
 
 _KMP_FORBIDDEN_COMMON_IMPORT_RE = re.compile(
-    r"(?m)^[ \t]*import[ \t]+((?:android\.(?:content|view|os|util|app|widget|graphics|database|net|provider|webkit)|java\.(?:io|net|sql|awt|nio)|javax\.swing)\.[A-Za-z0-9_.*]+)"
+    rf"(?m)^[ \t]*import[ \t]+({_KMP_ANDROID_JVM_PKG_GROUP}|{_KMP_IOS_NATIVE_PKG_GROUP})"
+)
+
+_IOS_SOURCE_SETS = (
+    "iosMain", "appleMain", "nativeMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main",
+)
+_ANDROID_JVM_SOURCE_SETS = (
+    "androidMain", "jvmMain", "desktopMain", "jvmAndAndroidMain",
 )
 
 
+def _source_set_of_rel(norm_rel: str) -> str:
+    parts = f"/{norm_rel}".split("/src/")
+    if len(parts) < 2:
+        return ""
+    return parts[1].split("/", 1)[0]
+
+
 def check_kmp_common_main_purity(repo: Path, changed_rel_paths: list[str] | None = None) -> tuple[bool, list[str]]:
-    """Deterministically verify that KMP src/commonMain Kotlin files do not import Android/JVM-only platform APIs."""
+    """Deterministically verify KMP source-set platform purity across commonMain, androidMain, and iosMain."""
     repo = repo.resolve()
-    target_files: list[Path] = []
+    target_files: list[tuple[Path, str]] = []
+    allowed_sets = {"commonMain", *_IOS_SOURCE_SETS, *_ANDROID_JVM_SOURCE_SETS}
     if changed_rel_paths is not None:
         for rel in changed_rel_paths:
             norm = str(rel or "").replace("\\", "/").strip("/")
-            if norm.endswith(".kt") and ("/src/commonMain/" in f"/{norm}"):
+            if not norm.endswith(".kt"):
+                continue
+            ss = _source_set_of_rel(norm)
+            if ss in allowed_sets:
                 fpath = repo / norm
                 if fpath.is_file() and not _is_skipped(fpath):
-                    target_files.append(fpath)
+                    target_files.append((fpath, ss))
     else:
         for mod_dir in _discover_kmp_common_modules(repo):
-            common_main = mod_dir / "src" / "commonMain"
-            if common_main.is_dir():
-                for kt_file in sorted(common_main.rglob("*.kt")):
-                    if not _is_skipped(kt_file):
-                        target_files.append(kt_file)
+            for ss in sorted(allowed_sets):
+                ss_dir = mod_dir / "src" / ss
+                if ss_dir.is_dir():
+                    for kt_file in sorted(ss_dir.rglob("*.kt")):
+                        if not _is_skipped(kt_file):
+                            target_files.append((kt_file, ss))
 
     violations: list[str] = []
-    for kt_file in target_files:
+    for kt_file, ss in target_files:
         try:
             raw = kt_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -237,17 +289,101 @@ def check_kmp_common_main_purity(repo: Path, changed_rel_paths: list[str] | None
             rel_posix = kt_file.relative_to(repo).as_posix()
         except ValueError:
             rel_posix = kt_file.name
-        for match in _KMP_FORBIDDEN_COMMON_IMPORT_RE.finditer(clean):
-            violations.append(
-                f"{rel_posix} imports forbidden platform API '{match.group(1)}' inside commonMain"
-            )
+        if ss == "commonMain":
+            for match in _KMP_FORBIDDEN_COMMON_IMPORT_RE.finditer(clean):
+                violations.append(
+                    f"{rel_posix} imports forbidden platform API '{match.group(1)}' inside commonMain"
+                )
+        elif ss in _IOS_SOURCE_SETS:
+            for match in _KMP_FORBIDDEN_ANDROID_JVM_IMPORT_RE.finditer(clean):
+                violations.append(
+                    f"{rel_posix} imports forbidden Android/JVM API '{match.group(1)}' inside {ss}"
+                )
+        elif ss in _ANDROID_JVM_SOURCE_SETS:
+            for match in _KMP_FORBIDDEN_IOS_NATIVE_IMPORT_RE.finditer(clean):
+                violations.append(
+                    f"{rel_posix} imports forbidden iOS/Native API '{match.group(1)}' inside {ss}"
+                )
     return len(violations) == 0, violations
+
+
+def _parse_fun_arity(text: str, pos: int) -> int | None:
+    """Parse top-level parameter count from `( ... )` immediately following a Kotlin `fun` name."""
+    n = len(text)
+    idx = pos
+    while idx < n and text[idx] in " \t\r\n":
+        idx += 1
+    if idx >= n or text[idx] != "(":
+        return None
+    idx += 1
+    paren_depth = 1
+    angle_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    segments: list[str] = []
+    current: list[str] = []
+    while idx < n and paren_depth > 0:
+        ch = text[idx]
+        if ch == "(":
+            paren_depth += 1
+            current.append(ch)
+        elif ch == ")":
+            paren_depth -= 1
+            if paren_depth == 0:
+                break
+            current.append(ch)
+        elif ch == "<":
+            angle_depth += 1
+            current.append(ch)
+        elif ch == ">" and (idx == 0 or text[idx - 1] != "-"):
+            angle_depth = max(0, angle_depth - 1)
+            current.append(ch)
+        elif ch == "[":
+            bracket_depth += 1
+            current.append(ch)
+        elif ch == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+            current.append(ch)
+        elif ch == "{":
+            brace_depth += 1
+            current.append(ch)
+        elif ch == "}":
+            brace_depth = max(0, brace_depth - 1)
+            current.append(ch)
+        elif ch == "," and paren_depth == 1 and angle_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+            segments.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+        idx += 1
+    if paren_depth != 0:
+        return None
+    tail = "".join(current).strip()
+    if tail:
+        segments.append(tail)
+    return len([seg for seg in segments if seg])
+
+
+def _normalize_decl_kind(raw_kind: str) -> str:
+    if raw_kind in ("class", "interface", "object"):
+        return "type"
+    return raw_kind
 
 
 def _extract_kmp_declarations(source_dir: Path, pattern: re.Pattern[str]) -> set[str]:
     names: set[str] = set()
+    for name, _ in _extract_kmp_declaration_signatures(source_dir, pattern).items():
+        names.add(name)
+    return names
+
+
+def _extract_kmp_declaration_signatures(
+    source_dir: Path, pattern: re.Pattern[str]
+) -> dict[str, set[tuple[str, str, int | None]]]:
+    """Return mapping of symbol_name -> set of (kind_group, receiver_base, fun_arity)."""
+    decls: dict[str, set[tuple[str, str, int | None]]] = {}
     if not source_dir.is_dir():
-        return names
+        return decls
     for kt_file in sorted(source_dir.rglob("*.kt")):
         if _is_skipped(kt_file):
             continue
@@ -257,8 +393,41 @@ def _extract_kmp_declarations(source_dir: Path, pattern: re.Pattern[str]) -> set
             continue
         clean = strip_gradle_comments_preserving_strings(raw)
         for match in pattern.finditer(clean):
-            names.add(match.group(2))
-    return names
+            raw_kind = match.group(1)
+            raw_recv = match.group(2) or ""
+            sym_name = match.group(3)
+            kind_group = _normalize_decl_kind(raw_kind)
+            recv_base = raw_recv.rsplit(".", 1)[-1] if raw_recv else ""
+            arity = _parse_fun_arity(clean, match.end()) if raw_kind == "fun" else None
+            decls.setdefault(sym_name, set()).add((kind_group, recv_base, arity))
+    return decls
+
+
+def _format_sig(sym: str, sig: tuple[str, str, int | None]) -> str:
+    kind_group, recv_base, arity = sig
+    target = f"{recv_base}.{sym}" if recv_base else sym
+    if kind_group == "fun" and arity is not None:
+        return f"fun {target}/{arity}"
+    return f"{kind_group} {target}"
+
+
+def _signature_matches(
+    exp_sig: tuple[str, str, int | None],
+    act_sigs: set[tuple[str, str, int | None]],
+) -> bool:
+    exp_kind, exp_recv, exp_arity = exp_sig
+    for act_kind, act_recv, act_arity in act_sigs:
+        kind_ok = (exp_kind == act_kind) or (exp_kind == "type" and act_kind == "typealias")
+        if not kind_ok:
+            continue
+        if act_kind == "typealias":
+            return True
+        if exp_recv != act_recv:
+            continue
+        if exp_kind == "fun" and exp_arity is not None and act_arity is not None and exp_arity != act_arity:
+            continue
+        return True
+    return False
 
 
 def _discover_kmp_common_modules(repo: Path) -> list[Path]:
@@ -289,7 +458,7 @@ def has_kmp_common_main(repo: Path) -> bool:
 
 
 def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | None = None) -> tuple[bool, str]:
-    """Deterministically verify expect/actual pairing in modified KMP modules.
+    """Deterministically verify expect/actual pairing and signature compatibility in modified KMP modules.
 
     Only inspects KMP modules that have both `src/commonMain` and at least one mobile
     platform source set (`src/androidMain`, `src/iosMain`, etc.) and were touched by
@@ -317,8 +486,8 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
     checked_modules = 0
     for mod_dir in sorted(candidate_module_dirs):
         common_main = mod_dir / "src" / "commonMain"
-        expect_names = _extract_kmp_declarations(common_main, _EXPECT_DECL_RE)
-        if not expect_names:
+        expect_decls = _extract_kmp_declaration_signatures(common_main, _EXPECT_DECL_RE)
+        if not expect_decls:
             continue
         checked_modules += 1
         try:
@@ -327,6 +496,24 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
         except ValueError:
             mod_label = mod_dir.name
 
+        def _verify_platform_target(target_label: str, platform_dirs: list[Path]) -> None:
+            actual_decls: dict[str, set[tuple[str, str, int | None]]] = {}
+            for p_dir in platform_dirs:
+                for sym, sigs in _extract_kmp_declaration_signatures(p_dir, _ACTUAL_DECL_RE).items():
+                    actual_decls.setdefault(sym, set()).update(sigs)
+            for sym in sorted(expect_decls):
+                if sym not in actual_decls:
+                    missing_reports.append(f"{mod_label} expect '{sym}' is missing actual in {target_label}")
+                    continue
+                act_sigs = actual_decls[sym]
+                for exp_sig in sorted(expect_decls[sym], key=lambda s: (s[0], s[1], -1 if s[2] is None else s[2])):
+                    if not _signature_matches(exp_sig, act_sigs):
+                        exp_str = _format_sig(sym, exp_sig)
+                        act_str = ", ".join(_format_sig(sym, a) for a in sorted(act_sigs, key=lambda s: (s[0], s[1], -1 if s[2] is None else s[2])))
+                        missing_reports.append(
+                            f"{mod_label} expect '{sym}' has incompatible actual in {target_label} (expected {exp_str}, found {act_str})"
+                        )
+
         # Check Android platform source sets if present in this module
         android_dirs = [
             mod_dir / "src" / d
@@ -334,12 +521,7 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
             if (mod_dir / "src" / d).is_dir()
         ]
         if (mod_dir / "src" / "androidMain").is_dir():
-            android_actuals: set[str] = set()
-            for android_d in android_dirs:
-                android_actuals |= _extract_kmp_declarations(android_d, _ACTUAL_DECL_RE)
-            missing_android = sorted(expect_names - android_actuals)
-            for sym in missing_android:
-                missing_reports.append(f"{mod_label} expect '{sym}' is missing actual in androidMain")
+            _verify_platform_target("androidMain", android_dirs)
 
         # Check iOS platform source sets if present in this module
         ios_dirs = [
@@ -348,15 +530,11 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
             if (mod_dir / "src" / d).is_dir()
         ]
         if any((mod_dir / "src" / d).is_dir() for d in ("iosMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")):
-            ios_actuals: set[str] = set()
-            for ios_d in ios_dirs:
-                ios_actuals |= _extract_kmp_declarations(ios_d, _ACTUAL_DECL_RE)
-            missing_ios = sorted(expect_names - ios_actuals)
-            for sym in missing_ios:
-                missing_reports.append(f"{mod_label} expect '{sym}' is missing actual in iosMain")
+            _verify_platform_target("iosMain", ios_dirs)
 
     if missing_reports:
         return False, "KMP_EXPECT_ACTUAL_MISMATCH: " + "; ".join(missing_reports)
     return True, f"KMP expect/actual pairing verified ({checked_modules} module(s) with expect declarations)"
+
 
 

@@ -145,7 +145,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "["}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift"}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -331,7 +331,19 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return not any(arg.startswith(("--pre", "--hostname-bin")) for arg in args)
     if name == "compileall":
         return True
-    if name == "run_device" and args == ["status"]:
+    if name == "xcrun":
+        if args in (["--version"], ["-h"], ["--help"]):
+            return True
+        if args[:2] in (["simctl", "list"], ["simctl", "getenv"], ["simctl", "help"]) and not any(a.startswith("-o") for a in args):
+            return True
+        if args[:1] == ["--sdk"] and "--show-sdk-path" in args and len(args) <= 3:
+            return True
+        return False
+    if name == "xcodebuild":
+        return bool(args) and all(a in {"-version", "-list", "-showsdks", "-help", "--help"} for a in args)
+    if name == "swift":
+        return args in (["--version"], ["-version"], ["--help"], ["-h"])
+    if name == "run_device" and args in (["status"], ["ios-status"]):
         return True
     if name == "android_inspect" or (name in {"harness_cli", "android-harness"} and args[:1] == ["android-inspect"]):
         inspection_args = args if name == "android_inspect" else args[1:]
@@ -348,7 +360,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     if name in {"harness_cli", "android-harness"}:
         if args[:2] in (["debug", "status"], ["debug", "logs"]):
             return True
-        if args == ["device", "status"]:
+        if args in (["device", "status"], ["device", "ios-status"]):
             return True
         if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"]):
             return True
@@ -648,7 +660,7 @@ def _is_production_code(rel_posix: str) -> bool:
     from _modules import is_kmp_or_android_test_path
 
     lower = f"/{rel_posix.lower()}"
-    if not lower.endswith((".kt", ".java")):
+    if not lower.endswith((".kt", ".java", ".swift")):
         return False
     return not is_kmp_or_android_test_path(rel_posix)
 
@@ -1196,7 +1208,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         # Real app: checking a merge with `harness.py compile` was refused with no task open. The bare
         # command compiles the harness-derived task and writes build outputs only; a named Gradle task
         # could be anything, so it still needs a task.
-        if _entry(normalized, repo) == ("harness_cli", ["compile"]):
+        if _entry(normalized, repo) in (("harness_cli", ["compile"]), ("harness_cli", ["compile", "--ios"])):
             return True, "compile check without a task writes build outputs only"
         lower = normalized.lower()
         if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
@@ -1224,7 +1236,14 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "IMPLEMENTING":
         if entry == "journey_runner" or (entry == "harness_cli" and arguments[:1] == ["journey"]):
             return False, "Journey replay requires VERIFYING and current install/review evidence."
-        if re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I) or (entry == "harness_cli" and arguments[:1] == ["device"]):
+        is_ios_device_action = (
+            (entry == "run_device" and arguments[:1] in (["ios-status"], ["ios-build"], ["ios-run"]))
+            or (entry in {"harness_cli", "android-harness"} and arguments[:2] in (["device", "ios-status"], ["device", "ios-build"], ["device", "ios-run"]))
+        )
+        if not is_ios_device_action and (
+            re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I)
+            or (entry == "harness_cli" and arguments[:1] == ["device"])
+        ):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
             return False, "Destructive filesystem or external script commands are blocked during implementation."

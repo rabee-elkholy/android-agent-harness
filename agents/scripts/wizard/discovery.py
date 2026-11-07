@@ -227,14 +227,21 @@ def discover_android_modules(repo: Path, paths: list[Path] | None = None) -> lis
     modules: list[str] = []
     catalog_ids = _catalog_plugin_ids(repo)
     for path in (paths if paths is not None else gradle_files(repo)):
+        if path.name in {"settings.gradle", "settings.gradle.kts"}:
+            continue
         text = _resolve_catalog_aliases(read_text(path), catalog_ids)
         if not re.search(
-            r"com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library)|androidTarget\s*\(|\bandroidLibrary\s*\{",
+            r"com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library)"
+            r"|org\.jetbrains\.kotlin\.multiplatform"
+            r"|kotlin\s*\(\s*[\"']multiplatform[\"']\s*\)"
+            r"|androidTarget\s*\(|\bandroidLibrary\s*\{",
             text,
         ):
             continue
         if re.search(
-            r"com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library).*apply\s+false",
+            r"(?:com\.android\.(?:application|library|dynamic-feature|kotlin\.multiplatform\.library)"
+            r"|org\.jetbrains\.kotlin\.multiplatform"
+            r"|kotlin\s*\(\s*[\"']multiplatform[\"']\s*\)).*apply\s+false",
             text,
         ):
             continue

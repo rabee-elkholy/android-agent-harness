@@ -2384,11 +2384,17 @@ def resolve_module_gradle_task(repo: Path, module: str, task_type: str = "compil
                 return f"{mod_clean}:compileKotlinAndroid"
             else:
                 return f"{mod_clean}:test{var_pascal}UnitTest"
-        if kmp_info["has_jvm_target"]:
+        if kmp_info["has_jvm_target"] or (mod_dir / "src" / "jvmMain").is_dir() or (mod_dir / "src" / "desktopMain").is_dir():
             if task_type == "compile":
                 return f"{mod_clean}:compileKotlinJvm"
             return f"{mod_clean}:jvmTest"
-        raise ValidationError(f"[CONFIG_ERROR] KMP module '{module}' task resolution requires configured Android target")
+        if kmp_info["has_ios_target"] and sys.platform == "darwin":
+            import platform
+            ios_arch = "IosX64" if platform.machine().lower() in {"x86_64", "amd64"} else "IosSimulatorArm64"
+            if task_type == "compile":
+                return f"{mod_clean}:compileKotlin{ios_arch}"
+            return f"{mod_clean}:{ios_arch[:1].lower() + ios_arch[1:]}Test"
+        raise ValidationError(f"[CONFIG_ERROR] KMP module '{module}' task resolution requires configured Android, JVM, or macOS iOS target")
 
     if task_type == "compile":
         if has_kotlin:

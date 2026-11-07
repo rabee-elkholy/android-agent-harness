@@ -435,7 +435,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         })
 
     posix_lower = f"/{posix.lower()}"
-    is_ios_source_set = bool(re.search(r"/src/ios[^/]*/", posix_lower))
+    is_ios_source_set = bool(re.search(r"/src/(?:ios|apple|native)[^/]*/", posix_lower))
     is_common_main = "/src/commonmain/" in posix_lower
     has_non_expect_composable = bool(
         re.search(
@@ -512,6 +512,87 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                     "type": "VIEWBINDING_MEMORY_LEAK",
                     "msg": f"Fragment ViewBinding memory leak: '{var_name}' is declared but not set to null in onDestroyView(). Set '{var_name} = null' in onDestroyView() to prevent retaining the View hierarchy.",
                 })
+
+    return issues
+
+
+SWIFT_STUB_PATTERN = re.compile(
+    r'\bfatalError\s*\(\s*"(?:TODO|Not\s+implemented|unimplemented|FIXME)[^"]*"\s*\)',
+    re.IGNORECASE,
+)
+
+
+def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> list[dict]:
+    """Fast preflight security and hygiene checks for KMM iOS Swift files."""
+    from _modules import is_kmp_or_android_test_path
+
+    issues: list[dict] = []
+    posix = file_path.as_posix()
+    is_test = is_kmp_or_android_test_path(posix)
+    try:
+        lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as e:
+        return [{"file": str(file_path), "line": 1, "type": "IO_ERROR", "msg": str(e)}]
+
+    in_block_comment = False
+    for idx, line in enumerate(lines, 1):
+        trimmed = line.strip()
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if trimmed.startswith("/*"):
+            if "*/" not in trimmed[2:]:
+                in_block_comment = True
+            continue
+        if modified_lines is not None and idx not in modified_lines:
+            continue
+
+        if BIDI_TROJAN_PATTERN.search(line):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "TROJAN_SOURCE_BIDI",
+                "msg": f"Invisible Bidi control / Trojan Source character detected in code: '{trimmed}'. Invisible directional formatting characters are prohibited (CVE-2021-42574).",
+            })
+
+        if not is_test:
+            for sec_name, sec_re in SECRET_PATTERNS:
+                if sec_re.search(line):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "HARDCODED_SECRET",
+                        "msg": f"Hardcoded credential detected ({sec_name}). Store credentials in secure build configuration or Keychain.",
+                    })
+                    break
+
+            for m_url in CLEARTEXT_URL_PATTERN.finditer(line):
+                host = m_url.group(1).lower().split(":")[0]
+                if host not in CLEARTEXT_WHITELIST_HOSTS and not any(host.endswith("." + wh) for wh in CLEARTEXT_WHITELIST_HOSTS):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "INSECURE_CLEARTEXT_TRAFFIC",
+                        "msg": f"Insecure cleartext HTTP URL detected: '{m_url.group(0)}'. Use HTTPS to prevent MITM attacks.",
+                    })
+                    break
+
+            if SWIFT_STUB_PATTERN.search(line) and not trimmed.startswith("//"):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "UNIMPLEMENTED_STUB",
+                    "msg": f"Unimplemented stub found in production Swift code: '{trimmed}'. Provide complete implementation.",
+                })
+
+        if DIAGNOSTIC_PROBE_PATTERN.search(trimmed):
+            issues.append({
+                "file": str(file_path),
+                "line": idx,
+                "type": "STRAY_DIAGNOSTIC_PROBE",
+                "msg": f"Stray diagnostic probe detected: '{trimmed}'. Remove temporary probes before review/delivery.",
+            })
 
     return issues
 
@@ -624,6 +705,15 @@ def main() -> int:
             p for root in roots for p in repo_glob(root, "**/*.java") if not any(x in p.parts for x in skip)
         ]
         java_lines_map = {p: None for p in java_files}
+        swift_roots = list(roots)
+        for ios_dir in ("iosApp", "ios", "appleApp"):
+            cand = REPO / ios_dir
+            if cand.is_dir() and cand not in swift_roots:
+                swift_roots.append(cand)
+        swift_files = [
+            p for root in swift_roots for p in repo_glob(root, "**/*.swift") if not any(x in p.parts for x in skip)
+        ]
+        swift_lines_map = {p: None for p in swift_files}
         changed = changed_paths()
     else:
         from _repo_files import active_task_scope, diff_modified_lines_against_baseline
@@ -633,6 +723,8 @@ def main() -> int:
         modified_lines_map = get_modified_lines_map(REPO, target_files)
         java_files = [p for p in changed if p.suffix == ".java"]
         java_lines_map = get_modified_lines_map(REPO, java_files) if java_files else {}
+        swift_files = [p for p in changed if p.suffix == ".swift"]
+        swift_lines_map = get_modified_lines_map(REPO, swift_files) if swift_files else {}
         if baseline_dir is not None:
             for p in target_files:
                 try:
@@ -650,10 +742,18 @@ def main() -> int:
                 b_file = baseline_dir / rel
                 if b_file.is_file() and p.is_file():
                     java_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
+            for p in swift_files:
+                try:
+                    rel = p.resolve().relative_to(REPO.resolve()).as_posix()
+                except ValueError:
+                    continue
+                b_file = baseline_dir / rel
+                if b_file.is_file() and p.is_file():
+                    swift_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
 
     build_files = [p for p in changed if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
 
-    if not target_files and not build_files and not java_files:
+    if not target_files and not build_files and not java_files and not swift_files:
         git_head_proc = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=REPO,
@@ -675,11 +775,15 @@ def main() -> int:
     mode_label = "all files" if args.all else "modified lines in changed files"
     if target_files:
         print(f"[*] Fast Kotlin Lint: Scanning {len(target_files)} Kotlin file(s) ({mode_label})...")
+    if swift_files:
+        print(f"[*] Fast Swift Lint: Scanning {len(swift_files)} Swift file(s) ({mode_label})...")
     all_issues = []
     for path in target_files:
         all_issues.extend(lint_file(path, modified_lines=modified_lines_map.get(path)))
     for path in java_files:
         all_issues.extend(lint_java_file(path, modified_lines=java_lines_map.get(path)))
+    for path in swift_files:
+        all_issues.extend(lint_swift_file(path, modified_lines=swift_lines_map.get(path)))
     for bf in build_files:
         all_issues.extend(lint_build_script(bf))
 

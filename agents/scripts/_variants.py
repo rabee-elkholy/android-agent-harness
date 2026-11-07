@@ -181,6 +181,49 @@ def resolve_compile_task(repo: Path | str | None = None) -> tuple[str, str]:
     )
 
 
+def resolve_ios_compile_task(repo: Path | str | None = None) -> tuple[str, str]:
+    """Return (ios_compile_task, note) for KMP modules targeting iOS on macOS."""
+    import platform
+
+    repo_p = Path(repo or ".").resolve()
+    arch_suffix = "IosX64" if platform.machine().lower() in {"x86_64", "amd64"} else "IosSimulatorArm64"
+    compile_suffix = f"compileKotlin{arch_suffix}"
+    candidates: list[str] = []
+    try:
+        from _modules import detect_kmp_build_script
+        from wizard.discovery import _catalog_plugin_ids, _resolve_catalog_aliases, gradle_files
+
+        catalog_ids = _catalog_plugin_ids(repo_p)
+        for gf in gradle_files(repo_p):
+            if gf.name in {"settings.gradle", "settings.gradle.kts"}:
+                continue
+            raw = gf.read_text(encoding="utf-8", errors="replace")
+            resolved = _resolve_catalog_aliases(raw, catalog_ids)
+            info = detect_kmp_build_script(raw, resolved)
+            mod_dir = gf.parent
+            has_ios_dir = (mod_dir / "src" / "iosMain").is_dir() or (mod_dir / "src" / "appleMain").is_dir()
+            if info["has_ios_target"] or (info["has_kmp_plugin"] and has_ios_dir) or has_ios_dir:
+                rel = mod_dir.relative_to(repo_p).as_posix()
+                mod = ":" + rel.replace("/", ":") if rel != "." else ":"
+                if mod not in candidates:
+                    candidates.append(mod)
+    except (OSError, ValueError, ImportError):
+        pass
+
+    for preferred in (":composeApp", ":shared", ":common"):
+        if preferred in candidates:
+            task = f"{preferred}:{compile_suffix}"
+            return task, f"KMP iOS compile task derived for {preferred} ({task})"
+    if candidates:
+        chosen = candidates[0].rstrip(":")
+        task = f"{chosen}:{compile_suffix}" if chosen else f":{compile_suffix}"
+        return task, f"KMP iOS compile task derived for {candidates[0]} ({task})"
+    return "", (
+        "IOS_COMPILE_TASK_UNKNOWN: no KMP module with an iOS target (iosSimulatorArm64 / iosArm64 / iosX64 or src/iosMain) "
+        "was found in this repository."
+    )
+
+
 def assemble_task(flavor: str | None = None) -> str:
     return resolve_assemble_task(flavor=flavor)
 

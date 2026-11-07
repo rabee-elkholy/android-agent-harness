@@ -44,10 +44,17 @@ def product_values(repo: Path, answers: dict) -> dict:
             pass
     if not launcher and project_kind == "application":
         launcher = f"{application_id}/.MainActivity"
-    assemble_task = answers.get("assemble") or ":app:assembleDebug"
+    raw_module = str(answers.get("module") or "").strip()
+    if raw_module and not raw_module.startswith(":"):
+        raw_module = f":{raw_module}"
+    default_assemble = f"{raw_module}:assembleDebug" if raw_module and raw_module != ":" else ":app:assembleDebug"
+    if project_kind == "library" and raw_module and raw_module != ":":
+        default_assemble = f"{raw_module}:assemble"
+    assemble_task = answers.get("assemble") or default_assemble
     unit_test_task = answers.get("unit_test_task") or assemble_task.replace("assemble", "test") + "UnitTest"
-    if "assemble" not in assemble_task:
-        unit_test_task = ":app:testDebugUnitTest"
+    if "assemble" not in assemble_task or assemble_task.endswith(":assemble"):
+        mod_prefix = raw_module if raw_module and raw_module != ":" else ":app"
+        unit_test_task = answers.get("unit_test_task") or f"{mod_prefix}:testDebugUnitTest"
     tracker_language = answers.get("zoho_language") or answers.get("tracker_language") or "en_titles_ar_comments"
     tools = answers.get("tools", ["antigravity"])
     if tools is None:
@@ -57,8 +64,19 @@ def product_values(repo: Path, answers: dict) -> dict:
     if not isinstance(configured_src, (list, tuple)) or not configured_src:
         module = str(answers.get("module") or assemble_task.split(":assemble", 1)[0] or ":app")
         module_parts = [part for part in module.split(":") if part]
-        source_set = "androidMain" if (repo.joinpath(*module_parts) / "src" / "androidMain").is_dir() else "main"
+        mod_root = repo.joinpath(*module_parts)
+        if (mod_root / "src" / "androidMain").is_dir():
+            source_set = "androidMain"
+        elif (mod_root / "src" / "commonMain").is_dir() and not (mod_root / "src" / "main").is_dir():
+            source_set = "commonMain"
+        else:
+            source_set = "main"
         configured_src = [*module_parts, "src", source_set]
+    default_apk = "app/build/outputs/apk/debug/app-debug.apk"
+    if raw_module and raw_module not in (":", ":app"):
+        mod_dir = raw_module.lstrip(":").replace(":", "/")
+        mod_leaf = raw_module.split(":")[-1]
+        default_apk = f"{mod_dir}/build/outputs/apk/debug/{mod_leaf}-debug.apk"
     values = {
         "PRODUCT_NAME": product_name,
         "PROJECT_KIND": project_kind,
@@ -67,7 +85,7 @@ def product_values(repo: Path, answers: dict) -> dict:
         "PACKAGE_PREFIX": ".".join(application_id.split(".")[:2]),
         "ASSEMBLE_TASK": assemble_task,
         "UNIT_TEST_TASK": unit_test_task,
-        "APK_RELATIVE": answers.get("apk_path") or "app/build/outputs/apk/debug/app-debug.apk",
+        "APK_RELATIVE": answers.get("apk_path") or default_apk,
         "ANDROID_SRC": tuple(str(item) for item in configured_src),
         "ACTIVE_FLAVOR": "" if answers.get("flavor_mode") == "custom_variant" else answers.get("flavor") or "",
         "ACTIVE_VARIANT": answers.get("build_variant") or "Debug",

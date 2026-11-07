@@ -75,9 +75,10 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"acknowledgepurchaseparams|consumeparams|queryproductdetailsparams|"
             r"querypurchasesparams|purchasetoken|onpurchasesupdated|"
             r"launchbillingflow|acknowledgepurchase|consumeasync|"
-            r"querypurchases\w*|queryproductdetails\w*|restorepurchases\w*|verifypurchase\w*"
+            r"querypurchases\w*|queryproductdetails\w*|restorepurchases\w*|verifypurchase\w*|"
+            r"storekit|skpaymentqueue|skproductsrequest|appstore\.sync|transaction\.updates"
             r")\b"
-            r"|\b(?:class|interface|object|fun)\s+(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner)\b)\w*(?:billing|purchase|subscription)\w*"
+            r"|\b(?:class|interface|object|fun|struct|actor)\s+(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner)\b)\w*(?:billing|purchase|subscription)\w*"
             r"|\b(?!purchase(?:date|history|label|title|card|item|badge|banner|click|clicked)\b)purchase[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
@@ -89,11 +90,12 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"\b(?:"
             r"oauth\w*|jwt|androidx\.biometric|biometricprompt|"
             r"com\.google\.android\.gms\.auth|firebaseauth|credentialmanager|"
-            r"idtoken|authtoken|bearertoken|oauth_token|auth_token"
+            r"idtoken|authtoken|bearertoken|oauth_token|auth_token|"
+            r"localauthentication|lacontext|asauthorization\w*"
             r")\b"
             r"|(?<!\bis)(?<!\bhas)(?<!\bwas)\b(?:authentication|authorization)\b"
-            r"|\b(?:class|interface|object)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
-            r"|\bfun\s+(?!(?:is|has|was|can|should)_?(?:login|logged_?in|signin|sign_in|signed_?in|logout|signout|auth))\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*(?<!navigation)(?<!screen)(?<!route)(?<!dialog)(?<!live)(?<!visible)(?<!visibility)(?<!enabled)\b"
+            r"|\b(?:class|interface|object|struct|actor)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
+            r"|\bfun(?:c)?\s+(?!(?:is|has|was|can|should)_?(?:login|logged_?in|signin|sign_in|signed_?in|logout|signout|auth))\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*(?<!navigation)(?<!screen)(?<!route)(?<!dialog)(?<!live)(?<!visible)(?<!visibility)(?<!enabled)\b"
             r"|\b(?:authenticate|authorize|login|sign_?in|logout|sign_?out)[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
@@ -102,8 +104,9 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     (
         "CRYPTO",
         re.compile(
-            r"\b(?:cipher|keystore|secretkey|secretkeyspec|keygenerator|keypairgenerator|messagedigest)\b"
-            r"|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest|Signature|SecureRandom)"
+            r"\b(?:cipher|keystore|secretkey|secretkeyspec|keygenerator|keypairgenerator|messagedigest|"
+            r"cryptokit|secitemadd|secitemcopymatching|secitemupdate|secitemdelete|seckey\w*|chacha20poly1305)\b"
+            r"|javax\.crypto|java\.security\.(?:KeyStore|MessageDigest|Signature|SecureRandom)|aes\.gcm"
             r"|(?<!\bis)(?<!\bwas)\b(?:encrypt|decrypt)\w*",
             re.IGNORECASE,
         ),
@@ -112,7 +115,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     (
         "SENSITIVE_DATA",
         re.compile(
-            r"\b(?:access_?token|refresh_?token|health_?data|fusedlocation\w*|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|latitude|longitude)\b"
+            r"\b(?:access_?token|refresh_?token|health_?data|fusedlocation\w*|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|latitude|longitude|ksecclass\w*|cllocationmanager|hkhealthstore)\b"
             r"|androidx\.security\.crypto|android\.location\b"
             r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)\b(?:password|biometric)(?:(?=Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b)_never_|\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b))",
             re.IGNORECASE,
@@ -121,8 +124,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
     ("COROUTINES", re.compile(r"\b(suspend|CoroutineScope|Dispatchers\.|Flow<|StateFlow|SharedFlow|launch\s*\{|async\s*\{)"), "COROUTINE_PATTERN"),
     ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)\b|\bAutoMigration\b|\bMigration\s*\("), "ROOM_PATTERN"),
-    ("PERSISTENCE", re.compile(r"\b(?:datastore|preferencesdatastore|sqldelight|sqlite(?:database|openhelper)?|realm(?:configuration)?)\b", re.IGNORECASE), "PERSISTENCE_PATTERN"),
-    ("NETWORK", re.compile(r"\b(?:retrofit|okhttp\w*|ktor|httpclient|websocket)\b|@(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP)\b", re.IGNORECASE), "NETWORK_PATTERN"),
+    ("PERSISTENCE", re.compile(r"\b(?:datastore|preferencesdatastore|sqldelight|sqlite(?:database|openhelper)?|realm(?:configuration)?|swiftdata|coredata|nspersistentcontainer|nsmanagedobject\w*|userdefaults|nsuserdefaults|multiplatformsettings)\b", re.IGNORECASE), "PERSISTENCE_PATTERN"),
+    ("NETWORK", re.compile(r"\b(?:retrofit|okhttp\w*|ktor|httpclient|websocket|urlsession\w*|nwpathmonitor|alamofire)\b|@(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP)\b", re.IGNORECASE), "NETWORK_PATTERN"),
     ("SECURITY", re.compile(r"\b(?:networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate)\b|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)", re.IGNORECASE), "SECURITY_PATTERN"),
     (
         "DEVICE_API",
@@ -131,7 +134,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"locationmanager|notificationmanager|notificationmanagercompat|foregroundservice|startforeground|"
             r"bluetoothadapter|bluetoothmanager|bluetoothgatt|bluetoothdevice|bluetoothsocket|bluetoothle\w*|"
             r"sensormanager|sensoreventlistener|sensorevent|"
-            r"cameramanager|cameradevice|cameracapturesession|camerax|processcameraprovider|imagecapture|previewview"
+            r"cameramanager|cameradevice|cameracapturesession|camerax|processcameraprovider|imagecapture|previewview|"
+            r"corelocation|corebluetooth|cbcentralmanager|avcapture\w*|avfoundation|usernotifications|unusernotificationcenter"
             r")\b"
             r"|\b(?:android\.hardware\.(?:camera2?|sensor\w*)|android\.bluetooth|androidx\.camera)\b",
             re.IGNORECASE,
@@ -1011,7 +1015,17 @@ def classify(
             if re.search(r"UsageDescription|aps-environment|keychain-access-groups|associated-domains|background-modes", diff_text, re.I):
                 _add(found, "MANIFEST_PERMISSION", rel, "IOS_PERMISSION_OR_ENTITLEMENT_CHANGE")
             _add(found, "BUILD_CONFIG", rel, "IOS_CONFIG_CHANGE")
+        if suffix in (".sq", ".sqm", ".sql") and not test_path:
+            _add(found, "PERSISTENCE", rel, "SQLDELIGHT_OR_SQL_CHANGE")
+            if suffix == ".sqm" or re.search(r"\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|VIEW|TRIGGER)\b", diff_text, re.I):
+                _add(found, "ROOM_SCHEMA", rel, "SQLDELIGHT_SCHEMA_MIGRATION")
+        if suffix in (".graphql", ".graphqls", ".gql") and not test_path:
+            _add(found, "NETWORK", rel, "GRAPHQL_SCHEMA_OR_QUERY")
+        if suffix == ".proto" and not test_path:
+            _add(found, "PERSISTENCE", rel, "PROTO_SCHEMA_CHANGE")
         if suffix == ".swift" and not test_path:
+            if re.search(r"\bimport\s+SwiftUI\b|:\s*View\b|@(?:StateObject|ObservedObject|State|Binding)\b", full_text):
+                _add(found, "COMPOSE_UI", rel, "SWIFTUI_VIEW_CHANGE")
             _add(found, "BUSINESS_LOGIC", rel, "IOS_ENTRY_SOURCE_CHANGE")
         if "androidmanifest.xml" in lower:
             manifest_has_perm = bool(
@@ -1066,7 +1080,7 @@ def classify(
         # "subscribe" there are text, not billing/auth/device code.
         values_resource = ("/res/values" in f"/{lower}" or "/composeresources/values" in f"/{lower}") and suffix == ".xml"
         doc_prose = is_documentation_path(rel)
-        pattern_diff_text = _strip_comments_only(diff_text) if suffix in (".kt", ".java", ".kts") else diff_text
+        pattern_diff_text = _strip_comments_only(diff_text) if suffix in (".kt", ".java", ".kts", ".swift") else diff_text
         for surface, pattern, reason in PATTERNS:
 
             if not test_path and not values_resource and not doc_prose:

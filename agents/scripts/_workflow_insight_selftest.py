@@ -460,6 +460,177 @@ class WorkflowInsightTests(unittest.TestCase):
             self.assertEqual("RESOLVED", resolved["status"])
             self.assertEqual(swift_rel, resolved["target"]["path"])
 
+    def test_kmp_cross_source_set_purity_and_expect_actual_signatures(self):
+        from _modules import check_kmp_common_main_purity, check_kmp_expect_actual_pairs
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            # 1. Cross-source-set purity: platform.* in commonMain, android.* in iosMain, platform.* in androidMain
+            common_f = repo / "shared/src/commonMain/kotlin/Common.kt"
+            ios_f = repo / "shared/src/iosMain/kotlin/Ios.kt"
+            android_f = repo / "shared/src/androidMain/kotlin/Android.kt"
+            for f in (common_f, ios_f, android_f):
+                f.parent.mkdir(parents=True, exist_ok=True)
+
+            common_f.write_text("package shared\nimport platform.UIKit.UIDevice\n", encoding="utf-8")
+            ios_f.write_text("package shared\nimport android.os.Bundle\n", encoding="utf-8")
+            android_f.write_text("package shared\nimport kotlinx.cinterop.ExperimentalForeignApi\n", encoding="utf-8")
+
+            ok, violations = check_kmp_common_main_purity(
+                repo,
+                [
+                    "shared/src/commonMain/kotlin/Common.kt",
+                    "shared/src/iosMain/kotlin/Ios.kt",
+                    "shared/src/androidMain/kotlin/Android.kt",
+                ],
+            )
+            self.assertFalse(ok)
+            self.assertEqual(3, len(violations), violations)
+
+            # Valid platform imports in their respective source sets
+            common_f.write_text(
+                "package shared\nexpect class PlatformUUID\nexpect fun formatPrice(amount: Double, currency: String): String\n",
+                encoding="utf-8",
+            )
+            ios_f.write_text(
+                "package shared\nimport platform.Foundation.NSUUID\nactual typealias PlatformUUID = NSUUID\n"
+                "actual fun formatPrice(amount: Double): String = \"$amount\"\n",
+                encoding="utf-8",
+            )
+            android_f.write_text(
+                "package shared\nimport java.util.UUID\nactual typealias PlatformUUID = UUID\n"
+                "actual fun formatPrice(amount: Double, currency: String): String = \"$amount $currency\"\n",
+                encoding="utf-8",
+            )
+            ok_pure, pure_violations = check_kmp_common_main_purity(
+                repo,
+                [
+                    "shared/src/commonMain/kotlin/Common.kt",
+                    "shared/src/iosMain/kotlin/Ios.kt",
+                    "shared/src/androidMain/kotlin/Android.kt",
+                ],
+            )
+            self.assertTrue(ok_pure, pure_violations)
+
+            # 2. Expect/Actual arity mismatch on iosMain (1 param vs 2 params)
+            ok_ea, msg_ea = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/Common.kt"])
+            self.assertFalse(ok_ea)
+            self.assertIn("expected fun formatPrice/2, found fun formatPrice/1", msg_ea)
+
+            # Fix iosMain via appleMain intermediate hierarchy + matching arity
+            ios_f.unlink()
+            apple_f = repo / "shared/src/appleMain/kotlin/Apple.kt"
+            apple_f.parent.mkdir(parents=True, exist_ok=True)
+            apple_f.write_text(
+                "package shared\nimport platform.Foundation.NSUUID\nactual typealias PlatformUUID = NSUUID\n"
+                "actual fun formatPrice(amount: Double, currency: String): String = \"$amount $currency\"\n",
+                encoding="utf-8",
+            )
+            ok_ea2, msg_ea2 = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/Common.kt"])
+            self.assertTrue(ok_ea2, msg_ea2)
+
+    def test_kmp_sqldelight_graphql_swift_classification_and_swift_lint(self):
+        import change_classifier
+        import fast_kt_lint
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            sq_rel = "shared/src/commonMain/sqldelight/com/example/User.sq"
+            sqm_rel = "shared/src/commonMain/sqldelight/migrations/1.sqm"
+            gql_rel = "shared/src/commonMain/graphql/GetUser.graphql"
+            swift_rel = "iosApp/iosApp/PaywallView.swift"
+            swift_test_rel = "iosApp/iosAppTests/PaywallTests.swift"
+            for rel, content in (
+                (sq_rel, "CREATE TABLE userEntity (id INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL);\n"),
+                (sqm_rel, "ALTER TABLE userEntity ADD COLUMN email TEXT;\n"),
+                (gql_rel, "query GetUser($id: ID!) { user(id: $id) { id name } }\n"),
+                (
+                    swift_rel,
+                    'import SwiftUI\nimport StoreKit\nstruct PaywallView: View {\n'
+                    '    let apiUrl = "http://insecure.example.com/pay"\n'
+                    '    var body: some View { Text("Pay") }\n'
+                    '    func buy() { fatalError("TODO: implement StoreKit purchase") }\n'
+                    '}\n',
+                ),
+                (
+                    swift_test_rel,
+                    'import XCTest\nfinal class PaywallTests: XCTestCase {\n'
+                    '    func testUrl() { let u = "http://insecure.example.com/test" }\n'
+                    '}\n',
+                ),
+            ):
+                p = repo / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding="utf-8")
+
+            res = change_classifier.classify(
+                repo,
+                task_changes=[{"path": sq_rel}, {"path": sqm_rel}, {"path": gql_rel}, {"path": swift_rel}],
+                candidate_paths=[sq_rel, sqm_rel, gql_rel, swift_rel],
+                progress=False,
+            )
+            surfaces = set(res.get("surfaces") or [])
+            self.assertIn("PERSISTENCE", surfaces)
+            self.assertIn("ROOM_SCHEMA", surfaces)
+            self.assertIn("NETWORK", surfaces)
+            self.assertIn("COMPOSE_UI", surfaces)
+            self.assertIn("BILLING", surfaces)
+
+            issues = fast_kt_lint.lint_swift_file(repo / swift_rel)
+            issue_types = {iss["type"] for iss in issues}
+            self.assertIn("INSECURE_CLEARTEXT_TRAFFIC", issue_types)
+            self.assertIn("UNIMPLEMENTED_STUB", issue_types)
+
+            test_issues = fast_kt_lint.lint_swift_file(repo / swift_test_rel)
+            self.assertEqual([], test_issues)
+
+    def test_macos_ios_compile_test_and_simulator_commands(self):
+        import _variants
+        import mutation_guard
+        import run_device
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "settings.gradle.kts").write_text('include(":composeApp", ":shared")\n', encoding="utf-8")
+            (repo / "shared/src/commonMain/kotlin").mkdir(parents=True)
+            (repo / "shared/src/iosMain/kotlin").mkdir(parents=True)
+            (repo / "shared/build.gradle.kts").write_text(
+                'plugins { kotlin("multiplatform") }\nkotlin { iosArm64(); iosSimulatorArm64() }\n',
+                encoding="utf-8",
+            )
+            (repo / "iosApp/iosApp.xcodeproj").mkdir(parents=True)
+
+            # 1. iOS compile task resolution
+            task_str, _note = _variants.resolve_ios_compile_task(repo)
+            self.assertTrue(task_str.startswith(":shared:compileKotlinIos"), task_str)
+
+            # 2. Aggregate KMP allTests XML report discovery
+            xml_report = repo / "shared/build/test-results/iosSimulatorArm64Test/TEST-SharedIosTest.xml"
+            xml_report.parent.mkdir(parents=True)
+            xml_report.write_text(
+                '<testsuite tests="2" failures="0" skipped="0"><testcase classname="SharedIosTest" name="testOne"/></testsuite>',
+                encoding="utf-8",
+            )
+            self.assertEqual([xml_report], run_tests_gate.report_paths(repo, ":shared:allTests"))
+            self.assertEqual(2, run_tests_gate.collect_test_summary(repo, ":shared:allTests")["executed"])
+
+            # 3. Xcode project discovery
+            flag, xc_path, scheme = run_device._discover_ios_xcode_project(repo)
+            self.assertEqual("-project", flag)
+            self.assertEqual("iosApp", scheme)
+            self.assertIsNotNone(xc_path)
+
+            # 4. Mutation guard allowlisting for macOS Xcode / Simulator commands & Swift production code
+            self.assertTrue(mutation_guard._is_production_code("iosApp/iosApp/ContentView.swift"))
+            self.assertFalse(mutation_guard._is_production_code("iosApp/iosAppTests/ContentViewTests.swift"))
+            for ro_cmd in (
+                "xcrun simctl list devices available -j",
+                "xcodebuild -version",
+                "swift --version",
+                "python .agents/harness.py device ios-status",
+                "python .agents/harness.py compile --ios",
+            ):
+                allowed, reason = mutation_guard.command_allowed(repo, ro_cmd)
+                self.assertTrue(allowed, f"{ro_cmd}: {reason}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

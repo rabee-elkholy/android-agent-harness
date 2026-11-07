@@ -159,6 +159,17 @@ class HarnessDoctor:
         else:
             self.log(category, "ADB Command", "WARN", "ADB CLI ('adb') not found in PATH.")
 
+        if (self.repo / "iosApp").is_dir() or (self.repo / "ios").is_dir():
+            if sys.platform == "darwin":
+                xcode_cmd = shutil.which("xcodebuild")
+                xcrun_cmd = shutil.which("xcrun")
+                if xcode_cmd and xcrun_cmd:
+                    self.log(category, "Xcode / iOS Simulator Toolchain", "PASS", f"macOS Xcode CLI & simctl available ({xcode_cmd}).")
+                else:
+                    self.log(category, "Xcode / iOS Simulator Toolchain", "WARN", "KMM iOS directory detected on macOS, but xcodebuild/xcrun not found in PATH.")
+            else:
+                self.log(category, "Xcode / iOS Simulator Toolchain", "PASS", f"KMM iOS directory detected (host OS is {os_name}; iOS compilation/simulator requires macOS).")
+
         if (self.repo / ".git").exists():
             self.log(category, "Git Repository", "PASS", "Active Git repository detected.")
             self._check_gitignore(category)
