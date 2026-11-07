@@ -525,7 +525,7 @@ def main(argv=None) -> int:
     parser.add_argument("action", choices=("start", "observe", "tap", "type", "key", "swipe", "wait", "restart", "screenshot",
                                            "add", "step", "need-developer", "resume", "status", "finish"))
     parser.add_argument("--repo", type=Path, default=Path(os.environ.get("HARNESS_REPO") or Path(__file__).resolve().parents[2]))
-    parser.add_argument("--task-id")
+    parser.add_argument("--task-id", "--task", dest="task_id")
     parser.add_argument("--restart", action="store_true", help="start: discard the unfinished session of this run")
     parser.add_argument("--screenshot", nargs="?", const="1", default=None)
     parser.add_argument("--resource-id")
