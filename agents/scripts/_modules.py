@@ -206,14 +206,19 @@ _KMP_MODIFIER_GROUP = (
     r"(?:(?:public|internal|protected|private|suspend|inline|infix|operator|tailrec|external|open|abstract|final|sealed|data|value|enum|annotation|fun)\s+)*"
 )
 
+_KMP_ANNOT_GROUP = r"(?:@[A-Za-z0-9_.:]+\s*(?:\((?:[^()]|\([^()]*\))*\))?\s*)*"
+_KMP_NESTED_TYPE_ARGS = r"(?:<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>)"
+
 _EXPECT_DECL_RE = re.compile(
-    rf"(?m)^[ \t]*(?:@[A-Za-z0-9_.]+\s*(?:\([^)]*\))?\s*)*{_KMP_MODIFIER_GROUP}expect\s+{_KMP_MODIFIER_GROUP}"
-    r"(class|interface|object|fun|val|var)\s+(?:<[^>]+>\s*)?(?:([A-Za-z0-9_.]+)(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
+    rf"(?m)^[ \t]*{_KMP_ANNOT_GROUP}{_KMP_MODIFIER_GROUP}expect\s+{_KMP_MODIFIER_GROUP}"
+    rf"(class|interface|object|fun|val|var)\s+(?:{_KMP_NESTED_TYPE_ARGS}\s+)?"
+    rf"(?:([A-Za-z0-9_.]+)(?:\s*{_KMP_NESTED_TYPE_ARGS})?\??\.)?([A-Za-z0-9_]+)\b"
 )
 
 _ACTUAL_DECL_RE = re.compile(
-    rf"(?m)^[ \t]*(?:@[A-Za-z0-9_.]+\s*(?:\([^)]*\))?\s*)*{_KMP_MODIFIER_GROUP}actual\s+{_KMP_MODIFIER_GROUP}"
-    r"(class|interface|object|typealias|fun|val|var)\s+(?:<[^>]+>\s*)?(?:([A-Za-z0-9_.]+)(?:\s*<[^>;{}=]*>)?\??\.)?([A-Za-z0-9_]+)\b"
+    rf"(?m)^[ \t]*{_KMP_ANNOT_GROUP}{_KMP_MODIFIER_GROUP}actual\s+{_KMP_MODIFIER_GROUP}"
+    rf"(class|interface|object|typealias|fun|val|var)\s+(?:{_KMP_NESTED_TYPE_ARGS}\s+)?"
+    rf"(?:([A-Za-z0-9_.]+)(?:\s*{_KMP_NESTED_TYPE_ARGS})?\??\.)?([A-Za-z0-9_]+)\b"
 )
 
 _KMP_ANDROID_JVM_PKG_GROUP = (
@@ -313,6 +318,18 @@ def _parse_fun_arity(text: str, pos: int) -> int | None:
     idx = pos
     while idx < n and text[idx] in " \t\r\n":
         idx += 1
+    if idx < n and text[idx] == "<":
+        # Skip trailing type arguments if any before `(`
+        t_depth = 1
+        idx += 1
+        while idx < n and t_depth > 0:
+            if text[idx] == "<":
+                t_depth += 1
+            elif text[idx] == ">":
+                t_depth -= 1
+            idx += 1
+        while idx < n and text[idx] in " \t\r\n":
+            idx += 1
     if idx >= n or text[idx] != "(":
         return None
     idx += 1
@@ -320,11 +337,24 @@ def _parse_fun_arity(text: str, pos: int) -> int | None:
     angle_depth = 0
     bracket_depth = 0
     brace_depth = 0
+    quote_char = ""
     segments: list[str] = []
     current: list[str] = []
     while idx < n and paren_depth > 0:
         ch = text[idx]
-        if ch == "(":
+        if quote_char:
+            current.append(ch)
+            if ch == "\\" and idx + 1 < n:
+                idx += 1
+                current.append(text[idx])
+            elif ch == quote_char:
+                quote_char = ""
+            idx += 1
+            continue
+        if ch in ('"', "'"):
+            quote_char = ch
+            current.append(ch)
+        elif ch == "(":
             paren_depth += 1
             current.append(ch)
         elif ch == ")":
@@ -461,7 +491,7 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
     """Deterministically verify expect/actual pairing and signature compatibility in modified KMP modules.
 
     Only inspects KMP modules that have both `src/commonMain` and at least one mobile
-    platform source set (`src/androidMain`, `src/iosMain`, etc.) and were touched by
+    platform source set (`src/androidMain`, `src/iosMain`, `src/appleMain`, etc.) and were touched by
     the current change set (or all KMP modules when changed_rel_paths is None).
     Native Android modules without `src/commonMain` are skipped with zero overhead.
     """
@@ -470,11 +500,17 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
     if changed_rel_paths is not None:
         for rel in changed_rel_paths:
             norm = str(rel or "").replace("\\", "/").strip("/")
-            if "/src/" in norm and norm.endswith(".kt"):
+            if not norm.endswith(".kt"):
+                continue
+            if norm.startswith("src/"):
+                mod_dir = repo
+            elif "/src/" in norm:
                 mod_prefix = norm.split("/src/", 1)[0]
                 mod_dir = repo / mod_prefix if mod_prefix and mod_prefix != "." else repo
-                if (mod_dir / "src" / "commonMain").is_dir():
-                    candidate_module_dirs.add(mod_dir)
+            else:
+                continue
+            if (mod_dir / "src" / "commonMain").is_dir():
+                candidate_module_dirs.add(mod_dir)
     else:
         for mod_dir in _discover_kmp_common_modules(repo):
             candidate_module_dirs.add(mod_dir)
@@ -520,16 +556,16 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
             for d in ("androidMain", "jvmAndAndroidMain", "mobileMain")
             if (mod_dir / "src" / d).is_dir()
         ]
-        if (mod_dir / "src" / "androidMain").is_dir():
+        if android_dirs:
             _verify_platform_target("androidMain", android_dirs)
 
-        # Check iOS platform source sets if present in this module
+        # Check iOS/Apple platform source sets if present in this module
         ios_dirs = [
             mod_dir / "src" / d
             for d in ("iosMain", "appleMain", "nativeMain", "mobileMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")
             if (mod_dir / "src" / d).is_dir()
         ]
-        if any((mod_dir / "src" / d).is_dir() for d in ("iosMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")):
+        if any((mod_dir / "src" / d).is_dir() for d in ("iosMain", "appleMain", "nativeMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")):
             _verify_platform_target("iosMain", ios_dirs)
 
     if missing_reports:

@@ -509,10 +509,15 @@ def _run_ios_build(args: argparse.Namespace) -> tuple[int, Path | None, dict | N
         live_print(f"[FAIL] xcodebuild failed with exit code {code}.", err=True)
         return 1, None, sim
     products_dir = derived_data / "Build" / "Products" / "Debug-iphonesimulator"
-    apps = sorted(p for p in products_dir.glob("*.app") if p.is_dir()) if products_dir.is_dir() else []
+    all_apps = sorted(p for p in products_dir.glob("*.app") if p.is_dir()) if products_dir.is_dir() else []
+    apps = [
+        p for p in all_apps
+        if not p.stem.lower().endswith(("-runner", "tests", "uitests"))
+    ] or all_apps
     if not apps:
         live_print(f"[FAIL] Build succeeded but no .app bundle was found in {products_dir}.", err=True)
         return 1, None, sim
+    apps.sort(key=lambda p: (0 if p.stem.lower() == scheme.lower() else 1, p.name))
     live_print(f"[+] Built iOS app bundle: {apps[0]}")
     return 0, apps[0], sim
 

@@ -340,10 +340,26 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return True
         return False
     if name == "xcodebuild":
-        return bool(args) and all(a in {"-version", "-list", "-showsdks", "-help", "--help"} for a in args)
+        if not args:
+            return False
+        ro_flags = {"-version", "-list", "-showsdks", "-showdestinations", "-help", "--help", "-json"}
+        val_flags = {"-project", "-workspace", "-scheme"}
+        idx = 0
+        has_ro_action = False
+        while idx < len(args):
+            a = args[idx]
+            if a in ro_flags:
+                if a != "-json":
+                    has_ro_action = True
+                idx += 1
+            elif a in val_flags and idx + 1 < len(args) and not args[idx + 1].startswith("-"):
+                idx += 2
+            else:
+                return False
+        return has_ro_action
     if name == "swift":
         return args in (["--version"], ["-version"], ["--help"], ["-h"])
-    if name == "run_device" and args in (["status"], ["ios-status"]):
+    if name == "run_device" and args[:1] in (["status"], ["ios-status"]) and len(args) == 1:
         return True
     if name == "android_inspect" or (name in {"harness_cli", "android-harness"} and args[:1] == ["android-inspect"]):
         inspection_args = args if name == "android_inspect" else args[1:]
@@ -1208,7 +1224,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         # Real app: checking a merge with `harness.py compile` was refused with no task open. The bare
         # command compiles the harness-derived task and writes build outputs only; a named Gradle task
         # could be anything, so it still needs a task.
-        if _entry(normalized, repo) in (("harness_cli", ["compile"]), ("harness_cli", ["compile", "--ios"])):
+        entry_no_task, args_no_task = _entry(normalized, repo)
+        if entry_no_task in {"harness_cli", "android-harness"} and args_no_task in (["compile"], ["compile", "--ios"]):
             return True, "compile check without a task writes build outputs only"
         lower = normalized.lower()
         if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
@@ -1234,7 +1251,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         # is decided before this (the developer's words as proof); the state never blocks it.
         return True, f"cancel of {status.lower() or 'the'} task on the developer's request"
     if status == "IMPLEMENTING":
-        if entry == "journey_runner" or (entry == "harness_cli" and arguments[:1] == ["journey"]):
+        if entry == "journey_runner" or (entry in {"harness_cli", "android-harness"} and arguments[:1] == ["journey"]):
             return False, "Journey replay requires VERIFYING and current install/review evidence."
         is_ios_device_action = (
             (entry == "run_device" and arguments[:1] in (["ios-status"], ["ios-build"], ["ios-run"]))
@@ -1242,7 +1259,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         )
         if not is_ios_device_action and (
             re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I)
-            or (entry == "harness_cli" and arguments[:1] == ["device"])
+            or (entry in {"harness_cli", "android-harness"} and arguments[:1] == ["device"])
         ):
             return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
@@ -1251,7 +1268,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
         if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
             return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
-        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "compileall"}
+        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness", "compileall"}
         if entry not in allowed_implementing_entries:
             return False, "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host file-edit tools where protected roots are enforced."
         try:
@@ -1262,7 +1279,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete", "bind-evidence"}
-        or (entry == "harness_cli" and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"]))
+        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
