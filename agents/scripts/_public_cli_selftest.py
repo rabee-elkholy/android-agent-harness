@@ -157,7 +157,10 @@ class PublicCliSelftest(unittest.TestCase):
         self.env["PYTHONIOENCODING"] = "utf-8"
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     # -------------------------------------------------------------------------
     # P0-T1: review_policy.py public CLI
@@ -606,7 +609,10 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.env = {**os.environ, "HARNESS_REPO": str(self.repo)}
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def test_p1_b1_b2_risk_lanes_and_proportional_device(self) -> None:
         """P1-B1 & B2: Proportional risk lanes (MICRO/STANDARD/CRITICAL) and UI verification classes."""
@@ -965,7 +971,10 @@ class PhaseCSensitiveDependencySelftest(unittest.TestCase):
         run_git(self.repo, "commit", "-qm", "initial commit")
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def test_direct_billing_keyword_change(self) -> None:
         """Scenario 1: Direct billing keyword change produces BILLING with HIGH confidence."""
@@ -1150,7 +1159,10 @@ class PhaseDRepairSelftest(unittest.TestCase):
         run_git(self.repo, "commit", "-qm", "initial commit")
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def test_repair_missing_managed_script(self) -> None:
         """Missing managed script under .agents/scripts/ is restored from pinned kit."""
@@ -1611,7 +1623,10 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
         self.safety_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
 
     def tearDown(self) -> None:
-        self.temp_dir.cleanup()
+        try:
+            self.temp_dir.cleanup()
+        except OSError:
+            shutil.rmtree(self.temp_dir.name, ignore_errors=True)
 
     def _invoke_hook(self, tool_name: str, tool_args: dict | None = None) -> dict:
         payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args or {}})
