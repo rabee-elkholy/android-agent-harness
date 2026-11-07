@@ -356,6 +356,214 @@ def _handle_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _discover_ios_xcode_project(repo: Path) -> tuple[str, Path | None, str]:
+    """Discover .xcworkspace or .xcodeproj in iosApp/, ios/, appleApp/, or repo root."""
+    search_dirs = [repo / "iosApp", repo / "ios", repo / "appleApp", repo]
+    for base in search_dirs:
+        if not base.is_dir():
+            continue
+        workspaces = sorted(
+            p for p in base.glob("*.xcworkspace")
+            if p.is_dir() and not p.parent.name.endswith(".xcodeproj")
+        )
+        if workspaces:
+            ws = workspaces[0]
+            return "-workspace", ws, ws.stem
+        projects = sorted(p for p in base.glob("*.xcodeproj") if p.is_dir())
+        if projects:
+            proj = projects[0]
+            return "-project", proj, proj.stem
+    return "", None, ""
+
+
+def _list_ios_simulators() -> list[dict]:
+    """Return available iOS simulators from `xcrun simctl list devices available -j`."""
+    import json
+
+    try:
+        proc = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "available", "-j"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=15.0,
+        )
+        if proc.returncode != 0:
+            return []
+        data = json.loads(proc.stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+    devices_map = data.get("devices") or {}
+    sims: list[dict] = []
+    for runtime, dev_list in devices_map.items():
+        if "ios" not in runtime.lower() or not isinstance(dev_list, list):
+            continue
+        for d in dev_list:
+            if not isinstance(d, dict) or not d.get("isAvailable", True):
+                continue
+            udid = str(d.get("udid") or "").strip()
+            name = str(d.get("name") or "").strip()
+            state = str(d.get("state") or "").strip()
+            if udid and name:
+                sims.append({"udid": udid, "name": name, "state": state, "runtime": runtime})
+    sims.sort(
+        key=lambda item: (
+            0 if item["state"].lower() == "booted" else 1,
+            0 if "iphone" in item["name"].lower() else 1,
+            item["name"],
+        )
+    )
+    return sims
+
+
+def _handle_ios_status(args: argparse.Namespace) -> int:
+    flag, xc_path, scheme = _discover_ios_xcode_project(REPO)
+    if xc_path is not None:
+        rel_xc = xc_path.relative_to(REPO).as_posix()
+        live_print(f"[+] Discovered iOS Xcode target: {rel_xc} (flag: {flag}, default scheme: {scheme})")
+    else:
+        live_print("[-] No iOS Xcode project (.xcodeproj / .xcworkspace) found under iosApp/ or repo root.")
+
+    if sys.platform != "darwin":
+        live_print(f"[-] Host OS is '{sys.platform}'; iOS Simulator and Xcode builds require macOS (darwin).")
+        return 0
+
+    try:
+        xc_proc = subprocess.run(
+            ["xcodebuild", "-version"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10.0,
+        )
+        if xc_proc.returncode == 0 and xc_proc.stdout.strip():
+            ver_line = " | ".join(line.strip() for line in xc_proc.stdout.strip().splitlines() if line.strip())
+            live_print(f"[+] Xcode: {ver_line}")
+        else:
+            live_print("[!] xcodebuild is not available or Xcode command-line tools are not configured.")
+    except (OSError, subprocess.TimeoutExpired):
+        live_print("[!] xcodebuild executable not found on PATH.")
+
+    sims = _list_ios_simulators()
+    if not sims:
+        live_print("[-] No available iOS Simulators reported by `xcrun simctl`.")
+        return 0
+    live_print(f"[+] Available iOS Simulators ({len(sims)}):")
+    for s in sims[:10]:
+        live_print(f"    - {s['name']} [{s['udid']}] ({s['state']})")
+    live_print(f"[*] Default resolved iOS Simulator: {sims[0]['name']} ({sims[0]['udid']})")
+    return 0
+
+
+def _select_ios_simulator(requested: str | None) -> dict | None:
+    sims = _list_ios_simulators()
+    if not sims:
+        return None
+    if not requested:
+        return sims[0]
+    req = requested.strip().lower()
+    for s in sims:
+        if s["udid"].lower() == req or s["name"].lower() == req:
+            return s
+    for s in sims:
+        if req in s["name"].lower():
+            return s
+    return None
+
+
+def _run_ios_build(args: argparse.Namespace) -> tuple[int, Path | None, dict | None]:
+    if sys.platform != "darwin":
+        live_print(f"[FAIL] iOS builds require macOS (current host: {sys.platform}).", err=True)
+        return EXIT_ENV, None, None
+    flag, xc_path, default_scheme = _discover_ios_xcode_project(REPO)
+    if xc_path is None:
+        live_print("[FAIL] No iOS Xcode project (.xcodeproj or .xcworkspace) found under iosApp/ or repo root.", err=True)
+        return 1, None, None
+    scheme = str(getattr(args, "scheme", None) or default_scheme).strip()
+    sim = _select_ios_simulator(getattr(args, "simulator", None))
+    if sim is None:
+        live_print("[FAIL] No available iOS Simulator found via `xcrun simctl list devices available`.", err=True)
+        return EXIT_ENV, None, None
+    derived_data = (REPO / ".agents" / "state" / "ios-derived-data") if (REPO / ".agents").is_dir() else (REPO / "build" / "ios-derived-data")
+    derived_data.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "xcodebuild",
+        flag,
+        str(xc_path),
+        "-scheme",
+        scheme,
+        "-configuration",
+        "Debug",
+        "-sdk",
+        "iphonesimulator",
+        "-destination",
+        f"id={sim['udid']}",
+        "-derivedDataPath",
+        str(derived_data),
+        "build",
+    ]
+    live_print(f"[*] Building iOS scheme '{scheme}' for simulator {sim['name']} ({sim['udid']})...")
+    with step_progress(f"Building iOS app ({scheme})"):
+        code, _log, _ = run_streaming(
+            cmd,
+            cwd=str(REPO),
+            heartbeat_sec=10.0,
+            should_echo=lambda line: any(tok in line for tok in ("error:", "warning:", "BUILD ", "Compiling", "Linking")),
+            label="xcodebuild",
+        )
+    if code != 0:
+        live_print(f"[FAIL] xcodebuild failed with exit code {code}.", err=True)
+        return 1, None, sim
+    products_dir = derived_data / "Build" / "Products" / "Debug-iphonesimulator"
+    apps = sorted(p for p in products_dir.glob("*.app") if p.is_dir()) if products_dir.is_dir() else []
+    if not apps:
+        live_print(f"[FAIL] Build succeeded but no .app bundle was found in {products_dir}.", err=True)
+        return 1, None, sim
+    live_print(f"[+] Built iOS app bundle: {apps[0]}")
+    return 0, apps[0], sim
+
+
+def _extract_ios_bundle_id(app_path: Path) -> str:
+    info_plist = app_path / "Info.plist"
+    if not info_plist.is_file():
+        return ""
+    for cmd in (
+        ["plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", str(info_plist)],
+        ["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier", str(info_plist)],
+    ):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=5.0)
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return ""
+
+
+def _handle_ios_run(args: argparse.Namespace) -> int:
+    code, app_path, sim = _run_ios_build(args)
+    if code != 0 or app_path is None or sim is None:
+        return code or 1
+    udid = sim["udid"]
+    if sim["state"].lower() != "booted":
+        live_print(f"[*] Booting iOS Simulator {sim['name']} ({udid})...")
+        subprocess.run(["xcrun", "simctl", "boot", udid], capture_output=True, check=False, timeout=30.0)
+    subprocess.run(["open", "-a", "Simulator"], capture_output=True, check=False, timeout=10.0)
+    live_print(f"[*] Installing {app_path.name} on simulator {udid}...")
+    inst = subprocess.run(
+        ["xcrun", "simctl", "install", udid, str(app_path)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=60.0,
+    )
+    if inst.returncode != 0:
+        live_print(f"[FAIL] xcrun simctl install failed: {inst.stderr.strip() or inst.stdout.strip()}", err=True)
+        return 1
+    bundle_id = _extract_ios_bundle_id(app_path) or APPLICATION_ID
+    live_print(f"[*] Launching {bundle_id} on simulator {udid}...")
+    launch = subprocess.run(
+        ["xcrun", "simctl", "launch", udid, bundle_id],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30.0,
+    )
+    if launch.returncode != 0:
+        live_print(f"[FAIL] xcrun simctl launch failed: {launch.stderr.strip() or launch.stdout.strip()}", err=True)
+        return 1
+    live_print(f"[+] Launched iOS app '{bundle_id}' on {sim['name']} ({udid}): {launch.stdout.strip()}")
+    return 0
+
+
 def _device_verification_disabled() -> bool:
     try:
         import _product
@@ -365,7 +573,9 @@ def _device_verification_disabled() -> bool:
 
 
 def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
-    if getattr(args, "force", False) or args.action in ("uninstall", "signoff", "skip-validation", "status"):
+    if getattr(args, "force", False) or args.action in (
+        "uninstall", "signoff", "skip-validation", "status", "ios-status", "ios-build", "ios-run"
+    ):
         return None
     try:
         from mutation_guard import active_plan
@@ -776,9 +986,26 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
 
 def main() -> int:
     enable_line_buffered_stdio()
-    parser = argparse.ArgumentParser(description=f"Live adb install/start for {PRODUCT_NAME}")
-    parser.add_argument("action", choices=["install", "start", "install-start", "uninstall", "signoff", "skip-validation", "status", "validate-automatically"])
+    parser = argparse.ArgumentParser(description=f"Live adb / iOS Simulator install/start for {PRODUCT_NAME}")
+    parser.add_argument(
+        "action",
+        choices=[
+            "install",
+            "start",
+            "install-start",
+            "uninstall",
+            "signoff",
+            "skip-validation",
+            "status",
+            "validate-automatically",
+            "ios-status",
+            "ios-build",
+            "ios-run",
+        ],
+    )
     parser.add_argument("-s", "--serial", default=None, help="Physical device serial")
+    parser.add_argument("--simulator", default=None, help="iOS Simulator UDID or device name (macOS only)")
+    parser.add_argument("--scheme", default=None, help="Xcode scheme for ios-build / ios-run (default: discovered project stem)")
     parser.add_argument(
         "--flavor",
         default=None,
@@ -826,6 +1053,16 @@ def main() -> int:
 
     if args.action == "status":
         return _handle_status(args)
+
+    if args.action == "ios-status":
+        return _handle_ios_status(args)
+
+    if args.action == "ios-build":
+        code, _app, _sim = _run_ios_build(args)
+        return code
+
+    if args.action == "ios-run":
+        return _handle_ios_run(args)
 
     if args.action == "signoff":
         return _handle_signoff(args)

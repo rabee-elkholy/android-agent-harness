@@ -32,7 +32,7 @@ def _run(script: str, args: list[str]) -> int:
     from evidence_store import StateLock
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
-    read_only = read_only or (script == "run_device.py" and args == ["status"])
+    read_only = read_only or (script == "run_device.py" and args in (["status"], ["ios-status"]))
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
     read_only = read_only or script == "incident_reporter.py"
@@ -304,7 +304,16 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("run_gradle_task.py", forwarded)
     if command == "compile":
         forwarded = list(args)
-        if not forwarded:
+        if forwarded == ["--ios"]:
+            sys.path.insert(0, str(SCRIPTS))
+            from _variants import resolve_ios_compile_task
+            task_str, note = resolve_ios_compile_task(REPO_ROOT)
+            if not task_str:
+                print(f"[WARN] {note}", file=sys.stderr)
+                return 3
+            print(f"[*] {note}")
+            forwarded = [task_str]
+        elif not forwarded:
             sys.path.insert(0, str(SCRIPTS))
             from _variants import resolve_compile_task
             task_str, note = resolve_compile_task(REPO_ROOT)

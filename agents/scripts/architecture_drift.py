@@ -83,17 +83,42 @@ def _is_compose_screen(txt: str) -> bool:
 
 
 _DATA_SOURCE_BYPASS_IMPORT_RE = re.compile(
-    r"(?m)^[ \t]*import[ \t]+(androidx\.room\.Dao|android\.database\.sqlite\.SQLiteDatabase|retrofit2\.http\.[A-Za-z0-9_.*]+|okhttp3\.OkHttpClient)\b"
+    r"(?m)^[ \t]*import[ \t]+("
+    r"androidx\.room\.Dao|"
+    r"android\.database\.sqlite\.SQLiteDatabase|"
+    r"retrofit2\.http\.[A-Za-z0-9_.*]+|"
+    r"okhttp3\.OkHttpClient|"
+    r"app\.cash\.sqldelight\.db\.SqlDriver|"
+    r"com\.squareup\.sqldelight\.db\.SqlDriver|"
+    r"io\.ktor\.client\.HttpClient"
+    r")\b"
 )
 _DATA_SOURCE_DAO_PROP_RE = re.compile(
-    r"\b(?:val|var)[ \t]+[A-Za-z0-9_]+[ \t]*:[ \t]*[A-Za-z0-9_]+Dao\b"
+    r"\b(?:val|var)[ \t]+[A-Za-z0-9_]+[ \t]*:[ \t]*[A-Za-z0-9_]+(?:Dao|Queries)\b"
 )
 
 
 def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
-    """Detect direct data-source (Room DAO / SQLite / Retrofit) usage inside a UI entry file."""
+    """Detect direct data-source (Room DAO / SQLite / SQLDelight / Retrofit / Ktor) usage inside a UI entry file."""
     lower_stem = stem.lower()
-    if any(tok in lower_stem for tok in ("viewmodel", "repository", "dao", "database", "module", "test", "factory", "worker", "service")):
+    if any(
+        tok in lower_stem
+        for tok in (
+            "viewmodel",
+            "screenmodel",
+            "component",
+            "presenter",
+            "store",
+            "repository",
+            "dao",
+            "database",
+            "module",
+            "test",
+            "factory",
+            "worker",
+            "service",
+        )
+    ):
         return None
     is_ui_entry = (
         "@Composable" in txt

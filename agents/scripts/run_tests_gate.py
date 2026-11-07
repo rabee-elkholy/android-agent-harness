@@ -48,7 +48,16 @@ def report_paths(repo: Path, task: str | list[str]) -> list[Path]:
         if node and node.file_path:
             module = (repo / node.file_path).parent
         exact = module / "build" / "test-results" / parts[-1]
-        return sorted(path for path in exact.rglob("*.xml") if path.is_file())
+        found = sorted(path for path in exact.rglob("*.xml") if path.is_file())
+        if found or parts[-1] not in {"allTests", "check"}:
+            return found
+        test_results_dir = module / "build" / "test-results"
+        if test_results_dir.is_dir():
+            return sorted(
+                path for path in test_results_dir.rglob("*.xml")
+                if path.is_file() and "androidtest" not in path.as_posix().lower()
+            )
+        return []
     return sorted(path for path in repo_glob(repo, "**/build/test-results/**/*.xml") if path.is_file() and "androidtest" not in path.as_posix().lower())
 
 
@@ -242,9 +251,12 @@ def _kmp_or_module_test_suffix(repo: Path, module: str, build: str, catalog_ids:
         mod_dir = repo / mod_rel if mod_rel else repo
         if kmp_info["has_android_target"] or (mod_dir / "src" / "androidMain").is_dir():
             return default_suffix
-        if kmp_info["has_jvm_target"]:
+        if kmp_info["has_jvm_target"] or (mod_dir / "src" / "jvmMain").is_dir() or (mod_dir / "src" / "desktopMain").is_dir():
             return "jvmTest"
-        return default_suffix
+        if kmp_info["has_ios_target"] and sys.platform == "darwin":
+            import platform
+            return "iosX64Test" if platform.machine().lower() in {"x86_64", "amd64"} else "iosSimulatorArm64Test"
+        return "allTests"
     jvm = bool(re.search(r'''kotlin\s*\(\s*["']jvm["']|["'](?:org\.jetbrains\.kotlin\.jvm|java|java-library)["']''', resolved))
     android = bool(re.search(r"com\.android\.|org\.jetbrains\.kotlin\.multiplatform", resolved))
     return "test" if jvm and not android else default_suffix
@@ -282,6 +294,16 @@ def resolve_target_task(repo: Path, requested_task: str | None) -> str:
             if build_text:
                 from wizard.discovery import _catalog_plugin_ids
                 task_suffix = _kmp_or_module_test_suffix(repo, single_mod, build_text, _catalog_plugin_ids(repo), task_suffix)
+                if sys.platform == "darwin" and any(
+                    re.search(r"/src/(?:ios|apple|native)[^/]*/", p.relative_to(repo).as_posix())
+                    for p in changed
+                ):
+                    from _modules import detect_kmp_build_script
+                    from wizard.discovery import _resolve_catalog_aliases
+                    kmp_info = detect_kmp_build_script(build_text, _resolve_catalog_aliases(build_text, _catalog_plugin_ids(repo)))
+                    if kmp_info["has_ios_target"] or (mod_dir / "src" / "iosMain").is_dir() or (mod_dir / "src" / "appleMain").is_dir():
+                        import platform
+                        task_suffix = "iosX64Test" if platform.machine().lower() in {"x86_64", "amd64"} else "iosSimulatorArm64Test"
             return f"{single_mod}:{task_suffix}"
     except (OSError, ValueError, ImportError, ValidationError):
         pass
@@ -382,6 +404,21 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
             continue
         suffix = _kmp_or_module_test_suffix(repo, module, build, catalog_ids, task_suffix)
         tasks.add(f"{module}:{suffix}")
+        if sys.platform == "darwin" and build:
+            mod_rel = module.lstrip(":").replace(":", "/")
+            if any(
+                p.relative_to(repo).as_posix().startswith(f"{mod_rel}/src/")
+                and re.search(r"/src/(?:ios|apple|native)[^/]*/", p.relative_to(repo).as_posix())
+                for p in changed
+            ):
+                from _modules import detect_kmp_build_script
+                from wizard.discovery import _resolve_catalog_aliases
+                kmp_info = detect_kmp_build_script(build, _resolve_catalog_aliases(build, catalog_ids))
+                mod_dir = repo / mod_rel if mod_rel else repo
+                if kmp_info["has_ios_target"] or (mod_dir / "src" / "iosMain").is_dir() or (mod_dir / "src" / "appleMain").is_dir():
+                    import platform
+                    ios_suffix = "iosX64Test" if platform.machine().lower() in {"x86_64", "amd64"} else "iosSimulatorArm64Test"
+                    tasks.add(f"{module}:{ios_suffix}")
     return sorted(tasks) or [default_task]
 
 
