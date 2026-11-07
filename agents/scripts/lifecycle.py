@@ -788,9 +788,18 @@ def _sync_tree_in_place(src: Path, dst: Path, *, keep: frozenset[str] = frozense
 IN_PLACE_KEEP = frozenset({"state", "cache", "agents"})
 
 
+def _is_non_hook_selftest(name: str) -> bool:
+    return name.startswith("_") and name.endswith("_selftest.py") and name != "_hook_selftest.py"
+
+
 def _install_engine(repo: Path, kit: Path, answers: dict, *, init_context: bool = False, in_place: bool = False) -> None:
     def ignored(_directory: str, names: list[str]) -> set[str]:
-        return {name for name in names if name in {"state", "cache", "__pycache__"} or name.endswith((".pyc", ".pyo"))}
+        return {
+            name for name in names
+            if name in {"state", "cache", "__pycache__"}
+            or name.endswith((".pyc", ".pyo"))
+            or _is_non_hook_selftest(name)
+        }
 
     required = sum(
         path.stat().st_size for path in (kit / "agents").rglob("*")

@@ -221,6 +221,9 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
     for rel, expected_sha in kit_files.items():
         if not rel.startswith("agents/"):
             continue
+        rel_name = Path(rel).name
+        if rel_name.startswith("_") and rel_name.endswith("_selftest.py") and rel_name != "_hook_selftest.py":
+            continue
         rel_installed = "." + rel
         if _is_preserved_managed_file(rel_installed):
             continue

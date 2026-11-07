@@ -1687,6 +1687,77 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
                     hook._audit("allow", "safe", "view_file", "")
                 self.assertFalse(any(call.args and call.args[0] == path for call in read.call_args_list))
 
+    def test_lean_review_profile_and_client_payload_slimming(self):
+        import review_policy
+        from _installer_config import product_values
+        from doctor.engine import HarnessDoctor
+
+        skills_root = fixtures.KIT / "agents" / "skills"
+        # 1. Default REVIEW_PROFILE is standard
+        vals_default = product_values(fixtures.KIT, {})
+        self.assertEqual("standard", vals_default["REVIEW_PROFILE"])
+        vals_lean = product_values(fixtures.KIT, {"review_profile": "lean"})
+        self.assertEqual("lean", vals_lean["REVIEW_PROFILE"])
+
+        # 2. T2_FEATURE bounded single-module change under standard vs lean
+        feature_cls = {
+            "surfaces": ["BUSINESS_LOGIC", "COMPOSE_UI"],
+            "severity": "MEDIUM",
+            "changed_files": 4,
+            "changed_lines": 80,
+            "has_delete_or_rename": False,
+            "details": {"COMPOSE_UI": {"reasons": ["BEHAVIOR"]}},
+        }
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            pol_std = review_policy.decide(feature_cls, skills_root)
+        self.assertEqual("T2_FEATURE", pol_std["risk_tier"])
+        self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_std["reviewers"])
+
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean"}):
+            pol_lean = review_policy.decide(feature_cls, skills_root)
+        self.assertEqual("T2_FEATURE", pol_lean["risk_tier"])
+        self.assertEqual(["bug-test-reviewer-agent"], pol_lean["reviewers"])
+        self.assertIn("LEAN_PROFILE_CONSOLIDATED", pol_lean["explanation"]["reviewers"]["bug-test-reviewer-agent"])
+
+        # 3. Widened _micro_eligible for small (<=2 files, <=40 lines) single-module BUSINESS_LOGIC in lean mode
+        small_logic_cls = {
+            "surfaces": ["BUSINESS_LOGIC"],
+            "severity": "MEDIUM",
+            "changed_files": 2,
+            "changed_lines": 25,
+            "has_delete_or_rename": False,
+        }
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            self.assertFalse(review_policy._micro_eligible(small_logic_cls))
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean"}):
+            self.assertTrue(review_policy._micro_eligible(small_logic_cls))
+            pol_micro = review_policy.decide(small_logic_cls, skills_root)
+            self.assertTrue(pol_micro["micro_eligible"])
+            self.assertEqual([], pol_micro["reviewers"])
+            self.assertIn("unit_tests", pol_micro["gates"])
+
+        # 4. High-risk surfaces (AUTH/SECURITY) never consolidate or become micro under lean
+        auth_cls = {
+            "surfaces": ["AUTH", "BUSINESS_LOGIC"],
+            "severity": "CRITICAL",
+            "changed_files": 1,
+            "changed_lines": 10,
+        }
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean"}):
+            pol_auth = review_policy.decide(auth_cls, skills_root)
+            self.assertFalse(pol_auth["micro_eligible"])
+            self.assertEqual(sorted(review_policy.FIVE_REVIEWERS), pol_auth["reviewers"])
+
+        # 5. Client install excludes non-hook _*_selftest.py while keeping _hook_selftest.py
+        self.assertTrue(lifecycle._is_non_hook_selftest("_vnext_selftest.py"))
+        self.assertFalse(lifecycle._is_non_hook_selftest("_hook_selftest.py"))
+        self.assertFalse(lifecycle._is_non_hook_selftest("workflow.py"))
+        doc = HarnessDoctor(fixtures.KIT, run_selftest=False)
+        released = doc._released_scripts()
+        self.assertIn("_hook_selftest.py", released)
+        self.assertNotIn("_vnext_selftest.py", released)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
