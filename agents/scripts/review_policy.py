@@ -187,7 +187,7 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
             return True
 
     # Tier 1 (Lean Profile): Small single-module low-risk business/UI logic edit with unit tests
-    if _configured_review_profile() == "lean":
+    if _configured_review_profile() == "lean" and effective_kind != "BUG":
         if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC"}:
             severity = str(classification.get("severity") or "").upper()
             if severity not in ("CRITICAL", "HIGH"):

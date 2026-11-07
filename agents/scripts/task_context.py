@@ -536,6 +536,7 @@ def resolve_task_context(
     module: str | None = None,
     source_set: str | None = None,
     limit: int = DEFAULT_NEIGHBOR_LIMIT,
+    trust_stat: bool = False,
 ) -> dict[str, Any]:
     """Resolve bounded task-local context without persistent writes."""
     root = repo.resolve()
@@ -543,7 +544,7 @@ def resolve_task_context(
     engine = GraphEngine(root)
     from task_metrics import operation_span
     with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
-        sync = engine.sync(persist=False)
+        sync = engine.sync(persist=False, trust_stat=trust_stat)
     return _resolve_task_context(root, engine, sync, file=file, symbol=symbol,
                                  module=module, source_set=source_set, limit=bounded_limit)
 
@@ -914,7 +915,7 @@ def _resolve_task_context(
 def resolve_task_contexts(
     repo: Path, *, files: list[str] | None = None, symbols: list[str] | None = None,
     module: str | None = None, source_set: str | None = None,
-    limit: int = DEFAULT_NEIGHBOR_LIMIT,
+    limit: int = DEFAULT_NEIGHBOR_LIMIT, trust_stat: bool = False,
 ) -> dict[str, Any]:
     """Resolve up to eight targets with one graph sync and a bounded union receipt."""
     targets = files or symbols or []
@@ -928,7 +929,7 @@ def resolve_task_contexts(
     engine = GraphEngine(root)
     from task_metrics import operation_span
     with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
-        sync = engine.sync(persist=False)
+        sync = engine.sync(persist=False, trust_stat=trust_stat)
     read_inputs = {}
     results = [_resolve_task_context(root, engine, sync,
                                     file=target if files else None, symbol=target if symbols else None,
@@ -1040,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-set")
     parser.add_argument("--limit", type=int, default=DEFAULT_NEIGHBOR_LIMIT)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--trust-stat", action="store_true", help="Reuse cached file hashes when stat metadata matches.")
     presentation = parser.add_mutually_exclusive_group()
     presentation.add_argument("--since", help="Digest actually received in this conversation; presentation only.")
     presentation.add_argument("--full", action="store_true", help="Return all advisory details without summary or shared-field references.")
@@ -1052,11 +1054,13 @@ def main(argv: list[str] | None = None) -> int:
     repo_path = Path(args.repo)
     if len(targets) > 1:
         result = resolve_task_contexts(repo_path, files=args.file, symbols=args.symbol,
-                                       module=args.module, source_set=args.source_set, limit=args.limit)
+                                       module=args.module, source_set=args.source_set, limit=args.limit,
+                                       trust_stat=args.trust_stat)
     else:
         result = resolve_task_context(repo_path, file=args.file[0] if args.file else None,
                                       symbol=args.symbol[0] if args.symbol else None,
-                                      module=args.module, source_set=args.source_set, limit=args.limit)
+                                      module=args.module, source_set=args.source_set, limit=args.limit,
+                                      trust_stat=args.trust_stat)
     if args.json:
         from context_presentation import present_context
         out_payload = present_context(repo_path, result, since=args.since, full=args.full)

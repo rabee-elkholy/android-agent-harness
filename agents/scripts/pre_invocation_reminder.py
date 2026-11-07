@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -73,8 +74,12 @@ def _unchanged_state_message(task_id: str, status: str) -> str:
     return f"Harness [Task {task_id}: {status}]: State unchanged; continue following active {status} rules and NEXT_ACTION."
 
 
+def _is_raw_kit_repo(repo: Path) -> bool:
+    return (repo / "harness_cli.py").is_file() and (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir()
+
+
 def _has_seen_state(conversation_id: str, state_key: str) -> bool:
-    if not conversation_id:
+    if not conversation_id or _is_raw_kit_repo(REPO):
         return False
     cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
     try:
@@ -88,18 +93,23 @@ def _has_seen_state(conversation_id: str, state_key: str) -> bool:
 
 
 def _record_seen_state(conversation_id: str, state_key: str) -> None:
-    if not conversation_id:
+    if not conversation_id or _is_raw_kit_repo(REPO):
         return
     cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
     try:
         data: dict[str, str] = {}
         if cache_path.is_file():
-            raw = json.loads(cache_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
+            try:
+                raw = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
+            except (OSError, ValueError):
+                data = {}
         data[conversation_id] = state_key
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(data), encoding="utf-8")
+        tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp_path.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp_path, cache_path)
     except (OSError, ValueError):
         return
 

@@ -2026,6 +2026,23 @@ class MissingBaselineGuidanceTests(unittest.TestCase):
             [":feature:auth:compileDebugKotlin"],
         ], calls)
 
+        calls.clear()
+
+        def fake_gradle_batch_transient(task_args: list[str], *, cwd=None, outcome=None):
+            calls.append(list(task_args))
+            return 1 if len(task_args) > 1 else 0
+
+        with mock.patch.object(wf_engine, "resolve_module_gradle_task", side_effect=fake_resolve), \
+             mock.patch("run_gradle_task.run_gradle", side_effect=fake_gradle_batch_transient):
+            ok_retry, detail_retry = wf_engine.check_phase_compile(self.tmp, modules)
+        self.assertTrue(ok_retry)
+        self.assertEqual("PASS", detail_retry)
+        self.assertEqual([
+            [":core:model:compileDebugKotlin", ":feature:auth:compileDebugKotlin"],
+            [":core:model:compileDebugKotlin"],
+            [":feature:auth:compileDebugKotlin"],
+        ], calls)
+
 
 def _gradle_tests_only_failed(code: int, test_failure_only: bool = True):
     """Mimic run_gradle's outcome attribution for a finished Gradle test run."""

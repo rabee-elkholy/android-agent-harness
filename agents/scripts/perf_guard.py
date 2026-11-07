@@ -118,8 +118,30 @@ def scan_file(file_path: Path) -> list[dict]:
 
         # 5. Contract State without @Immutable (only in Compose files)
         if has_compose_context and _has_real_match(line, _STATE_DATA_CLASS_RE):
-            prev_lines = lines[max(0, idx - 5):idx]
-            has_immutable = any("@Immutable" in pl or "@Stable" in pl for pl in prev_lines)
+            has_immutable = "@Immutable" in line or "@Stable" in line
+            if not has_immutable:
+                lookback_idx = idx - 2
+                in_kdoc = False
+                while lookback_idx >= 0:
+                    prev_line = lines[lookback_idx].strip()
+                    if in_kdoc:
+                        if "/*" in prev_line:
+                            in_kdoc = False
+                        lookback_idx -= 1
+                        continue
+                    if prev_line.endswith("*/") and not prev_line.startswith("/*"):
+                        in_kdoc = True
+                        lookback_idx -= 1
+                        continue
+                    if prev_line.startswith("@"):
+                        if "@Immutable" in prev_line or "@Stable" in prev_line:
+                            has_immutable = True
+                            break
+                        lookback_idx -= 1
+                    elif not prev_line or prev_line.startswith("//") or prev_line.startswith("/*") or prev_line.startswith("*"):
+                        lookback_idx -= 1
+                    else:
+                        break
             if not has_immutable:
                 findings.append({
                     "file": str(file_path),

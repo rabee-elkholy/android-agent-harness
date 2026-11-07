@@ -400,8 +400,18 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
             if not has_ann:
                 lookback_idx = idx - 2
                 annotations = []
+                in_kdoc = False
                 while lookback_idx >= 0:
                     prev_line = lines[lookback_idx].strip()
+                    if in_kdoc:
+                        if "/*" in prev_line:
+                            in_kdoc = False
+                        lookback_idx -= 1
+                        continue
+                    if prev_line.endswith("*/") and not prev_line.startswith("/*"):
+                        in_kdoc = True
+                        lookback_idx -= 1
+                        continue
                     if prev_line.startswith("@"):
                         annotations.append(prev_line)
                         lookback_idx -= 1
@@ -486,24 +496,29 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                         "msg": f"'{file_path.name}' needs @Preview composable function{extra}",
                     })
 
-    is_fragment = bool(re.search(r"class\s+\w+[^{]*:\s*(?:BaseFragment|Fragment|DialogFragment|BottomSheetDialogFragment)\b", text))
+    clean_fragment_text = re.sub(
+        r'("""[\s\S]*?"""|"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\'|//[^\r\n]*|/\*[\s\S]*?\*/)',
+        lambda m: '""' if m.group(0).startswith(('"', "'")) else "",
+        text,
+    )
+    is_fragment = bool(re.search(r"class\s+\w+[^{]*:\s*(?:BaseFragment|Fragment|DialogFragment|BottomSheetDialogFragment)\b", clean_fragment_text))
     if is_fragment and not is_test:
-        binding_decl = re.search(r"private\s+var\s+(_binding\w*)\s*:\s*[A-Za-z0-9_]+Binding\?\s*=\s*null", text)
+        binding_decl = re.search(r"private\s+var\s+(_binding\w*)\s*:\s*[A-Za-z0-9_]+Binding\?\s*=\s*null", clean_fragment_text)
         if binding_decl:
             var_name = binding_decl.group(1)
-            ondestroy_header = re.search(r"override\s+fun\s+onDestroyView\s*\([^)]*\)\s*\{", text)
+            ondestroy_header = re.search(r"override\s+fun\s+onDestroyView\s*\([^)]*\)\s*\{", clean_fragment_text)
             ondestroy_body = ""
             if ondestroy_header:
                 depth = 1
                 pos = ondestroy_header.end()
-                while pos < len(text) and depth > 0:
-                    ch = text[pos]
+                while pos < len(clean_fragment_text) and depth > 0:
+                    ch = clean_fragment_text[pos]
                     if ch == "{":
                         depth += 1
                     elif ch == "}":
                         depth -= 1
                     pos += 1
-                ondestroy_body = text[ondestroy_header.end():pos - 1] if depth == 0 else text[ondestroy_header.end():]
+                ondestroy_body = clean_fragment_text[ondestroy_header.end():pos - 1] if depth == 0 else clean_fragment_text[ondestroy_header.end():]
             nullified = bool(ondestroy_body) and bool(re.search(rf"\b{re.escape(var_name)}\s*=\s*null\b", ondestroy_body))
             if not nullified:
                 issues.append({
