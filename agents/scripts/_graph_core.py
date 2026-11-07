@@ -73,7 +73,7 @@ class GraphNode:
     def to_dict(self, compact: bool = False) -> dict[str, Any]:
         if not compact:
             return asdict(self)
-        meta = {k: v for k, v in (self.metadata or {}).items() if k != "same_package_refs"}
+        meta = {k: v for k, v in (self.metadata or {}).items() if k not in ("same_package_refs", "xml_refs")}
         out: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
@@ -1224,7 +1224,7 @@ def parse_xml_file(path: Path, repo: Path) -> list[tuple[GraphNode, list[str]]]:
         file_path=rel_path,
         module=module_id,
         declarations=[name],
-        metadata={"xml": True, "is_nav": is_nav, "language": "XML"},
+        metadata={"xml": True, "is_nav": is_nav, "language": "XML", "xml_refs": referenced_symbols},
     )
     return [(node, referenced_symbols)]
 
@@ -1642,12 +1642,31 @@ class GraphEngine:
                             if target_node and target_node.file_path != node.file_path:
                                 self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
 
-            for xnode, refs in xml_connections:
+            xml_refs_by_id: dict[str, list[str]] = {
+                xnode.id: list(refs) for xnode, refs in xml_connections
+            }
+            for node in list(self.graph.nodes.values()):
+                if (node.metadata or {}).get("xml") and node.id not in xml_refs_by_id:
+                    stored_refs = (node.metadata or {}).get("xml_refs")
+                    if isinstance(stored_refs, list):
+                        xml_refs_by_id[node.id] = list(stored_refs)
+
+            for xnode_id, refs in xml_refs_by_id.items():
+                if xnode_id not in self.graph.nodes:
+                    continue
                 for ref in refs:
-                    if ref in self.symbol_to_node_id:
-                        self.graph.add_edge(xnode.id, self.symbol_to_node_id[ref], kind=EdgeKind.RENDERS.value)
+                    target_id = (
+                        self.fqn_to_node_id.get(ref)
+                        or (ref if ref in self.graph.nodes else None)
+                        or self.symbol_to_node_id.get(ref)
+                    )
+                    if not target_id and "." in ref:
+                        short_ref = ref.rsplit(".", 1)[-1]
+                        target_id = self.symbol_to_node_id.get(short_ref)
+                    if target_id and target_id != xnode_id and not target_id.startswith("layout:"):
+                        self.graph.add_edge(xnode_id, target_id, kind=EdgeKind.RENDERS.value)
                     elif f"layout:{ref}" in self.graph.nodes:
-                        self.graph.add_edge(xnode.id, f"layout:{ref}", kind=EdgeKind.CONTAINS.value)
+                        self.graph.add_edge(xnode_id, f"layout:{ref}", kind=EdgeKind.CONTAINS.value)
 
             if persist:
                 self.save_cache()
