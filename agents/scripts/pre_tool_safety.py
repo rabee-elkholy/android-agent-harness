@@ -17,9 +17,56 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _repo_files import REPO  # noqa: E402
-from mutation_guard import _entry, active_plan, command_allowed, file_mutation_allowed, join_continuations  # noqa: E402
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_env_repo = os.environ.get("HARNESS_REPO", "").strip()
+REPO = Path(_env_repo).resolve() if _env_repo else _SCRIPTS_DIR.parent.parent
 from _vnext_common import ValidationError, active_review_package_path, read_json, sha256_file, state_root, validate_id  # noqa: E402
+
+
+def active_plan(repo: Path | str, *, allow_missing: bool = False) -> dict:
+    """Resolve a live task; optional diagnostics tolerate absence, never a broken pointer."""
+    repo_path = Path(repo)
+    installed = repo_path / ".agents" / "state"
+    state = installed if installed.parent.is_dir() else repo_path / "agents" / "state"
+    active_file = state / "active-task.json"
+    if active_file.is_file():
+        try:
+            active = read_json(active_file)
+            plan_path = Path(str(active.get("plan_path") or ""))
+            if not plan_path.is_absolute():
+                plan_path = repo_path / plan_path
+            plan_resolved = plan_path.resolve()
+            state_resolved = state.resolve()
+            if state_resolved != plan_resolved and state_resolved not in plan_resolved.parents:
+                raise ValidationError("active plan path escapes harness state")
+            if plan_resolved.is_file():
+                return read_json(plan_resolved)
+        except ValidationError:
+            raise
+        except (OSError, ValueError):
+            pass
+    from mutation_guard import active_plan as _full_active_plan
+    return _full_active_plan(repo, allow_missing=allow_missing)
+
+
+def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
+    from mutation_guard import _entry as _mg_entry
+    return _mg_entry(command, repo)
+
+
+def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
+    from mutation_guard import command_allowed as _mg_command_allowed
+    return _mg_command_allowed(repo, command)
+
+
+def file_mutation_allowed(repo: Path | str, targets: list[str] | None = None) -> tuple[bool, str, str]:
+    from mutation_guard import file_mutation_allowed as _mg_file_mutation_allowed
+    return _mg_file_mutation_allowed(repo, targets=targets)
+
+
+def join_continuations(command: str) -> str:
+    from mutation_guard import join_continuations as _mg_join_continuations
+    return _mg_join_continuations(command)
 
 
 from policy_vocab import (
@@ -50,8 +97,16 @@ WRITE_TOOLS = {
 }
 SUBAGENT_TOOLS = frozenset(SUBAGENT_ORCHESTRATION_TOOLS)
 SEARCH_TOOLS = {"grep_search", "find_by_name"}
-from integrations.registry import registry  # noqa: E402
-from integrations.base import validate_external_write  # noqa: E402
+
+
+def _get_registry():
+    from integrations.registry import registry as _reg
+    return _reg
+
+
+def validate_external_write(integration, tool_name: str, args: dict, plan: dict, *, grant=None) -> tuple[bool, str]:
+    from integrations.base import validate_external_write as _vew
+    return _vew(integration, tool_name, args, plan, grant=grant)
 KNOWN_MCP_READ_PREFIXES = (
     "get_", "list_", "read_", "search_", "fetch_", "query_", "check_", "inspect_",
     "api-get-", "api-retrieve-", "api-query-", "developerknowledge_",
@@ -1590,7 +1645,7 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         tool_args = {}
 
     # 1. Query specialized integration registry (e.g. Zoho Sprints & Universal PM MCPs)
-    integration = registry.resolve(server, tool_name)
+    integration = _get_registry().resolve(server, tool_name)
     if integration is not None:
         if integration.is_read_only(tool_name, tool_args):
             disp = integration.resolve_display_name(server, tool_name) if hasattr(integration, "resolve_display_name") else integration.display_name
@@ -2145,8 +2200,14 @@ def _main() -> None:
         if name == "list_dir":
             _handle_list_dir(name, args)
             return
+        # Known read-only tools (checked before loading external integration registry)
+        if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+            if name in ("view_file", "read_file", "read"):
+                _flag_out_of_scope_read(name, args)
+            emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
+            return
         # External integrations called directly as host tools (e.g. zoho_add_comment)
-        integration = registry.resolve("", name)
+        integration = _get_registry().resolve("", name)
         if integration is not None:
             if integration.is_read_only(name, args):
                 emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
@@ -2164,13 +2225,6 @@ def _main() -> None:
                 "ToolName": mcp_match.group(2),
                 "Arguments": args,
             })
-            return
-
-        # Known read-only tools
-        if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
-            if name in ("view_file", "read_file", "read"):
-                _flag_out_of_scope_read(name, args)
-            emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return
 
         # Capability-based safety for unknown host tools

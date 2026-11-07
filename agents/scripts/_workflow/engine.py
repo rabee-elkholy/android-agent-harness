@@ -2405,15 +2405,31 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
     if not gradle_wrapper:
         return True, "NOT_REQUIRED"
     from run_gradle_task import run_gradle
+    resolved_tasks: list[tuple[str, str]] = []
     for m in modules:
         try:
             compile_task = resolve_module_gradle_task(repo, m, task_type="compile", phase_changes=phase_changes)
         except ValidationError as exc:
             return False, str(exc)
+        resolved_tasks.append((m, compile_task))
+    if not resolved_tasks:
+        return True, "PASS"
+    if len(resolved_tasks) == 1:
+        m, compile_task = resolved_tasks[0]
         res = run_gradle([compile_task], cwd=repo)
         if res != 0:
             return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
-    return True, "PASS"
+        return True, "PASS"
+    unique_tasks = list(dict.fromkeys(t for _, t in resolved_tasks))
+    batch_res = run_gradle(unique_tasks, cwd=repo)
+    if batch_res == 0:
+        return True, "PASS"
+    for m, compile_task in resolved_tasks:
+        res = run_gradle([compile_task], cwd=repo)
+        if res != 0:
+            return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
+    m0, t0 = resolved_tasks[0]
+    return False, f"compile failed for module '{m0}' with task '{t0}' (exit code {batch_res})"
 
 
 def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: str | None) -> list[dict]:
@@ -2502,6 +2518,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
     total_ignored = 0
     total_failed = 0
 
+    runnable: list[tuple[str, str]] = []
     for m in modules:
         # A module with no unit-test sources whose phase changes are all resources cannot produce
         # test evidence; demanding it dead-ends any phase touching a resource-only module (N3).
@@ -2525,8 +2542,42 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
             task = resolve_module_gradle_task(repo, m, task_type="test", phase_changes=phase_changes)
         except ValidationError as exc:
             return False, str(exc)
+        runnable.append((m, task))
 
-        is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
+    is_mock = hasattr(run_gradle_fn, "assert_called") or hasattr(run_gradle_fn, "side_effect") or hasattr(run_gradle_fn, "return_value")
+
+    if len(runnable) > 1:
+        reports_before_map = {m: (None if is_mock else report_signatures(repo, task)) for m, task in runnable}
+        batch_outcome: dict = {}
+        unique_tasks = list(dict.fromkeys(task for _, task in runnable))
+        batch_res = run_gradle_fn(unique_tasks, cwd=repo, outcome=batch_outcome)
+        batch_all_ok = True
+        batch_mod_data: dict[str, tuple[bool, str, dict]] = {}
+        for m, task in runnable:
+            ok, detail, data = evaluate_unit_test_execution(
+                repo=repo,
+                task=task,
+                code=batch_res,
+                reports_before=reports_before_map[m],
+                outcome=batch_outcome,
+                task_start=task_start,
+            )
+            batch_mod_data[m] = (ok, detail, data)
+            if not ok:
+                batch_all_ok = False
+        if batch_all_ok:
+            for m, _task in runnable:
+                _, _, data = batch_mod_data[m]
+                total_ignored += data.get("baseline_ignored", 0)
+                total_failed += data.get("total_failed", 0)
+                aggregated_evidence["modules"][m] = data
+            aggregated_evidence["baseline_ignored"] = total_ignored
+            aggregated_evidence["total_failed"] = total_failed
+            aggregated_evidence["evidence_identity_sha256"] = evidence_identity
+            atomic_write_json(test_file, aggregated_evidence)
+            return True, "PASS"
+
+    for m, task in runnable:
         reports_before = None if is_mock else report_signatures(repo, task)
         outcome: dict = {}
         res = run_gradle_fn([task], cwd=repo, outcome=outcome)

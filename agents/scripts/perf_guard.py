@@ -27,6 +27,18 @@ def get_git_modified_files() -> list[Path]:
         return []
 
 
+def _has_real_match(line: str, pattern: re.Pattern[str]) -> bool:
+    from fast_kt_lint import _in_string_or_comment
+    return any(not _in_string_or_comment(line, m.start()) for m in pattern.finditer(line))
+
+
+_RUNBLOCKING_RE = re.compile(r"\brunBlocking\s*(?:\(|\{)")
+_THREAD_SLEEP_RE = re.compile(r"\bThread\s*\.\s*sleep\s*\(")
+_ALLOW_MAIN_THREAD_RE = re.compile(r"\ballowMainThreadQueries\s*\(")
+_WAKELOCK_ACQUIRE_RE = re.compile(r"\bwakeLock\s*\.\s*acquire\s*\(\s*\)")
+_STATE_DATA_CLASS_RE = re.compile(r"\bdata\s+class\s+[A-Za-z0-9_]*(?:State|UiState)\b")
+
+
 def scan_file(file_path: Path) -> list[dict]:
     findings = []
     try:
@@ -35,12 +47,37 @@ def scan_file(file_path: Path) -> list[dict]:
         return [{"file": str(file_path), "line": 1, "severity": "Warning", "message": f"Could not read file: {e}"}]
 
     lines = content.splitlines()
+    has_compose_context = any(
+        "androidx.compose" in l or "org.jetbrains.compose" in l or "@Composable" in l
+        for l in lines
+    )
+    in_block_comment = False
+    in_triple_string = False
 
     for idx, line in enumerate(lines, start=1):
         stripped = line.strip()
 
+        if in_block_comment:
+            if "*/" in line:
+                in_block_comment = False
+            continue
+        if stripped.startswith("/*"):
+            if "*/" not in stripped[2:]:
+                in_block_comment = True
+            continue
+        if in_triple_string:
+            if '"""' in line:
+                in_triple_string = False
+            continue
+        if '"""' in stripped and stripped.count('"""') % 2 != 0:
+            in_triple_string = True
+            continue
+
+        if stripped.startswith("//") or stripped.startswith("*"):
+            continue
+
         # 1. runBlocking check
-        if "runBlocking" in stripped and not stripped.startswith("//") and not stripped.startswith("/*"):
+        if _has_real_match(line, _RUNBLOCKING_RE):
             # Exclude test files (Android & KMP test source sets)
             from _modules import is_kmp_or_android_test_path
             norm_fp = str(file_path).replace("\\", "/")
@@ -53,7 +90,7 @@ def scan_file(file_path: Path) -> list[dict]:
                 })
 
         # 2. Thread.sleep check
-        if "Thread.sleep(" in stripped and not stripped.startswith("//"):
+        if _has_real_match(line, _THREAD_SLEEP_RE):
             findings.append({
                 "file": str(file_path),
                 "line": idx,
@@ -62,7 +99,7 @@ def scan_file(file_path: Path) -> list[dict]:
             })
 
         # 3. allowMainThreadQueries check
-        if "allowMainThreadQueries" in stripped and not stripped.startswith("//"):
+        if _has_real_match(line, _ALLOW_MAIN_THREAD_RE):
             findings.append({
                 "file": str(file_path),
                 "line": idx,
@@ -71,7 +108,7 @@ def scan_file(file_path: Path) -> list[dict]:
             })
 
         # 4. WakeLock acquire without timeout
-        if re.search(r"wakeLock\s*\.\s*acquire\s*\(\s*\)", stripped) and not stripped.startswith("//"):
+        if _has_real_match(line, _WAKELOCK_ACQUIRE_RE):
             findings.append({
                 "file": str(file_path),
                 "line": idx,
@@ -79,9 +116,9 @@ def scan_file(file_path: Path) -> list[dict]:
                 "message": "WakeLock acquired without a timeout. Always specify a maximum timeout: wakeLock.acquire(timeoutMs)."
             })
 
-        # 5. Contract State without @Immutable
-        if re.search(r"data\s+class\s+[A-Za-z0-9_]*(?:State|UiState)\b", stripped) and not stripped.startswith("//"):
-            prev_lines = lines[max(0, idx - 5):idx - 1]
+        # 5. Contract State without @Immutable (only in Compose files)
+        if has_compose_context and _has_real_match(line, _STATE_DATA_CLASS_RE):
+            prev_lines = lines[max(0, idx - 5):idx]
             has_immutable = any("@Immutable" in pl or "@Stable" in pl for pl in prev_lines)
             if not has_immutable:
                 findings.append({

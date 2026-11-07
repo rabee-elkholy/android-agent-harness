@@ -854,6 +854,12 @@ def _warm_project_graph(repo: Path) -> tuple[bool, str | None]:
         engine = GraphEngine(repo)
         engine.sync(force_full=True)
         engine.save_cache()
+        try:
+            from ensure_hook_selftest import seed_cache_for_agents
+            if (repo / ".agents" / "scripts").is_dir():
+                seed_cache_for_agents(repo / ".agents", ok=True)
+        except (OSError, ValueError, ImportError):
+            pass
         return True, None
     except Exception as exc:
         sanitized = (
@@ -1234,7 +1240,15 @@ def require_update_idle(repo: Path, *, preserve_active_task: str | None = None, 
 def _state_snapshot(repo: Path) -> dict[str, str]:
     state = repo / ".agents/state"
     records = {}
-    ignored = {".write.lock", "audit_log.jsonl", "hook-conversations.json", "hook-state.json", "update_cache.json"}
+    ignored = {
+        ".write.lock",
+        "audit_log.jsonl",
+        "hook-conversations.json",
+        "hook-state.json",
+        "hook_selftest.json",
+        "hook_selftest.running.json",
+        "update_cache.json",
+    }
     for path in state.rglob("*"):
         if path.is_symlink():
             raise ValidationError("active-task state contains a symlink; update refused")

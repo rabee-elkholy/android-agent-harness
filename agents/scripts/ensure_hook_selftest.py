@@ -26,7 +26,7 @@ except ImportError:
 AGENTS = Path(__file__).resolve().parent.parent
 SCRIPTS = AGENTS / "scripts"
 SELFTEST = SCRIPTS / "_hook_selftest.py"
-CACHE = AGENTS / "state" / "hook_selftest.json"
+CACHE = AGENTS / "cache" / "hook_selftest.json"
 _fingerprint_files: dict = {}
 
 
@@ -149,6 +149,123 @@ def _read_stdin_safe(timeout_sec: float = 0.1) -> str:
     return buf[0] if buf else ""
 
 
+def _running_lock_path() -> Path:
+    return CACHE.with_name("hook_selftest.running.json")
+
+
+def _is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _is_background_running(max_age_sec: float = 300.0) -> bool:
+    import time
+    lock_file = _running_lock_path()
+    try:
+        if not lock_file.is_file():
+            return False
+        data = json.loads(lock_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False
+        started = float(data.get("started_at") or 0.0)
+        if time.time() - started > max_age_sec:
+            return False
+        pid = int(data.get("pid") or 0)
+        return _is_pid_alive(pid)
+    except Exception:
+        return False
+
+
+def _write_running_lock(pid: int, fingerprint: str) -> None:
+    import time
+    from _vnext_common import atomic_write_json
+    try:
+        atomic_write_json(_running_lock_path(), {"pid": pid, "fingerprint": fingerprint, "started_at": time.time()})
+    except (OSError, ValueError):
+        pass
+
+
+def _clear_running_lock() -> None:
+    try:
+        _running_lock_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _spawn_background_selftest(fingerprint: str) -> bool:
+    if _is_background_running():
+        return False
+    env = os.environ.copy()
+    env.pop("HARNESS_HOOK_STATE", None)
+    env.pop("HARNESS_TRANSCRIPT_ROOT", None)
+    kwargs: dict = {
+        "cwd": str(AGENTS.parent),
+        "env": env,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        kwargs["creationflags"] = flags
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "--cli", "--background-worker"],
+            **kwargs,
+        )
+        _write_running_lock(proc.pid, fingerprint)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def seed_cache_for_agents(agents_dir: Path, *, ok: bool = True) -> None:
+    """Seed hook_selftest.json for an installed .agents directory after verified install/update."""
+    global AGENTS, SCRIPTS, SELFTEST, CACHE
+    prev = (AGENTS, SCRIPTS, SELFTEST, CACHE)
+    try:
+        AGENTS = agents_dir.resolve()
+        SCRIPTS = AGENTS / "scripts"
+        SELFTEST = SCRIPTS / "_hook_selftest.py"
+        CACHE = AGENTS / "cache" / "hook_selftest.json"
+        fp = harness_fingerprint()
+        _write_cache(fp, ok)
+    finally:
+        AGENTS, SCRIPTS, SELFTEST, CACHE = prev
+
+
+def _failure_hook_response() -> str:
+    try:
+        import _product
+        prod_name = getattr(_product, "PRODUCT_NAME", getattr(_product, "PRODUCT", "App"))
+    except Exception:
+        prod_name = "App"
+    return json.dumps(
+        {
+            "injectSteps": [
+                {
+                    "ephemeralMessage": (
+                        f"{prod_name} hook selftest FAILED after a harness change. "
+                        "Do not assemble. Run `python .agents/scripts/_hook_selftest.py` "
+                        "and fix the failures before delivery."
+                    )
+                }
+            ]
+        }
+    )
+
+
 def main() -> int:
     enable_line_buffered_stdio()
     if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
@@ -165,35 +282,28 @@ def main() -> int:
             print("[OK] Hook selftest cache is fresh.", flush=True)
         return 0
 
-    ok, output = run_selftest(echo=(not as_hook))
-    _write_cache(fingerprint, ok)
-
     if as_hook:
-        if ok:
-            print("{}", flush=True)
+        cache = _read_cache()
+        if cache.get("ok") is False:
+            if cache.get("fingerprint") != fingerprint:
+                _spawn_background_selftest(fingerprint)
+            print(_failure_hook_response(), flush=True)
             return 0
-        try:
-            import _product
-            prod_name = getattr(_product, "PRODUCT_NAME", getattr(_product, "PRODUCT", "App"))
-        except Exception:
-            prod_name = "App"
-        print(
-            json.dumps(
-                {
-                    "injectSteps": [
-                        {
-                            "ephemeralMessage": (
-                                f"{prod_name} hook selftest FAILED after a harness change. "
-                                "Do not assemble. Run `python .agents/scripts/_hook_selftest.py` "
-                                "and fix the failures before delivery."
-                            )
-                        }
-                    ]
-                }
-            ),
-            flush=True,
-        )
+        if os.environ.get("HARNESS_HOOK_SELFTEST_SYNC") == "1":
+            ok, _ = run_selftest(echo=False)
+            _write_cache(fingerprint, ok)
+            print("{}" if ok else _failure_hook_response(), flush=True)
+            return 0
+        _spawn_background_selftest(fingerprint)
+        print("{}", flush=True)
         return 0
+
+    _write_running_lock(os.getpid(), fingerprint)
+    try:
+        ok, output = run_selftest(echo=True)
+        _write_cache(fingerprint, ok)
+    finally:
+        _clear_running_lock()
 
     if ok:
         print("[SUCCESS] Hook selftest passed; cache updated.", flush=True)
