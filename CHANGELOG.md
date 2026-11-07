@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.9] - 2026-11-07
+
+### KMP `expect`/`actual` nested generic & default parameter arity hardening, Swift inline comment stripping, and macOS Xcode CLI edge-case fixes
+
+- **Nested Generics, Annotations, and String-Aware Parameter Arity in `expect`/`actual` Verification (`agents/scripts/_modules.py`)**: Upgrade `_EXPECT_DECL_RE` and `_ACTUAL_DECL_RE` to support nested type arguments (`<T : Comparable<T>>`, `Map<String, List<Int>>`) and nested parentheses in annotations (`@Deprecated(..., ReplaceWith(...))`); make `_parse_fun_arity` string- and char-literal aware so commas or parentheses inside default parameter values (`currency: String = ", "`) never skew parameter counts; and activate `iosMain` verification when a module uses `appleMain` or `nativeMain` directly without an `iosMain` folder.
+- **Swift Inline Comment Stripping in Preflight Lint (`agents/scripts/fast_kt_lint.py`)**: Strip trailing inline `//` comments outside string literals in `lint_swift_file` before scanning for cleartext HTTP URLs, hardcoded secrets, or `fatalError("TODO")` stubs so commented-out legacy references never trigger false positives.
+- **macOS Root CLI `compile --ios`, Read-Only `xcodebuild` Discovery Flags, and Scheme-Aware `.app` Selection (`harness_cli.py`, `agents/harness.py`, `agents/scripts/mutation_guard.py`, `agents/scripts/run_device.py`)**: Support `compile --ios` in the root `harness_cli.py` (`cmd_compile`); avoid acquiring an exclusive `StateLock` for `device status`/`device ios-status` or `--help` in `agents/harness.py`; allow read-only `xcodebuild -list`/`-showdestinations` with `-project`/`-workspace`/`-scheme` and `android-harness` in `mutation_guard.py`; and prefer the scheme-matching `.app` bundle while excluding `*-Runner.app`/`*Tests.app` test bundles in `run_device.py`.
+
 ## [1.2.8] - 2026-11-07
 
 ### 100% KMM / KMP (Kotlin Multiplatform Mobile) support and macOS iOS Simulator build, test, and run integration
