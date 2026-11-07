@@ -766,6 +766,14 @@ import argparse
         assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_expect_issues), False, "expect @Composable fun in commonMain does not require @Preview")
         lint_welcome_issues = lint_file(common_main / "WelcomeScreen.kt")
         assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_welcome_issues), False, "Parameterless @Preview in commonMain satisfies preview lint")
+
+        eng_stat = GraphEngine(kmm_dir)
+        res_cold = eng_stat.sync()
+        assert_eq(res_cold["files_hashed"] > 0, True, "Cold sync hashes files")
+        res_warm_stat = eng_stat.sync(trust_stat=True)
+        assert_eq(res_warm_stat["files_hashed"], 0, "Warm sync with trust_stat=True reuses cached hashes when stat matches")
+        res_warm_default = eng_stat.sync()
+        assert_eq(res_warm_default["files_hashed"] > 0, True, "Default sync always hashes files to catch restored timestamps")
     finally:
         shutil.rmtree(kmm_dir, ignore_errors=True)
 
