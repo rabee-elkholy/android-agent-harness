@@ -460,7 +460,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                         sib_text = sibling.read_text(encoding="utf-8", errors="replace")
                         if stem in sib_text or cand_name.startswith(stem):
                             preview_search_text = f"{preview_search_text}\n{sib_text}"
-                    except Exception:
+                    except (OSError, ValueError):
                         pass
             has_rtl = any(loc in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             has_ltr = any(loc not in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)

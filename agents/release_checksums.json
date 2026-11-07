@@ -120,7 +120,7 @@
     "agents/scripts/ensure_hook_selftest.py": "c7367c8d46d0947baf631420a7f0bd4b201ca560ae3e2061702a650b5d87d6c9",
     "agents/scripts/evidence_store.py": "30dcdffe280a393258acb93db72dfc923a2cebb0f487b6e3e64e58892f8926b3",
     "agents/scripts/exported_component_guard.py": "dc1c4d309ad8d9f4ff7b826848d9c9455b6c3381e195005e9d77623a38fb7ac3",
-    "agents/scripts/fast_kt_lint.py": "7f1bcb8974662242b075b024563dcc09307dcaad1f4cfa8e3bd4d33016a4780a",
+    "agents/scripts/fast_kt_lint.py": "bd5beaced8cd42fbef53adc1eeef9647653c4111cf0d034f5919c0700af67566",
     "agents/scripts/final_verdict.py": "ab94f8ef8855d8d22d59b8a6cc10adae3fb871fe674a7f7d83bf0b849e455ffb",
     "agents/scripts/final_verifier.py": "fd4f592008826c64574ef830d2c77729f7cdef2a9935354afc5b10d4eb96adfb",
     "agents/scripts/generate_project_context.py": "fb8d1b6b58412a12170749e511d2512d672380ba9f1da4888955d1d0cdcf5bdc",
