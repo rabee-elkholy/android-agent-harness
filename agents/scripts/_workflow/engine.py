@@ -3344,6 +3344,70 @@ def local_task_metrics(args: argparse.Namespace) -> dict:
     return metrics_report(Path(args.repo).resolve(), args.task_id)
 
 
+def cmd_plan_check(args: argparse.Namespace) -> dict:
+    """Read-only readiness, YAGNI reuse, file grounding, and module DAG audit for a task plan."""
+    from _workflow.planning import _discover_reuse_candidates, _evaluate_plan_readiness
+
+    repo = Path(args.repo).resolve()
+    tid = str(getattr(args, "task_id", "") or "").strip()
+    if not tid:
+        active_file = state_root(repo) / "active-task.json"
+        if active_file.is_file():
+            try:
+                tid = str(read_json(active_file).get("task_id") or "").strip()
+            except (OSError, ValueError, ValidationError):
+                tid = ""
+    if not tid:
+        raise ValidationError("no active task found; pass --task-id <id>")
+    plan = _load_plan(repo, tid)
+    directory = task_dir(repo, tid)
+    policy_file = directory / "preliminary-policy.json"
+    policy: dict[str, Any] = {}
+    if policy_file.is_file():
+        try:
+            policy = read_json(policy_file)
+        except (OSError, ValueError, ValidationError):
+            policy = {}
+
+    all_files: list[str] = list(plan.get("expected_files") or [])
+    for phase in plan.get("phases") or []:
+        if isinstance(phase, dict):
+            for f in phase.get("expected_files") or []:
+                if f not in all_files:
+                    all_files.append(f)
+
+    existing_files: list[str] = []
+    new_files: list[str] = []
+    for rel in all_files:
+        rel_norm = str(rel).replace("\\", "/").strip("/")
+        if not rel_norm:
+            continue
+        if (repo / rel_norm).exists():
+            existing_files.append(rel_norm)
+        else:
+            new_files.append(rel_norm)
+
+    reuse_cands = _discover_reuse_candidates(repo, all_files)
+    plan_for_eval = dict(plan)
+    plan_for_eval["reuse_candidates"] = reuse_cands
+    readiness = _evaluate_plan_readiness(plan_for_eval, policy, repo=repo)
+    return {
+        "status": readiness["status"],
+        "readiness_status": readiness["status"],
+        "task_id": tid,
+        "task_state": plan.get("status"),
+        "planning_depth": readiness["planning_depth"],
+        "risk_tier": readiness["risk_tier"],
+        "existing_files": existing_files,
+        "new_files": new_files,
+        "reuse_candidates": reuse_cands,
+        "path_grounding_warnings": readiness.get("path_grounding_warnings", []),
+        "phase_dag_warnings": readiness.get("phase_dag_warnings", []),
+        "advisories": readiness.get("advisories", []),
+        "readiness_assessment": readiness,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -3470,6 +3534,10 @@ def build_parser() -> argparse.ArgumentParser:
     heal_cmd.add_argument("--prepare-fresh-run", action="store_true", help="Immediately prepare a fresh delta verification run after healing")
     heal_cmd.add_argument("--host", default=None, help="Host environment when preparing a fresh verification run")
     heal_cmd.set_defaults(handler=cmd_heal_task)
+    plan_check_cmd = sub.add_parser("plan-check", help="Audit a task plan for Zero-Decision readiness, file grounding, YAGNI reuse candidates, and phase module DAG order")
+    plan_check_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    plan_check_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active task if omitted)")
+    plan_check_cmd.set_defaults(handler=cmd_plan_check)
     parser.add_argument("--json", action="store_true")
     for subparser in sub.choices.values():
         # Accept --json after the subcommand too; SUPPRESS keeps the top-level value.
@@ -4032,6 +4100,11 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
             "PLAN_GAPS=" + ",".join(gaps) + ": the developer cannot review these. Before asking for approval, run "
             "`workflow.py revise` with --approach / --risks / --device-strategy (phone steps with expected results)."
         )
+    readiness = result.get("readiness_assessment") if isinstance(result.get("readiness_assessment"), dict) else {}
+    if readiness.get("path_grounding_warnings"):
+        lines.append("PATH_GROUNDING_WARNINGS=" + " | ".join(str(w) for w in readiness["path_grounding_warnings"]))
+    if readiness.get("phase_dag_warnings"):
+        lines.append("PHASE_DAG_WARNINGS=" + " | ".join(str(w) for w in readiness["phase_dag_warnings"]))
     if reapproval:
         changes = revision_changes(old, result)
         lines.append("REVISION_CHANGES=" + ("; ".join(changes) if changes else "no scope change"))
@@ -4060,7 +4133,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     args = parser.parse_args(argv)
     try:
-        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal"}:
+        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal", "plan-check"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
         if args.action in {"continue", "merge"} and args.json:
@@ -4152,6 +4225,16 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"    - {step}")
     elif args.action in ("change-decision", "plan-note", "heal"):
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    elif args.action == "plan-check":
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"PLAN_READINESS_STATUS={result.get('status', 'READY')}")
+            print(f"TASK_ID={result.get('task_id')} ({result.get('planning_depth')}, {result.get('risk_tier')})")
+            print(f"EXISTING_FILES={len(result.get('existing_files') or [])} NEW_FILES={len(result.get('new_files') or [])}")
+            for adv in (result.get("readiness_assessment") or {}).get("advisories") or []:
+                print(f"ADVISORY: {adv}")
+        return 0
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
     elif args.action == "validate-finding":

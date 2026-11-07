@@ -11,7 +11,7 @@ Previous findings to verdict:
 - [finding 1]
 - [finding 2]
 
-Verdict each finding ADDRESSED or NOT ADDRESSED with file:line. Flag new breakage. If the previous items are addressed and your role is clean, emit your PASS token (BUG_PASS / CONVENTION_PASS / SECURITY_PASS / PERF_PASS / REGRESSION_PASS / TEST_PASS).
+Verdict each finding ADDRESSED or NOT ADDRESSED with file:line. When a finding includes a recorded `FALSE_POSITIVE` validation defense in your role brief, verify the cited `file:line` invariant directly in the repository: mark it ADDRESSED if the code proof holds, or NOT ADDRESSED with counter-evidence if the defect remains reachable. Flag new breakage. If the previous items are addressed and your role is clean, emit your PASS token (BUG_PASS / CONVENTION_PASS / SECURITY_PASS / PERF_PASS / REGRESSION_PASS / TEST_PASS).
 
 Focus on the fixes, their immediate consumers, and regressions caused by them. Record unrelated improvements as DEFER without turning them into blocking scope expansion. A newly discovered in-scope correctness or safety defect remains actionable. State the inspected scope and evidence limits; do not claim whole-application correctness from a scoped review. Use the selected reviewer's own verdict format, including the test-quality reviewer when policy selects it.
 
@@ -20,3 +20,4 @@ End your reply with the evidence footer:
 (cites=0 for a clean PASS). A reply without a valid matching footer does not clear
 the delivery barrier.
 ```
+

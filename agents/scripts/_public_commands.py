@@ -558,6 +558,22 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
         "description": "Generate derived project context artifacts from repository analysis.",
     },
     {
+        "command": "task plan-check",
+        "read_only": True,
+        "valid_states": ["ANY"],
+        "required_inputs": [],
+        "model_facing": True,
+        "description": "Evaluate active or specified task plan readiness, Zero-Decision completeness, path grounding, and phase module DAG order.",
+    },
+    {
+        "command": "context drift-report",
+        "read_only": True,
+        "valid_states": ["ANY"],
+        "required_inputs": [],
+        "model_facing": True,
+        "description": "Audit living project context (project-notes.md, developer-instructions.json, project-facts.json) for stale file or module references.",
+    },
+    {
         "command": "context refresh",
         "read_only": False,
         "valid_states": ["ANY"],

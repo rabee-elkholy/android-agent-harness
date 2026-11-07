@@ -9,6 +9,8 @@ from . import engine as _engine
 
 _REUSE_ROLE_SUFFIXES = (
     "Helper", "Manager", "Util", "Utils", "Impl", "Wrapper", "Service", "Handler", "Coordinator",
+    "Formatter", "Validator", "Calculator", "Interceptor", "UseCase", "Repository", "DataSource",
+    "Mapper", "Provider", "Factory", "Delegate", "Client", "Store", "Controller",
 )
 
 
@@ -35,8 +37,10 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
             stem = _engine.Path(rel_norm).stem
             queries = [stem]
             for suffix in _REUSE_ROLE_SUFFIXES:
-                if stem.endswith(suffix) and len(stem) - len(suffix) >= 4:
+                if stem.endswith(suffix) and len(stem) - len(suffix) >= 3:
                     queries.append(stem[: -len(suffix)])
+                    if len(suffix) >= 5:
+                        queries.append(suffix)
             for q in queries:
                 if len(q) < 4:
                     continue
@@ -56,6 +60,7 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
                         "symbol": sym_name,
                         "existing_file": existing_file,
                         "kind": sym_kind,
+                        "exact_symbol_match": sym_name == stem,
                     })
                     if len(candidates) >= 8:
                         return candidates
@@ -64,20 +69,139 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
         return []
 
 
-def _evaluate_plan_readiness(plan: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
-    """Compute advisory architecture & specification readiness diagnostics for a plan."""
+def _check_phase_module_dag(repo: Path, phases: list[dict[str, Any]] | None) -> list[str]:
+    """Detect multi-phase plans that modify downstream modules before upstream dependency modules."""
+    if not phases or len(phases) < 2:
+        return []
+    try:
+        from _graph_core import EdgeKind, parse_gradle_modules
+        from plan_authority import discover_android_modules
+
+        mod_nodes, mod_edges = parse_gradle_modules(repo)
+        if not mod_edges:
+            return []
+        direct_deps: dict[str, set[str]] = {}
+        for edge in mod_edges:
+            if edge.kind == EdgeKind.DEPENDS_ON.value and edge.source != edge.target:
+                direct_deps.setdefault(edge.source, set()).add(edge.target)
+        if not direct_deps:
+            return []
+
+        # Compute transitive closure of module dependencies
+        transitive_deps: dict[str, set[str]] = {}
+        for mod in list(direct_deps.keys()) + list(mod_nodes.keys()):
+            visited: set[str] = set()
+            stack = list(direct_deps.get(mod, ()))
+            while stack:
+                curr = stack.pop()
+                if curr not in visited and curr != mod:
+                    visited.add(curr)
+                    stack.extend(direct_deps.get(curr, ()))
+            if visited:
+                transitive_deps[mod] = visited
+
+        known_mods = sorted(
+            (
+                (_engine.module_id(item), _engine.module_id(item).lstrip(":").replace(":", "/"))
+                for item in (set(discover_android_modules(repo)) | set(mod_nodes.keys()))
+            ),
+            key=lambda item: len(item[1]),
+            reverse=True,
+        )
+
+        def _file_to_mod(rel_path: str) -> str:
+            rel_clean = str(rel_path).replace("\\", "/").strip("/")
+            matched = next(
+                (cand for cand, prefix in known_mods if prefix and (rel_clean == prefix or rel_clean.startswith(prefix + "/"))),
+                None,
+            )
+            return matched or ":"
+
+        phase_mods: list[tuple[str, set[str]]] = []
+        first_seen_idx: dict[str, tuple[int, str]] = {}
+        for idx, phase in enumerate(phases):
+            if not isinstance(phase, dict):
+                continue
+            pid = str(phase.get("id") or f"p{idx + 1}")
+            p_files = phase.get("expected_files") or []
+            mods = {_file_to_mod(f) for f in p_files if str(f).strip()} - {":"}
+            phase_mods.append((pid, mods))
+            for m in mods:
+                if m not in first_seen_idx:
+                    first_seen_idx[m] = (idx, pid)
+
+        warnings: list[str] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for idx, (pid, mods) in enumerate(phase_mods):
+            for down_mod in sorted(mods):
+                for up_mod in sorted(transitive_deps.get(down_mod, ())):
+                    if up_mod in first_seen_idx:
+                        up_first_idx, up_first_pid = first_seen_idx[up_mod]
+                        if up_first_idx > idx and (down_mod, up_mod) not in seen_pairs:
+                            seen_pairs.add((down_mod, up_mod))
+                            warnings.append(
+                                f"PHASE_MODULE_DAG_ORDER: Phase '{pid}' modifies downstream module '{down_mod}' before later phase "
+                                f"'{up_first_pid}' modifies its upstream dependency '{up_mod}'; consider ordering "
+                                "upstream module contracts first."
+                            )
+        return warnings
+    except Exception:
+        return []
+
+
+def _evaluate_plan_readiness(
+    plan: dict[str, Any],
+    policy: dict[str, Any],
+    repo: Path | None = None,
+) -> dict[str, Any]:
+    """Compute advisory architecture, grounding & specification readiness diagnostics for a plan."""
     risk_tier = str((policy or {}).get("risk_tier") or "T1_LOW")
+    planning_depth = str(plan.get("planning_depth") or "BOUNDED").upper()
     is_high_risk = risk_tier in {"T3_HIGH", "T4_SENSITIVE", "T5_CRITICAL"}
+    is_architectural = planning_depth == "ARCHITECTURAL"
     has_approach = bool(str(plan.get("approach") or "").strip())
     has_risks = bool(plan.get("risks"))
     has_discovery_provenance = bool(plan.get("discovery_provenance") or plan.get("task_context_id"))
     has_verification_contract = bool(plan.get("verification_contract"))
-    reuse_count = len(plan.get("reuse_candidates") or [])
+    reuse_cands = [c for c in (plan.get("reuse_candidates") or []) if isinstance(c, dict)]
+    reuse_count = len(reuse_cands)
+
+    path_grounding_warnings: list[str] = []
+    for cand in reuse_cands:
+        planned_f = str(cand.get("planned_file") or "")
+        sym = str(cand.get("symbol") or "")
+        existing_f = str(cand.get("existing_file") or "")
+        if planned_f and sym and existing_f and (cand.get("exact_symbol_match") or _engine.Path(planned_f).stem == sym):
+            path_grounding_warnings.append(
+                f"PATH_GROUNDING_WARNING: Planned new file '{planned_f}' matches existing symbol '{sym}' at "
+                f"'{existing_f}'. Verify whether you meant to edit '{existing_f}' or create a distinct symbol."
+            )
+
+    phase_dag_warnings = _check_phase_module_dag(repo, plan.get("phases")) if repo is not None else []
+
     advisories: list[str] = []
-    if is_high_risk and not has_approach:
-        advisories.append("High-risk task is missing an explicit implementation approach (--approach).")
-    if is_high_risk and not has_risks:
-        advisories.append("High-risk task has no documented failure modes or risks (--risks).")
+    if (is_high_risk or is_architectural) and not has_approach:
+        advisories.append(
+            "ARCHITECTURAL / high-risk task is missing an explicit implementation approach (--approach) required by the Zero-Decision Rule."
+            if is_architectural
+            else "High-risk task is missing an explicit implementation approach (--approach)."
+        )
+    if (is_high_risk or is_architectural) and not has_risks:
+        advisories.append(
+            "ARCHITECTURAL / high-risk task has no documented failure modes, trade-offs, or risks (--risks)."
+            if is_architectural
+            else "High-risk task has no documented failure modes or risks (--risks)."
+        )
+
+    surfaces = set(plan.get("expected_surfaces") or [])
+    combined_notes = f"{plan.get('approach') or ''} {' '.join(str(r) for r in (plan.get('risks') or []))}".lower()
+    if "ROOM_SCHEMA" in surfaces and not any(
+        tok in combined_notes for tok in ("migration", "schema", "version", "automigration", "auto-migration", "fallback")
+    ):
+        advisories.append("ROOM_SCHEMA surface is active, but neither --approach nor --risks specifies the schema migration strategy.")
+
+    advisories.extend(path_grounding_warnings)
+    advisories.extend(phase_dag_warnings)
     if reuse_count > 0:
         advisories.append(
             f"Plan introduces new file(s) overlapping {reuse_count} existing symbol(s); verify reuse vs. duplication."
@@ -85,11 +209,14 @@ def _evaluate_plan_readiness(plan: dict[str, Any], policy: dict[str, Any]) -> di
     return {
         "status": "ADVISORY_GAPS" if advisories else "READY",
         "risk_tier": risk_tier,
+        "planning_depth": planning_depth,
         "has_approach": has_approach,
         "has_risks": has_risks,
         "has_discovery_provenance": has_discovery_provenance,
         "has_verification_contract": has_verification_contract,
         "reuse_candidates_count": reuse_count,
+        "path_grounding_warnings": path_grounding_warnings,
+        "phase_dag_warnings": phase_dag_warnings,
         "advisories": advisories,
     }
 
@@ -369,10 +496,10 @@ def _build_and_save_plan(
         elif task_context_id:
             plan["task_context_id"] = task_context_id
         plan["developer_instructions"] = _engine._applicable_developer_instructions_for_task(repo, cached_ctx, inferred_target_scope, arch_intent)
-        reuse_cands = _discover_reuse_candidates(repo, norm_expected_files)
+        reuse_cands = _discover_reuse_candidates(repo, architecture_scope_files)
         if reuse_cands:
             plan["reuse_candidates"] = reuse_cands
-        plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy)
+        plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy, repo=repo)
         # Reject non-material revisions before touching phase progress or baselines.
         if (old_plan or {}).get("approval") and _engine._same_plan(old_plan, plan):
             return old_plan
@@ -381,7 +508,7 @@ def _build_and_save_plan(
             # a clarification. Require an explicit explanation before reapproval.
             before, after = _engine.plan_payload(old_plan), _engine.plan_payload(plan)
             lineage = {"plan_id", "supersedes_plan_sha256", "base_delivery_snapshot_sha256",
-                       "base_change_set_sha256", "base_file_identities", "base_change_identities",
+                       "base_change_set_sha256", "base_change_identities", "base_file_identities",
                        "base_external_inputs_sha256"}
             changed = {key for key in set(before) | set(after)
                        if key not in lineage and before.get(key) != after.get(key)}
@@ -527,10 +654,10 @@ def _build_and_save_plan(
             "primary_target": str((disc_receipt.get("query") or {}).get("value") or ""),
         }
 
-    reuse_cands = _discover_reuse_candidates(repo, norm_expected_files)
+    reuse_cands = _discover_reuse_candidates(repo, architecture_scope_files)
     if reuse_cands:
         plan["reuse_candidates"] = reuse_cands
-    plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy)
+    plan["readiness_assessment"] = _evaluate_plan_readiness(plan, preliminary_policy, repo=repo)
 
     _engine.assert_disjoint_task_scope(repo, task_id, plan, exclude_task_ids=scope_exclusions)
     _engine.save_plan(directory / "plan.json", plan)

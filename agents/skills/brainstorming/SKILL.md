@@ -31,29 +31,32 @@ When preparing an architectural plan, settle these points (the selected approach
 ## 3. Four-Phase Brainstorming Methodology
 
 ### Phase 1: Requirements, Reuse & Anti-Sycophancy Probing
-1. **Challenge Flawed Premises (Anti-Sycophancy)**: Never blindly validate a proposed design if it violates Android/KMP lifecycle guarantees, introduces race conditions, bypasses ViewModel/Repository boundaries, or adds speculative abstractions. Point out the concrete technical flaw and propose a sound alternative before drafting.
-2. **Graph-Backed Codebase Reuse First**: Query the project graph (`graph --find` / `task-context`) before proposing any new Manager, Helper, UseCase, Repository, or UI component. Reuse or extend existing classes whenever possible.
-3. **YAGNI & Complexity Justification**: Every newly proposed abstraction layer, wrapper interface, or state channel must justify its existence with a concrete multi-caller, platform-boundary (`expect`/`actual`), or unit-testability requirement.
-4. **Underspecified Requirements & Edge Cases**: Probe data persistence needs (Room, DataStore, SharedPreferences), network error handling, offline support, process death restoration, and backward compatibility constraints.
+1. **Zoom-Out Altitude Control (Symptom vs. Root Cause)**: Before designing around a reported symptom, zoom out one architectural level to verify whether the defect or requirement is an artifact of an upstream contract mismatch, duplicate state channel, or layer violation. Fix the root cause rather than adding defensive glue around a broken flow.
+2. **Challenge Flawed Premises (Anti-Sycophancy)**: Never blindly validate a proposed design if it violates Android/KMP lifecycle guarantees, introduces race conditions, bypasses ViewModel/Repository boundaries, or adds speculative abstractions. Point out the concrete technical flaw and propose a sound alternative before drafting.
+3. **Graph-Backed Codebase Reuse & Path Grounding**: Query the project graph (`graph --find` / `task-context`) before proposing any new Manager, Helper, UseCase, Repository, Validator, Formatter, Calculator, Interceptor, Mapper, or UI component. Reuse or extend existing classes whenever possible, and verify that no planned new file duplicates an existing symbol at another path.
+4. **Minimalist Data Flow & YAGNI Justification**: Prefer transformations where data flows through a single source of truth (`StateFlow` / immutable domain model) without intermediate state caches or synchronization flags. Every newly proposed abstraction layer, wrapper interface, or state channel must justify its existence with a concrete multi-caller, platform-boundary (`expect`/`actual`), or unit-testability requirement.
+5. **Underspecified Requirements & Edge Cases**: Probe data persistence needs (Room, SQLDelight, DataStore, SharedPreferences), network error handling, offline support, process death restoration, and backward compatibility constraints.
 
-### Phase 2: Design Space & Trade-off Evaluation
-Formulate and evaluate **2–3 distinct technical approaches**:
-- **Option A (Minimal / Incremental)**: Smallest blast radius, fits existing code structure directly, minimal refactoring.
-- **Option B (Idiomatic MVI / Clean Architecture)**: Single-source StateFlow, isolated UseCase, clean domain entities, full separation of concerns.
-- **Option C (Future-Proof / Reactive)**: Event-driven channels, decoupled abstractions, high scalability.
+### Phase 2: TRIZ Contradiction Resolution & Trade-off Evaluation
+When two architectural requirements appear to conflict (e.g., offline-first responsiveness vs. strict server consistency, or shared KMP `commonMain` purity vs. platform-native APIs):
+1. **State the Technical Contradiction Explicitly**: Formulate what improving parameter $A$ degrades in parameter $B$, instead of hiding the tension behind a vague compromise.
+2. **Distinguish Immutable Platform Bounds from False Compromises**: Separate hard Android/iOS OS bounds (main-thread frame budget, Binder transaction limits, process-death state serialization, KMP cinterop/ObjC export rules) from artificial codebase habits that can be eliminated by separating concerns in time, space, or layer boundary.
+3. **Evaluate 2–3 Distinct Technical Approaches**:
+   - **Option A (Minimal / Incremental)**: Smallest blast radius, fits existing code structure directly, minimal refactoring.
+   - **Option B (Idiomatic MVI / Clean Architecture)**: Single-source `StateFlow`, isolated `UseCase`, clean domain entities, full separation of concerns.
+   - **Option C (Decoupled / Cross-Module Boundary)**: Explicit domain contract or `expect`/`actual` bridge across modules.
+   For each option, state **Pros & Cons**, **Blast Radius & Risk**, and **Secondary Operational Consequences** (what new maintenance, migration, or testing obligation the chosen design introduces).
 
-For each option, evaluate:
-- **Pros & Cons**.
-- **Blast Radius & Risk**: Which existing screens/features are touched?
-- **Implementation Effort**: Number of files and estimated complexity.
-
-### Phase 3: Android Platform Invariants Pre-Screening
+### Phase 3: Android & KMP Platform Invariants Pre-Screening
 Before proposing an approach, verify that it adheres to strict platform invariants:
 - **Threading & ANR**: Zero synchronous disk or database I/O on `Dispatchers.Main`.
-- **Database Migrations**: Incremental schema changes for `@Entity` / `@Database`.
+- **Database Migrations**: Incremental schema changes for Room (`@Entity` / `@Database`) and SQLDelight (`.sq` / `.sqm`).
 - **Compose Stability**: `@Immutable` / `@Stable` state models, Lazy list keys, directional RTL padding.
+- **KMP Source-Set Purity & Module DAG**: Upstream modules (`:core:*`, `:shared`) must be planned and checkpointed in earlier phases than downstream consumer modules (`:app`, `:feature:*`).
 - **Localization**: Dual-locale Arabic (RTL) and English (LTR) string parity.
 
-### Phase 4: Developer Alignment & Spec Locking
+### Phase 4: Zero-Decision Implementation Readiness (Goldfish Naive-Reader Standard)
 - Present trade-offs concisely to the developer in chat or via `ask_question` when user preferences are needed.
-- Lock the agreed technical specification before running `workflow.py draft`.
+- Lock the agreed technical specification before running `workflow.py draft` so the resulting plan satisfies the **Zero-Decision Rule**: an independent executor or fresh-context specialist reviewer ("Goldfish") reading `plan.md` must have exact file paths, module ordering, approach summary, and risk mitigations without needing to invent undocumented architectural decisions mid-implementation.
+- Run `python .agents/harness.py task plan-check --task-id <id>` when diagnosing plan readiness, path grounding, or multi-phase module DAG ordering.
+
