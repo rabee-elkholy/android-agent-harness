@@ -1538,6 +1538,7 @@ class GraphEngine:
         modified: list[str] = []
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
         files_hashed = 0
+        metadata_changed = False
 
         for rel, path in current_files.items():
             try:
@@ -1573,7 +1574,7 @@ class GraphEngine:
                 # timestamps and same-size edits are always caught.
                 curr_hash = self.compute_file_hash(path)
                 files_hashed += 1
-                self.file_metadata[rel] = {
+                new_meta = {
                     "size": size,
                     "mtime_ns": mtime_ns,
                     "ctime_ns": ctime_ns,
@@ -1581,6 +1582,9 @@ class GraphEngine:
                     "ino": ino,
                     "hash": curr_hash,
                 }
+                if meta != new_meta:
+                    metadata_changed = True
+                self.file_metadata[rel] = new_meta
 
             if cached_hash is None:
                 added.append(rel)
@@ -1683,6 +1687,8 @@ class GraphEngine:
             self._rebuild_file_index()
             if persist:
                 self.save_cache()
+        elif metadata_changed and persist:
+            self.save_cache()
 
         return {
             "added": len(added),

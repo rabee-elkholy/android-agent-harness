@@ -48,7 +48,7 @@
     "agents/scripts/_environment.py": "509053af44e58c984006375c5f6331218ea7c94d07381f83f054fb0c3119b261",
     "agents/scripts/_external_write_policy_selftest.py": "8daaf72d829568beceb2cb1d420e933e193293a8a7cf699fd998b60c5f8a1052",
     "agents/scripts/_gate_results.py": "735dd02ea35a7e2fa276c47169b6db9c4e578798b58bc8a27ceb4585fdecf7e8",
-    "agents/scripts/_graph_core.py": "b8ca47033b8baa6850b93b6163d1af52c922e0d64d161b07b2fb567029a8ec36",
+    "agents/scripts/_graph_core.py": "2dfea9c53fb9819a29bc3b4dcfdd773cff7a7ee3190fe8d5844d4bb59c966fcc",
     "agents/scripts/_graph_discovery_selftest.py": "4dbcca4853f884bfc9b588b78ded20fbfef4620e2f1fc4414953609ea3ac54bf",
     "agents/scripts/_graph_selftest.py": "2cf1dd5171a277252112250322f89ea8f9af11ee10a8b05e0a663ef998679e28",
     "agents/scripts/_hook_selftest.py": "d0d68d61ac657abbd6cba6a5f5784c966793a1d94affa146b5eaac5609454b71",
