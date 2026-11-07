@@ -869,7 +869,7 @@ class HarnessDoctor:
 
         try:
             sys.path.insert(0, str(self.agents_dir / "scripts"))
-            from project_context import project_context_status
+            from project_context import check_living_context_drift, project_context_status
             status_res = project_context_status(self.repo)
             curr_status = status_res.get("status")
             if curr_status == "CURRENT":
@@ -880,6 +880,20 @@ class HarnessDoctor:
                     self.log(category, "Project Context Freshness", "FAIL", f"Freshness verification failed post-install: {msg}")
                 else:
                     self.log(category, "Project Context Freshness", "WARN", msg, details=status_res.get("diff", {}).get("details"))
+
+            drift_res = check_living_context_drift(self.repo)
+            stale_notes = int(drift_res.get("stale_notes_count", 0))
+            stale_inst = int(drift_res.get("stale_instructions_count", 0))
+            if stale_notes == 0 and stale_inst == 0:
+                self.log(category, "Living Context Drift", "PASS", "No stale file or module references in project-notes.md or developer-instructions.json.")
+            else:
+                self.log(
+                    category,
+                    "Living Context Drift",
+                    "WARN",
+                    f"{stale_notes} stale note reference(s) and {stale_inst} stale instruction reference(s) detected. Run `python .agents/harness.py context drift-report`.",
+                    details=drift_res.get("remediation"),
+                )
         except Exception as exc:
             self.log(category, "Project Context Freshness", "WARN", f"Could not verify context freshness: {exc}")
 

@@ -15,7 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
-    "heal",
+    "heal", "plan-check",
 })
 
 
@@ -33,7 +33,8 @@ def _run(script: str, args: list[str]) -> int:
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
     read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
-    read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"]))
+    read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"]))
+    read_only = read_only or (script == "generate_project_context.py" and args[:1] in (["preview"], ["status"], ["drift-report"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
     read_only = read_only or script == "incident_reporter.py"
     # Merge checks the execution sessions of every source before applying; preview is read-only.

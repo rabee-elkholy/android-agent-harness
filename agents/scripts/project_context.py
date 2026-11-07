@@ -1624,3 +1624,221 @@ def is_context_fresh(repo: Path) -> bool:
         return stored_fp == curr_fp
     except Exception:
         return False
+
+
+_REPO_FILE_PATH_RE = re.compile(
+    r"(?:(?<=`)|(?<=[\s\"'(]))"
+    r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.(?:kt|java|swift|xml|gradle|kts|toml|json|md))"
+    r"(?:(?=`)|(?=[\s\"'),.:;]|$))"
+)
+_BACKTICK_MODULE_REF_RE = re.compile(r"`(:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)*)`")
+
+
+def _suggest_healed_context_path(repo: Path, missing_rel: str, g_engine: Any) -> str | None:
+    """Attempt to locate a moved/renamed file using GraphEngine or filename scan."""
+    stem = Path(missing_rel).stem
+    filename = Path(missing_rel).name
+    if g_engine is not None and stem and len(stem) >= 3:
+        try:
+            res = g_engine.find_symbol(stem, limit=3)
+            for match in res.get("matches") or []:
+                cand = str(match.get("file_path") or "").replace("\\", "/").strip("/")
+                if cand and cand != missing_rel and (repo / cand).is_file():
+                    return cand
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+    try:
+        for cand_path in repo_glob(repo, f"**/{filename}"):
+            if cand_path.is_file() and not _skip_path(cand_path, repo):
+                rel = _rel_path(cand_path, repo)
+                if rel and rel != missing_rel:
+                    return rel
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def check_living_context_drift(repo: Path) -> dict[str, Any]:
+    """Audit project-notes.md, developer-instructions.json, and project-facts.json for code-to-doc drift."""
+    root = repo.resolve()
+    context_dir = root / ".agents" / "project-context"
+    facts_status = project_context_status(root)
+    facts_fresh = facts_status.get("status") == "CURRENT"
+
+    known_modules: set[str] = set()
+    try:
+        from wizard.discovery import discover_android_modules
+        for m in discover_android_modules(root):
+            m_clean = str(m or "").strip()
+            if m_clean:
+                known_modules.add(m_clean if m_clean.startswith(":") else f":{m_clean}")
+    except (ImportError, OSError, ValueError):
+        known_modules = set()
+    facts_file = context_dir / "project-facts.json"
+    if facts_file.is_file():
+        try:
+            f_data = json.loads(facts_file.read_text(encoding="utf-8"))
+            for m in (f_data.get("facts") or f_data).get("modules") or []:
+                m_clean = str(m or "").strip()
+                if m_clean:
+                    known_modules.add(m_clean if m_clean.startswith(":") else f":{m_clean}")
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    g_engine = None
+    try:
+        from _graph_core import GraphEngine
+        eng = GraphEngine(root)
+        if eng.ensure_loaded():
+            g_engine = eng
+    except (ImportError, OSError, ValueError):
+        g_engine = None
+
+    stale_instructions: list[dict[str, Any]] = []
+    inst_file = context_dir / "developer-instructions.json"
+    if inst_file.is_file():
+        try:
+            inst_data = json.loads(inst_file.read_text(encoding="utf-8"))
+            for inst in inst_data.get("instructions") or []:
+                if not isinstance(inst, dict) or inst.get("status", "ACTIVE") != "ACTIVE":
+                    continue
+                inst_id = str(inst.get("id") or "unknown")
+                raw_scope = inst.get("scope")
+                if isinstance(raw_scope, dict):
+                    s_kind = str(raw_scope.get("kind") or "GLOBAL").upper()
+                    s_val = str(raw_scope.get("value") or "").strip()
+                elif isinstance(raw_scope, str) and ":" in raw_scope:
+                    prefix, _, rest = raw_scope.partition(":")
+                    s_kind = prefix.strip().upper()
+                    s_val = rest.strip()
+                else:
+                    s_kind = "GLOBAL"
+                    s_val = ""
+
+                if s_kind == "PATH" and s_val not in ("", "*"):
+                    norm_p = s_val.replace("\\", "/").strip("/")
+                    if not (root / norm_p).exists():
+                        healed = _suggest_healed_context_path(root, norm_p, g_engine)
+                        stale_instructions.append({
+                            "id": inst_id,
+                            "kind": "STALE_INSTRUCTION_SCOPE_PATH",
+                            "reference": norm_p,
+                            "suggested_replacement": healed,
+                            "remediation": (
+                                f'python .agents/harness.py context instruct --remove {inst_id} '
+                                '--source developer_terminal --proof-reference "prune stale path"'
+                            ),
+                        })
+                elif s_kind == "MODULE" and s_val not in ("", "*") and known_modules:
+                    norm_m = s_val if s_val.startswith(":") else f":{s_val}"
+                    mod_dir = norm_m.lstrip(":").replace(":", "/")
+                    if norm_m not in known_modules and not (root / mod_dir).is_dir():
+                        stale_instructions.append({
+                            "id": inst_id,
+                            "kind": "STALE_INSTRUCTION_SCOPE_MODULE",
+                            "reference": norm_m,
+                            "suggested_replacement": None,
+                            "remediation": (
+                                f'python .agents/harness.py context instruct --remove {inst_id} '
+                                '--source developer_terminal --proof-reference "prune stale module"'
+                            ),
+                        })
+
+                text = str(inst.get("text") or "")
+                seen_refs: set[str] = set()
+                for ref_path in _REPO_FILE_PATH_RE.findall(text):
+                    norm_ref = ref_path.replace("\\", "/").strip("/")
+                    if (
+                        norm_ref in seen_refs
+                        or norm_ref.startswith(".agents/")
+                        or "..." in norm_ref
+                    ):
+                        continue
+                    seen_refs.add(norm_ref)
+                    if not (root / norm_ref).exists():
+                        healed = _suggest_healed_context_path(root, norm_ref, g_engine)
+                        stale_instructions.append({
+                            "id": inst_id,
+                            "kind": "STALE_INSTRUCTION_FILE_REF",
+                            "reference": norm_ref,
+                            "suggested_replacement": healed,
+                            "remediation": (
+                                f'python .agents/harness.py context instruct --supersedes {inst_id} '
+                                '--source developer_terminal --proof-reference "update moved file path" "<updated instruction>"'
+                            ),
+                        })
+        except (OSError, ValueError, KeyError, TypeError):
+            stale_instructions = []
+
+    stale_notes: list[dict[str, Any]] = []
+    notes_file = context_dir / "project-notes.md"
+    if notes_file.is_file():
+        try:
+            notes_text = notes_file.read_text(encoding="utf-8", errors="replace")
+            seen_note_refs: set[tuple[str, str]] = set()
+            for raw_line in notes_text.splitlines():
+                stripped = raw_line.strip()
+                if not stripped or stripped.startswith("#") or stripped.startswith(">"):
+                    continue
+                for ref_path in _REPO_FILE_PATH_RE.findall(stripped):
+                    norm_ref = ref_path.replace("\\", "/").strip("/")
+                    if norm_ref.startswith(".agents/") or "..." in norm_ref:
+                        continue
+                    key = ("FILE", norm_ref)
+                    if key in seen_note_refs:
+                        continue
+                    seen_note_refs.add(key)
+                    if not (root / norm_ref).exists():
+                        healed = _suggest_healed_context_path(root, norm_ref, g_engine)
+                        clean_bullet = stripped.lstrip("-* ").strip()
+                        stale_notes.append({
+                            "kind": "STALE_NOTE_FILE_REF",
+                            "reference": norm_ref,
+                            "line": stripped,
+                            "suggested_replacement": healed,
+                            "remediation": (
+                                f'python .agents/harness.py context note --replace "{clean_bullet}" '
+                                f'"{clean_bullet.replace(norm_ref, healed)}"'
+                                if healed
+                                else f'python .agents/harness.py context note --remove "{clean_bullet}"'
+                            ),
+                        })
+                if known_modules:
+                    for mod_ref in _BACKTICK_MODULE_REF_RE.findall(stripped):
+                        key = ("MODULE", mod_ref)
+                        if key in seen_note_refs:
+                            continue
+                        seen_note_refs.add(key)
+                        mod_dir = mod_ref.lstrip(":").replace(":", "/")
+                        if mod_ref not in known_modules and not (root / mod_dir).is_dir():
+                            clean_bullet = stripped.lstrip("-* ").strip()
+                            stale_notes.append({
+                                "kind": "STALE_NOTE_MODULE_REF",
+                                "reference": mod_ref,
+                                "line": stripped,
+                                "suggested_replacement": None,
+                                "remediation": f'python .agents/harness.py context note --remove "{clean_bullet}"',
+                            })
+        except (OSError, ValueError):
+            stale_notes = []
+
+    remediation: list[str] = []
+    if not facts_fresh and facts_status.get("status") != "MISSING":
+        remediation.append("python .agents/harness.py context refresh")
+    for item in stale_instructions + stale_notes:
+        rem = item.get("remediation")
+        if rem and rem not in remediation:
+            remediation.append(rem)
+
+    has_living_drift = bool(stale_instructions or stale_notes or (not facts_fresh and facts_status.get("status") != "MISSING"))
+    return {
+        "status": "DRIFT_DETECTED" if has_living_drift else "CLEAN",
+        "facts_status": facts_status.get("status", "MISSING"),
+        "facts_fresh": facts_fresh,
+        "stale_instructions_count": len(stale_instructions),
+        "stale_notes_count": len(stale_notes),
+        "stale_instructions": stale_instructions,
+        "stale_notes": stale_notes,
+        "remediation": remediation,
+    }
+

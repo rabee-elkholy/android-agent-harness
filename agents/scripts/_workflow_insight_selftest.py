@@ -661,6 +661,174 @@ class WorkflowInsightTests(unittest.TestCase):
                 allowed, reason = mutation_guard.command_allowed(repo, ro_cmd)
                 self.assertTrue(allowed, f"{ro_cmd}: {reason}")
 
+    def test_egm_expanded_reuse_path_grounding_and_phase_dag(self):
+        from _graph_core import GraphEngine
+        from _workflow.planning import (
+            _check_phase_module_dag,
+            _discover_reuse_candidates,
+            _evaluate_plan_readiness,
+        )
+        import workflow
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "settings.gradle.kts").write_text('include(":app", ":core:network")\n', encoding="utf-8")
+            (repo / "app").mkdir(parents=True)
+            (repo / "app/build.gradle.kts").write_text(
+                'plugins { id("com.android.application") }\ndependencies { implementation(project(":core:network")) }\n',
+                encoding="utf-8",
+            )
+            (repo / "core/network").mkdir(parents=True)
+            (repo / "core/network/build.gradle.kts").write_text('plugins { id("com.android.library") }\n', encoding="utf-8")
+
+            calc_file = repo / "core/network/src/main/kotlin/com/example/core/PriceCalculator.kt"
+            calc_file.parent.mkdir(parents=True, exist_ok=True)
+            calc_file.write_text("package com.example.core\nclass PriceCalculator {\n    fun calculate(): Int = 42\n}\n", encoding="utf-8")
+
+            fmt_file = repo / "core/network/src/main/kotlin/com/example/core/CurrencyFormatter.kt"
+            fmt_file.write_text("package com.example.core\nclass CurrencyFormatter {\n    fun format(): String = \"\"\n}\n", encoding="utf-8")
+
+            engine = GraphEngine(repo)
+            engine.sync()
+
+            expected = [
+                "app/src/main/kotlin/com/example/PriceCalculator.kt",
+                "app/src/main/kotlin/com/example/AmountFormatter.kt",
+            ]
+            candidates = _discover_reuse_candidates(repo, expected)
+            exact_matches = [c for c in candidates if c.get("exact_symbol_match")]
+            role_matches = [c for c in candidates if not c.get("exact_symbol_match")]
+            self.assertEqual(1, len(exact_matches))
+            self.assertEqual("PriceCalculator", exact_matches[0]["symbol"])
+            self.assertTrue(any(c["symbol"] == "CurrencyFormatter" for c in role_matches))
+
+            # Inverted multi-phase module DAG order (:app in p1 before :core:network in p2)
+            inverted_phases = [
+                {"id": "p1", "title": "Update UI", "expected_files": ["app/src/main/kotlin/com/example/PriceCalculator.kt"]},
+                {"id": "p2", "title": "Update Core", "expected_files": ["core/network/src/main/kotlin/com/example/core/PriceCalculator.kt"]},
+            ]
+            dag_warnings = _check_phase_module_dag(repo, inverted_phases)
+            self.assertEqual(1, len(dag_warnings))
+            self.assertIn("modifies downstream module ':app' before later phase 'p2'", dag_warnings[0])
+
+            # Correct upstream-first phase order (:core:network in p1 before :app in p2)
+            valid_phases = [
+                {"id": "p1", "title": "Update Core", "expected_files": ["core/network/src/main/kotlin/com/example/core/PriceCalculator.kt"]},
+                {"id": "p2", "title": "Update UI", "expected_files": ["app/src/main/kotlin/com/example/PriceCalculator.kt"]},
+            ]
+            self.assertEqual([], _check_phase_module_dag(repo, valid_phases))
+
+            plan = {
+                "schema_version": 2,
+                "task_id": "t-egm-plan",
+                "task_kind": "FEATURE",
+                "planning_depth": "ARCHITECTURAL",
+                "requested_outcome": "Refactor pricing and currency formatting",
+                "approach": "Consolidate pricing calculation",
+                "expected_files": expected,
+                "expected_surfaces": ["BUSINESS_LOGIC", "ROOM_SCHEMA"],
+                "risks": [],
+                "constraints": [],
+                "phases": inverted_phases,
+                "reuse_candidates": candidates,
+            }
+            policy = {"risk_tier": "T3_HIGH", "gates": ["preflight", "unit_tests"], "reviewers": ["bug-test-reviewer-agent"]}
+            readiness = _evaluate_plan_readiness(plan, policy, repo=repo)
+            self.assertEqual("ADVISORY_GAPS", readiness["status"])
+            self.assertEqual(1, len(readiness["path_grounding_warnings"]))
+            self.assertIn("PATH_GROUNDING_WARNING", readiness["path_grounding_warnings"][0])
+            self.assertEqual(1, len(readiness["phase_dag_warnings"]))
+            self.assertTrue(any("PHASE_MODULE_DAG_ORDER" in adv for adv in readiness["advisories"]))
+            self.assertTrue(any("ROOM_SCHEMA" in adv for adv in readiness["advisories"]))
+
+            # Test workflow.py plan-check CLI
+            tdir = repo / ".agents/state/tasks/t-egm-plan"
+            tdir.mkdir(parents=True, exist_ok=True)
+            plan["readiness_assessment"] = readiness
+            (tdir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "workflow.py"), "plan-check", "--repo", str(repo), "--task-id", "t-egm-plan", "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            check_out = json.loads(proc.stdout)
+            self.assertEqual("ADVISORY_GAPS", check_out["readiness_status"])
+            self.assertEqual(1, len(check_out["path_grounding_warnings"]))
+            self.assertEqual(1, len(check_out["phase_dag_warnings"]))
+
+    def test_egm_living_context_drift_and_self_healing_suggestions(self):
+        from _graph_core import GraphEngine
+        from project_context import check_living_context_drift
+        import generate_project_context
+        from doctor.engine import HarnessDoctor
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "settings.gradle.kts").write_text('include(":app", ":core:network")\n', encoding="utf-8")
+            (repo / "app").mkdir(parents=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            (repo / "core/network").mkdir(parents=True)
+            (repo / "core/network/build.gradle.kts").write_text('plugins { id("com.android.library") }\n', encoding="utf-8")
+
+            moved_file = repo / "core/network/src/main/kotlin/com/example/ApiClient.kt"
+            moved_file.parent.mkdir(parents=True, exist_ok=True)
+            moved_file.write_text("package com.example\nclass ApiClient\n", encoding="utf-8")
+
+            engine = GraphEngine(repo)
+            engine.sync()
+
+            ctx_dir = repo / ".agents/project-context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "project-notes.md").write_text(
+                "# Project Notes\n\n## Domain Conventions & Context\n"
+                "- Old client lived at `app/src/main/kotlin/com/example/ApiClient.kt` inside `:legacy:sync`.\n"
+                "- Active client is `core/network/src/main/kotlin/com/example/ApiClient.kt`.\n",
+                encoding="utf-8",
+            )
+            (ctx_dir / "developer-instructions.json").write_text(
+                json.dumps({
+                    "schema_version": 1,
+                    "instructions": [
+                        {
+                            "id": "inst-stale-1",
+                            "status": "ACTIVE",
+                            "scope": "module::legacy:sync",
+                            "text": "Keep retry interceptor in app/src/main/kotlin/com/example/ApiClient.kt",
+                        }
+                    ],
+                }),
+                encoding="utf-8",
+            )
+
+            drift = check_living_context_drift(repo)
+            self.assertEqual("DRIFT_DETECTED", drift["status"])
+            self.assertEqual(2, drift["stale_notes_count"])
+            self.assertEqual(2, drift["stale_instructions_count"])
+            file_note = next(n for n in drift["stale_notes"] if n["kind"] == "STALE_NOTE_FILE_REF")
+            self.assertEqual("core/network/src/main/kotlin/com/example/ApiClient.kt", file_note["suggested_replacement"])
+
+            # Verify CLI drift-report --json
+            proc = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "generate_project_context.py"), "drift-report", "--repo", str(repo), "--json"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            cli_data = json.loads(proc.stdout)
+            self.assertEqual("DRIFT_DETECTED", cli_data["status"])
+
+            # Verify Doctor surfaces Living Context Drift warning
+            generate_project_context.main(["generate", "--repo", str(repo)])
+            doc = HarnessDoctor(repo, run_selftest=False)
+            doc.is_raw_kit = False
+            doc.check_project_context()
+            drift_chk = next(r for r in doc.results if r.name == "Living Context Drift")
+            self.assertEqual("WARN", drift_chk.status)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

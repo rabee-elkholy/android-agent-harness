@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_context import (  # noqa: E402
     ContextSourceChangedDuringExtraction,
+    check_living_context_drift,
     extract_consistent_project_context,
     extract_project_facts,
     project_context_diff,
@@ -435,6 +436,27 @@ def cmd_instruct(args: argparse.Namespace) -> int:
     return ret_payload
 
 
+def cmd_drift_report(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    report = check_living_context_drift(repo)
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    status = report.get("status", "CLEAN")
+    print(f"CONTEXT_DRIFT_STATUS={status}")
+    print(f"FACTS_STATUS={report.get('facts_status', 'MISSING')} (fresh={report.get('facts_fresh', False)})")
+    print(f"STALE_INSTRUCTIONS={report.get('stale_instructions_count', 0)} STALE_NOTES={report.get('stale_notes_count', 0)}")
+    for item in report.get("stale_instructions") or []:
+        healed = f" -> suggested: {item['suggested_replacement']}" if item.get("suggested_replacement") else ""
+        print(f"  - [{item.get('kind')}] {item.get('id')}: {item.get('reference')}{healed}")
+    for item in report.get("stale_notes") or []:
+        healed = f" -> suggested: {item['suggested_replacement']}" if item.get("suggested_replacement") else ""
+        print(f"  - [{item.get('kind')}] {item.get('reference')}{healed}")
+    for rem in report.get("remediation") or []:
+        print(f"REMEDIATION: {rem}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -481,6 +503,10 @@ def main(argv: list[str] | None = None) -> int:
     p_inst.add_argument("--repo", default=".")
     p_inst.add_argument("--json", action="store_true")
 
+    p_drift = sub.add_parser("drift-report", help="Audit project-notes.md and developer-instructions.json for stale file/module references")
+    p_drift.add_argument("--repo", default=".")
+    p_drift.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "preview":
         return cmd_preview(args)
@@ -495,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "instruct":
         ret = cmd_instruct(args)
         return 0 if (isinstance(ret, dict) and ret.get("status") == "PASS") or ret == 0 else 1
+    if args.command == "drift-report":
+        return cmd_drift_report(args)
     return 1
 
 

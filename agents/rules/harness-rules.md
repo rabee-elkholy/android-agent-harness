@@ -43,7 +43,7 @@ Lifecycle (`PLAN -> BUILD -> VERIFY -> SHIP -> DONE`): Follow `NEXT_ACTION`/`NEX
 
 - During `IMPLEMENTING`, diagnostic compile/test/assemble is not final delivery evidence. During `VERIFYING`, execute on one frozen change-set in strict order: (1) `preflight`, (2) `run_tests_gate.py` when selected, (3) AI Specialist Reviewers, (4) Assemble & Device Verification, (5) Interactive Mobile Walkthrough & Sign-off, (6) `verify` then `complete`.
 - Final assemble/device requires all routed reviews PASS with zero blocking findings. Self-certification is forbidden on HIGH/CRITICAL or sensitive work; reviewer failure/timeout/quota is `ENV_BLOCKED`.
-- At `REVIEW_ROUND_CAP_REACHED` or budget exhaustion, ask the developer and record via `task review-budget --task-id <id> [--round-limit <n>] [--limit <n>] --source conversation --proof-reference "<answer>"`. Later rounds re-review only affected specialists and unresolved finding owners while preserving unaffected PASS carries.
+- At `REVIEW_ROUND_CAP_REACHED` or budget exhaustion, ask the developer and record via `task review-budget --task-id <id> [--round-limit <n>] [--limit <n>] --source conversation --proof-reference "<answer>"`. Later rounds re-review only affected specialists and unresolved finding owners while preserving unaffected PASS carries. Record structured finding triage (`CONFIRMED` or `FALSE_POSITIVE` with `file:line` proof) via `task validate-finding --task-id <id> --finding-id <id> --status <CONFIRMED|FALSE_POSITIVE> --reason "<proof>"`.
 - TDD is required for regressions/deterministic behavior with a seam (zero tests cannot satisfy a required test gate). Let `preflight` finish its full report before fixing. New unit-test failures get one automatic diagnostic retry on unchanged inputs; failed-then-passed is `SUSPECTED_FLAKY` and blocks delivery.
 - **Developer Android Studio edits, reformatting, or Git commits/merges**: on `FILE_SCOPE_DECISION_REQUIRED`, `VERIFICATION_STALE`, `DELIVERY_STALE_AFTER_COMMIT`, or `TASK_HEAD_LINEAGE_RECONCILIATION_REQUIRED`, ask via `ask_question` if the developer made those changes in Android Studio. If yes, record with `python .agents/harness.py task change-decision --repo . --task-id <id> --mode accept-edits --file <path> --reason "Developer edit/reformat in Android Studio" --apply --source conversation --proof-reference "<developer answer>"` (`--reconcile-lineage` for Git commits/merges, or `--mode extend-scope` for supporting files serving the same approved outcome; during `VERIFYING`/`READY_FOR_DELIVERY`, preview first then `--apply --expect-preview <sha256>`).
 
@@ -74,8 +74,8 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 |---|---|
 | Task context | `python .agents/harness.py task-context --file <path> --json` |
 | Feature / find graph | `python .agents/harness.py graph --feature <name> --json` |
-| Context note | `python .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) |
-| Task guidance | `python .agents/harness.py task status --task-id <id> --next` |
+| Context note / drift | `python .agents/harness.py context note "<structured-english-note>"` (`--replace` / `--remove`, or `context drift-report`) |
+| Task guidance / plan check | `python .agents/harness.py task status --task-id <id> --next` (or `task plan-check --task-id <id>`) |
 | Policy diagnosis | `python .agents/harness.py policy --json` |
 | Consecutive verification steps | `python .agents/harness.py verify-steps --task-id <id> --host antigravity` |
 | Preflight | `python .agents/harness.py preflight` |
@@ -90,3 +90,4 @@ Report detected tier honestly: `HARD_ENFORCED`, `RULE_ENFORCED`, or `UNSUPPORTED
 | Verify | `python .agents/harness.py verify --task-id <id>` |
 
 For repeated context and deterministic continuation, follow `.agents/workflows/efficient-context.md`; presentation digests never grant scope or evidence.
+

@@ -1710,7 +1710,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_phase_review)
 
     sp = sub.add_parser("context", help="Inspect, preview, refresh, or add/edit/remove notes/instructions in derived project context.")
-    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct"), help="Context action.")
+    sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct", "drift-report"), help="Context action.")
     sp.add_argument("note_text", nargs="?", default="", help="Note or instruction text.")
     sp.add_argument("--note", default="", help="Note text to append or replace with.")
     sp.add_argument("--instruction", default="", help="Instruction text.")
