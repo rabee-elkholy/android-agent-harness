@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-agent-harness"
-version = "1.2.7"
+version = "1.2.8"
 description = "Approval-first, evidence-bound engineering harness for Android and KMM/KMP (Kotlin Multiplatform Mobile) projects on Google Antigravity."
 readme = "README.md"
 requires-python = ">=3.10"
