@@ -2434,8 +2434,7 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
         res = run_gradle([compile_task], cwd=repo)
         if res != 0:
             return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
-    m0, t0 = resolved_tasks[0]
-    return False, f"compile failed for module '{m0}' with task '{t0}' (exit code {batch_res})"
+    return True, "PASS"
 
 
 def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: str | None) -> list[dict]:

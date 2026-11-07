@@ -1757,6 +1757,116 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         self.assertIn("_hook_selftest.py", released)
         self.assertNotIn("_vnext_selftest.py", released)
 
+    def test_v127_edge_case_hardening(self):
+        import fast_kt_lint
+        import perf_guard
+        import pre_invocation_reminder as reminder
+        import project_graph
+        import review_policy
+        import task_context
+
+        skills_root = fixtures.KIT / "agents" / "skills"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # 1. fast_kt_lint: braces inside strings/comments in onDestroyView() do not cause false positives,
+            #    and commented-out _binding = null does not mask a real leak.
+            frag_ok = root / "ProfileFragment.kt"
+            frag_ok.write_text(
+                "package com.example\n"
+                "class ProfileFragment : Fragment() {\n"
+                "    private var _binding: ProfileBinding? = null\n"
+                "    override fun onDestroyView() {\n"
+                "        super.onDestroyView()\n"
+                '        println("closing brace in string } } }")\n'
+                "        // extra comment brace }\n"
+                "        _binding = null\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            issues_ok = fast_kt_lint.lint_file(frag_ok)
+            self.assertFalse(any(i["type"] == "VIEWBINDING_MEMORY_LEAK" for i in issues_ok))
+
+            frag_commented = root / "LeakingFragment.kt"
+            frag_commented.write_text(
+                "package com.example\n"
+                "class LeakingFragment : Fragment() {\n"
+                "    private var _binding: ProfileBinding? = null\n"
+                "    override fun onDestroyView() {\n"
+                "        super.onDestroyView()\n"
+                "        // _binding = null\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            issues_leak = fast_kt_lint.lint_file(frag_commented)
+            self.assertTrue(any(i["type"] == "VIEWBINDING_MEMORY_LEAK" for i in issues_leak))
+
+            # 2. perf_guard & fast_kt_lint: @Immutable above multi-line KDoc and multiple annotations is recognized
+            state_kt = root / "HomeContract.kt"
+            state_kt.write_text(
+                "package com.example\n"
+                "import androidx.compose.runtime.Immutable\n"
+                "@Immutable\n"
+                "/**\n"
+                " * Multi-line KDoc explaining UI state.\n"
+                " * Line 2\n"
+                " * Line 3\n"
+                " * Line 4\n"
+                " * Line 5\n"
+                " */\n"
+                "@Parcelize\n"
+                "data class HomeUiState(val title: String = \"\")\n",
+                encoding="utf-8",
+            )
+            self.assertEqual([], perf_guard.scan_file(state_kt))
+            self.assertFalse(any(i["type"] == "MISSING_IMMUTABLE" for i in fast_kt_lint.lint_file(state_kt)))
+
+            # 3. review_policy: lean profile never makes BUG tasks micro-eligible (retains bug-test-reviewer-agent)
+            small_bug_cls = {
+                "surfaces": ["BUSINESS_LOGIC"],
+                "severity": "MEDIUM",
+                "changed_files": 1,
+                "changed_lines": 10,
+                "has_delete_or_rename": False,
+            }
+            with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean"}):
+                self.assertFalse(review_policy._micro_eligible(small_bug_cls, task_kind="BUG"))
+                pol_bug = review_policy.decide(small_bug_cls, skills_root, task_kind="BUG")
+                self.assertFalse(pol_bug["micro_eligible"])
+                self.assertEqual(["bug-test-reviewer-agent"], pol_bug["reviewers"])
+
+            # 4. pre_invocation_reminder: does not create .agents/cache in a raw kit checkout, and recovers from corrupt JSON
+            kit_like = root / "kit_checkout"
+            (kit_like / "agents").mkdir(parents=True)
+            (kit_like / "harness_cli.py").write_text("# kit\n", encoding="utf-8")
+            (kit_like / "agents" / "VERSION").write_text("1.2.9\n", encoding="utf-8")
+            with mock.patch.object(reminder, "REPO", kit_like):
+                reminder._record_seen_state("conv-1", "t1:ACTIVE")
+                self.assertFalse((kit_like / ".agents").exists())
+            with mock.patch.object(reminder, "REPO", root):
+                (root / ".agents" / "cache").mkdir(parents=True)
+                cache_file = root / ".agents" / "cache" / "reminder-state.json"
+                cache_file.write_text("{corrupt", encoding="utf-8")
+                reminder._record_seen_state("conv-1", "t1:ACTIVE")
+                self.assertTrue(reminder._has_seen_state("conv-1", "t1:ACTIVE"))
+
+            # 5. project_graph & task_context: warm trust_stat fast-path skips re-hashing unchanged files
+            src = root / "app" / "src" / "main" / "kotlin" / "com" / "example" / "SampleViewModel.kt"
+            src.parent.mkdir(parents=True)
+            src.write_text("package com.example\nclass SampleViewModel\n", encoding="utf-8")
+            out_cold = io.StringIO()
+            with contextlib.redirect_stdout(out_cold):
+                self.assertEqual(0, project_graph.main(["--repo", str(root), "--stats", "--json", "--sync"]))
+            self.assertGreater(json.loads(out_cold.getvalue())["files_hashed"], 0)
+            out_warm = io.StringIO()
+            with contextlib.redirect_stdout(out_warm):
+                self.assertEqual(0, project_graph.main(["--repo", str(root), "--stats", "--json"]))
+            self.assertEqual(0, json.loads(out_warm.getvalue())["files_hashed"])
+            ctx_warm = task_context.resolve_task_context(root, symbol="SampleViewModel", trust_stat=True)
+            self.assertEqual("RESOLVED", ctx_warm["status"])
+            self.assertEqual(0, ctx_warm["graph_sync"]["files_hashed"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

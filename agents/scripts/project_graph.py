@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = GraphEngine(repo_root)
     if args.sync:
         live_print("[*] Rebuilding complete universal code graph from disk...", err=is_json)
-    sync_res = engine.sync(force_full=args.sync)
+    sync_res = engine.sync(force_full=args.sync, trust_stat=not args.sync)
     if sync_res.get("added") or sync_res.get("modified") or sync_res.get("deleted"):
         live_print(
             f"[*] Incremental code graph sync: +{sync_res['added']} added, ~{sync_res['modified']} modified, -{sync_res['deleted']} deleted files.",
@@ -132,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                 "added": sync_res.get("added", 0),
                 "modified": sync_res.get("modified", 0),
                 "deleted": sync_res.get("deleted", 0),
+                "files_hashed": sync_res.get("files_hashed", 0),
+                "files_parsed": sync_res.get("files_parsed", 0),
                 "healed_log": engine.healed_log,
             }, indent=2))
             return 0
