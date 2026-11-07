@@ -801,6 +801,14 @@ import argparse
             for e in kmm_engine_inc.graph.edges
         )
         assert_eq(has_renders_after_kt_edit, True, "XML RENDERS edge survives incremental sync when only target Kotlin file is modified")
+
+        eng_stat = GraphEngine(kmm_dir)
+        res_cold = eng_stat.sync(force_full=True)
+        assert_eq(res_cold["files_hashed"] > 0, True, "Cold sync hashes files")
+        res_warm_stat = eng_stat.sync(trust_stat=True)
+        assert_eq(res_warm_stat["files_hashed"], 0, "Warm sync with trust_stat=True reuses cached hashes when stat matches")
+        res_warm_default = eng_stat.sync()
+        assert_eq(res_warm_default["files_hashed"] > 0, True, "Default sync always hashes files to catch restored timestamps")
     finally:
         shutil.rmtree(kmm_dir, ignore_errors=True)
 

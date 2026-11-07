@@ -1477,7 +1477,7 @@ class GraphEngine:
             ],
         }
 
-    def sync(self, force_full: bool = False, *, persist: bool = True) -> dict[str, Any]:
+    def sync(self, force_full: bool = False, *, persist: bool = True, trust_stat: bool = False) -> dict[str, Any]:
         """Incremental synchronization: scans repo, updates dirty files, heals stale paths."""
         if force_full:
             self.graph = DependencyGraph()
@@ -1538,23 +1538,53 @@ class GraphEngine:
         modified: list[str] = []
         deleted: list[str] = [rel for rel in self.file_hashes if rel not in current_files]
         files_hashed = 0
+        metadata_changed = False
 
         for rel, path in current_files.items():
             try:
                 st = path.stat()
                 mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+                ctime_ns = getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9))
                 size = st.st_size
-            except Exception:
+                dev = getattr(st, "st_dev", 0)
+                ino = getattr(st, "st_ino", 0)
+            except (OSError, ValueError):
                 mtime_ns = 0
+                ctime_ns = 0
                 size = 0
+                dev = 0
+                ino = 0
 
             cached_hash = self.file_hashes.get(rel)
-            # Restored timestamps and same-size edits are common after source
-            # replacement. Metadata is diagnostic, never proof of unchanged bytes.
-            # Hash every source, but keep expensive parsing incremental.
-            curr_hash = self.compute_file_hash(path)
-            files_hashed += 1
-            self.file_metadata[rel] = {"size": size, "mtime_ns": mtime_ns, "hash": curr_hash}
+            meta = self.file_metadata.get(rel) or {}
+            if (
+                trust_stat
+                and not force_full
+                and cached_hash is not None
+                and size > 0
+                and meta.get("size") == size
+                and meta.get("mtime_ns") == mtime_ns
+                and meta.get("ctime_ns") == ctime_ns
+                and meta.get("dev") == dev
+                and meta.get("ino") == ino
+            ):
+                curr_hash = cached_hash
+            else:
+                # Default mode (trust_stat=False) hashes every source so restored
+                # timestamps and same-size edits are always caught.
+                curr_hash = self.compute_file_hash(path)
+                files_hashed += 1
+                new_meta = {
+                    "size": size,
+                    "mtime_ns": mtime_ns,
+                    "ctime_ns": ctime_ns,
+                    "dev": dev,
+                    "ino": ino,
+                    "hash": curr_hash,
+                }
+                if meta != new_meta:
+                    metadata_changed = True
+                self.file_metadata[rel] = new_meta
 
             if cached_hash is None:
                 added.append(rel)
@@ -1676,6 +1706,8 @@ class GraphEngine:
             self._rebuild_file_index()
             if persist:
                 self.save_cache()
+        elif metadata_changed and persist:
+            self.save_cache()
 
         return {
             "added": len(added),
