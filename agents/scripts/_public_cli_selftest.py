@@ -2428,6 +2428,49 @@ class UpdateNoticeSelftest(unittest.TestCase):
             message = json.loads(buf.getvalue())["injectSteps"][0]["ephemeralMessage"]
             self.assertEqual(expected, "UPDATE-NOTICE" in message, invocation)
 
+    def test_reminder_deduplicates_unchanged_state_per_conversation_and_task_flag_aliases(self) -> None:
+        import pre_invocation_reminder
+        import workflow
+        from unittest import mock
+        import contextlib
+        import io
+
+        parser = workflow.build_parser()
+        args_id = parser.parse_args(["status", "--task-id", "t-123"])
+        args_alias = parser.parse_args(["status", "--task", "t-123"])
+        self.assertEqual("t-123", args_id.task_id)
+        self.assertEqual("t-123", args_alias.task_id)
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            with mock.patch.object(pre_invocation_reminder, "REPO", repo_dir), \
+                 mock.patch.object(pre_invocation_reminder, "_current_task_state", return_value=("t-123", "IMPLEMENTING")), \
+                 mock.patch.object(pre_invocation_reminder, "_compact_message", return_value="FULL-IMPLEMENTING-REMINDER"):
+                buf1 = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 2, "conversationId": "conv-abc"}))), \
+                     contextlib.redirect_stdout(buf1):
+                    pre_invocation_reminder.main()
+                msg1 = json.loads(buf1.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertEqual("FULL-IMPLEMENTING-REMINDER", msg1)
+
+                buf2 = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 3, "conversationId": "conv-abc"}))), \
+                     contextlib.redirect_stdout(buf2):
+                    pre_invocation_reminder.main()
+                msg2 = json.loads(buf2.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertIn("State unchanged", msg2)
+                self.assertLess(len(msg2), len("FULL-IMPLEMENTING-REMINDER") * 5)
+
+            with mock.patch.object(pre_invocation_reminder, "REPO", repo_dir), \
+                 mock.patch.object(pre_invocation_reminder, "_current_task_state", return_value=("t-123", "VERIFYING")), \
+                 mock.patch.object(pre_invocation_reminder, "_compact_message", return_value="FULL-VERIFYING-REMINDER"):
+                buf3 = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 4, "conversationId": "conv-abc"}))), \
+                     contextlib.redirect_stdout(buf3):
+                    pre_invocation_reminder.main()
+                msg3 = json.loads(buf3.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertEqual("FULL-VERIFYING-REMINDER", msg3)
+
 
 class CommandEfficiencySelftest(unittest.TestCase):
     setUp = PublicCliSelftest.setUp

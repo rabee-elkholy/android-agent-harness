@@ -797,7 +797,7 @@ def main() -> int:
         help="Install over a newer build on the phone (adb install -d, debug builds); keeps the app's data",
     )
     parser.add_argument("--confirm-destructive", action="store_true", help="Required for uninstall")
-    parser.add_argument("--task-id", default=None, help="Task ID for signoff")
+    parser.add_argument("--task-id", "--task", dest="task_id", default=None, help="Task ID for signoff")
     parser.add_argument("--criterion-id", action="append", default=[], help="Manual criterion explicitly verified by the developer; repeat per criterion")
     parser.add_argument("--proof-reference", default=None, help="Proof reference / reason for signoff")
     parser.add_argument("--verdict", choices=["PASS", "FAIL"], default="PASS", help="Signoff verdict")
