@@ -766,6 +766,41 @@ import argparse
         assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_expect_issues), False, "expect @Composable fun in commonMain does not require @Preview")
         lint_welcome_issues = lint_file(common_main / "WelcomeScreen.kt")
         assert_eq(any(i["type"] == "MISSING_COMPOSE_PREVIEW" for i in lint_welcome_issues), False, "Parameterless @Preview in commonMain satisfies preview lint")
+
+        # XML FQN fragment reference resolves to RENDERS edge and survives incremental Kotlin sync
+        xml_layout_dir = kmm_dir / "composeApp" / "src" / "androidMain" / "res" / "layout"
+        xml_layout_dir.mkdir(parents=True, exist_ok=True)
+        frag_kt = kmm_dir / "composeApp" / "src" / "androidMain" / "kotlin" / "com" / "test" / "ui" / "ProfileFragment.kt"
+        frag_kt.parent.mkdir(parents=True, exist_ok=True)
+        frag_kt.write_text(
+            "package com.test.ui\n\nclass ProfileFragment {\n    fun v() = 1\n}\n",
+            encoding="utf-8",
+        )
+        (xml_layout_dir / "fragment_profile.xml").write_text(
+            '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '    <fragment android:name="com.test.ui.ProfileFragment" />\n'
+            '</FrameLayout>\n',
+            encoding="utf-8",
+        )
+        kmm_engine.sync()
+        has_renders_initial = any(
+            e.source == "layout:fragment_profile" and e.target == "com.test.ui.ProfileFragment" and e.kind == EdgeKind.RENDERS.value
+            for e in kmm_engine.graph.edges
+        )
+        assert_eq(has_renders_initial, True, "XML fragment with FQN android:name resolves RENDERS edge on sync")
+
+        # Modify only the Kotlin fragment file and run incremental sync via a fresh GraphEngine instance (loading from cache)
+        frag_kt.write_text(
+            "package com.test.ui\n\nclass ProfileFragment {\n    fun v() = 2\n}\n",
+            encoding="utf-8",
+        )
+        kmm_engine_inc = GraphEngine(kmm_dir)
+        kmm_engine_inc.sync()
+        has_renders_after_kt_edit = any(
+            e.source == "layout:fragment_profile" and e.target == "com.test.ui.ProfileFragment" and e.kind == EdgeKind.RENDERS.value
+            for e in kmm_engine_inc.graph.edges
+        )
+        assert_eq(has_renders_after_kt_edit, True, "XML RENDERS edge survives incremental sync when only target Kotlin file is modified")
     finally:
         shutil.rmtree(kmm_dir, ignore_errors=True)
 

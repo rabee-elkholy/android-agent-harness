@@ -933,6 +933,72 @@ class SecurityTests(unittest.TestCase):
         leak_issues = [iss for iss in issues if iss["type"] == "VIEWBINDING_MEMORY_LEAK"]
         self.assertEqual([], leak_issues, "Clean fragment with _binding = null must pass")
 
+        nested_clean_code = (
+            "package com.test\n\nimport androidx.fragment.app.Fragment\n\n"
+            "class NestedCleanFragment : Fragment() {\n"
+            "    private var _binding: FragmentProfileBinding? = null\n"
+            "    override fun onDestroyView() {\n"
+            "        if (true) { cleanup() }\n"
+            "        _binding = null\n"
+            "        super.onDestroyView()\n"
+            "    }\n"
+            "}\n"
+        )
+        nested_file = self.repo / "app/src/main/java/com/test/NestedCleanFragment.kt"
+        nested_file.write_text(nested_clean_code, encoding="utf-8")
+        nested_issues = lint_file(nested_file)
+        self.assertEqual([], [iss for iss in nested_issues if iss["type"] == "VIEWBINDING_MEMORY_LEAK"], "onDestroyView with nested braces before _binding = null must pass")
+        self.assertEqual([], [iss for iss in nested_issues if iss["type"] == "MISSING_HILT_ENTRY_POINT"], "Plain Fragment without Hilt markers must not require @AndroidEntryPoint")
+
+        hilt_frag_code = (
+            "package com.test\n\nimport androidx.fragment.app.Fragment\nimport javax.inject.Inject\n\n"
+            "class InjectedFragment : Fragment() {\n"
+            "    @Inject lateinit var repo: Any\n"
+            "}\n"
+        )
+        hilt_file = self.repo / "app/src/main/java/com/test/InjectedFragment.kt"
+        hilt_file.write_text(hilt_frag_code, encoding="utf-8")
+        hilt_issues = lint_file(hilt_file)
+        self.assertTrue(any(iss["type"] == "MISSING_HILT_ENTRY_POINT" for iss in hilt_issues), "Fragment with @Inject must still require @AndroidEntryPoint")
+
+        # Sibling preview file satisfies MISSING_COMPOSE_PREVIEW
+        screen_no_inline_prev = self.repo / "app/src/main/java/com/test/SiblingScreen.kt"
+        screen_no_inline_prev.write_text(
+            "package com.test\nimport androidx.compose.runtime.Composable\n"
+            "@Composable\nfun SiblingScreen(title: String) {}\n",
+            encoding="utf-8",
+        )
+        sibling_prev = self.repo / "app/src/main/java/com/test/SiblingScreenPreview.kt"
+        sibling_prev.write_text(
+            "package com.test\nimport androidx.compose.ui.tooling.preview.Preview\nimport androidx.compose.runtime.Composable\n"
+            "@Preview(locale = \"en\")\n@Preview(locale = \"ar\")\n@Composable\nfun SiblingScreenPreview() { SiblingScreen(\"hi\") }\n",
+            encoding="utf-8",
+        )
+        sib_issues = lint_file(screen_no_inline_prev)
+        self.assertEqual([], [iss for iss in sib_issues if iss["type"] == "MISSING_COMPOSE_PREVIEW"], "Sibling *Preview.kt with dual-locale previews must satisfy preview rule")
+
+        # perf_guard ignores comments/strings and non-Compose State classes
+        from perf_guard import scan_file as perf_scan_file
+        domain_state = self.repo / "app/src/main/java/com/test/OrderState.kt"
+        domain_state.write_text(
+            "package com.test\n"
+            "// Do not call runBlocking or Thread.sleep(100) here\n"
+            "val msg = \"Avoid runBlocking { } and Thread.sleep(1000)\"\n"
+            "data class OrderState(val id: String)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual([], perf_scan_file(domain_state), "perf_guard must ignore comments/strings and non-Compose State classes")
+
+        bad_perf = self.repo / "app/src/main/java/com/test/BadPerf.kt"
+        bad_perf.write_text(
+            "package com.test\nimport androidx.compose.runtime.Composable\n"
+            "data class BadUiState(val x: Int)\n"
+            "fun block() { Thread.sleep(50); runBlocking { } }\n",
+            encoding="utf-8",
+        )
+        bad_findings = perf_scan_file(bad_perf)
+        self.assertEqual(3, len(bad_findings), f"Expected 3 findings (State, Thread.sleep, runBlocking), got: {bad_findings}")
+
     def test_room_migration_not_null_without_default_rejected(self):
         sys.path.insert(0, str(SCRIPTS))
         from room_guard import NOT_NULL_NO_DEFAULT_RE

@@ -77,8 +77,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"launchbillingflow|acknowledgepurchase|consumeasync|"
             r"querypurchases\w*|queryproductdetails\w*|restorepurchases\w*|verifypurchase\w*"
             r")\b"
-            r"|\b(?:class|interface|object|fun)\s+\w*(?:billing|purchase|subscription)\w*"
-            r"|\bpurchase[a-z0-9_]*\s*\(",
+            r"|\b(?:class|interface|object|fun)\s+(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner)\b)\w*(?:billing|purchase|subscription)\w*"
+            r"|\b(?!purchase(?:date|history|label|title|card|item|badge|banner|click|clicked)\b)purchase[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
         "BILLING_PATTERN",
@@ -114,7 +114,7 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
         re.compile(
             r"\b(?:access_?token|refresh_?token|health_?data|fusedlocation\w*|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|latitude|longitude)\b"
             r"|androidx\.security\.crypto|android\.location\b"
-            r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)\b(?:password|biometric)\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b)",
+            r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)\b(?:password|biometric)(?:(?=Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b)_never_|\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b))",
             re.IGNORECASE,
         ),
         "SENSITIVE_PATTERN",
