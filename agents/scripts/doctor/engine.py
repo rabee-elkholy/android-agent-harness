@@ -275,17 +275,23 @@ class HarnessDoctor:
             self.log(category, "Git Working Tree", "WARN", f"Failed querying git status: {exc}")
 
     def _released_scripts(self) -> list[str]:
-        """Scripts the release ships, from its checksum inventory (the single list of shipped files)."""
+        """Scripts the release ships to client checkouts, from its checksum inventory."""
         inventory = self.agents_dir / "release_checksums.json"
         try:
             files = json.loads(inventory.read_text(encoding="utf-8")).get("files") or {}
         except (OSError, ValueError, AttributeError):
             return []
         prefix = "agents/scripts/"
-        return sorted(
-            name[len(prefix):] for name in files
-            if isinstance(name, str) and name.startswith(prefix) and name.endswith(".py")
-        )
+        result: list[str] = []
+        for name in files:
+            if not (isinstance(name, str) and name.startswith(prefix) and name.endswith(".py")):
+                continue
+            rel_script = name[len(prefix):]
+            base = Path(rel_script).name
+            if base.startswith("_") and base.endswith("_selftest.py") and base != "_hook_selftest.py":
+                continue
+            result.append(rel_script)
+        return sorted(result)
 
     def check_file_structure(self) -> None:
         category = "2. File Structure & Version"

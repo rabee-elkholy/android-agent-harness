@@ -83,6 +83,18 @@ def _configured_device_verification_mode() -> str:
     return mode
 
 
+def _configured_review_profile() -> str:
+    env_profile = str(os.environ.get("HARNESS_REVIEW_PROFILE") or "").strip().lower()
+    if env_profile in {"standard", "lean"}:
+        return env_profile
+    try:
+        from _product import REVIEW_PROFILE
+        profile = str(REVIEW_PROFILE or "").strip().lower()
+    except (ImportError, TypeError, ValueError, AttributeError):
+        profile = "standard"
+    return "lean" if profile == "lean" else "standard"
+
+
 def _is_visual_compose(classification: dict) -> bool:
     details = classification.get("details") or {}
     compose_info = details.get("COMPOSE_UI")
@@ -173,6 +185,16 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
             if severity in ("CRITICAL", "HIGH"):
                 return False
             return True
+
+    # Tier 1 (Lean Profile): Small single-module low-risk business/UI logic edit with unit tests
+    if _configured_review_profile() == "lean":
+        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC"}:
+            severity = str(classification.get("severity") or "").upper()
+            if severity not in ("CRITICAL", "HIGH"):
+                changed_files = int(classification.get("changed_files") or 0)
+                changed_lines = int(classification.get("changed_lines") or 0)
+                if 0 < changed_files <= 2 and 0 <= changed_lines <= 40:
+                    return True
 
     return False
 
@@ -326,6 +348,20 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     is_conflict_task = str(task_kind or (plan or {}).get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
     if micro or is_conflict_task:
         reviewers.clear()
+    elif (
+        _configured_review_profile() == "lean"
+        and risk_tier in ("T1_LOW_RISK", "T2_FEATURE")
+        and planning_depth != "ARCHITECTURAL"
+        and arch_intent not in ("MIGRATION", "NEW_SUBSYSTEM")
+        and changed_modules_count <= 1
+        and "UNKNOWN" not in surfaces
+        and not (surfaces & (CRITICAL_SURFACES | {"MANIFEST_PERMISSION", "BUILD_CONFIG", "NATIVE_CODE", "DEVICE_API", "ROOM_SCHEMA", "PERSISTENCE"}))
+        and "bug-test-reviewer-agent" in reviewers
+        and "arch-regression-reviewer-agent" in reviewers
+    ):
+        reviewers.discard("arch-regression-reviewer-agent")
+        merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
+        reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"LEAN_PROFILE_CONSOLIDATED"})
     if "UNKNOWN" in surfaces and not is_conflict_task:
         reviewers.clear()
         if unknown_resolved:
