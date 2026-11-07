@@ -1473,6 +1473,56 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
                 source.unlink()
                 self.assertNotEqual(first, checker.harness_fingerprint())
 
+    def test_hook_selftest_non_blocking_in_hook_mode_and_blocking_in_cli_mode(self):
+        import io
+        import time
+        import ensure_hook_selftest as checker
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            scripts = root / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "dummy.py").write_text("x = 1\n", encoding="utf-8")
+            cache_file = root / "cache" / "hook_selftest.json"
+
+            # 1. Hook mode with stale cache spawns background worker and returns immediately (<2s) without running selftest synchronously
+            spawned: list[str] = []
+            with mock.patch.multiple(checker, AGENTS=root, SCRIPTS=scripts, CACHE=cache_file), \
+                    mock.patch.object(checker, "_read_stdin_safe", return_value='{"conversationId":"c1"}'), \
+                    mock.patch.object(checker, "run_selftest", side_effect=AssertionError("sync selftest must not run in hook mode")), \
+                    mock.patch.object(checker, "_spawn_background_selftest", side_effect=lambda fp: (spawned.append(fp), True)[1]), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                t0 = time.perf_counter()
+                rc = checker.main()
+                elapsed = time.perf_counter() - t0
+                self.assertEqual(0, rc)
+                self.assertLess(elapsed, 2.0)
+                self.assertEqual("{}", out.getvalue().strip())
+                self.assertEqual(1, len(spawned))
+
+            # 2. Prior failure in cache surfaces warning immediately in hook mode
+            with mock.patch.multiple(checker, AGENTS=root, SCRIPTS=scripts, CACHE=cache_file):
+                fp = checker.harness_fingerprint()
+                checker._write_cache(fp, False)
+                with mock.patch.object(checker, "_read_stdin_safe", return_value='{"conversationId":"c1"}'), \
+                        mock.patch.object(checker, "_spawn_background_selftest", return_value=False), \
+                        mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                    rc = checker.main()
+                    self.assertEqual(0, rc)
+                    payload = json.loads(out.getvalue().strip())
+                    self.assertIn("Do not assemble", payload["injectSteps"][0]["ephemeralMessage"])
+
+            # 3. CLI / preflight mode runs selftest synchronously and fails with exit code 1 when selftest fails
+            with mock.patch.multiple(checker, AGENTS=root, SCRIPTS=scripts, CACHE=cache_file), \
+                    mock.patch.object(checker, "_read_stdin_safe", return_value=""), \
+                    mock.patch.object(checker, "run_selftest", return_value=(False, "failed")):
+                self.assertEqual(1, checker.main())
+                self.assertIs(False, checker._read_cache().get("ok"))
+
+            # 4. seed_cache_for_agents seeds fresh cache
+            checker.seed_cache_for_agents(root, ok=True)
+            with mock.patch.multiple(checker, AGENTS=root, SCRIPTS=scripts, CACHE=cache_file):
+                self.assertTrue(checker.cache_is_fresh(checker.harness_fingerprint()))
+
     def test_antigravity_identity_scan_does_not_read_tool_history_after_dispatch(self):
         import reviewer_host
         with tempfile.TemporaryDirectory() as td:
