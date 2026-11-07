@@ -420,7 +420,12 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                     "msg": f"MVI State class '{trimmed}' is missing @Immutable or @Stable for Compose stability.",
                 })
 
-    uses_hilt = DI_FRAMEWORK.lower() == "hilt" or "@Inject" in text or "hiltViewModel" in text or "hiltNavGraphViewModels" in text
+    uses_hilt = bool(
+        re.search(
+            r"@Inject\b|\bhiltViewModel\b|\bhiltNavGraphViewModels\b|\bby\s+(?:activityViewModels|viewModels)\b|\bdagger\.hilt\b",
+            text,
+        )
+    )
     if uses_hilt and has_fragment_activity_in_diff and not has_android_entry_point and not is_test:
         issues.append({
             "file": str(file_path),
@@ -446,12 +451,23 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         and is_preview_surface(file_path.name, text)
     ):
         if not is_stateful_container_only(text):
+            preview_search_text = text
+            stem = file_path.stem
+            for cand_name in (f"{stem}Preview.kt", f"{stem}Previews.kt", "Previews.kt"):
+                sibling = file_path.parent / cand_name
+                if sibling != file_path and sibling.is_file():
+                    try:
+                        sib_text = sibling.read_text(encoding="utf-8", errors="replace")
+                        if stem in sib_text or cand_name.startswith(stem):
+                            preview_search_text = f"{preview_search_text}\n{sib_text}"
+                    except (OSError, ValueError):
+                        pass
             has_rtl = any(loc in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             has_ltr = any(loc not in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             needs_bidirectional = has_rtl and has_ltr and not is_common_main
             extra = " plus Loading/Empty/Error." if requires_state_previews(file_path.name) else "."
             if needs_bidirectional:
-                if not PREVIEW_AR.search(text) or not PREVIEW_EN.search(text):
+                if not PREVIEW_AR.search(preview_search_text) or not PREVIEW_EN.search(preview_search_text):
                     issues.append({
                         "file": str(file_path),
                         "line": 1,
@@ -462,7 +478,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                         ),
                     })
             else:
-                if not PREVIEW_EN.search(text) and "@Preview" not in text:
+                if not PREVIEW_EN.search(preview_search_text) and "@Preview" not in preview_search_text:
                     issues.append({
                         "file": str(file_path),
                         "line": 1,
@@ -475,8 +491,20 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         binding_decl = re.search(r"private\s+var\s+(_binding\w*)\s*:\s*[A-Za-z0-9_]+Binding\?\s*=\s*null", text)
         if binding_decl:
             var_name = binding_decl.group(1)
-            ondestroy_match = re.search(r"override\s+fun\s+onDestroyView\s*\([^)]*\)\s*\{([^}]*)\}", text, re.DOTALL)
-            nullified = ondestroy_match and (f"{var_name} = null" in ondestroy_match.group(1) or f"{var_name}=null" in ondestroy_match.group(1))
+            ondestroy_header = re.search(r"override\s+fun\s+onDestroyView\s*\([^)]*\)\s*\{", text)
+            ondestroy_body = ""
+            if ondestroy_header:
+                depth = 1
+                pos = ondestroy_header.end()
+                while pos < len(text) and depth > 0:
+                    ch = text[pos]
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                    pos += 1
+                ondestroy_body = text[ondestroy_header.end():pos - 1] if depth == 0 else text[ondestroy_header.end():]
+            nullified = bool(ondestroy_body) and bool(re.search(rf"\b{re.escape(var_name)}\s*=\s*null\b", ondestroy_body))
             if not nullified:
                 issues.append({
                     "file": str(file_path),
