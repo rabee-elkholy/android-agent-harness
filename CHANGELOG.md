@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.10] - 2026-11-07
+
+### Multi-module batch compile fallback fix, string/comment-aware ViewBinding & `@Immutable` KDoc scanners, `lean` profile `BUG` review protection, and warm `trust_stat` CLI wiring
+
+- **Multi-Module Batch Compile Fallback (`agents/scripts/_workflow/engine.py`)**: Return `True, "PASS"` in `check_phase_compile` when a batched multi-module `./gradlew` compile fails transiently (e.g., daemon lock contention) and every individual module compile task succeeds on fallback retry.
+- **String/Comment-Aware Fragment ViewBinding Leak Scanner & Multi-Line KDoc `@Immutable` Lookback (`agents/scripts/fast_kt_lint.py`, `agents/scripts/perf_guard.py`)**: Strip comments and string literals before scanning `onDestroyView()` braces and `_binding = null` so braces inside strings/comments never prematurely terminate the body scan and commented-out null assignments never mask memory leaks; and expand `@Immutable`/`@Stable` lookback across multi-line KDoc blocks and contiguous annotations in both `perf_guard.py` and `fast_kt_lint.py`.
+- **`REVIEW_PROFILE = "lean"` `BUG` Protection, Atomic Reminder State Cache, and Warm `trust_stat` Fast-Path (`agents/scripts/review_policy.py`, `agents/scripts/pre_invocation_reminder.py`, `agents/scripts/project_graph.py`, `agents/scripts/task_context.py`)**: Exclude `BUG` tasks from `MICRO` (0-reviewer) eligibility under `REVIEW_PROFILE = "lean"` so `BUG` fixes always retain consolidated `bug-test-reviewer-agent` coverage; write `.agents/cache/reminder-state.json` atomically with corrupt-JSON recovery while skipping raw kit checkouts; and enable `trust_stat` on warm `project_graph.py` queries (`not args.sync`) and via `--trust-stat` in `task_context.py`.
+
 ## [1.2.9] - 2026-11-07
 
 ### KMP `expect`/`actual` nested generic & default parameter arity hardening, Swift inline comment stripping, and macOS Xcode CLI edge-case fixes

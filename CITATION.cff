@@ -10,7 +10,7 @@ abstract: >-
   on Gradle Android and KMM/KMP (Kotlin Multiplatform Mobile) projects with AST/symbol graph
   discovery across Kotlin, Java, XML, and Swift, 6-tier dynamic risk routing, independent
   multi-agent code review, and deterministic verification gates.
-version: 1.2.9
+version: 1.2.10
 date-released: 2026-11-07
 license: "MIT"
 url: "https://github.com/rabee-elkholy/android-agent-harness"
