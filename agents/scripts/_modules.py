@@ -75,9 +75,9 @@ def is_kmp_or_android_test_path(rel_path: str) -> bool:
 
 
 def strip_gradle_comments_preserving_strings(text: str) -> str:
-    """Strip // and /* */ comments from Gradle script text while keeping string literals intact."""
+    """Strip // and /* */ comments from Gradle/Kotlin script text while keeping single, double, and triple-quoted string literals intact."""
     return re.sub(
-        r'''("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|//[^\n]*|/\*.*?\*/''',
+        r'''("""[\s\S]*?"""|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|//[^\n]*|/\*.*?\*/''',
         lambda m: m.group(1) or " ",
         text or "",
         flags=re.S,

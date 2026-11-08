@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             operation = args[0]
             if len(args) > 1 and args[1] in actions.get(args[0], ()):
                 operation += "-" + args[1]
-            if operation not in {"task-metrics", "task-coverage", "task-status", "journey-list", "journey-validate", "review-status", "review-profile"}:
+            if operation not in {"task-metrics", "task-coverage", "task-status", "task-plan-check", "journey-list", "journey-validate", "review-status", "review-profile"}:
                 task_id = metric_owner
                 if task_id:
                     record_operation(REPO_ROOT, task_id, operation, time.monotonic() - monotonic, code, started)
@@ -268,7 +268,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     if command == "context":
         if not args:
-            print("[ERROR] context requires preview, generate, status, refresh, note, or instruct", file=sys.stderr)
+            print("[ERROR] context requires preview, generate, status, refresh, note, instruct, or drift-report", file=sys.stderr)
             return 2
         return _run("generate_project_context.py", [args[0], "--repo", str(REPO_ROOT), *args[1:]])
     if command == "task-context":

@@ -755,13 +755,31 @@ class WorkflowInsightTests(unittest.TestCase):
             self.assertEqual(0, proc.returncode, proc.stderr)
             check_out = json.loads(proc.stdout)
             self.assertEqual("ADVISORY_GAPS", check_out["readiness_status"])
+            self.assertEqual("T3_HIGH", check_out["risk_tier"])
             self.assertEqual(1, len(check_out["path_grounding_warnings"]))
             self.assertEqual(1, len(check_out["phase_dag_warnings"]))
+
+            # Multi-file starvation edge case: 5 existing *Formatter classes should not starve
+            # exact_symbol_match detection on the 2nd planned file (PriceCalculator.kt).
+            for idx in range(5):
+                extra_fmt = repo / f"core/network/src/main/kotlin/com/example/core/Extra{idx}Formatter.kt"
+                extra_fmt.write_text(f"package com.example.core\nclass Extra{idx}Formatter\n", encoding="utf-8")
+            engine.sync()
+            ordered_expected = [
+                "app/src/main/kotlin/com/example/AmountFormatter.kt",
+                "app/src/main/kotlin/com/example/PriceCalculator.kt",
+            ]
+            multi_cands = _discover_reuse_candidates(repo, ordered_expected)
+            self.assertTrue(
+                any(c.get("exact_symbol_match") and c.get("symbol") == "PriceCalculator" for c in multi_cands),
+                f"Expected exact_symbol_match for PriceCalculator in {multi_cands}",
+            )
 
     def test_egm_living_context_drift_and_self_healing_suggestions(self):
         from _graph_core import GraphEngine
         from project_context import check_living_context_drift
         import generate_project_context
+        import mutation_guard
         from doctor.engine import HarnessDoctor
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
@@ -775,6 +793,9 @@ class WorkflowInsightTests(unittest.TestCase):
             moved_file = repo / "core/network/src/main/kotlin/com/example/ApiClient.kt"
             moved_file.parent.mkdir(parents=True, exist_ok=True)
             moved_file.write_text("package com.example\nclass ApiClient\n", encoding="utf-8")
+            manifest_file = repo / "app/src/main/AndroidManifest.xml"
+            manifest_file.parent.mkdir(parents=True, exist_ok=True)
+            manifest_file.write_text("<manifest/>\n", encoding="utf-8")
 
             engine = GraphEngine(repo)
             engine.sync()
@@ -784,7 +805,9 @@ class WorkflowInsightTests(unittest.TestCase):
             (ctx_dir / "project-notes.md").write_text(
                 "# Project Notes\n\n## Domain Conventions & Context\n"
                 "- Old client lived at `app/src/main/kotlin/com/example/ApiClient.kt` inside `:legacy:sync`.\n"
-                "- Active client is `core/network/src/main/kotlin/com/example/ApiClient.kt`.\n",
+                "- Active client is `core/network/src/main/kotlin/com/example/ApiClient.kt`.\n"
+                "- Build debug APK with `:app:assembleDebug` or `:core:network:testDebugUnitTest`.\n"
+                "- External docs: https://github.com/example/repo/blob/main/docs/architecture.md and `src/main/AndroidManifest.xml`.\n",
                 encoding="utf-8",
             )
             (ctx_dir / "developer-instructions.json").write_text(
@@ -795,7 +818,7 @@ class WorkflowInsightTests(unittest.TestCase):
                             "id": "inst-stale-1",
                             "status": "ACTIVE",
                             "scope": "module::legacy:sync",
-                            "text": "Keep retry interceptor in app/src/main/kotlin/com/example/ApiClient.kt",
+                            "text": "Keep retry interceptor in app/src/main/kotlin/com/example/ApiClient.kt (see https://github.com/org/repo/blob/main/README.md)",
                         }
                     ],
                 }),
@@ -804,8 +827,8 @@ class WorkflowInsightTests(unittest.TestCase):
 
             drift = check_living_context_drift(repo)
             self.assertEqual("DRIFT_DETECTED", drift["status"])
-            self.assertEqual(2, drift["stale_notes_count"])
-            self.assertEqual(2, drift["stale_instructions_count"])
+            self.assertEqual(2, drift["stale_notes_count"], f"Unexpected stale notes: {drift['stale_notes']}")
+            self.assertEqual(2, drift["stale_instructions_count"], f"Unexpected stale instructions: {drift['stale_instructions']}")
             file_note = next(n for n in drift["stale_notes"] if n["kind"] == "STALE_NOTE_FILE_REF")
             self.assertEqual("core/network/src/main/kotlin/com/example/ApiClient.kt", file_note["suggested_replacement"])
 
@@ -828,7 +851,146 @@ class WorkflowInsightTests(unittest.TestCase):
             drift_chk = next(r for r in doc.results if r.name == "Living Context Drift")
             self.assertEqual("WARN", drift_chk.status)
 
+            # Verify mutation_guard allows read-only plan-check, drift-report, and context note without an active task
+            kit_root = Path(__file__).resolve().parents[2]
+            for cmd in (
+                "python .agents/harness.py task plan-check --json",
+                "python .agents/harness.py context drift-report --json",
+                'python .agents/harness.py context note "Test note"',
+            ):
+                allowed, reason = mutation_guard.command_allowed(kit_root, cmd)
+                self.assertTrue(allowed, f"{cmd} should be allowed: {reason}")
+
+    def test_pass2_edge_cases_finding_routing_arch_drift_and_kmp_lint(self):
+        import argparse
+        import _modules
+        import architecture_drift
+        import fast_kt_lint
+        import review_package
+        import workflow
+
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+
+            # 1. Gradle triple-quoted string comment stripping
+            raw_gradle = 'val url = """https://example.com//not-a-comment""" // trailing comment\n'
+            stripped_gradle = _modules.strip_gradle_comments_preserving_strings(raw_gradle)
+            self.assertIn('"""https://example.com//not-a-comment"""', stripped_gradle)
+            self.assertNotIn("trailing comment", stripped_gradle)
+
+            # 2. Specialist reviewer routing from short finding IDs & auto-resolved reviewer in record-finding-validation
+            tdir = repo / ".agents/state/tasks/t-pass2"
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / "plan.json").write_text(json.dumps({"task_id": "t-pass2", "expected_files": []}), encoding="utf-8")
+            (tdir / "reviews-security-privacy-reviewer-agent.json").write_text(
+                json.dumps({
+                    "reviewer": "security-privacy-reviewer-agent",
+                    "findings": [{"id": "F-CUSTOM-99", "severity": "HIGH", "summary": "Custom finding"}],
+                }),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                repo=str(repo),
+                task_id="t-pass2",
+                finding_id="F-CUSTOM-99",
+                status="CONFIRMED",
+                reason="Resolved in commit",
+                evidence_reference="commit:abc1234",
+            )
+            res = workflow.record_finding_validation(args)
+            self.assertEqual("t-pass2", res.get("task_id"))
+            val_payload = json.loads((tdir / "finding-validations.json").read_text(encoding="utf-8"))
+            self.assertEqual("security-privacy-reviewer-agent", val_payload["validations"][0].get("reviewer"))
+
+            # Short prefix routing without explicit reviewer field
+            (tdir / "finding-validations.json").write_text(
+                json.dumps({
+                    "task_id": "t-pass2",
+                    "validations": [
+                        {
+                            "finding_id": "F-SEC-1",
+                            "status": "FALSE_POSITIVE",
+                            "reason": "Encrypted token storage",
+                        }
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            sec_lines = review_package._scoped_finding_validation_lines(repo, "t-pass2", "security-perf-reviewer-agent")
+            self.assertEqual(2, len(sec_lines))
+            self.assertTrue(any("F-SEC-1" in line for line in sec_lines))
+            ui_lines = review_package._scoped_finding_validation_lines(repo, "t-pass2", "compose-ui-reviewer-agent")
+            self.assertEqual([], ui_lines)
+
+            # 3. Architecture drift ignores commented-out DAO imports and SearchQueries UI state properties
+            ui_file = repo / "feature/search/src/commonMain/kotlin/com/example/search/SearchViewModel.kt"
+            ui_file.parent.mkdir(parents=True, exist_ok=True)
+            ui_file.write_text(
+                "package com.example.search\n"
+                "// import com.example.data.local.dao.UserDao\n"
+                "/* import app.cash.sqldelight.db.SqlDriver */\n"
+                "class SearchViewModel(\n"
+                "    private val searchQueries: SearchQueries,\n"
+                ") {\n"
+                "    val recentQueries: List<String> = emptyList()\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            drift_findings = architecture_drift._detect_ui_data_source_bypass(
+                "feature/search/src/commonMain/kotlin/com/example/search/SearchViewModel.kt",
+                ui_file.read_text(encoding="utf-8"),
+            )
+            self.assertIsNone(drift_findings, f"Unexpected drift findings: {drift_findings}")
+
+            # 4. KMP @Preview discovery in parallel src/androidMain/... for a commonMain screen
+            common_screen = repo / "shared/src/commonMain/kotlin/com/example/ui/ProfileScreen.kt"
+            common_screen.parent.mkdir(parents=True, exist_ok=True)
+            common_screen.write_text(
+                "package com.example.ui\n"
+                "import androidx.compose.runtime.Composable\n"
+                "@Composable\n"
+                "fun ProfileScreen() {\n"
+                "    val a = 1\n"
+                "    val b = 2\n"
+                "    val c = 3\n"
+                "    val d = 4\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            android_preview = repo / "shared/src/androidMain/kotlin/com/example/ui/ProfileScreenPreview.kt"
+            android_preview.parent.mkdir(parents=True, exist_ok=True)
+            android_preview.write_text(
+                "package com.example.ui\n"
+                "import androidx.compose.ui.tooling.preview.Preview\n"
+                "@Preview\n"
+                "fun ProfileScreenPreview() {}\n",
+                encoding="utf-8",
+            )
+            kt_violations = fast_kt_lint.lint_file(common_screen)
+            self.assertFalse(
+                any(v.rule == "MISSING_PREVIEW" for v in kt_violations),
+                f"Expected no MISSING_PREVIEW when androidMain preview exists, got {kt_violations}",
+            )
+
+            # 5. Swift triple-quoted string ignores http:// cleartext warning
+            swift_file = repo / "iosApp/iosApp/DocSample.swift"
+            swift_file.parent.mkdir(parents=True, exist_ok=True)
+            swift_file.write_text(
+                "import Foundation\n"
+                'let sampleDoc = """\n'
+                "Example legacy endpoint: http://legacy.example.com/api\n"
+                '"""\n',
+                encoding="utf-8",
+            )
+            swift_violations = fast_kt_lint.lint_swift_file(swift_file)
+            self.assertFalse(
+                any(v.rule == "CLEARTEXT_HTTP" for v in swift_violations),
+                f"Expected no CLEARTEXT_HTTP inside Swift triple-quoted string, got {swift_violations}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 

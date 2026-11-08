@@ -831,7 +831,7 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
 
     # Generate lean briefs
     briefs: dict[str, str] = {}
-    from review_package import REVIEWER_ROLES
+    from review_package import REVIEWER_ROLES, _scoped_finding_validation_lines
     phase_note_lines: list[str] = []
     if metadata.get("plan_clarifications"):
         try:
@@ -839,21 +839,25 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             phase_note_lines = brief_note_lines(tdir, _load_plan(repo, task_id))
         except (OSError, ValueError, KeyError, ValidationError):
             phase_note_lines = []
+    completeness_owner = "bug-test-reviewer-agent" if "bug-test-reviewer-agent" in selected_reviewers else "arch-regression-reviewer-agent"
+    phase_label = target_phase.get("title") or target_phase.get("name") or phase_id
     for rev in selected_reviewers:
         r_info = REVIEWER_ROLES.get(rev, {
             "title": rev,
             "focus": f"Evaluate phase delta for phase '{phase_id}' within your specialty.",
         })
+        val_lines = _scoped_finding_validation_lines(repo, task_id, rev, completeness_owner)
         b_lines = [
             f"# LEAN PHASE BRIEF: {r_info['title']} (`{rev}`)",
             f"**Task ID**: {task_id} | **Phase ID**: {phase_id} | **Run ID**: {run_id} | **Package SHA**: `{pkg_sha[:12]}`",
             "",
             "## 1. Approved Phase Objective & Delta Scope",
-            f"- **Phase**: {target_phase.get('name', phase_id)}",
+            f"- **Phase**: {phase_label}",
             f"- **Description**: {target_phase.get('description', '')}",
             f"- **Focus**: {r_info['focus']}",
             *phase_note_lines,
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
+            *val_lines,
             "",
             "## 2. Review Package Reference",
             f"`{package_path}`",

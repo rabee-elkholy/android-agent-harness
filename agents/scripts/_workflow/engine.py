@@ -1230,13 +1230,58 @@ def record_finding_validation(args: argparse.Namespace) -> dict:
             except Exception as exc:
                 raise ValidationError(f"cannot read existing finding validations: {exc}")
 
+        fid_clean = str(args.finding_id).strip()
+        resolved_reviewer = str(getattr(args, "reviewer", "") or "").strip()
+        if not resolved_reviewer and fid_clean:
+            for rev_file in sorted(directory.glob("reviews-*.json"), reverse=True):
+                try:
+                    rev_payload = read_json(rev_file)
+                    review_entries = (
+                        rev_payload.get("reviews")
+                        if isinstance(rev_payload, dict) and isinstance(rev_payload.get("reviews"), list)
+                        else ([rev_payload] if isinstance(rev_payload, dict) else [])
+                    )
+                    for r_entry in review_entries:
+                        if not isinstance(r_entry, dict):
+                            continue
+                        r_name = str(r_entry.get("reviewer") or "").strip()
+                        for f_item in r_entry.get("findings") or []:
+                            if isinstance(f_item, dict) and str(f_item.get("id") or f_item.get("finding_id") or "").strip().lower() == fid_clean.lower():
+                                resolved_reviewer = r_name
+                                break
+                        if resolved_reviewer:
+                            break
+                except (OSError, ValueError, ValidationError):
+                    continue
+                if resolved_reviewer:
+                    break
+        if not resolved_reviewer and fid_clean:
+            for ledger_file in sorted(directory.glob("phases/*/review/ledger.json"), reverse=True):
+                try:
+                    l_payload = read_json(ledger_file)
+                    for r_name, r_data in (l_payload.get("reviewers") or {}).items():
+                        if not isinstance(r_data, dict):
+                            continue
+                        for f_item in r_data.get("findings") or []:
+                            if isinstance(f_item, dict) and str(f_item.get("id") or f_item.get("finding_id") or "").strip().lower() == fid_clean.lower():
+                                resolved_reviewer = str(r_name).strip()
+                                break
+                        if resolved_reviewer:
+                            break
+                except (OSError, ValueError, ValidationError):
+                    continue
+                if resolved_reviewer:
+                    break
+
         entry = {
-            "finding_id": str(args.finding_id).strip(),
+            "finding_id": fid_clean,
             "status": status,
             "reason": reason,
             "evidence_reference": evidence_ref,
             "recorded_at": utc_now(),
         }
+        if resolved_reviewer:
+            entry["reviewer"] = resolved_reviewer
         validations.append(entry)
         payload = {
             "task_id": args.task_id,
@@ -3363,11 +3408,30 @@ def cmd_plan_check(args: argparse.Namespace) -> dict:
     directory = task_dir(repo, tid)
     policy_file = directory / "preliminary-policy.json"
     policy: dict[str, Any] = {}
-    if policy_file.is_file():
+    current_file = directory / "current.json"
+    if current_file.is_file():
+        try:
+            cur_pol_raw = str(read_json(current_file).get("policy") or "").strip()
+            if cur_pol_raw:
+                cur_pol = Path(cur_pol_raw)
+                if not cur_pol.is_absolute():
+                    cur_pol = (repo / cur_pol).resolve()
+                if cur_pol.is_file():
+                    policy = read_json(cur_pol)
+        except (OSError, ValueError, ValidationError):
+            policy = {}
+    if not policy and policy_file.is_file():
         try:
             policy = read_json(policy_file)
         except (OSError, ValueError, ValidationError):
             policy = {}
+    if not policy:
+        fallback_tier = str(
+            (plan.get("readiness_assessment") or {}).get("risk_tier")
+            or plan.get("risk_tier")
+            or "T1_LOW"
+        )
+        policy = {"risk_tier": fallback_tier}
 
     all_files: list[str] = list(plan.get("expected_files") or [])
     for phase in plan.get("phases") or []:
