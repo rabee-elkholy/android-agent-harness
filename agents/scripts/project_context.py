@@ -1627,11 +1627,64 @@ def is_context_fresh(repo: Path) -> bool:
 
 
 _REPO_FILE_PATH_RE = re.compile(
-    r"(?:(?<=`)|(?<=[\s\"'(]))"
-    r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.(?:kt|java|swift|xml|gradle|kts|toml|json|md))"
+    r"(?:(?<=`)|(?<=[\s\"'(]))(?<!://)"
+    r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.(?:kt|java|swift|xml|gradle|kts|toml|json|md|sq|sqm|graphql|graphqls|proto))"
     r"(?:(?=`)|(?=[\s\"'),.:;]|$))"
 )
 _BACKTICK_MODULE_REF_RE = re.compile(r"`(:[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)*)`")
+_GRADLE_EXACT_TASKS = frozenset({
+    "help", "tasks", "projects", "properties", "dependencies", "build", "clean", "check",
+    "assemble", "bundle", "lint", "test", "connectedCheck", "connectedAndroidTest", "allTests",
+    "detekt", "ktlintCheck", "ktlintFormat", "spotlessCheck", "spotlessApply",
+})
+_GRADLE_TASK_PREFIXES = (
+    "assemble", "bundle", "compile", "test", "connected", "lint", "check", "publish",
+    "install", "uninstall", "package", "merge", "process", "generate", "ksp", "kapt",
+    "link", "pod", "sync", "embed", "sign", "archive", "verify", "jacoco", "kover", "ios",
+)
+
+
+def _is_existing_or_non_repo_path(root: Path, norm_ref: str, known_modules: set[str]) -> bool:
+    """Return True if norm_ref exists in the repo, exists under a known module's src/, or is a non-repo URL/artifact path."""
+    if (
+        norm_ref.startswith((".agents/", "build/", ".gradle/"))
+        or "..." in norm_ref
+        or "<" in norm_ref
+        or ">" in norm_ref
+    ):
+        return True
+    first_seg = norm_ref.split("/", 1)[0]
+    if "." in first_seg and not first_seg.startswith(".") and not (root / first_seg).exists():
+        # Domain-qualified URL path such as github.com/org/repo/blob/main/README.md
+        return True
+    if (root / norm_ref).exists():
+        return True
+    if norm_ref.startswith("src/"):
+        candidate_mods = {m.lstrip(":").replace(":", "/") for m in known_modules} | {"app", "shared", "composeApp"}
+        for mod_rel in candidate_mods:
+            if mod_rel and (root / mod_rel / norm_ref).exists():
+                return True
+    return False
+
+
+def _is_gradle_task_ref(mod_ref: str, known_modules: set[str], root: Path) -> bool:
+    """Return True when a colon-prefixed reference like `:app:assembleDebug` is a Gradle task rather than a module."""
+    parts = [p for p in mod_ref.split(":") if p]
+    if not parts:
+        return False
+    last = parts[-1]
+    is_task_name = (
+        last in _GRADLE_EXACT_TASKS
+        or (last.startswith(_GRADLE_TASK_PREFIXES) and any(ch.isupper() for ch in last))
+    )
+    if len(parts) == 1:
+        return is_task_name
+    parent_mod = ":" + ":".join(parts[:-1])
+    parent_dir = "/".join(parts[:-1])
+    parent_exists = parent_mod in known_modules or (root / parent_dir).is_dir()
+    if not parent_exists:
+        return False
+    return is_task_name or any(ch.isupper() for ch in last)
 
 
 def _suggest_healed_context_path(repo: Path, missing_rel: str, g_engine: Any) -> str | None:
@@ -1717,7 +1770,7 @@ def check_living_context_drift(repo: Path) -> dict[str, Any]:
 
                 if s_kind == "PATH" and s_val not in ("", "*"):
                     norm_p = s_val.replace("\\", "/").strip("/")
-                    if not (root / norm_p).exists():
+                    if not _is_existing_or_non_repo_path(root, norm_p, known_modules):
                         healed = _suggest_healed_context_path(root, norm_p, g_engine)
                         stale_instructions.append({
                             "id": inst_id,
@@ -1748,25 +1801,20 @@ def check_living_context_drift(repo: Path) -> dict[str, Any]:
                 seen_refs: set[str] = set()
                 for ref_path in _REPO_FILE_PATH_RE.findall(text):
                     norm_ref = ref_path.replace("\\", "/").strip("/")
-                    if (
-                        norm_ref in seen_refs
-                        or norm_ref.startswith(".agents/")
-                        or "..." in norm_ref
-                    ):
+                    if norm_ref in seen_refs or _is_existing_or_non_repo_path(root, norm_ref, known_modules):
                         continue
                     seen_refs.add(norm_ref)
-                    if not (root / norm_ref).exists():
-                        healed = _suggest_healed_context_path(root, norm_ref, g_engine)
-                        stale_instructions.append({
-                            "id": inst_id,
-                            "kind": "STALE_INSTRUCTION_FILE_REF",
-                            "reference": norm_ref,
-                            "suggested_replacement": healed,
-                            "remediation": (
-                                f'python .agents/harness.py context instruct --supersedes {inst_id} '
-                                '--source developer_terminal --proof-reference "update moved file path" "<updated instruction>"'
-                            ),
-                        })
+                    healed = _suggest_healed_context_path(root, norm_ref, g_engine)
+                    stale_instructions.append({
+                        "id": inst_id,
+                        "kind": "STALE_INSTRUCTION_FILE_REF",
+                        "reference": norm_ref,
+                        "suggested_replacement": healed,
+                        "remediation": (
+                            f'python .agents/harness.py context instruct --supersedes {inst_id} '
+                            '--source developer_terminal --proof-reference "update moved file path" "<updated instruction>"'
+                        ),
+                    })
         except (OSError, ValueError, KeyError, TypeError):
             stale_instructions = []
 
@@ -1782,29 +1830,30 @@ def check_living_context_drift(repo: Path) -> dict[str, Any]:
                     continue
                 for ref_path in _REPO_FILE_PATH_RE.findall(stripped):
                     norm_ref = ref_path.replace("\\", "/").strip("/")
-                    if norm_ref.startswith(".agents/") or "..." in norm_ref:
+                    if _is_existing_or_non_repo_path(root, norm_ref, known_modules):
                         continue
                     key = ("FILE", norm_ref)
                     if key in seen_note_refs:
                         continue
                     seen_note_refs.add(key)
-                    if not (root / norm_ref).exists():
-                        healed = _suggest_healed_context_path(root, norm_ref, g_engine)
-                        clean_bullet = stripped.lstrip("-* ").strip()
-                        stale_notes.append({
-                            "kind": "STALE_NOTE_FILE_REF",
-                            "reference": norm_ref,
-                            "line": stripped,
-                            "suggested_replacement": healed,
-                            "remediation": (
-                                f'python .agents/harness.py context note --replace "{clean_bullet}" '
-                                f'"{clean_bullet.replace(norm_ref, healed)}"'
-                                if healed
-                                else f'python .agents/harness.py context note --remove "{clean_bullet}"'
-                            ),
-                        })
+                    healed = _suggest_healed_context_path(root, norm_ref, g_engine)
+                    clean_bullet = stripped.lstrip("-* ").strip()
+                    stale_notes.append({
+                        "kind": "STALE_NOTE_FILE_REF",
+                        "reference": norm_ref,
+                        "line": stripped,
+                        "suggested_replacement": healed,
+                        "remediation": (
+                            f'python .agents/harness.py context note --replace "{clean_bullet}" '
+                            f'"{clean_bullet.replace(norm_ref, healed)}"'
+                            if healed
+                            else f'python .agents/harness.py context note --remove "{clean_bullet}"'
+                        ),
+                    })
                 if known_modules:
                     for mod_ref in _BACKTICK_MODULE_REF_RE.findall(stripped):
+                        if _is_gradle_task_ref(mod_ref, known_modules, root):
+                            continue
                         key = ("MODULE", mod_ref)
                         if key in seen_note_refs:
                             continue

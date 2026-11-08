@@ -459,11 +459,44 @@ def _is_blind_goldfish_role(reviewer: str, routed: set[str], completeness_owner:
     return True
 
 
+_FINDING_PREFIX_TO_ROLE = {
+    "sec": "security-perf-reviewer-agent",
+    "security": "security-perf-reviewer-agent",
+    "perf": "security-perf-reviewer-agent",
+    "arch": "arch-regression-reviewer-agent",
+    "architecture": "arch-regression-reviewer-agent",
+    "bug": "bug-test-reviewer-agent",
+    "test": "bug-test-reviewer-agent",
+    "compose": "compose-ui-reviewer-agent",
+    "ui": "compose-ui-reviewer-agent",
+    "conv": "conventions-reviewer-agent",
+    "convention": "conventions-reviewer-agent",
+    "spec": "spec-compliance-agent",
+}
+
+
+def _infer_finding_reviewer(item: dict) -> str:
+    """Resolve explicit or prefix-inferred reviewer role for a finding validation item."""
+    explicit = str(item.get("reviewer") or "").strip()
+    if explicit:
+        return explicit
+    fid = str(item.get("finding_id") or "").strip().lower()
+    if not fid:
+        return ""
+    for role_name in REVIEWER_ROLES:
+        short_role = role_name.replace("-agent", "").lower()
+        if fid.startswith(short_role):
+            return role_name
+    stripped = fid[2:] if fid.startswith("f-") else fid
+    head = stripped.split("-", 1)[0].split("_", 1)[0].split(":", 1)[0]
+    return _FINDING_PREFIX_TO_ROLE.get(head, "")
+
+
 def _scoped_finding_validation_lines(
     repo: Path,
     task_id: str,
     reviewer: str,
-    completeness_owner: str,
+    completeness_owner: str = "",
 ) -> list[str]:
     """Return role-scoped finding validation claims for adversarial re-verification in the brief."""
     validations_path = task_dir(repo, task_id) / "finding-validations.json"
@@ -476,18 +509,15 @@ def _scoped_finding_validation_lines(
         return []
     if not items:
         return []
-    role_prefix = reviewer.replace("-agent", "").lower()
     matched: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        item_rev = str(item.get("reviewer") or "").strip()
-        fid = str(item.get("finding_id") or "").strip().lower()
+        item_rev = _infer_finding_reviewer(item)
         if (
             reviewer in (completeness_owner, "spec-compliance-agent")
             or not item_rev
             or item_rev == reviewer
-            or (role_prefix and fid.startswith(role_prefix))
         ):
             matched.append(item)
     if not matched:

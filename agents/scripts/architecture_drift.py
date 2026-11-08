@@ -94,12 +94,14 @@ _DATA_SOURCE_BYPASS_IMPORT_RE = re.compile(
     r")\b"
 )
 _DATA_SOURCE_DAO_PROP_RE = re.compile(
-    r"\b(?:val|var)[ \t]+[A-Za-z0-9_]+[ \t]*:[ \t]*[A-Za-z0-9_]+(?:Dao|Queries)\b"
+    r"\b(?:val|var)[ \t]+[A-Za-z0-9_]+[ \t]*:[ \t]*[A-Za-z0-9_]+(?:Dao|SqlDriver)\b"
 )
 
 
 def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
     """Detect direct data-source (Room DAO / SQLite / SQLDelight / Retrofit / Ktor) usage inside a UI entry file."""
+    from _modules import strip_gradle_comments_preserving_strings
+
     lower_stem = stem.lower()
     if any(
         tok in lower_stem
@@ -117,22 +119,25 @@ def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
             "factory",
             "worker",
             "service",
+            "graph",
+            "container",
         )
     ):
         return None
+    clean_txt = strip_gradle_comments_preserving_strings(txt)
     is_ui_entry = (
-        "@Composable" in txt
-        or "setContent" in txt
+        "@Composable" in clean_txt
+        or "setContent" in clean_txt
         or "fragment" in lower_stem
         or "activity" in lower_stem
         or "screen" in lower_stem
     )
     if not is_ui_entry:
         return None
-    imp_match = _DATA_SOURCE_BYPASS_IMPORT_RE.search(txt)
+    imp_match = _DATA_SOURCE_BYPASS_IMPORT_RE.search(clean_txt)
     if imp_match:
         return f"imports {imp_match.group(1)}"
-    dao_match = _DATA_SOURCE_DAO_PROP_RE.search(txt)
+    dao_match = _DATA_SOURCE_DAO_PROP_RE.search(clean_txt)
     if dao_match:
         return f"declares direct DAO dependency ({dao_match.group(0).strip()})"
     return None
@@ -336,9 +341,12 @@ def check_architecture_drift(
         or source_dims.get("ui_toolkit") in ("compose", "xml")
     )
     if has_layered_state_holder and mode in ("PRESERVE", "REFACTOR", "NEW"):
+        from _modules import is_kmp_or_android_test_path
         layer_baseline = _baseline_reader(repo, task_id)
         for p in modified_kt_files:
             rel = p.relative_to(repo).as_posix()
+            if is_kmp_or_android_test_path(rel) or "/di/" in f"/{rel.lower()}":
+                continue
             txt = _safe_read(p)
             if not txt:
                 continue

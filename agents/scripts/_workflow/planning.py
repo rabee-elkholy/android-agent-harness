@@ -16,11 +16,17 @@ _REUSE_ROLE_SUFFIXES = (
 
 def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[dict[str, Any]]:
     """Query the project graph for existing symbols overlapping newly planned code files."""
+    from _modules import is_kmp_or_android_test_path
+
     code_suffixes = {".kt", ".java", ".swift"}
     new_code_files: list[str] = []
     for rel in expected_files or []:
         rel_norm = str(rel).replace("\\", "/").strip("/")
-        if not rel_norm or _engine.Path(rel_norm).suffix.lower() not in code_suffixes:
+        if (
+            not rel_norm
+            or _engine.Path(rel_norm).suffix.lower() not in code_suffixes
+            or is_kmp_or_android_test_path(rel_norm)
+        ):
             continue
         if not (repo / rel_norm).exists():
             new_code_files.append(rel_norm)
@@ -33,15 +39,51 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
             return []
         candidates: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
+        role_queries_by_file: list[tuple[str, str, list[str]]] = []
+
+        # Pass 1: Run exact stem queries across all planned new files first so loose
+        # role suffix matches on file #1 never starve PATH_GROUNDING_WARNING on later files.
         for rel_norm in new_code_files[:10]:
             stem = _engine.Path(rel_norm).stem
-            queries = [stem]
+            role_queries: list[str] = []
             for suffix in _REUSE_ROLE_SUFFIXES:
                 if stem.endswith(suffix) and len(stem) - len(suffix) >= 3:
-                    queries.append(stem[: -len(suffix)])
+                    role_queries.append(stem[: -len(suffix)])
                     if len(suffix) >= 5:
-                        queries.append(suffix)
-            for q in queries:
+                        role_queries.append(suffix)
+            role_queries_by_file.append((rel_norm, stem, role_queries))
+            if len(stem) < 4:
+                continue
+            res = g_engine.find_symbol(stem, limit=4)
+            for match in res.get("matches") or []:
+                existing_file = str(match.get("file_path") or "").replace("\\", "/").strip("/")
+                sym_name = str(match.get("name") or "")
+                sym_kind = str(match.get("kind") or "symbol")
+                if (
+                    not existing_file
+                    or existing_file == rel_norm
+                    or not sym_name
+                    or is_kmp_or_android_test_path(existing_file)
+                ):
+                    continue
+                key = (rel_norm, sym_name, existing_file)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append({
+                    "planned_file": rel_norm,
+                    "symbol": sym_name,
+                    "existing_file": existing_file,
+                    "kind": sym_kind,
+                    "exact_symbol_match": sym_name == stem,
+                })
+                if len(candidates) >= 8:
+                    return candidates
+
+        # Pass 2: Run prefix/suffix role queries with a per-file cap to surface reusable helpers.
+        for rel_norm, stem, role_queries in role_queries_by_file:
+            per_file_added = 0
+            for q in role_queries:
                 if len(q) < 4:
                     continue
                 res = g_engine.find_symbol(q, limit=4)
@@ -49,7 +91,12 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
                     existing_file = str(match.get("file_path") or "").replace("\\", "/").strip("/")
                     sym_name = str(match.get("name") or "")
                     sym_kind = str(match.get("kind") or "symbol")
-                    if not existing_file or existing_file == rel_norm or not sym_name:
+                    if (
+                        not existing_file
+                        or existing_file == rel_norm
+                        or not sym_name
+                        or is_kmp_or_android_test_path(existing_file)
+                    ):
                         continue
                     key = (rel_norm, sym_name, existing_file)
                     if key in seen:
@@ -62,10 +109,15 @@ def _discover_reuse_candidates(repo: Path, expected_files: list[str]) -> list[di
                         "kind": sym_kind,
                         "exact_symbol_match": sym_name == stem,
                     })
-                    if len(candidates) >= 8:
-                        return candidates
+                    per_file_added += 1
+                    if len(candidates) >= 8 or per_file_added >= 3:
+                        break
+                if len(candidates) >= 8 or per_file_added >= 3:
+                    break
+            if len(candidates) >= 8:
+                return candidates
         return candidates
-    except Exception:
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
         return []
 
 
@@ -145,7 +197,7 @@ def _check_phase_module_dag(repo: Path, phases: list[dict[str, Any]] | None) -> 
                                 "upstream module contracts first."
                             )
         return warnings
-    except Exception:
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
         return []
 
 

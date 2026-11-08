@@ -463,15 +463,23 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         if not is_stateful_container_only(text):
             preview_search_text = text
             stem = file_path.stem
-            for cand_name in (f"{stem}Preview.kt", f"{stem}Previews.kt", "Previews.kt"):
-                sibling = file_path.parent / cand_name
-                if sibling != file_path and sibling.is_file():
-                    try:
-                        sib_text = sibling.read_text(encoding="utf-8", errors="replace")
-                        if stem in sib_text or cand_name.startswith(stem):
-                            preview_search_text = f"{preview_search_text}\n{sib_text}"
-                    except (OSError, ValueError):
-                        pass
+            preview_dirs = [file_path.parent]
+            if is_common_main:
+                android_parallel = Path(
+                    re.sub(r"/src/commonMain(?=/|$)", "/src/androidMain", file_path.parent.as_posix(), flags=re.IGNORECASE)
+                )
+                if android_parallel != file_path.parent and android_parallel.is_dir():
+                    preview_dirs.append(android_parallel)
+            for p_dir in preview_dirs:
+                for cand_name in (f"{stem}Preview.kt", f"{stem}Previews.kt", "Previews.kt"):
+                    sibling = p_dir / cand_name
+                    if sibling != file_path and sibling.is_file():
+                        try:
+                            sib_text = sibling.read_text(encoding="utf-8", errors="replace")
+                            if stem in sib_text or cand_name.startswith(stem):
+                                preview_search_text = f"{preview_search_text}\n{sib_text}"
+                        except (OSError, ValueError):
+                            pass
             has_rtl = any(loc in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             has_ltr = any(loc not in {"ar", "he", "fa", "ur", "iw"} for loc in SUPPORTED_LOCALES)
             needs_bidirectional = has_rtl and has_ltr and not is_common_main
@@ -550,6 +558,7 @@ def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> 
         return [{"file": str(file_path), "line": 1, "type": "IO_ERROR", "msg": str(e)}]
 
     in_block_comment = False
+    in_triple_string = False
     for idx, line in enumerate(lines, 1):
         trimmed = line.strip()
         if in_block_comment:
@@ -559,6 +568,14 @@ def lint_swift_file(file_path: Path, modified_lines: set[int] | None = None) -> 
         if trimmed.startswith("/*"):
             if "*/" not in trimmed[2:]:
                 in_block_comment = True
+            continue
+        if in_triple_string:
+            if '"""' in line:
+                in_triple_string = False
+            continue
+        if '"""' in trimmed:
+            if trimmed.count('"""') % 2 != 0:
+                in_triple_string = True
             continue
         if modified_lines is not None and idx not in modified_lines:
             continue

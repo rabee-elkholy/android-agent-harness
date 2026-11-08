@@ -300,8 +300,10 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name == "journey_runner" and args[:1] in (["list"], ["validate"]):
         return True
+    if name == "workflow" and args[:1] == ["plan-check"]:
+        return True
     if name in {"harness_cli", "android-harness"} and (
-            args[:2] in (["task", "coverage"], ["task", "metrics"], ["journey", "list"], ["journey", "validate"])):
+            args[:2] in (["task", "coverage"], ["task", "metrics"], ["task", "plan-check"], ["journey", "list"], ["journey", "validate"])):
         return True
     if name == "git":
         if args[:1] == ["-C"] and len(args) >= 3:
@@ -386,7 +388,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return True
         if args[:1] == ["task-context"]:
             return _valid_context_targets(args)
-        if args[:2] in (["context", "preview"], ["context", "status"]):
+        if args[:2] in (["context", "preview"], ["context", "status"], ["context", "drift-report"]):
             return True
         # `graph` forwards to project_graph.py and gets the same read-only rule.
         if args[:1] == ["graph"]:

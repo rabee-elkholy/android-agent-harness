@@ -766,6 +766,8 @@ def cmd_context(args: argparse.Namespace) -> int:
             cli_args.append(text)
         if getattr(args, "scope", None):
             cli_args.extend(["--scope", args.scope])
+        if getattr(args, "scope_value", None):
+            cli_args.extend(["--scope-value", args.scope_value])
         if getattr(args, "source", None):
             cli_args.extend(["--source", args.source])
         if getattr(args, "proof_reference", None):
@@ -1717,6 +1719,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--replace", default="", help="Existing note text/bullet to replace in project notes.")
     sp.add_argument("--remove", default="", help="Existing note text or instruction ID to remove.")
     sp.add_argument("--scope", default="GLOBAL", help="Instruction scope (e.g. module::payments, package:com.example, global).")
+    sp.add_argument("--scope-value", default=None, help="Instruction scope value.")
     sp.add_argument("--source", choices=("conversation", "developer_terminal", "host_native"), default=None, help="Explicit developer authority source.")
     sp.add_argument("--proof-reference", default="", help="Message or command reference proving developer direction.")
     sp.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")
