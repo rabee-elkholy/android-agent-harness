@@ -63,7 +63,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 1,
         "scope": "task",
         "preset": "flash-dynamic",
-        "label_ar": "فلاش مع مستويات ديناميك — للمهمة",
+        "label_ar": "النظام السريع للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز مع تصعيد التفكير عند الحاجة",
         "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — for this task",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
@@ -72,7 +72,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 2,
         "scope": "run",
         "preset": "flash-dynamic",
-        "label_ar": "فلاش مع مستويات ديناميك — هذه المرة فقط",
+        "label_ar": "النظام السريع لهذه المرة فقط (flash-dynamic-once)",
         "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — this review only",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
@@ -81,7 +81,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 3,
         "scope": "task",
         "preset": "inherit",
-        "label_ar": "موديل المحادثة — للمهمة",
+        "label_ar": "نفس موديل المحادثة للمهمة (inherit-task) — استخدام الموديل الأساسي لكل المراجعين",
         "label_en": "Current chat model (Inherit) — for this task",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
@@ -90,7 +90,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 4,
         "scope": "run",
         "preset": "inherit",
-        "label_ar": "موديل المحادثة — هذه المرة فقط",
+        "label_ar": "نفس موديل المحادثة لهذه المرة فقط (inherit-once)",
         "label_en": "Current chat model (Inherit) — this review only",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
@@ -99,7 +99,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 5,
         "scope": "task",
         "preset": "hybrid-smart",
-        "label_ar": "هجين ذكي (فلاش للعادي + موديل المحادثة للحرج) — للمهمة",
+        "label_ar": "النظام الهجين الذكي للمهمة (hybrid-smart-task) — سريع للفحص العادي وموديل المحادثة للحرج",
         "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — for this task",
         "policy": {
             "schema_version": 1,
@@ -112,7 +112,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 6,
         "scope": "run",
         "preset": "hybrid-smart",
-        "label_ar": "هجين ذكي (فلاش للعادي + موديل المحادثة للحرج) — هذه المرة فقط",
+        "label_ar": "النظام الهجين الذكي لهذه المرة فقط (hybrid-smart-once)",
         "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — this review only",
         "policy": {
             "schema_version": 1,
@@ -174,7 +174,7 @@ def resolve_interactive_choice(choice: str) -> tuple[dict, str]:
         entry = by_index[lower]
         return dict(entry["policy"]), str(entry["scope"])
     for entry in ANTIGRAVITY_INTERACTIVE_CHOICES.values():
-        if raw == entry["label_ar"] or lower == entry["label_en"].lower():
+        if raw == entry["label_ar"] or lower == entry["label_en"].lower() or entry["id"] in lower:
             return dict(entry["policy"]), str(entry["scope"])
     raise ValidationError(
         f"unknown reviewer model choice '{choice}'; supported choices: "

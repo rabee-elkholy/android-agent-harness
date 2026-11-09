@@ -383,8 +383,10 @@ def review_action(context: VerificationContext) -> dict | None:
                         "reason": (
                             f"Waiting for independent reviewer subagents to complete ({done_cnt}/{len(required_reviewers)} finished; "
                             f"remaining: {', '.join(sorted(dispatched))}; models: {pending_with_models}). "
-                            "Yield immediately; in chat output at most one short progress line (e.g. "
-                            f"`{done_cnt}/{len(required_reviewers)}`) without listing pending reviewer names in prose.{unbound_hint}"
+                            "Yield immediately (call NO tools in this turn); in chat output at most one short progress line (e.g. "
+                            f"`{done_cnt}/{len(required_reviewers)}`) without listing pending reviewer names in prose, "
+                            "NEVER emit '!]', '[Message]', '<SYSTEM_MESSAGE>', or fabricated subagent responses in chat, "
+                            f"then STOP and wait for the host wakeup.{unbound_hint}"
                         ),
                         "reviewers": required_reviewers,
                         "pending_reviewers": sorted(dispatched),
@@ -712,10 +714,9 @@ def build_device_action(context: VerificationContext) -> dict | None:
                 app_id = str(inst_ev.get("application_id") or "")
                 serial_hash = str(inst_ev.get("serial_sha256") or inst_ev.get("serial_hash") or "")[:12]
                 signoff_reason = (
-                    "Present mobile verification walkthrough to developer and obtain explicit PASS or FAIL sign-off. "
-                    "Keep the 3-section walkthrough concise (at most 5 core rows in the `| # | Action | Expected Result |` table, "
-                    "with no file-summary prose wall after the walkthrough) and immediately invoke the `ask_question` tool in this SAME turn "
-                    "(never end the turn with text only)."
+                    "Invoke the `ask_question` tool IMMEDIATELY with ZERO chat text before the tool call, "
+                    "placing the concise 3-section mobile verification walkthrough (at most 5 numbered steps `1. **<Action>**: <Expected result>`, each on its own line — NEVER a Markdown pipe table `| ... |`, "
+                    "with no file-summary prose wall, no `---` dividers, and no `*(...)*` parenthetical notes) directly inside the `ask_question` `question` text."
                 )
                 if sensitive_pending:
                     # One question instead of two: the final approval of sensitive changes rides on the sign-off.
@@ -774,12 +775,13 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "device_target_identity": serial_hash,
                     },
                     "instructions": (
-                        "Present a concise 3-section mobile verification walkthrough "
-                        "(translated into the developer's active conversation language; never hardcode a language): "
-                        "(1) Navigation & Preconditions, (2) Numbered Verification Table (`| # | Action | Expected Result |` with at most 5 core rows), "
-                        "and (3) Edge Cases — with NO file-change summary wall — "
-                        "AND in the SAME response turn immediately invoke `ask_question` "
-                        "(include the 3-section walkthrough with the `| # | Action | Expected Result |` table in chat or directly inside the `ask_question` question text so the developer always sees the numbered steps, never just a one-line summary). "
+                        "Invoke `ask_question` IMMEDIATELY as the first token of your response (emit ZERO chat prose before the tool call) "
+                        "and place the concise 3-section mobile verification walkthrough "
+                        "(translated into the developer's active conversation language; never hardcode a language) "
+                        "directly inside the `ask_question` `question` text with a newline before every item: "
+                        "(1) Navigation & Preconditions (bullets), (2) Verification Steps (1-5 numbered lines `1. **<Action>**: <Expected result>` — NEVER use a Markdown pipe table `| ... |` inside `ask_question`), "
+                        "and (3) Edge Cases (bullets) — with NO file-change summary wall, NO `---` dividers, and NO `*(...)*` status narration. "
+                        "Translate all options into the developer's language; in an RTL language, start every line, bullet, and option with a word in that language (never start an option with English 'PASS' or 'FAIL'). "
                         "Do not run automatic validation before selection."
                     ),
                     "accepted_responses": accepted_responses,

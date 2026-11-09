@@ -75,6 +75,12 @@ class EfficiencyTests(unittest.TestCase):
             self.assertEqual([':app'],arch['target_modules'])
             self.assertIn('main',arch['source_sets'])
             self.assertLess(len(json.dumps(arch).encode()),8192)
+            from mutation_guard import _valid_context_targets
+            self.assertTrue(_valid_context_targets(['--file', files[0], '--symbol', 'ProfilePresenter', '--json']))
+            mixed_cmd = [sys.executable, tc.__file__, '--repo', str(f.repo), '--file', files[0], '--symbol', 'ProfilePresenter', '--json']
+            mixed_out = json.loads(subprocess.check_output(mixed_cmd, text=True))
+            self.assertEqual('BATCH_RESOLVED', mixed_out['status'])
+            self.assertEqual(2, len(mixed_out['results']))
         finally:f.tearDown()
 
     def test_summary_batch_shares_exact_values_without_scope_loss(self):

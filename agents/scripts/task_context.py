@@ -918,9 +918,11 @@ def resolve_task_contexts(
     limit: int = DEFAULT_NEIGHBOR_LIMIT, trust_stat: bool = False,
 ) -> dict[str, Any]:
     """Resolve up to eight targets with one graph sync and a bounded union receipt."""
-    targets = files or symbols or []
-    if bool(files) == bool(symbols) or not 1 <= len(targets) <= MAX_BATCH_TARGETS or any(not str(t).strip() for t in targets):
-        raise ValueError("Supply 1-8 nonempty --file targets or 1-8 --symbol targets, never both.")
+    file_list = list(files or [])
+    symbol_list = list(symbols or [])
+    combined = [("file", t) for t in file_list] + [("symbol", t) for t in symbol_list]
+    if not 1 <= len(combined) <= MAX_BATCH_TARGETS or any(not str(t).strip() for _, t in combined):
+        raise ValueError("Supply 1-8 nonempty --file and/or --symbol targets.")
     from project_context import compute_source_fingerprint
     from discovery_receipt import create_discovery_receipt, save_discovery_receipt
 
@@ -931,10 +933,11 @@ def resolve_task_contexts(
     with operation_span(root, "graph-sync", counters={"graph_syncs": 1}):
         sync = engine.sync(persist=False, trust_stat=trust_stat)
     read_inputs = {}
+    deduped = list(dict.fromkeys(combined))
     results = [_resolve_task_context(root, engine, sync,
-                                    file=target if files else None, symbol=target if symbols else None,
+                                    file=target if kind == "file" else None, symbol=target if kind == "symbol" else None,
                                     module=module, source_set=source_set, limit=limit, publish=False, read_inputs=read_inputs)
-               for target in dict.fromkeys(targets)]
+               for kind, target in deduped]
     for row in results:
         if isinstance(row.get("project_notes"), dict) and "content" in row["project_notes"]:
             row["project_notes"] = {k: v for k, v in row["project_notes"].items() if k != "content"}
@@ -955,9 +958,14 @@ def resolve_task_contexts(
         return result
     receipts = [row["discovery"] for row in successful if row.get("discovery")]
     if receipts:
+        query_kind = (
+            "batch_files" if file_list and not symbol_list
+            else "batch_symbols" if symbol_list and not file_list
+            else "batch_mixed"
+        )
         receipt = create_discovery_receipt(
-            mode="TARGETED_GRAPH_CONTEXT", query_kind="batch_files" if files else "batch_symbols",
-            query_value=json.dumps(list(dict.fromkeys(targets)), ensure_ascii=True),
+            mode="TARGETED_GRAPH_CONTEXT", query_kind=query_kind,
+            query_value=json.dumps([t for _, t in deduped], ensure_ascii=True),
             graph_fingerprint=_receipt_graph_fingerprint(engine, sync),
             resolved_modules=sorted({item for row in receipts for item in row["resolved_modules"]}),
             resolved_paths=sorted({item for row in receipts for item in row["resolved_paths"]}),
@@ -1034,9 +1042,8 @@ def _deduplicate_cli_context_notes(repo: Path, payload: dict[str, Any]) -> dict[
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
-    target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--file", action="append", help="Target file; repeat for a batch of up to 8.")
-    target.add_argument("--symbol", action="append", help="Target symbol; repeat for a batch of up to 8.")
+    parser.add_argument("--file", action="append", help="Target file; repeat for a batch of up to 8.")
+    parser.add_argument("--symbol", action="append", help="Target symbol; repeat for a batch of up to 8.")
     parser.add_argument("--module")
     parser.add_argument("--source-set")
     parser.add_argument("--limit", type=int, default=DEFAULT_NEIGHBOR_LIMIT)
@@ -1048,7 +1055,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.since and not re.fullmatch(r"[0-9a-f]{64}", args.since):
         parser.error("--since requires a lowercase SHA-256 context digest")
-    targets = args.file or args.symbol
+    targets = list(args.file or []) + list(args.symbol or [])
+    if not targets:
+        parser.error("one of the arguments --file --symbol is required")
     if len(targets) > MAX_BATCH_TARGETS:
         parser.error("A task-context batch accepts at most 8 targets.")
     repo_path = Path(args.repo)

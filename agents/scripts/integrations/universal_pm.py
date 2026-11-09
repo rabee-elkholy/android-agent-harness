@@ -16,7 +16,7 @@ import re
 
 from typing import Any, Mapping
 from integrations.base import ExternalIntegration
-from pm_discovery import BUILTIN_PM_CATALOG, classify_pm_tool, identify_pm_provider
+from pm_discovery import BUILTIN_PM_CATALOG, classify_pm_tool, identify_pm_provider, unwrap_zoho_mcp_execute
 
 TERMINAL_STATUS_VALUES = frozenset({
     "done", "closed", "solved", "completed", "resolved", "shipped", "archived",
@@ -24,14 +24,25 @@ TERMINAL_STATUS_VALUES = frozenset({
 
 
 class UniversalPmIntegration(ExternalIntegration):
-    """Dynamic PM integration covering all non-Zoho-Sprints PM MCP providers."""
+    """Dynamic PM integration covering all PM MCP providers (including official Zoho Sprints MCP)."""
 
     name = "universal_pm"
     display_name = "Project Tracker (PM MCP)"
 
     def matches(self, server: str, tool_name: str) -> bool:
         provider = identify_pm_provider(server, tool_name)
-        if not provider or provider == "zoho_sprints":
+        if not provider:
+            return False
+        if provider == "zoho_sprints":
+            server_lower = (server or "").lower().strip()
+            tool_lower = (tool_name or "").lower().strip()
+            if (
+                "zoho-sprints_mcp" in server_lower
+                or "zoho_sprints_mcp" in server_lower
+                or tool_lower.startswith("zohomcp_")
+                or tool_lower.startswith("zohosprints_")
+            ):
+                return True
             return False
         return True
 
@@ -105,8 +116,9 @@ class UniversalPmIntegration(ExternalIntegration):
         plan: Mapping[str, Any],
         grant: Mapping[str, Any] | None = None,
     ) -> tuple[bool, str]:
-        tl = str(tool_name or "").strip().lower()
-        tool_class = classify_pm_tool(tool_name, args)
+        unwrapped_tool, args = unwrap_zoho_mcp_execute(tool_name, args)
+        tl = str(unwrapped_tool or "").strip().lower()
+        tool_class = classify_pm_tool(unwrapped_tool, args)
         allow_close = bool(grant and grant.get("allow_close"))
 
         # 1. Terminal Status Protection (Done / Closed / Solved / Resolved)

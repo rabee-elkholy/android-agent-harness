@@ -24,12 +24,12 @@ never rerun preflight, tests, reviewers or assemble for it.**
    `e2e step --scenario S# --status PASS|FAIL|BLOCKED|SKIPPED --observed "..."`.
 4. Human-only steps (Google/Facebook sign-in, OTP, payment, Wi-Fi off, account
    state, Arabic text entry, a physical action):
-   `e2e need-developer --scenario S# --ask "<exact action>"`, ask with
-   `ask_question` in the same turn (`Done - continue` / `Skip this scenario` /
+   `e2e need-developer --scenario S# --ask "<exact action>"`, then invoke
+   `ask_question` immediately (zero pre-tool prose) with the action inside `question` (`Done - continue` / `Skip this scenario` /
    `Stop E2E`), then `e2e resume --scenario S#` and retry. `ENV_BLOCKED` (locked
    screen, disconnected phone) is handled the same way: ask, then retry once.
-5. `e2e finish` writes an advisory report. Show a compact table (failures first)
-   and ask for sign-off; record it with `device signoff --source conversation`
+5. `e2e finish` writes an advisory report. Invoke `ask_question` immediately (zero pre-tool prose) with a compact table (failures first) inside `question`
+   for sign-off; record it with `device signoff --source conversation`
    quoting the report hash. A FAIL scenario is reported as FAIL; resume the task
    to fix it. Sensitive approval stays human-owned.
 

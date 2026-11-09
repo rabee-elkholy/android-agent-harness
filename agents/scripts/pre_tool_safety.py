@@ -1053,6 +1053,18 @@ def _handle_subagent(name: str, args: dict) -> None:
                 emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
                 return
 
+    if name == "invoke_subagent" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
+        raw_subs, _ = _normalize_subagent_items(args)
+        if raw_subs and all(
+            isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
+            for s in raw_subs
+        ):
+            if len(raw_subs) > 5:
+                emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
+                return
+            emit("allow", "Read-only research subagent is allowed for bounded codebase exploration.", tool=name)
+            return
+
     try:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
@@ -2136,7 +2148,7 @@ def _main() -> None:
                         emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                         return
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
-                    emit("deny", "Reviewer tools are limited to source reads and bounded discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
+                    emit("deny", "Reviewer tools are limited to source reads and bounded discovery. Do NOT call send_message; output your final review response directly as plain assistant text and end your turn.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                     return
                 if name in SEARCH_TOOLS:
                     from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness, is_path_in_discovery_scope

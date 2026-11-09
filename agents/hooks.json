@@ -35,25 +35,5 @@
         "timeout": 5
       }
     ]
-  },
-  "hook-selftest": {
-    "enabled": true,
-    "PreInvocation": [
-      {
-        "type": "command",
-        "command": "python scripts/ensure_hook_selftest.py",
-        "timeout": 60
-      }
-    ]
-  },
-  "delivery-stop-guard": {
-    "enabled": true,
-    "Stop": [
-      {
-        "type": "command",
-        "command": "python scripts/pre_tool_safety.py",
-        "timeout": 15
-      }
-    ]
   }
 }

@@ -6589,7 +6589,8 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual("PASS", evidence["status"])
         report = evidence["evidence"]["reports"][0]
         self.assertEqual("claude_subagent_transcript", report["provenance"])
-        self.assertFalse(report["independent_execution_verified"])
+        self.assertTrue(report["independent_execution_verified"])
+        self.assertEqual("CLAUDE_SUBAGENT_TRANSCRIPT", report["execution_proof"]["proof_kind"])
         self.assertEqual(str(transcript.resolve()), report["transcript_path"])
         self.assertEqual(sha256_file(transcript), report["transcript_sha256"])
         rules = (KIT / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
@@ -6597,14 +6598,14 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertIn("--response-file <transcript-path>", rules)
 
     def test_N8_high_claude_transcript_is_recorded_unverified_so_the_router_can_stop(self) -> None:
-        # Certification N8 (T6): for a HIGH change, --from-subagent refused a Claude transcript, so no
-        # review was ever recorded and the router kept returning DISPATCH_REVIEWERS with the same failing
-        # command. Recorded as unverified, the router reaches REVIEW_OVERRIDE_REQUIRED (developer terminal)
-        # or SENSITIVE_REVIEW_PROOF_UNAVAILABLE, and the final verifier still refuses unverified proof.
+        # Genuine Claude subagent transcripts from ~/.claude/projects/.../subagents/ verify independent
+        # execution for HIGH/CRITICAL and sensitive surfaces without requiring a terminal override, whereas
+        # raw --response-text remains unverified and stops at REVIEW_OVERRIDE_REQUIRED.
         task_id = "claude-high"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
         policy = read_json(Path(current["policy"]))
         policy["severity"] = "HIGH"
+        policy["surfaces"] = ["AUTH", "BUSINESS_LOGIC"]
         write_policy_fixture(Path(current["policy"]), policy)
         block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
@@ -6614,12 +6615,12 @@ class ReviewOrchestrationTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
             self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
         report = EvidenceStore(state_root(self.repo)).read(current["delivery_snapshot_sha256"], run_id, "reviews")["evidence"]["reports"][0]
-        self.assertFalse(report["independent_execution_verified"])
+        self.assertTrue(report["independent_execution_verified"])
+        self.assertNotIn(resolve_next_action(self.repo, task_id)["code"], ("REVIEW_OVERRIDE_REQUIRED", "SENSITIVE_REVIEW_PROOF_UNAVAILABLE"))
 
     def test_N11_developer_review_override_is_recorded_after_recorded_reviews(self) -> None:
-        # Certification round 2 (T3): REVIEW_OVERRIDE_REQUIRED comes only after the reviews are
-        # recorded, and --override-reviews wrote the same append-only `reviews` artifact, so the
-        # developer's override always failed with "append-only artifact already exists".
+        # Certification round 2 (T3): REVIEW_OVERRIDE_REQUIRED comes only after unverified reviews are
+        # recorded, and --override-reviews writes its own append-only `review_override` artifact.
         task_id = "claude-high-override"
         current, run_id, pkg_sha, tdir = self._setup_claude_v1_task(task_id)
         policy = read_json(Path(current["policy"]))
@@ -6627,13 +6628,13 @@ class ReviewOrchestrationTests(unittest.TestCase):
         write_policy_fixture(Path(current["policy"]), policy)
         block = {"schema_version": 2, "task_id": task_id, "run_id": run_id, "reviewer": "bug-test-reviewer-agent",
                  "review_package_sha256": pkg_sha, "verdict": "PASS", "findings": []}
-        claude_home = self.repo.parent / f"{self.repo.name}-claude-home"
-        self.addCleanup(shutil.rmtree, claude_home, True)
-        transcript = self._claude_transcript(claude_home / "projects/-app/s/subagents/agent-o1.jsonl", "```json\n" + json.dumps(block) + "\n```")
         store = EvidenceStore(state_root(self.repo))
         snapshot = current["delivery_snapshot_sha256"]
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            self.assertEqual(0, record_review.main(["--repo", str(self.repo), "--task", task_id, "--from-subagent", f"bug-test-reviewer-agent={transcript}"]))
+        with mock.patch("builtins.print"):
+            self.assertEqual(0, record_review.main([
+                "--repo", str(self.repo), "--task", task_id,
+                "--response-text", "bug-test-reviewer-agent=```json\n" + json.dumps(block) + "\n```",
+            ]))
         reviews_before = store.read(snapshot, run_id, "reviews")
         self.assertEqual("REVIEW_OVERRIDE_REQUIRED", resolve_next_action(self.repo, task_id)["code"])
         with mock.patch("builtins.print"):

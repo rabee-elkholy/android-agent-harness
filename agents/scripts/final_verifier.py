@@ -851,6 +851,8 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                             return True
                         if d_clean in executed_methods or d_clean in executed_classes:
                             return True
+                        if "." in d_clean and ".".join(d_clean.split(".")[:-1]) in executed_classes:
+                            return True
                         return False
 
                     executed_any = any(_was_executed(did) for did in repro_defect_ids)
@@ -954,6 +956,14 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                             exp_pkg = str(evidence.get("package_sha256") or "").lower()
                             if not (pkg.startswith(exp_pkg[:12]) or exp_pkg[:12].startswith(pkg)):
                                 err_msg = f"reviewer {rev_name} execution proof package hash mismatch"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
+                        if proof.get("proof_kind") == "CLAUDE_SUBAGENT_TRANSCRIPT":
+                            t_sha = str(proof.get("transcript_sha256") or "")
+                            if not re.fullmatch(r"[0-9a-f]{64}", t_sha.lower()) or not str(proof.get("transcript_path") or "").strip():
+                                err_msg = f"reviewer {rev_name} Claude subagent transcript proof is missing or malformed"
                                 reasons.append(err_msg)
                                 checks[-1]["status"] = "FAIL"
                                 checks[-1]["detail"] = err_msg

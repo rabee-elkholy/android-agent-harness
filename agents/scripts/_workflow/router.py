@@ -602,7 +602,6 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "reason": (
                 f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
                 "Human Git Authority requires the developer to review and commit changes before final delivery. "
-                "Tip: commit the verified files as-is. In the Android Studio commit dialog, keep 'Optimize imports' and 'Reformat code' unchecked to preserve the exact verified snapshot. "
                 f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
             ),
             "suggested_commit": suggested_commit,
@@ -621,12 +620,12 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
                 + refinement_commit_note
                 + f"Suggested commit:\n```text\n{suggested_commit_full}\n```\n"
-                "Format the Commit & Delivery Card in the developer's active conversation language:\n"
-                "(1) Verified files list (every file path in `backticks`, noting any pre-existing edits),\n"
+                "Invoke `ask_question` IMMEDIATELY with ZERO chat prose before the tool call, placing the Commit & Delivery Card "
+                "(in the developer's active conversation language) directly inside the `ask_question` `question` text:\n"
+                "(1) Compact verified files summary (show total file count and at most 3 key file names in `backticks`, noting any pre-existing edits),\n"
                 "(2) The full Conventional Commit message (subject line + bullet body) inside a copyable fenced ```text code block, and\n"
-                "(3) Invoke `ask_question` with options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task'.\n"
-                "IMPORTANT: Because `ask_question` turns often hide separate chat prose, ALSO include the verified file list and the fenced ```text Conventional Commit block directly inside the `ask_question` question text so the developer can always copy the commit message!\n"
-                "Tip: Keep 'Optimize imports' and 'Reformat code' unchecked in Android Studio Commit.\n"
+                "(3) Options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task' (translated into the developer's language; in an RTL language, start every line, bullet, and option with a word in that language).\n"
+                "CRITICAL: Emit ZERO chat text, NO `---` dividers, and NO `*(...)*` status notes before calling `ask_question`! "
                 "The model must NOT run git commit commands. Await developer commit."
             ),
             "expected": {},

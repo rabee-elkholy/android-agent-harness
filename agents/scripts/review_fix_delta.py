@@ -5,7 +5,56 @@ from the same saved manifests, so a stored policy is never trusted on its own wo
 """
 from __future__ import annotations
 
+import difflib
+import re
 from pathlib import Path
+
+DIAGNOSTIC_LOG_ONLY_LINE_RE = re.compile(
+    r"""^\s*(?:"""
+    r"""import\s+(?:android\.util\.Log|timber\.log\.Timber)\b.*|"""
+    r"""(?:private\s+|internal\s+)?const\s+val\s+[A-Z0-9_]*TAG[A-Z0-9_]*\s*=\s*"[^"\r\n]*"\s*|"""
+    r"""(?:(?:android\.util\.)?Log|Timber(?:\.tag\([^)\r\n]*\))?)\.[vdiwe]\s*\(.*"""
+    r""")\s*$"""
+)
+
+
+def _is_diagnostic_log_only_comparison(comparison: dict[str, tuple[str, str]] | None) -> bool:
+    if not comparison:
+        return False
+    saw_change = False
+    stripped: list[str] = []
+    for relative, (old_text, new_text) in comparison.items():
+        if not relative.lower().endswith((".kt", ".java")):
+            return False
+        old_lines, new_lines = old_text.splitlines(), new_text.splitlines()
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines).get_opcodes():
+            if tag == "equal":
+                continue
+            for line in [*old_lines[i1:i2], *new_lines[j1:j2]]:
+                s = line.strip()
+                if not s or s.startswith("//"):
+                    continue
+                saw_change = True
+                stripped.append(s)
+    if not saw_change:
+        return False
+    combined = "\n".join(stripped)
+    # Single-line or multi-line Log.d/Timber.d/import/TAG additions:
+    if all(DIAGNOSTIC_LOG_ONLY_LINE_RE.match(s) for s in stripped):
+        return True
+    # Multi-line Log.d(...) call where arguments span lines inside a single log statement:
+    without_imports_and_tags = [
+        s for s in stripped
+        if not re.match(r"^(?:import\s+(?:android\.util\.Log|timber\.log\.Timber)\b|(?:private\s+|internal\s+)?const\s+val\s+[A-Z0-9_]*TAG[A-Z0-9_]*\s*=)", s)
+    ]
+    if without_imports_and_tags:
+        joined = " ".join(without_imports_and_tags)
+        if re.fullmatch(
+            r"(?:(?:android\.util\.)?Log|Timber(?:\.tag\([^)]*\))?)\.[vdiwe]\s*\([^;{}]*\)",
+            joined,
+        ):
+            return True
+    return False
 
 
 def _identities(manifest):
@@ -161,6 +210,8 @@ def compute_fix_delta(
         if not files:
             return {"files": [], "reviewers": [], **decision_basis}
         comparison = _comparison_texts(repo, previous, current_manifest, plan, previous_run_id, files)
+        if _is_diagnostic_log_only_comparison(comparison):
+            return {"files": files, "reviewers": [], **decision_basis, "comparison": "REVIEWED_TEXT"}
         present = [{"path": path} for path in files if path in after or comparison is not None]
         if not present:
             # Only deletions since the review: the regression reviewer covers what they break.

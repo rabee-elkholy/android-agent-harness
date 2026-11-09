@@ -41,11 +41,11 @@ BUILTIN_PM_CATALOG: dict[str, dict[str, Any]] = {
     },
     "zoho_sprints": {
         "display": "Zoho Sprints",
-        "server_aliases": ("zoho-sprints", "zoho_sprints"),
-        "plugin_aliases": ("zoho-sprints",),
-        "tool_prefixes": ("zoho_list_sprints", "zoho_list_tasks", "zoho_get_task_details", "zoho_create_task", "zoho_update_task_status", "zoho_add_comment", "zoho_update_task_description"),
-        "triggers_en": ("update zoho", "update pm", "update task"),
-        "triggers_ar": ("زوهو", "التاسك", "المهمة"),
+        "server_aliases": ("zoho-sprints", "zoho_sprints", "zoho-sprints_mcp", "zoho_sprints_mcp", "zsprints"),
+        "plugin_aliases": ("zoho-sprints", "zoho_sprints"),
+        "tool_prefixes": ("zohosprints_", "zoho_sprints_", "zohomcp_", "zoho_list_sprints", "zoho_list_tasks", "zoho_get_task_details", "zoho_create_task", "zoho_update_task_status", "zoho_add_comment", "zoho_update_task_description"),
+        "triggers_en": ("update zoho", "update zoho sprints", "update pm", "update task"),
+        "triggers_ar": ("زوهو", "سبرنت", "التاسك", "المهمة"),
         "in_progress_labels": ("in progress",),
         "retest_labels": ("ready to retest",),
         "terminal_labels": ("done", "solved", "closed", "completed"),
@@ -141,9 +141,10 @@ PM_DOMAIN_NOUNS = frozenset({
 # Non-PM servers that should stay on generic MCP rules (e.g. design/cloud/docs)
 NON_PM_SERVERS = frozenset({
     "stitchmcp", "figma", "figma_figma", "mobbin", "mobbin_mobbin",
-    "postman", "postman-mcp-server", "firebase", "supabase", "vercel",
-    "netlify", "railway", "chrome-devtools", "backend", "auth",
-    "notion", "notion_notion",
+    "postman", "postman-mcp-server", "postman_postman", "firebase", "firebase-mcp-server",
+    "supabase", "vercel", "netlify", "railway", "chrome-devtools", "backend", "auth",
+    "notion", "notion_notion", "notion-mcp-server", "canva", "canva_canva",
+    "context7", "context7_context7",
 })
 
 
@@ -255,9 +256,30 @@ def _dir_looks_like_pm_mcp(server_dir: Path) -> bool:
     return False
 
 
+def unwrap_zoho_mcp_execute(
+    tool_name: str, args: Mapping[str, Any] | None = None
+) -> tuple[str, Mapping[str, Any]]:
+    """Unwrap ZohoMCP_executeTool into its inner (tool_name, arguments) when present."""
+    raw = str(tool_name or "").strip()
+    args_map = dict(args or {})
+    if raw.lower() == "zohomcp_executetool":
+        body = args_map.get("body")
+        container = dict(body) if isinstance(body, Mapping) else args_map
+        inner_name = str(container.get("tool_name") or container.get("toolName") or "").strip()
+        inner_args = container.get("arguments") or container.get("args") or {}
+        if isinstance(inner_args, str):
+            try:
+                inner_args = json.loads(inner_args)
+            except Exception:
+                inner_args = {}
+        if inner_name:
+            return inner_name, (dict(inner_args) if isinstance(inner_args, Mapping) else {})
+    return raw, args_map
+
+
 def classify_pm_tool(tool_name: str, args: Mapping[str, Any] | None = None) -> str:
     """Classify a PM MCP tool into READ, COMMENT, UPDATE_DESCRIPTION, UPDATE_STATUS, CREATE, DELETE, or WRITE."""
-    raw = str(tool_name or "").strip()
+    raw, args_dict = unwrap_zoho_mcp_execute(tool_name, args)
     tl = raw.lower()
     # Split both snake_case and camelCase
     snake_parts = [p for p in re.split(r"[_\-.:]+", tl) if p]
@@ -281,13 +303,15 @@ def classify_pm_tool(tool_name: str, args: Mapping[str, Any] | None = None) -> s
     if not has_write_verb and (any(tl.startswith(p) for p in read_starters) or bool(tokens & {"get", "list", "search", "fetch", "lookup", "check", "preview"})):
         return "READ"
 
-    # Special case: ZohoProjects_get_* and getJira* are always READ even if they contain words like 'edit' (e.g. get_edit_count, get_edits, get_project_edit_details)
+    # Special case: ZohoProjects_get_*, ZohoSprints_get_*, ZohoMCP_get*, and getJira* are always READ
     if (
         tl.startswith("zohoprojects_get_")
         or tl.startswith("zohoprojects_list_")
         or tl.startswith("zohoprojects_check_")
         or tl.startswith("zohoprojects_preview_")
-        or tl in {"getjiraissue", "gettransitionsforjiraissue", "getjiraissueremoteissuelinks", "getvisiblejiraprojects", "getjiraprojectissuetypesmetadata", "getjiraissuetypemetawithfields", "searchjiraissuesusingjql", "lookupjiraaccountid", "getissuelinktypes", "atlassianuserinfo", "getaccessibleatlassianresources", "getcontentformatguide", "search", "fetch"}
+        or tl.startswith("zohosprints_get")
+        or tl.startswith("zohosprints_list")
+        or tl in {"zohomcp_getfeatures", "zohomcp_listtools", "zohomcp_getschema", "getjiraissue", "gettransitionsforjiraissue", "getjiraissueremoteissuelinks", "getvisiblejiraprojects", "getjiraprojectissuetypesmetadata", "getjiraissuetypemetawithfields", "searchjiraissuesusingjql", "lookupjiraaccountid", "getissuelinktypes", "atlassianuserinfo", "getaccessibleatlassianresources", "getcontentformatguide", "search", "fetch"}
     ):
         return "READ"
 
@@ -307,13 +331,73 @@ def classify_pm_tool(tool_name: str, args: Mapping[str, Any] | None = None) -> s
         return "CREATE"
 
     # 5. Updating / Editing / Transitioning
-    args_dict = dict(args or {})
     if tokens & {"transition"} or "status" in args_dict or "status_id" in args_dict or "transition" in args_dict:
         return "UPDATE_STATUS"
     if "description" in tokens or ("description" in args_dict and tokens & {"update", "edit"}):
         return "UPDATE_DESCRIPTION"
 
     return "WRITE"
+
+
+def _active_antigravity_server_names(repo: Path | None = None) -> set[str] | None:
+    """Return lowercase active MCP server names from Antigravity config/plugins and repo config, or None if no host config root exists."""
+    if os.environ.get("HARNESS_ANTIGRAVITY_MCP_DIR", "").strip() or os.environ.get("HARNESS_ANTIGRAVITY_PLUGINS_DIR", "").strip():
+        return None
+    try:
+        home = Path.home()
+    except OSError:
+        return None
+    config_root = home / ".gemini" / "config"
+    if not config_root.is_dir():
+        return None
+    active: set[str] = set()
+    mcp_cfg = config_root / "mcp_config.json"
+    if mcp_cfg.is_file():
+        try:
+            data = read_json(mcp_cfg)
+            servers = data.get("mcpServers") if isinstance(data, dict) else {}
+            if isinstance(servers, dict):
+                for k in servers:
+                    active.add(str(k).strip().lower())
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    plugins_dir = config_root / "plugins"
+    if plugins_dir.is_dir():
+        try:
+            for plug_dir in plugins_dir.iterdir():
+                if not plug_dir.is_dir():
+                    continue
+                pname = plug_dir.name.strip().lower()
+                active.add(pname)
+                for cfg_name in ("mcp_config.json", "mcp.json"):
+                    pcfg = plug_dir / cfg_name
+                    if pcfg.is_file():
+                        try:
+                            pdata = read_json(pcfg)
+                            pservers = pdata.get("mcpServers") if isinstance(pdata, dict) else {}
+                            if isinstance(pservers, dict):
+                                for subk in pservers:
+                                    sub_lower = str(subk).strip().lower()
+                                    active.add(sub_lower)
+                                    active.add(f"{pname}_{sub_lower}")
+                                    active.add(f"{pname}-{sub_lower}")
+                        except (OSError, ValueError, KeyError, TypeError):
+                            pass
+        except OSError:
+            pass
+    if repo is not None:
+        for cfg_rel in (".agents/mcp_config.json", "agents/mcp_config.json", ".cursor/mcp.json"):
+            rcfg = Path(repo) / cfg_rel
+            if rcfg.is_file():
+                try:
+                    rdata = read_json(rcfg)
+                    rservers = rdata.get("mcpServers") if isinstance(rdata, dict) else {}
+                    if isinstance(rservers, dict):
+                        for k in rservers:
+                            active.add(str(k).strip().lower())
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+    return active if active else None
 
 
 def discover_installed_pm_mcps(
@@ -323,15 +407,20 @@ def discover_installed_pm_mcps(
 ) -> list[dict[str, Any]]:
     """Scan Antigravity MCP directories, plugins, and repo configs for all installed PM MCPs."""
     discovered: dict[str, dict[str, Any]] = {}
+    explicit_roots = {Path(p).resolve() for p in (extra_mcp_roots or [])}
+    active_servers = _active_antigravity_server_names(repo)
 
     # 1. Scan Antigravity MCP server schema directories (<appDataDir>/mcp/<serverName>)
     mcp_dirs = list(extra_mcp_roots or []) + _candidate_antigravity_mcp_dirs()
     for mcp_dir in mcp_dirs:
+        is_explicit_root = Path(mcp_dir).resolve() in explicit_roots
         try:
             for srv_dir in sorted(mcp_dir.iterdir()):
                 if not srv_dir.is_dir():
                     continue
                 srv_name = srv_dir.name
+                if not is_explicit_root and active_servers is not None and srv_name.strip().lower() not in active_servers:
+                    continue
                 provider_id = identify_pm_provider(srv_name)
                 if not provider_id and _dir_looks_like_pm_mcp(srv_dir):
                     provider_id = f"custom:{srv_name.lower()}"
@@ -503,6 +592,8 @@ def resolve_configured_pm_language(repo: Path | None = None, plan: Mapping[str, 
 
 
 def main(argv: list[str] | None = None) -> int:
+    from _live_process import enable_line_buffered_stdio
+    enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description="Universal Multi-Provider PM MCP CLI for Android Agent Harness.")
     sub = parser.add_subparsers(dest="subcommand", required=True)
 

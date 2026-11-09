@@ -287,7 +287,7 @@ def is_read_only_adb(args: list[str]) -> bool:
 
 def _valid_context_targets(args: list[str]) -> bool:
     selectors = [arg.split("=", 1)[0] for arg in args if arg.split("=", 1)[0] in {"--file", "--symbol"}]
-    return 1 <= len(selectors) <= 8 and len(set(selectors)) == 1 and not any(arg.startswith("--out") for arg in args)
+    return 1 <= len(selectors) <= 8 and not any(arg.startswith("--out") for arg in args)
 
 
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
@@ -660,6 +660,9 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             for_mutation=True,
         )
         drift = [item for item in drift if not item.startswith("file:")]
+        plan_surfs = set(plan.get("expected_surfaces") or [])
+        if plan_surfs - {"LOCALIZATION", "DOCS", "TEST_ONLY"} and not rel_posix.endswith("AndroidManifest.xml"):
+            drift = [item for item in drift if not item.startswith("surface:")]
         if drift:
             hint = _all_missing_surfaces_hint(root, plan, rel_posix, drift, classify, check_material_drift)
             return (
@@ -1263,7 +1266,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I)
             or (entry in {"harness_cli", "android-harness"} and arguments[:1] == ["device"])
         ):
-            return False, "Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first."
+            return False, (
+                "Device operation is blocked during IMPLEMENTING. For diagnostic/debug builds without reviewers, "
+                "run 'python .agents/harness.py debug install' (and 'python .agents/harness.py debug logs' to read logcat). "
+                "For final verification, transition via 'python .agents/scripts/workflow.py prepare-verification' first."
+            )
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
             return False, "Destructive filesystem or external script commands are blocked during implementation."
         if re.search(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b", normalized, re.I):

@@ -719,13 +719,13 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertEqual("NONE", pol_logic["ui_verification_class"])
         self.assertFalse(pol_logic["device_required"])
 
-        # Case 8: Architectural planning depth adds convention & spec-compliance
+        # Case 8: Architectural planning depth routes arch-regression-reviewer-agent without redundant 4th spec reviewer
         pol_arch = review_policy.decide(
             cls_click, self.skills_root, project_kind="application",
             plan={"planning_depth": "ARCHITECTURAL"}
         )
         self.assertIn("arch-regression-reviewer-agent", pol_arch["reviewers"])
-        self.assertIn("spec-compliance-agent", pol_arch["reviewers"])
+        self.assertNotIn("spec-compliance-agent", pol_arch["reviewers"])
 
     def test_p1_b2_cli_policy_output_fields(self) -> None:
         """P1-B2 (b): Public CLI returns RISK_LANE and UI_VERIFICATION_CLASS in plain text and JSON."""

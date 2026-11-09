@@ -800,6 +800,12 @@ def _complete_review_core(
             )
             ledger["reviewers"][reviewer]["last_error"] = err_code
             save_ledger(directory, run_id, ledger)
+            if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE":
+                raise ValidationError(
+                    f"could not extract trusted transcript for subagent '{execution_id}': {err_code} "
+                    f"(SUBAGENT_STILL_RUNNING: reviewer '{reviewer}' is still executing tools in the background and has not emitted its final report yet. "
+                    f"STOP IMMEDIATELY: Do NOT retry 'review complete' and do NOT call 'send_message'. End your turn with NO tool calls and wait for the host wakeup notification.)"
+                )
             raise ValidationError(f"could not extract trusted transcript for subagent '{execution_id}': {err_code}")
 
 
@@ -1060,6 +1066,35 @@ def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:
     }
 
 
+def _print_finalized_review_summary(res: dict[str, Any]) -> None:
+    from review_models import effective_reviewer_model
+    rep_summaries = [
+        f"{rep.get('reviewer')} [{effective_reviewer_model(rep.get('model_selection'))}]={rep.get('verdict')}"
+        for rep in (res.get("reports") or [])
+    ]
+    rep_suffix = f" ({', '.join(rep_summaries)})" if rep_summaries else ""
+    print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings{rep_suffix}")
+    print("REVIEW_SUMMARY_TABLE_BEGIN")
+    print("| Reviewer | Model | Verdict | Findings |")
+    print("| :--- | :--- | :--- | :---: |")
+    findings_by_rev: dict[str, int] = {}
+    for f_item in (res.get("findings") or []):
+        r_key = str(f_item.get("reviewer") or "")
+        findings_by_rev[r_key] = findings_by_rev.get(r_key, 0) + 1
+    for rep in (res.get("reports") or []):
+        r_name = str(rep.get("reviewer") or "")
+        m_name = effective_reviewer_model(rep.get("model_selection"))
+        v_name = str(rep.get("verdict") or "PASS")
+        f_cnt = findings_by_rev.get(r_name, 0)
+        print(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
+    print("REVIEW_SUMMARY_TABLE_END")
+    print(
+        "[!] CRITICAL: Reviews are already finalized (do NOT run `review finalize`). "
+        "Invoke `run_command` for NEXT_ACTION immediately in this turn, and NEVER write parenthetical "
+        "status narration (such as `*(running...)*`) before calling `run_command`."
+    )
+
+
 def _run_uses_native_dispatch(repo: Path, task_id: str) -> bool:
     from review_sources import has_trusted_review_source
     current_file = task_dir(repo, task_id) / "current-run.json"
@@ -1131,6 +1166,8 @@ def main(argv: list[str] | None = None) -> int:
             except (ImportError, OSError, ValueError, KeyError):
                 model_map = {}
             for idx, (rev_name, exec_id) in enumerate(zip(revs, exec_ids)):
+                from record_review import wait_for_live_subagent_transcript
+                wait_for_live_subagent_transcript(args.host, exec_id)
                 if idx == 0:
                     res = complete_review(
                         repo,
@@ -1150,30 +1187,18 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 eff_model = model_map.get(rev_name, "inherit")
                 print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
+            try:
+                st_after = get_review_execution_status(repo, args.task)
+                req_revs = list(st_after.get("required_reviewers") or [])
+                rev_states = st_after.get("reviewers") or {}
+                if req_revs and all(rev_states.get(r, {}).get("state") == REVIEW_INGESTED for r in req_revs):
+                    _print_finalized_review_summary(finalize_review_execution(repo, args.task))
+            except (ValidationError, OSError, ValueError, KeyError):
+                pass
             return 0
         elif args.subcommand == "finalize":
             res = finalize_review_execution(repo, args.task)
-            from review_models import effective_reviewer_model
-            rep_summaries = [
-                f"{rep.get('reviewer')} [{effective_reviewer_model(rep.get('model_selection'))}]={rep.get('verdict')}"
-                for rep in (res.get("reports") or [])
-            ]
-            rep_suffix = f" ({', '.join(rep_summaries)})" if rep_summaries else ""
-            print(f"REVIEW_FINALIZED: {len(res.get('reports', []))} reports, {len(res.get('blocking_findings', []))} blocking findings{rep_suffix}")
-            print("REVIEW_SUMMARY_TABLE_BEGIN")
-            print("| Reviewer | Model | Verdict | Findings |")
-            print("| :--- | :--- | :--- | :---: |")
-            findings_by_rev: dict[str, int] = {}
-            for f_item in (res.get("findings") or []):
-                r_key = str(f_item.get("reviewer") or "")
-                findings_by_rev[r_key] = findings_by_rev.get(r_key, 0) + 1
-            for rep in (res.get("reports") or []):
-                r_name = str(rep.get("reviewer") or "")
-                m_name = effective_reviewer_model(rep.get("model_selection"))
-                v_name = str(rep.get("verdict") or "PASS")
-                f_cnt = findings_by_rev.get(r_name, 0)
-                print(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
-            print("REVIEW_SUMMARY_TABLE_END")
+            _print_finalized_review_summary(res)
             return 0
         elif args.subcommand in ("dispatch", "dispatch-batch", "dispatch_batch") and _run_uses_native_dispatch(repo, args.task):
             raise ValidationError(

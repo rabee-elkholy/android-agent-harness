@@ -589,9 +589,19 @@ def generate_task_brief(
             "- **Merge Conflict Resolution Focus**: Verify that both branches' intent (`HEAD` and incoming branch) is preserved without silently dropping callbacks, state fields, UI elements, imports, permissions, or error handling, and check for cross-branch signature or state mismatches.",
         ])
     if plan.get("phases"):
-        brief_lines.extend([
-            "- **Final Integration Focus**: Prioritize cross-phase contract mismatch, integration regressions, state flow between layers, navigation wiring, and regressions introduced after earlier phase PASS.",
-        ])
+        had_ai_phase_review = any(
+            (task_dir(repo, task_id) / "phases" / str(p.get("id") or "") / "review" / "phase_review_result.json").is_file()
+            for p in (plan.get("phases") or [])
+            if isinstance(p, dict) and p.get("id")
+        )
+        if had_ai_phase_review:
+            brief_lines.extend([
+                "- **Final Integration Focus**: Prioritize cross-phase contract mismatch, integration regressions, state flow between layers, navigation wiring, and regressions introduced after earlier phase PASS.",
+            ])
+        else:
+            brief_lines.extend([
+                "- **Multi-Phase Full & Integration Focus**: Earlier phase checkpoints ran deterministic compile/test checks only (`DETERMINISTIC_ONLY`, no mid-phase AI subagent review). Audit the complete implementation across ALL phases in full depth, as well as cross-phase contract alignment, state flow between layers, and navigation wiring.",
+            ])
     if metadata.get("plan_clarifications_sha256"):
         brief_lines.append(
             "- **Plan clarifications**: Read the frozen Clarifications section in the package and the `Mid-Task Developer Refinements (plan-notes)` above when assessing plan completeness and contract changes. "
@@ -602,6 +612,10 @@ def generate_task_brief(
         "## 2. Reviewer Specialty & Directives",
         f"- **Role Focus**: {role_info['focus']}",
     ])
+    if reviewer in ("arch-regression-reviewer-agent", "bug-test-reviewer-agent", "spec-compliance-agent"):
+        brief_lines.append(
+            "- **Shared/Reused Screen Back & Navigation Audit**: When any touched screen, Fragment, Activity, Dialog, BottomSheet, or route can be opened from multiple entry points/flows (e.g. onboarding/wizard vs settings/edit/home/deep-link), verify that system back (`BackHandler` / `OnBackPressedCallback`), UI back/close buttons, and completion/exit navigation (`popBackStack`, `popUpTo`, `navigateUp`, `finish`, result callbacks) return to the right caller for EVERY entry flow without hardcoded single-caller destinations or broken back stacks."
+        )
     delta_files = [str(f) for f in ((policy.get("fix_delta") or {}).get("files") or []) if str(f).strip()]
     if delta_files:
         brief_lines.append("- **Follow-Up Delta Files (Modified Since Prior Run — Focus Here First)**:")

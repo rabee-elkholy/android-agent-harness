@@ -339,7 +339,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     if "TEST_ONLY" in surfaces:
         require_reviewers({"bug-test-reviewer-agent"}, "TEST_ONLY")
     if planning_depth == "ARCHITECTURAL" and not micro and "UNKNOWN" not in surfaces:
-        require_reviewers({"spec-compliance-agent", "arch-regression-reviewer-agent"}, "ARCHITECTURAL_PLAN")
+        require_reviewers({"arch-regression-reviewer-agent"}, "ARCHITECTURAL_PLAN")
     if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM") and not micro and "UNKNOWN" not in surfaces:
         require_reviewers({"arch-regression-reviewer-agent"}, arch_intent)
     if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):

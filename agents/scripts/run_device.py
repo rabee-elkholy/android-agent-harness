@@ -591,7 +591,9 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
     status = str(active.get("status") or "")
     if status == "IMPLEMENTING":
         live_print(
-            "[FAIL] Device operation is blocked during IMPLEMENTING. Transition to verification via 'python .agents/scripts/workflow.py prepare-verification' first.",
+            "[FAIL] Device operation is blocked during IMPLEMENTING. For diagnostic/debug builds without reviewers, "
+            "run 'python .agents/harness.py debug install' (and 'python .agents/harness.py debug logs' to read logcat). "
+            "For final verification, transition via 'python .agents/scripts/workflow.py prepare-verification' first.",
             err=True,
         )
         return EXIT_ENV
@@ -1356,14 +1358,14 @@ def main() -> int:
                     pass
 
             live_print("\n" + "=" * 60)
-            live_print("[MANDATORY MOBILE TEST WALKTHROUGH & SAME-TURN ASK_QUESTION]")
+            live_print("[MANDATORY MOBILE TEST WALKTHROUGH INSIDE ASK_QUESTION — ZERO PRE-TOOL PROSE]")
             if walkthrough_uri:
                 live_print(f"WALKTHROUGH_URI={walkthrough_uri}")
-            live_print("The agent MUST now output a COMPACT 3-section mobile walkthrough in chat (in the developer's active conversation language; <= 5 table rows; NO file-summary wall after the walkthrough):")
+            live_print("Invoke `ask_question` IMMEDIATELY as your very first action in this turn (output ZERO chat prose before the tool call) and put this COMPACT 3-section mobile walkthrough (in the developer's active conversation language; <= 5 numbered steps, each on its own line; NEVER use a `| ... |` pipe table inside `ask_question`; NO file-summary wall) directly inside the `ask_question` `question` parameter:")
             live_print("1. Navigation & Preconditions:")
             for p in walkthrough["preconditions"]:
                 live_print(f"   - {p}")
-            live_print("2. Walkthrough Steps (`| # | Action | Expected Result |` table, at most 5 core rows):")
+            live_print("2. Walkthrough Steps (1-5 numbered lines `1. **<Action>**: <Expected result>`, each on its own line — NEVER a pipe table):")
             for h in walkthrough["happy_path"]:
                 live_print(f"   - {h}")
             live_print("3. Edge Cases & Regression Checks:")
@@ -1373,9 +1375,10 @@ def main() -> int:
             live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
             live_print("TOOL_CALL_REQUIRED=ask_question")
             live_print(
-                "[!] CRITICAL: Keep the chat walkthrough concise (<= 5 table rows, no file-change summary dump) AND in the SAME response turn immediately invoke `ask_question` "
-                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise). "
-                "NEVER end your turn after printing the walkthrough text without calling `ask_question`!\n"
+                "[!] CRITICAL: Do NOT write any chat text (`content`), horizontal rules (`---`), or parenthetical notes (`*(...)*`) before calling `ask_question`! "
+                "Emit the `ask_question` tool call immediately and place the entire 3-section walkthrough (using numbered lines for steps, NEVER a `| ... |` pipe table) inside the `question` field "
+                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise; "
+                "translate all lines, table headers, and options into the developer's language, and in an RTL language start every line and every option with a word in that language, e.g. 'ناجح (PASS) — ...', never starting with English 'PASS'/'FAIL').\n"
             )
             if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
                 live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")

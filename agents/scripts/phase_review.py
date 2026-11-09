@@ -856,6 +856,7 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             f"- **Description**: {target_phase.get('description', '')}",
             f"- **Focus**: {r_info['focus']}",
             *phase_note_lines,
+            "- **Shared/Reused Screen Back & Navigation Audit**: When any touched screen, Fragment, Activity, Dialog, or route is reachable from multiple entry points/flows (e.g. wizard/onboarding vs edit/settings/home), verify that system back (`BackHandler` / `OnBackPressedCallback`), UI back/close actions, and exit navigation (`popBackStack`, `popUpTo`, `navigateUp`, `finish`) work for every caller without hardcoded single-flow destinations.",
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
             *val_lines,
             "",
@@ -1357,6 +1358,12 @@ def _complete_phase_review_locked(
             rev_entry["last_error_code"] = err_code
             ledger["ledger_sha256"] = compute_ledger_sha(ledger)
             atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+            if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE":
+                raise ValidationError(
+                    f"could not extract trusted transcript for subagent '{execution_id}': {err_code} "
+                    f"(SUBAGENT_STILL_RUNNING: reviewer '{reviewer}' is still executing tools in the background and has not emitted its final report yet. "
+                    f"STOP IMMEDIATELY: Do NOT retry 'phase-review complete' and do NOT call 'send_message'. End your turn with NO tool calls and wait for the host wakeup notification.)"
+                )
             raise ValidationError(f"could not extract trusted transcript for subagent '{execution_id}': {err_code}")
 
     if raw_response is not None:
@@ -1628,7 +1635,7 @@ def format_phase_provenance_section(repo: Path, task_id: str) -> str:
 
     lines = [
         "## PHASE REVIEW PROVENANCE",
-        "*(Auditable phase delta review evidence recorded during phase progression)*",
+        "*(Auditable phase progression evidence. Note: `DETERMINISTIC_ONLY` means only compile/test gates ran at phase checkpoint; full AI specialist review of all phase changes is required in this final verification pass.)*",
         "",
         "| Phase | Phase Delta SHA | Package SHA | Reviewers | Verdict | Finding IDs | Resolved | Checkpoint SHA |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
@@ -1724,6 +1731,9 @@ def _main(argv: list[str] | None = None) -> int:
                     found = find_claude_subagent_transcript(exec_id)
                     if found:
                         raw_response, response_source = read_claude_subagent_transcript(found)
+                elif run_file.is_file() and has_trusted_review_source(run_host):
+                    from record_review import wait_for_live_subagent_transcript
+                    wait_for_live_subagent_transcript(run_host, exec_id)
             else:
                 response_path = Path(args.response_file).expanduser()
                 if not response_path.is_file():

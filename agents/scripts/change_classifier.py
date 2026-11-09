@@ -243,6 +243,46 @@ def _is_visual_only_compose(diff_text: str) -> bool:
     return bool(VISUAL_COMPOSE_KEYWORDS_RE.search(code_text))
 
 
+DIAGNOSTIC_LOG_ONLY_LINE_RE = re.compile(
+    r"""^\s*(?:"""
+    r"""import\s+(?:android\.util\.Log|timber\.log\.Timber)\b.*|"""
+    r"""(?:private\s+|internal\s+)?const\s+val\s+[A-Z0-9_]*TAG[A-Z0-9_]*\s*=\s*"[^"\r\n]*"\s*|"""
+    r"""(?:(?:android\.util\.)?Log|Timber(?:\.tag\([^)\r\n]*\))?)\.[vdiwe]\s*\(.*"""
+    r""")\s*$"""
+)
+
+
+def _is_diagnostic_log_only_diff(diff_text: str) -> bool:
+    if not diff_text:
+        return False
+    modified = [
+        line[1:].strip()
+        for line in diff_text.splitlines()
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    ]
+    non_empty = [s for s in modified if s and not s.startswith("//")]
+    if not non_empty:
+        return False
+    if all(DIAGNOSTIC_LOG_ONLY_LINE_RE.match(s) for s in non_empty):
+        return True
+    without_meta = [
+        s for s in non_empty
+        if not re.match(
+            r"^(?:import\s+(?:android\.util\.Log|timber\.log\.Timber)\b|"
+            r"(?:private\s+|internal\s+)?const\s+val\s+[A-Z0-9_]*TAG[A-Z0-9_]*\s*=)",
+            s,
+        )
+    ]
+    if without_meta:
+        joined = " ".join(without_meta)
+        if re.fullmatch(
+            r"(?:(?:android\.util\.)?Log|Timber(?:\.tag\([^)]*\))?)\.[vdiwe]\s*\([^;{}]*\)",
+            joined,
+        ):
+            return True
+    return False
+
+
 def _add(result: dict, surface: str, path: str, reason: str) -> None:
     result.setdefault(surface, {"files": set(), "reasons": set()})
     result[surface]["files"].add(path)
@@ -954,6 +994,9 @@ def classify(
         from _modules import is_kmp_or_android_test_path
 
         test_path = is_kmp_or_android_test_path(rel)
+        if suffix in (".kt", ".java") and not test_path and _is_diagnostic_log_only_diff(diff_text):
+            _add(found, "ANALYTICS", rel, "DIAGNOSTIC_LOG_ONLY")
+            continue
         if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
         elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":

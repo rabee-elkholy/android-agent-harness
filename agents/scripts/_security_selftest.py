@@ -1341,7 +1341,7 @@ class SecurityTests(unittest.TestCase):
         self.assertTrue(any("forbidden for sensitive changes" in r for r in res.get("blocked_by", [])))
 
     def test_SPEC_001(self):
-        """SPEC-001: architectural task routes a real installed spec reviewer"""
+        """SPEC-001: architectural task routes core reviewers without redundant 4th spec reviewer"""
         from review_policy import decide
         spec_subagent_path = SCRIPTS.parent / "subagents" / "spec-compliance-agent.json"
         self.assertTrue(spec_subagent_path.is_file(), "spec-compliance-agent.json must exist")
@@ -1351,7 +1351,8 @@ class SecurityTests(unittest.TestCase):
         skills_root = SCRIPTS.parent / "skills"
         cls_arch = {"surfaces": ["BUSINESS_LOGIC"], "severity": "HIGH", "changed_files": 4, "planning_depth": "ARCHITECTURAL"}
         policy = decide(cls_arch, skills_root)
-        self.assertIn("spec-compliance-agent", policy["reviewers"])
+        self.assertIn("arch-regression-reviewer-agent", policy["reviewers"])
+        self.assertNotIn("spec-compliance-agent", policy["reviewers"])
 
     def test_SPEC_002(self):
         """SPEC-002: clean spec reviewer response parses as PASS"""
@@ -1857,7 +1858,8 @@ class SecurityTests(unittest.TestCase):
             SCRIPTS.parent / "skills",
             plan={"planning_depth": "ARCHITECTURAL"},
         )
-        self.assertIn("spec-compliance-agent", policy["reviewers"])
+        self.assertIn("arch-regression-reviewer-agent", policy["reviewers"])
+        self.assertNotIn("spec-compliance-agent", policy["reviewers"])
 
     def test_BRIEF_SCHEMA_001_uses_authoritative_plan_fields(self):
         """BRIEF-SCHEMA-001: generate_task_brief uses requested_outcome, task_kind, and expected_modules"""

@@ -1491,15 +1491,25 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
     from final_verifier import unplanned_mandatory_skills
     drift = [*drift, *(f"skill:{skill}" for skill in unplanned_mandatory_skills(plan, policy))]
     extra_files = [item[5:] for item in drift if item.startswith("file:")]
-    if extra_files:
-        plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(extra_files))
-        plan.pop("material_drift", None)
-        plan.pop("material_drift_causes", None)
-        plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
-        if isinstance(plan.get("approval"), dict):
+    if extra_files and isinstance(plan.get("approval"), dict) and plan.get("approval", {}).get("plan_sha256"):
+        from mutation_guard import file_mutation_allowed
+        if all(file_mutation_allowed(repo, targets=[f])[0] for f in extra_files):
+            old_plan_sha = str(plan.get("plan_sha256") or "")
+            if old_plan_sha:
+                history_dir = task_dir(repo, args.task_id) / "plan-history"
+                history_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
+                plan["supersedes_plan_sha256"] = old_plan_sha
+            plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(extra_files))
+            plan.pop("material_drift", None)
+            plan.pop("material_drift_causes", None)
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
             plan["approval"]["plan_sha256"] = plan["plan_sha256"]
-        save_plan(_plan_path(repo, args.task_id), plan)
-        drift = [item for item in drift if not item.startswith("file:")]
+            save_plan(_plan_path(repo, args.task_id), plan)
+            if "plan_sha256" in policy:
+                policy["plan_sha256"] = plan["plan_sha256"]
+            policy["policy_sha256"] = canonical_sha256({key: value for key, value in policy.items() if key != "policy_sha256"})
+            drift = [item for item in drift if not item.startswith("file:")]
     if drift:
         plan["material_drift"] = drift
         causes = _drift_causes(repo, manifest, drift, plan)
@@ -2778,6 +2788,12 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
                 approved_task_files.add(change_path)
                 cur_exp = list(plan.get("expected_files") or [])
                 if change_path not in cur_exp:
+                    old_plan_sha = str(plan.get("plan_sha256") or "")
+                    if old_plan_sha:
+                        history_dir = task_dir(repo, args.task_id) / "plan-history"
+                        history_dir.mkdir(parents=True, exist_ok=True)
+                        atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
+                        plan["supersedes_plan_sha256"] = old_plan_sha
                     plan["expected_files"] = sorted(set(cur_exp) | {change_path})
                     plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
                     if isinstance(plan.get("approval"), dict):
@@ -3858,11 +3874,16 @@ def pre_existing_changes_line(repo: Path, plan: dict) -> str:
 # Real app (1.1.11): "as plain text" produced an unformatted list, and lines that began with a code name
 # (`LegacyRevenuePaywallFragment`, 'sale') came out scrambled in an Arabic (right-to-left) question.
 QUESTION_FORMAT = (
-    "a short bold heading, then one bullet per line starting with a bold label (what changes, files, sensitive "
-    "areas or outside writes, phone checks, risks); numbered sub-steps for phone checks; no emoji. "
-    "Translate all headings and labels into the developer's active conversation language (never hardcode a fixed language). "
-    "For a right-to-left language, start every line with a word in that language, never with a code name, and put "
-    "every code name, file name, value and English term in backticks so it keeps its place in the sentence."
+    "a short bold heading, then one bullet per line starting with a bold label (what changes broken into 2-4 concise "
+    "1-line functional sub-bullets without low-level XML/ID walls, phases & file count, sensitive areas or outside writes "
+    "only when present, and 2-3 concise phone check steps; omit internal CLI flags or raw 17-digit tracker IDs); "
+    "numbered sub-steps for phone checks; no emoji. "
+    "Translate all headings, labels, link text, and ask_question options into the developer's active conversation language "
+    "(never hardcode a fixed language). "
+    "For a right-to-left language, start every line with a word in that language (including every bullet, markdown link "
+    "label `[...](...)`, and ask_question option; never start a line, link label, or option with a code name, English word, "
+    "or backtick, which flips dir='auto' to LTR), and put every code name, file name, value and English term in backticks "
+    "so it keeps its place in the sentence."
 )
 
 
@@ -3903,17 +3924,20 @@ def approval_brief(plan: dict, sensitive_advisory: str | None = None) -> str:
         lines.append("Phases: " + "; ".join(
             f"{index}. {redact(phase.get('title') or phase.get('description') or phase.get('id'))}"
             for index, phase in enumerate(phases, 1)))
-    if plan.get("review_budget_forecast"):
+    if plan.get("review_budget_forecast") and plan["review_budget_forecast"].get("status") != "WITHIN_LIMIT":
         from review_budget import forecast_summary
         lines.append(forecast_summary(plan["review_budget_forecast"]))
     if names:
-        shown = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
         lines.append(f"Files ({len(names)}): {shown}")
-    reuse_cands = [c for c in (plan.get("reuse_candidates") or []) if isinstance(c, dict)]
+    reuse_cands = [
+        c for c in (plan.get("reuse_candidates") or [])
+        if isinstance(c, dict) and c.get("exact_symbol_match")
+    ]
     if reuse_cands:
         shown_reuse = ", ".join(
             f"{c.get('symbol')} ({Path(str(c.get('existing_file') or '')).name})"
-            for c in reuse_cands[:4]
+            for c in reuse_cands[:3]
         )
         lines.append(f"Reuse candidates: {shown_reuse}")
     if attention:

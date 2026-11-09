@@ -980,25 +980,25 @@ class PolicyTests(RepoCase):
     def test_later_round_reruns_only_findings_regression_and_promotions(self) -> None:
         arch_plan = {"planning_depth": "ARCHITECTURAL"}
         prior_classification = {
-            "classification_sha256": "a" * 64, "surfaces": ["PUBLIC_API"],
+            "classification_sha256": "a" * 64, "surfaces": ["NETWORK"],
             "severity": "MEDIUM", "confidence": "HIGH", "changed_files": 1,
             "changed_lines": 4, "has_delete_or_rename": False,
         }
         previous = decide(prior_classification, KIT / "agents/skills", plan=arch_plan)
         fixed = dict(prior_classification)
-        fixed.update({"classification_sha256": "b" * 64, "surfaces": ["PUBLIC_API", "COROUTINES"]})
+        fixed.update({"classification_sha256": "b" * 64, "surfaces": ["NETWORK", "PUBLIC_API"]})
         later = decide_later_round(
             fixed, KIT / "agents/skills", previous_policy=previous,
             finding_owners=["bug-test-reviewer-agent"],
-            passed_reviewers=["arch-regression-reviewer-agent", "spec-compliance-agent"],
+            passed_reviewers=["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
             source_snapshot="s" * 64, source_change_set="c" * 64, source_run_id="run-old",
             round_number=2, plan=arch_plan,
         )
         self.assertEqual(
-            {"bug-test-reviewer-agent", "security-perf-reviewer-agent", "arch-regression-reviewer-agent"},
+            {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"},
             set(later["reviewers"]),
         )
-        self.assertEqual(["spec-compliance-agent"], [item["reviewer"] for item in later["carried_reviews"]])
+        self.assertEqual(["security-perf-reviewer-agent"], [item["reviewer"] for item in later["carried_reviews"]])
 
     def test_missing_required_skill_blocks_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

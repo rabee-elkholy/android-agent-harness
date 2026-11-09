@@ -467,8 +467,8 @@ def cmd_need_developer(repo: Path, args) -> dict:
     _save(path, session)
     return {"status": "WAITING_FOR_DEVELOPER", "scenario": item["id"], "ask": args.ask,
             "next_action": "E2E_DEVELOPER_ASSIST",
-            "instruction": ("In THIS turn invoke ask_question with the exact action (options: 'Done - continue' / "
-                            "'Skip this scenario' / 'Stop E2E'). On 'Done' run e2e resume --scenario "
+            "instruction": ("Invoke ask_question IMMEDIATELY as your first action (ZERO pre-tool chat prose) with the exact action inside `question` (options: 'Done - continue' / "
+                            "'Skip this scenario' / 'Stop E2E', translated into the developer's language starting every line and option with a word in that language). On 'Done' run e2e resume --scenario "
                             f"{item['id']} and retry the scenario; on 'Skip' run e2e step --status SKIPPED.")}
 
 
@@ -514,8 +514,8 @@ def cmd_finish(repo: Path, args) -> dict:
     _save(path, session)
     return {"status": verdict, "counts": counts, "report": str(report), "report_uri": report.resolve().as_uri(),
             "next_action": "DEVICE_SIGNOFF_REQUIRED",
-            "instruction": ("In THIS turn show a compact result table (failed/blocked scenarios first, at most 8 rows, link the report) "
-                            "and invoke ask_question for sign-off: 'PASS - approve (E2E report)' / 'FAIL - needs fixes'. "
+            "instruction": ("Invoke ask_question IMMEDIATELY as your first action (ZERO pre-tool chat prose) and place the compact result table (failed/blocked scenarios first, at most 8 rows, link the report) "
+                            "directly inside ask_question's `question` field for sign-off: 'PASS - approve (E2E report)' / 'FAIL - needs fixes' (translate lines and options into the developer's language starting every line, link label, and option with a word in that language). "
                             "Record the answer with device signoff --source conversation --proof-reference \"<answer> (E2E "
                             f"{session['report_sha256'][:12]})\". A FAIL verdict should be presented as FAIL with the failing scenarios.")}
 

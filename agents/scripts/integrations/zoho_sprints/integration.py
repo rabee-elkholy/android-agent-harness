@@ -30,7 +30,15 @@ class ZohoSprintsIntegration(ExternalIntegration):
     def matches(self, server: str, tool_name: str) -> bool:
         server_lower = (server or "").lower().strip()
         tool_lower = (tool_name or "").lower().strip()
-        if "zoho-projects" in server_lower or "zoho_projects" in server_lower or tool_lower.startswith("zohoprojects_"):
+        if (
+            "zoho-projects" in server_lower
+            or "zoho_projects" in server_lower
+            or "zoho-sprints_mcp" in server_lower
+            or "zoho_sprints_mcp" in server_lower
+            or tool_lower.startswith("zohoprojects_")
+            or tool_lower.startswith("zohomcp_")
+            or tool_lower.startswith("zohosprints_")
+        ):
             return False
         if "zoho" in server_lower or "zoho" in tool_lower:
             return True

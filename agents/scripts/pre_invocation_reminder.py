@@ -45,15 +45,15 @@ def _compact_message() -> str:
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
-        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. If the developer modifies, simplifies, or drops any detail of the initial Outcome/Approach in chat (within approved file scope), immediately record `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary of developer refinement>\" --source conversation --proof-reference \"<developer words>\"` before `prepare-verification` so isolated reviewers see the updated decision. Wait for background task completion without reading `.system_generated/tasks/*.log`; on partial reviewer completion output at most one short count line (e.g. `1/2`) without listing reviewer names or `[<model>]` tags in prose. For a separate disjoint task, draft a new task-id or use `task switch --task-id <id>`.{notes_rem}"
+        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. If the developer modifies, simplifies, or drops any detail of the initial Outcome/Approach in chat (within approved file scope), immediately record `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary of developer refinement>\" --source conversation --proof-reference \"<developer words>\"` before `prepare-verification` so isolated reviewers see the updated decision. Wait for background task completion without reading `.system_generated/tasks/*.log`; on partial reviewer completion output at most one short count line (e.g. `1/2`) without listing reviewer names or `[<model>]` tags in prose; never emit '!]', '[Message]', or '<SYSTEM_MESSAGE>' in chat. For a separate disjoint task, draft a new task-id or use `task switch --task-id <id>`.{notes_rem}"
     if status == "VERIFYING":
-        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. compact 3-section mobile walkthrough (`<= 5` table rows, no file-summary wall) + mandatory same-turn `ask_question` tool call (never end turn with text only) -> 6. verify. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. Disjoint tasks can be drafted concurrently (`task draft` / `task switch`); editing tracked files stales frozen verification.{notes_rem}"
+        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mandatory immediate `ask_question` tool call as your FIRST action (ZERO pre-tool chat prose, no `---`, no `*(...)*` notes) with the compact 3-section mobile walkthrough (`<= 5` table rows, no file-summary wall) placed directly inside `ask_question`'s `question` field -> 6. task complete. Never emit '!]', '[Message]', parenthetical status loops (e.g. '*(running...)*'), or fabricated subagent/task output in chat. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. Disjoint tasks can be drafted concurrently (`task draft` / `task switch`); editing tracked files stales frozen verification.{notes_rem}"
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""
         return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Resume before fixing issues: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
-        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Follow the returned delivery action.{notes_rem}"
+        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Invoke `ask_question` IMMEDIATELY as your first token (ZERO pre-tool chat prose) with the Commit & Delivery Card inside `question`. Never emit '!]' or '[Message]' in chat.{notes_rem}"
     return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. Up to 3 disjoint tasks may coexist (`task draft` / `task switch --task-id <id>`); only cancel when explicitly asked (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}"
 
 
@@ -71,7 +71,7 @@ def _current_task_state() -> tuple[str, str]:
 def _unchanged_state_message(task_id: str, status: str) -> str:
     if not task_id or status == "IDLE":
         return "Android Harness: Idle (no active task)."
-    return f"Harness [Task {task_id}: {status}]: State unchanged; continue following active {status} rules and NEXT_ACTION."
+    return f"Harness [Task {task_id}: {status}]: State unchanged; follow active {status} rules and invoke NEXT_ACTION tool first."
 
 
 def _is_raw_kit_repo(repo: Path) -> bool:
