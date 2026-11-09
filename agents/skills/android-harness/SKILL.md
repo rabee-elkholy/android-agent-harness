@@ -42,7 +42,7 @@ Application source inspection remains unaffected. For documented commands, see [
 - **Daily work notes**: [Daily work notes](./references/daily-scenarios.md).
 - **Automated skills**: [Automated skills](./references/automated-skills.md).
 
-Zoho Sprints (when enabled): `.agents/workflows/zoho-sprints.md`. Mutate only on `update zoho`.
+PM Tracker (when enabled): `.agents/workflows/pm-tracker.md`. Mutate only on explicit approval (`update pm` / `update zoho` / `حدث التاسك`).
 
 ## Related skills
 

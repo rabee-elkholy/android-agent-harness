@@ -3216,7 +3216,7 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
         "inputs": act.get("inputs", {}),
         "expected": act.get("expected", {}),
     }
-    for k in ("tool", "instructions", "choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "reviewer_models", "briefs", "package_path", "review_execution_profile", "pending_reviewers"):
+    for k in ("tool", "instructions", "choices", "before_first_dispatch", "reviewer_prompts", "reviewers", "reviewer_models", "briefs", "package_path", "review_execution_profile", "pending_reviewers", "context_rotation"):
         if k in act:
             res_entry[k] = act[k]
     return [res_entry]
@@ -3248,6 +3248,7 @@ def status(args: argparse.Namespace) -> dict:
                 **({"tool": next_act["tool"]} if "tool" in next_act else {}),
                 **({"instructions": next_act["instructions"]} if "instructions" in next_act else {}),
                 **({"reviewer_models": next_act["reviewer_models"]} if "reviewer_models" in next_act else {}),
+                **({"context_rotation": next_act["context_rotation"]} if "context_rotation" in next_act else {}),
             }
         ]
         # Antigravity keeps only the end of long tool output. With the full review briefs inside, the
@@ -3618,6 +3619,21 @@ def build_parser() -> argparse.ArgumentParser:
     plan_check_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     plan_check_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active task if omitted)")
     plan_check_cmd.set_defaults(handler=cmd_plan_check)
+    from task_bridge import cmd_task_bridge
+    bridge_cmd = sub.add_parser("bridge", help="Save, load, inspect, or snooze a Smart Context Rotation & Task-to-Task Context Bridge")
+    bridge_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    bridge_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active or most recently delivered task)")
+    bridge_cmd.add_argument("--save", action="store_true", help="Save a context bridge artifact for a new conversation")
+    bridge_cmd.add_argument("--load", action="store_true", help="Load the saved context bridge in a new conversation (default action)")
+    bridge_cmd.add_argument("--status", action="store_true", help="Inspect conversation bloat metrics, rotation advisory, and saved bridge status")
+    bridge_cmd.add_argument("--snooze", action="store_true", help="Snooze context rotation advisories for the current conversation")
+    bridge_cmd.add_argument("--snooze-steps", type=int, default=120, help="Number of additional steps before recommending rotation again (default: 120)")
+    bridge_cmd.add_argument("--mode", choices=("auto", "follow-up", "mid-task", "FOLLOW_UP_TASK", "MID_TASK_HANDOFF"), default="auto", help="Bridge mode: auto (default), follow-up, or mid-task")
+    bridge_cmd.add_argument("--next-outcome", default="", help="Follow-up task outcome or request to carry into the new conversation")
+    bridge_cmd.add_argument("--summary", default="", help="Concise summary of architectural decisions and task context")
+    bridge_cmd.add_argument("--expected-files", default="", help="Comma-separated target files to seed into the bridged Discovery Receipt")
+    bridge_cmd.add_argument("--host", default=None, help="Host environment (antigravity, claude, codex)")
+    bridge_cmd.set_defaults(handler=cmd_task_bridge)
     parser.add_argument("--json", action="store_true")
     for subparser in sub.choices.values():
         # Accept --json after the subcommand too; SUPPRESS keeps the top-level value.
@@ -4193,6 +4209,15 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
         lines.append("PATH_GROUNDING_WARNINGS=" + " | ".join(str(w) for w in readiness["path_grounding_warnings"]))
     if readiness.get("phase_dag_warnings"):
         lines.append("PHASE_DAG_WARNINGS=" + " | ".join(str(w) for w in readiness["phase_dag_warnings"]))
+    if action == "draft":
+        try:
+            from task_bridge import evaluate_rotation_advisory
+            rot_adv = evaluate_rotation_advisory(repo, "FOLLOW_UP_BOUNDARY", task_id=str(result.get("task_id") or ""), plan=result)
+            if rot_adv:
+                lines.append(f"CONTEXT_ROTATION_RECOMMENDED={rot_adv.get('mode')}: {rot_adv.get('save_command')}")
+                lines.append(f"CONTEXT_ROTATION_REASON={rot_adv.get('reason')}")
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
     if reapproval:
         changes = revision_changes(old, result)
         lines.append("REVISION_CHANGES=" + ("; ".join(changes) if changes else "no scope change"))
@@ -4221,10 +4246,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     args = parser.parse_args(argv)
     try:
-        if args.action not in {"continue", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal", "plan-check"}:
+        if args.action not in {"continue", "bridge", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal", "plan-check"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
-        if args.action in {"continue", "merge"} and args.json:
+        if args.action in {"continue", "merge", "bridge"} and args.json:
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
                 result = args.handler(args)
@@ -4241,6 +4266,11 @@ def main(argv: list[str] | None = None) -> int:
                     continue_task(argparse.Namespace(repo=str(repo), task_id=args.task_id, host=current_host,
                                                      source_stopped=False, expect_session=None))
     except (ValidationError, OSError) as exc:
+        if args.action == "bridge" and getattr(args, "json", False):
+            message = str(exc)
+            code = message.split(":", 1)[0] if message.startswith("TASK_BRIDGE_") else "TASK_BRIDGE_FAILED"
+            print(json.dumps({"status": "BLOCKED", "code": code, "reason": message}, ensure_ascii=False, indent=2))
+            return 1
         if args.action == "merge" and args.json and not isinstance(exc, TaskConflictError):
             message = str(exc)
             code = message.split(":", 1)[0] if message.startswith("TASK_MERGE_") else "TASK_MERGE_FAILED"
@@ -4323,6 +4353,44 @@ def main(argv: list[str] | None = None) -> int:
             for adv in (result.get("readiness_assessment") or {}).get("advisories") or []:
                 print(f"ADVISORY: {adv}")
         return 0
+    elif args.action == "bridge":
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            b_status = str(result.get("status") or "READY")
+            print(f"TASK_STATUS={b_status}")
+            if result.get("bridge_id"):
+                print(f"BRIDGE_ID={result['bridge_id']} MODE={result.get('mode', '')}")
+            if b_status == "BRIDGE_SAVED":
+                print(f"BRIDGE_SHA256={result.get('bridge_sha256', '')}")
+                print(f"NEW_CHAT_COMMAND={result.get('new_chat_command', 'python .agents/harness.py task bridge')}")
+                print(f"NEW_CHAT_PROMPT={result.get('new_chat_prompt', '')}")
+            elif b_status in ("BRIDGE_LOADED", "BRIDGE_CONTINUED"):
+                if result.get("session_id"):
+                    print(f"HOST_EXECUTOR={result.get('host')} SESSION={result.get('session_id')} ENFORCEMENT={result.get('enforcement_tier')}")
+                disc = result.get("discovery_receipt") or {}
+                if disc.get("id"):
+                    print(f"DISCOVERY_RECEIPT={disc.get('id')} FILES={len(disc.get('resolved_paths') or [])}")
+                if result.get("context_summary"):
+                    print(f"CONTEXT_SUMMARY={result.get('context_summary')}")
+                if result.get("next_outcome"):
+                    print(f"NEXT_OUTCOME={result.get('next_outcome')}")
+                if result.get("suggested_draft_command"):
+                    print(f"SUGGESTED_DRAFT_COMMAND={result.get('suggested_draft_command')}")
+                upcoming = result.get("next_action") or {}
+                if upcoming.get("code"):
+                    print(f"NEXT_ACTION={upcoming.get('code')}: {upcoming.get('command') or ''}")
+                    print(f"NEXT_REASON={upcoming.get('reason') or ''}")
+            elif b_status == "ROTATION_SNOOZED":
+                print(f"SNOOZED_UNTIL_STEPS={result.get('snooze_until_steps')}")
+            else:
+                health = result.get("conversation_health") or {}
+                print(f"CONVERSATION_STEPS={health.get('steps', 0)} EST_TOKENS={health.get('estimated_context_tokens', 0)}")
+                rot = result.get("context_rotation")
+                if isinstance(rot, dict) and rot.get("recommended"):
+                    print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}")
+                    print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}")
+        return 0
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
     elif args.action == "validate-finding":
@@ -4386,9 +4454,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"NEXT_REASON={item.get('reason')}")
             if item.get("instructions") and (item.get("tool") == "ask_question" or item.get("kind") == "DEVELOPER_ACTION"):
                 print(f"NEXT_INSTRUCTIONS={item.get('instructions')}")
+            rot = item.get("context_rotation")
+            if isinstance(rot, dict) and rot.get("recommended"):
+                print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}")
+                print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}")
             if item.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"}:
                 # Preserve the router's exact payload once, including current briefs.
                 print("NEXT_ACTION_INPUTS=" + json.dumps(item.get("inputs", {}), ensure_ascii=False))
+        if args.action in ("deliver", "begin-next-phase"):
+            try:
+                from task_bridge import evaluate_rotation_advisory
+                ck = "FOLLOW_UP_BOUNDARY" if args.action == "deliver" else "MID_TASK_CHECKPOINT"
+                rot_adv = evaluate_rotation_advisory(Path(args.repo).resolve(), ck, task_id=str(getattr(args, "task_id", "") or ""), plan=result if isinstance(result, dict) else None)
+                if rot_adv:
+                    print(f"CONTEXT_ROTATION_RECOMMENDED={rot_adv.get('mode')}: {rot_adv.get('save_command')}")
+                    print(f"CONTEXT_ROTATION_REASON={rot_adv.get('reason')}")
+            except (ImportError, OSError, ValueError, ValidationError):
+                pass
     if args.action in ("draft", "revise", "recover-active", "reconcile-delivery"):
         return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1

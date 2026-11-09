@@ -23,7 +23,7 @@ BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery", "switch", "merge",
     "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue", "change-decision", "plan-note",
-    "heal",
+    "heal", "bridge",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
 GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
@@ -300,10 +300,11 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name == "journey_runner" and args[:1] in (["list"], ["validate"]):
         return True
-    if name == "workflow" and args[:1] == ["plan-check"]:
+    if name == "workflow" and (args[:1] == ["plan-check"] or (args[:1] == ["bridge"] and "--status" in args)):
         return True
     if name in {"harness_cli", "android-harness"} and (
-            args[:2] in (["task", "coverage"], ["task", "metrics"], ["task", "plan-check"], ["journey", "list"], ["journey", "validate"])):
+            args[:2] in (["task", "coverage"], ["task", "metrics"], ["task", "plan-check"], ["journey", "list"], ["journey", "validate"])
+            or (args[:2] == ["task", "bridge"] and "--status" in args)):
         return True
     if name == "git":
         if args[:1] == ["-C"] and len(args) >= 3:
@@ -1185,7 +1186,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         if value("--source") == "conversation" and value("--proof-reference").strip():
             return True, "explicit developer reviewer-model decision; command validates native policy"
         return False, "review model changes require the developer's explicit conversation decision and proof reference"
-    if _workflow_action(normalized, repo) != "continue" and not _is_read_only(normalized, repo):
+    if _workflow_action(normalized, repo) not in {"continue", "bridge"} and not _is_read_only(normalized, repo):
         try:
             plan = active_plan(Path(repo))
             if _workflow_action(normalized, repo):

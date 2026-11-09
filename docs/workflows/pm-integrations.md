@@ -64,7 +64,7 @@ handoff): Zoho `Done`/`Solved`; GitHub `Done`/`Shipped`; Jira `Done`/
 
 ## Handoff contract (all providers)
 
-Identical to rules section 5 and `.agents/workflows/zoho-sprints.md`:
+Identical to rules section 5 and `.agents/workflows/pm-tracker.md`:
 
 1. First line MUST be `Commit: <hash>` (retrieved via
    `git log -1 --format=%h`; never invented).

@@ -1446,7 +1446,7 @@ class LifecycleTests(RepoCase):
             self.assertEqual(0, attr.returncode, attr.stderr)
             self.assertEqual("agents/.gitignore: eol: lf", attr.stdout.strip())
             self.assertNotIn(b"\r\n", (checkout / "agents/.gitignore").read_bytes())
-            proc_diff = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=str(KIT), capture_output=True, text=True, check=False)
+            proc_diff = subprocess.run(["git", "diff", "--no-renames", "--name-only", "HEAD"], cwd=str(KIT), capture_output=True, text=True, check=False)
             if proc_diff.returncode == 0:
                 for line in proc_diff.stdout.splitlines():
                     rel = line.strip()

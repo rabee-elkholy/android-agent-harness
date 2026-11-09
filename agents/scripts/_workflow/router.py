@@ -84,19 +84,19 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
             }
 
     if state == "IMPLEMENTING":
-        return _next_implementation(repo, task_id, plan, host, identity, run_host, state, session)
+        return _attach_rotation_advisory(repo, task_id, plan, _next_implementation(repo, task_id, plan, host, identity, run_host, state, session))
 
     if state == "VERIFYING":
-        return _next_verification(repo, task_id, plan, host, identity, run_host, state, session)
+        return _attach_rotation_advisory(repo, task_id, plan, _next_verification(repo, task_id, plan, host, identity, run_host, state, session))
 
     if state == "READY_FOR_DELIVERY":
-        return _next_delivery(repo, task_id, plan, host, identity, run_host, state, session)
+        return _attach_rotation_advisory(repo, task_id, plan, _next_delivery(repo, task_id, plan, host, identity, run_host, state, session))
 
     if state == "DELIVERED":
-        return _next_delivered(repo, task_id, plan, host, identity, run_host, state, session)
+        return _attach_rotation_advisory(repo, task_id, plan, _next_delivered(repo, task_id, plan, host, identity, run_host, state, session))
 
     if state == "BLOCKED":
-        return _next_blocked(repo, task_id, plan, host, identity, run_host, state, session)
+        return _attach_rotation_advisory(repo, task_id, plan, _next_blocked(repo, task_id, plan, host, identity, run_host, state, session))
 
     if state == "CANCELLED":
         return {
@@ -118,6 +118,39 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
         "inputs": {"repo": ".", "task_id": task_id},
         "expected": {},
     }
+
+
+_FOLLOW_UP_ROTATION_CODES = frozenset({
+    "COMPLETE_TASK",
+    "DEVELOPER_GIT_COMMIT_REQUIRED",
+    "DELIVER",
+    "TASK_DELIVERED",
+})
+_MID_TASK_ROTATION_CODES = frozenset({
+    "BEGIN_NEXT_PHASE",
+    "PREPARE_VERIFICATION",
+    "RESUME_IMPLEMENTATION",
+})
+
+
+def _attach_rotation_advisory(repo: Path, task_id: str, plan: dict | None, action: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(action, dict):
+        return action
+    code = str(action.get("code") or "")
+    if code in _FOLLOW_UP_ROTATION_CODES:
+        checkpoint_kind = "FOLLOW_UP_BOUNDARY"
+    elif code in _MID_TASK_ROTATION_CODES:
+        checkpoint_kind = "MID_TASK_CHECKPOINT"
+    else:
+        return action
+    try:
+        from task_bridge import evaluate_rotation_advisory
+        advisory = evaluate_rotation_advisory(repo, checkpoint_kind, task_id=task_id, plan=plan)
+        if advisory:
+            action = {**action, "context_rotation": advisory}
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        pass
+    return action
 
 
 def _next_implementation(repo, task_id, plan, host, identity, run_host, state, session):

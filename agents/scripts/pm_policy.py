@@ -1,14 +1,14 @@
 """Provider-agnostic project-management (PM) policy engine.
 
 Deterministic, offline, stdlib-only. Generalizes the Zoho Sprints policy
-(rules section 5 + workflows/zoho-sprints.md) to GitHub Projects, Jira, and
+(rules section 5 + workflows/pm-tracker.md) to GitHub Projects, Jira, and
 Linear without changing any default behavior:
 
 - Absent/empty PM_PROVIDER resolves to "zoho_sprints" (the historical default).
 - "update zoho" remains the mutation trigger for zoho_sprints; other providers
   get "update <provider>".
 - Handoff validation recognizes the bilingual header mapping table documented
-  in workflows/zoho-sprints.md per ZOHO_LANGUAGE mode.
+  in workflows/pm-tracker.md per ZOHO_LANGUAGE mode.
 
 No network I/O anywhere in this module. Adapters live in separate scripts
 (see pm_github.py) or upstream MCP servers (see agents/pm/*.md).
@@ -69,7 +69,7 @@ PROVIDERS: dict[str, dict] = {
 
 WIZARD_PROVIDER_IDS = ("zoho_sprints", "github_projects", "jira_mcp", "linear_mcp", "none")
 
-# Bilingual handoff header aliases per workflows/zoho-sprints.md. Each section
+# Bilingual handoff header aliases per workflows/pm-tracker.md. Each section
 # accepts any alias of its comment-language group (all_en -> EN, otherwise AR).
 SECTIONS: tuple[dict, ...] = (
     {
@@ -280,7 +280,7 @@ def validate_handoff(
         if not found:
             violations.append(
                 f"Missing mandatory section header ({aliases[0].rstrip(':')}) — "
-                "see workflows/zoho-sprints.md templates."
+                "see workflows/pm-tracker.md templates."
             )
 
     key = resolve_provider(provider)

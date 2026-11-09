@@ -45,6 +45,7 @@ The model focuses on engineering. The harness handles workflow state, proof, and
 | **Cryptographic Evidence & Physical Device Proof** | Claiming "tests pass" from stale runs or shipping broken UI without device checks | Every test run, review verdict, APK artifact hash, `device install-start` foreground observation, and live `e2e` phone session is bound to `delivery_snapshot_sha256` and `change_set_sha256`. Any post-verification edit invalidates stale proof. |
 | **Self-Healing State & Consent-First Zero-PII Telemetry** | Wedged task state after developer Android Studio edits or unexpected crashes | Automatic stable checkpoint snapshots (`task heal`), preview-bound incremental scope decisions (`task change-decision`), and organized local Zero-PII incident reports (`.agents/state/incidents/<id>.md`) with consent-first `ask_question` GitHub reporting. |
 | **Universal Zero-Config PM MCP Integration** | Accidental ticket closures, overwritten Bug descriptions, or leaked code identifiers in QA reports | Auto-discovers installed PM MCPs (Zoho Projects, Zoho Sprints, Jira, Linear, Monday.com, GitHub, ClickUp, Asana, Trello), enforces mandatory preview-and-approval (`pm authorize`), protects original Bug descriptions, blocks automatic `Done`/`Closed` transitions, and generates 5-section RTL/LTR functional QA reports. |
+| **Smart Context Rotation & Task Bridge (`task bridge`)** | Token bloat and latency in long chats, or having to re-explain completed work when starting a related follow-up task in a new chat | Monitors conversation length/tokens via native hooks and transcript tail inspection, surfaces non-blocking rotation advisories (`CONTEXT_ROTATION_RECOMMENDED`) at clean checkpoints, and transfers architectural contracts, modified file scopes, plan notes, and a fresh Discovery Receipt into a new chat via `python .agents/harness.py task bridge`. |
 
 ---
 
@@ -147,14 +148,23 @@ one task approval
 - **Fast deterministic phase checkpoints by default**: Phase transitions use fast deterministic checkpoints (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests) and auto-extend approved in-scope file paths without pausing for mid-phase AI subagent reviews unless `scoped_phase_review_enabled` is explicitly set.
 - **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
 
-### Continuing across AI hosts
+### Continuing across AI hosts & Smart Context Rotation (`task bridge`)
 
-An approved task can continue in another supported AI host using the same checkout.
-Stop the former executor, then let the receiving agent run `task continue --host
-<actual-host> --source-stopped`. The task keeps its approval and progress; interrupted
-review runs are archived and restarted through the receiving host's real protocol,
-while valid deterministic proof is retained with its original provenance. See
-[cross-host continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md) for commands and enforcement limits.
+- **Cross-host continuation (`task continue`)**: An approved task can continue in another supported AI host using the same checkout. Stop the former executor, then let the receiving agent run `task continue --host <actual-host> --source-stopped`. The task keeps its approval and progress; interrupted review runs are archived and restarted through the receiving host's real protocol, while valid deterministic proof is retained with its original provenance. See [cross-host continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md) for commands and enforcement limits.
+- **Smart Context Rotation (`CONTEXT_ROTATION_RECOMMENDED`)**: Long conversations accumulate large context windows (`80k?150k+` tokens), increasing token cost and latency on every turn. The harness tracks active conversation turns and token estimates in the background and surfaces a non-blocking advisory at clean checkpoints:
+  - **Post-task / Follow-up boundary** (`>= 120` steps or `>= 80,000` estimated context tokens): When delivering a task or starting discovery/drafting for a related follow-up task in a large chat.
+  - **Mid-task clean checkpoints** (`>= 220` steps or `>= 110,000` estimated context tokens): At phase boundaries (`checkpoint-phase` / `begin-next-phase`) or before final verification (`prepare-verification`).
+- **Zero-Friction Task-to-Task & Mid-Task Bridge (`task bridge`)**: Instead of starting a new chat from scratch and re-explaining what was just built (or paying for full repository re-discovery), the agent bridges the exact engineering state in one command:
+  ```bash
+  # 1. In the current chat, save the bridge (follow-up task or mid-task handoff):
+  python .agents/harness.py task bridge --save \
+    --next-outcome "Add input validation and error state to LoginScreen" \
+    --summary "Completed LoginViewModel and AuthRepository; preserve existing UiState contract"
+
+  # 2. Open a fresh chat and run one bootstrap command:
+  python .agents/harness.py task bridge
+  ```
+  Running `python .agents/harness.py task bridge` in the new chat validates `.agents/state/task-bridge.json`, mints a **fresh conversation-local Discovery Receipt** (`mode="task_bridge"`) for the bridged files and modules so `task draft` and bounded searches work immediately without re-running `task-context`, and either pre-fills the follow-up `task draft` command (`FOLLOW_UP_TASK`) or transfers the active execution session (`MID_TASK_HANDOFF`). Developers who prefer to stay in the current chat can snooze advisories with `python .agents/harness.py task bridge --snooze`.
 
 ### Incremental Changes & External Writes
 

@@ -41,3 +41,23 @@ Optional local metrics use HARNESS_LOCAL_METRICS=1. Query the existing task metr
 command. Child-operation durations are separate from command totals, and numeric
 counters describe harness work/output, not actual model reads or token use.
 Feature-off performs no measurement reads/writes; collection never controls gates.
+
+## Smart Context Rotation & Task-to-Task Bridge (`task bridge`)
+
+When a conversation grows large (`CONTEXT_ROTATION_RECOMMENDED` at post-task delivery,
+phase checkpoints, or pre-verification) or when the developer wants to start a related
+follow-up task in a clean chat without re-explaining the previous task:
+
+1. **Save the bridge in the current chat**:
+   `python .agents/harness.py task bridge --save [--task-id <id>] [--next-outcome "<follow-up request>"] [--summary "<key decisions & files>"]`
+   - For a completed/delivered task (`FOLLOW_UP_TASK`), this captures the completed task's
+     outcome, approach, architecture contract, modified files, and plan notes.
+   - For an active in-progress task (`MID_TASK_HANDOFF`), this captures the live task state
+     and marks the source session stopped for seamless continuation.
+2. **Load the bridge in the new chat**:
+   `python .agents/harness.py task bridge`
+   - Mints a fresh conversation-local Discovery Receipt (`st_mtime >= RECEIPT_NOT_BEFORE`)
+     and refreshes `.agents/cache/last-task-context.json` so bounded searches and
+     `task draft` work immediately with zero re-discovery overhead.
+   - If the developer chooses to stay in the current chat instead of rotating, suppress
+     repeated advisories with `python .agents/harness.py task bridge --snooze`.

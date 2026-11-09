@@ -74,7 +74,7 @@ CORE_WORKFLOWS = (
     "preflight.md",
     "check-strings.md",
     "test-quality-audit.md",
-    "zoho-sprints.md",
+    "pm-tracker.md",
 )
 
 CORE_REFERENCES = (

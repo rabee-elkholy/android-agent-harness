@@ -15,7 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
-    "heal", "plan-check",
+    "heal", "plan-check", "bridge",
 })
 
 
@@ -33,7 +33,7 @@ def _run(script: str, args: list[str]) -> int:
     read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
     read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
-    read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"]))
+    read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"], ["bridge"]))
     read_only = read_only or (script == "generate_project_context.py" and args[:1] in (["preview"], ["status"], ["drift-report"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
     read_only = read_only or script == "incident_reporter.py"
@@ -136,6 +136,10 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
         print(f"SUGGESTED_COMMIT={action['suggested_commit']}", flush=True)
     if action.get("instructions") and (action.get("tool") == "ask_question" or action.get("kind") == "DEVELOPER_ACTION"):
         print(f"NEXT_INSTRUCTIONS={action['instructions']}", flush=True)
+    rot = action.get("context_rotation")
+    if isinstance(rot, dict) and rot.get("recommended"):
+        print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}", flush=True)
+        print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}", flush=True)
     if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
         try:
             compact_inputs = _compact_for_host(action["inputs"])
@@ -198,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
             operation = args[0]
             if len(args) > 1 and args[1] in actions.get(args[0], ()):
                 operation += "-" + args[1]
-            if operation not in {"task-metrics", "task-coverage", "task-status", "task-plan-check", "journey-list", "journey-validate", "review-status", "review-profile"}:
+            if operation not in {"task-metrics", "task-coverage", "task-status", "task-plan-check", "task-bridge", "journey-list", "journey-validate", "review-status", "review-profile"}:
                 task_id = metric_owner
                 if task_id:
                     record_operation(REPO_ROOT, task_id, operation, time.monotonic() - monotonic, code, started)

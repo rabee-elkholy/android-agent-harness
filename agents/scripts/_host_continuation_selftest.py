@@ -552,6 +552,201 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
         self.assertEqual("DISPATCH_PHASE_REVIEWERS", action["code"])
         self.assertEqual("INHERIT_PARENT_BY_OMISSION", action["review_execution_profile"]["model_policy"])
 
+    def test_task_bridge_follow_up_after_deliver_mints_fresh_discovery_receipt(self):
+        import time
+        import discovery_receipt
+        task_id = self.simple_task()
+        directory = workflow.task_dir(self.repo, task_id)
+        plan = read_json(directory / "plan.json")
+        plan["status"] = "DELIVERED"
+        plan["delivered_at"] = "2026-11-09T20:00:00+00:00"
+        plan["expected_files"] = ["app/src/main/java/com/example/App.kt"]
+        workflow.save_plan(directory / "plan.json", plan)
+        (self.repo / ".agents/state/active-task.json").unlink(missing_ok=True)
+        discovery_receipt.clear_latest_discovery_receipt(self.repo)
+
+        save_out = io.StringIO()
+        with contextlib.redirect_stdout(save_out):
+            code = workflow.main([
+                "bridge", "--save", "--repo", str(self.repo),
+                "--next-outcome", "Add input validation to App",
+                "--summary", "Delivered initial App screen",
+                "--json",
+            ])
+        self.assertEqual(0, code)
+        saved = json.loads(save_out.getvalue())
+        self.assertEqual("BRIDGE_SAVED", saved["status"])
+        self.assertEqual("FOLLOW_UP_TASK", saved["mode"])
+        self.assertEqual(task_id, saved["task_snapshot"]["task_id"])
+        self.assertIn("app/src/main/java/com/example/App.kt", saved["discovery_seed"]["resolved_paths"])
+
+        # Simulate a new conversation starting after the bridge was saved
+        prev_not_before = discovery_receipt.RECEIPT_NOT_BEFORE
+        try:
+            discovery_receipt.RECEIPT_NOT_BEFORE = time.time() - 0.01
+            load_out = io.StringIO()
+            with contextlib.redirect_stdout(load_out):
+                code = workflow.main(["bridge", "--repo", str(self.repo), "--json"])
+            self.assertEqual(0, code)
+            loaded = json.loads(load_out.getvalue())
+            self.assertEqual("BRIDGE_LOADED", loaded["status"])
+            self.assertEqual("FOLLOW_UP_TASK", loaded["mode"])
+            self.assertEqual("Add input validation to App", loaded["next_outcome"])
+            self.assertEqual("DRAFT_BRIDGED_FOLLOWUP_TASK", loaded["next_action"]["code"])
+            fresh_rec = discovery_receipt.load_latest_discovery_receipt(self.repo)
+            self.assertIsNotNone(fresh_rec)
+            self.assertEqual("task_bridge", fresh_rec["mode"])
+            self.assertIn("app/src/main/java/com/example/App.kt", fresh_rec["resolved_paths"])
+
+            draft_out = io.StringIO()
+            with contextlib.redirect_stdout(draft_out), contextlib.redirect_stderr(io.StringIO()):
+                d_code = workflow.main([
+                    "draft", "--repo", str(self.repo),
+                    "--task-id", "followup-validation",
+                    "--outcome", "Add input validation to App",
+                    "--expected-files", "app/src/main/java/com/example/App.kt",
+                    "--approach", "Validate App inputs before submission",
+                    "--json",
+                ])
+            self.assertEqual(0, d_code)
+            drafted = read_json(workflow.task_dir(self.repo, "followup-validation") / "plan.json")
+            self.assertEqual("task_bridge", (drafted.get("discovery_provenance") or {}).get("discovery_mode"))
+        finally:
+            discovery_receipt.RECEIPT_NOT_BEFORE = prev_not_before
+
+    def test_task_bridge_mid_task_handoff_transfers_session_and_is_idempotent(self):
+        from mutation_guard import command_allowed
+        task_id = self.simple_task()
+        code, _ = self.cli(task_id, "claude")
+        self.assertEqual(0, code)
+
+        save_out = io.StringIO()
+        with contextlib.redirect_stdout(save_out):
+            s_code = workflow.main([
+                "bridge", "--save", "--repo", str(self.repo),
+                "--task-id", task_id,
+                "--summary", "Mid-task checkpoint on First.kt",
+                "--json",
+            ])
+        self.assertEqual(0, s_code)
+        saved = json.loads(save_out.getvalue())
+        self.assertEqual("MID_TASK_HANDOFF", saved["mode"])
+
+        with mock.patch.dict(os.environ, {"HARNESS_HOST": "codex", "CODEX_THREAD_ID": "new-thread-99"}):
+            allowed, reason = command_allowed(self.repo, "python .agents/harness.py task bridge")
+            self.assertTrue(allowed, reason)
+            load_out = io.StringIO()
+            with contextlib.redirect_stdout(load_out):
+                l_code = workflow.main(["bridge", "--repo", str(self.repo), "--host", "codex", "--json"])
+            self.assertEqual(0, l_code)
+            loaded = json.loads(load_out.getvalue())
+            self.assertEqual("BRIDGE_CONTINUED", loaded["status"])
+            self.assertEqual("codex", loaded["host"])
+            self.assertEqual("IMPLEMENT_APPROVED_SCOPE", loaded["next_action"]["code"])
+
+            # Second load in the same chat is idempotent
+            load_out_2 = io.StringIO()
+            with contextlib.redirect_stdout(load_out_2):
+                l_code_2 = workflow.main(["bridge", "--repo", str(self.repo), "--host", "codex", "--json"])
+            self.assertEqual(0, l_code_2)
+            loaded_2 = json.loads(load_out_2.getvalue())
+            self.assertEqual("BRIDGE_CONTINUED", loaded_2["status"])
+
+    def test_smart_context_rotation_advisory_and_snooze(self):
+        task_id = self.simple_task()
+        directory = workflow.task_dir(self.repo, task_id)
+        plan = read_json(directory / "plan.json")
+        plan["status"] = "DELIVERED"
+        workflow.save_plan(directory / "plan.json", plan)
+
+        with mock.patch.dict(os.environ, {"HARNESS_CONVERSATION_STEPS": "150"}):
+            act = workflow.resolve_next_action(self.repo, task_id, plan)
+            self.assertEqual("TASK_DELIVERED", act["code"])
+            self.assertIn("context_rotation", act)
+            self.assertEqual("FOLLOW_UP_TASK", act["context_rotation"]["mode"])
+
+            # Snooze for 100 steps (until 250)
+            snooze_out = io.StringIO()
+            with contextlib.redirect_stdout(snooze_out):
+                self.assertEqual(0, workflow.main(["bridge", "--snooze", "--snooze-steps", "100", "--repo", str(self.repo), "--json"]))
+            act_snoozed = workflow.resolve_next_action(self.repo, task_id, plan)
+            self.assertNotIn("context_rotation", act_snoozed)
+
+        with mock.patch.dict(os.environ, {"HARNESS_CONVERSATION_STEPS": "260"}):
+            act_after = workflow.resolve_next_action(self.repo, task_id, plan)
+            self.assertIn("context_rotation", act_after)
+
+    def test_pre_tool_safety_records_active_conversation_turns(self):
+        conv_id = "11111111-2222-3333-4444-555555555555"
+        for _ in range(2):
+            code, res = self._run_pre_tool_safety({
+                "conversationId": conv_id,
+                "toolName": "view_file",
+                "toolArgs": {"AbsolutePath": str(self.repo / "app/src/main/java/com/example/First.kt")},
+            })
+            self.assertEqual(0, code, res)
+        conv_file = self.repo / ".agents/state/active-conversation.json"
+        self.assertTrue(conv_file.is_file())
+        data = read_json(conv_file)
+        self.assertEqual(conv_id, data["conversation_id"])
+        self.assertEqual(2, data["hook_calls"])
+
+    def test_task_bridge_edge_cases_integrity_repo_mismatch_and_transcript_tail(self):
+        from task_bridge import _inspect_transcript_tail
+
+        # 1. Missing bridge fails closed
+        err_out = io.StringIO()
+        with contextlib.redirect_stdout(err_out):
+            self.assertEqual(1, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        self.assertIn("TASK_BRIDGE_NOT_FOUND", err_out.getvalue())
+
+        # 2. Save bridge and inspect --status
+        task_id = self.simple_task()
+        save_out = io.StringIO()
+        with contextlib.redirect_stdout(save_out):
+            self.assertEqual(0, workflow.main(["bridge", "--save", "--repo", str(self.repo), "--task-id", task_id, "--json"]))
+
+        status_out = io.StringIO()
+        with contextlib.redirect_stdout(status_out):
+            self.assertEqual(0, workflow.main(["bridge", "--status", "--repo", str(self.repo), "--json"]))
+        st = json.loads(status_out.getvalue())
+        self.assertEqual("READY", st["status"])
+        self.assertIsNotNone(st["saved_bridge"])
+        self.assertEqual(task_id, st["saved_bridge"]["task_id"])
+
+        # 3. Tampered bridge fails closed
+        b_path = self.repo / ".agents/state/task-bridge.json"
+        b_data = read_json(b_path)
+        Tampered = dict(b_data, next_outcome="tampered without updating sha")
+        atomic_write_json(b_path, Tampered)
+        tamper_out = io.StringIO()
+        with contextlib.redirect_stdout(tamper_out):
+            self.assertEqual(1, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        self.assertIn("TASK_BRIDGE_INTEGRITY_ERROR", tamper_out.getvalue())
+
+        # 4. Repo root mismatch fails closed even with recalculated sha
+        from _vnext_common import canonical_sha256
+        from task_bridge import _bridge_canonical_fields
+        mismatch = dict(b_data)
+        mismatch["repository"] = dict(b_data["repository"], root_sha256="0" * 64)
+        mismatch["bridge_sha256"] = canonical_sha256(_bridge_canonical_fields(mismatch))
+        atomic_write_json(b_path, mismatch)
+        mismatch_out = io.StringIO()
+        with contextlib.redirect_stdout(mismatch_out):
+            self.assertEqual(1, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        self.assertIn("TASK_BRIDGE_REPO_MISMATCH", mismatch_out.getvalue())
+
+        # 5. Transcript tail inspection extracts step_index and token usage
+        fake_transcript = self.repo / "transcript.jsonl"
+        fake_transcript.write_text(
+            json.dumps({"step_index": 42, "type": "USER_INPUT"}) + "\n"
+            + json.dumps({"step_index": 185, "type": "PLANNER_RESPONSE", "usage": {"input_tokens": 92000, "cache_read_tokens": 4500}}) + "\n",
+            encoding="utf-8",
+        )
+        t_metrics = _inspect_transcript_tail(fake_transcript)
+        self.assertEqual(185, t_metrics["steps"])
+        self.assertEqual(96500, t_metrics["tokens"])
+
 
 # Avoid running the parent suite again when this focused suite is discovered.
 for _name in dir(phase_fixtures.PhaseReviewV2Selftest):

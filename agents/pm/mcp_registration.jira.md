@@ -55,7 +55,7 @@ provider-generic form of the historical `update zoho`). Ingest stays read-only.
 
 ## 5. Handoff contract
 
-Identical to rules section 5 and `.agents/workflows/zoho-sprints.md`:
+Identical to rules section 5 and `.agents/workflows/pm-tracker.md`:
 
 - First line MUST be `Commit: <hash>`.
 - Mandatory sections: Root Cause/Objective, Solution/What Changed,

@@ -2157,6 +2157,12 @@ def _main() -> None:
                     if receipt and check_discovery_freshness(REPO, receipt)[0] and is_path_in_discovery_scope(REPO, target, receipt) and not _installed_engine_target(target, recursive=True):
                         emit("allow", "Reviewer search is inside its graph discovery scope.", tool=name, reason_code="REVIEWER_DISCOVERY_SEARCH_ALLOWED")
                         return
+        if conversation and not reviewer:
+            try:
+                from task_bridge import record_active_conversation_turn
+                record_active_conversation_turn(REPO, conversation)
+            except (ImportError, OSError, ValueError):
+                pass
         if name in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
             target = str(args.get("AbsolutePath") or args.get("absolutePath") or args.get("SearchPath")
                          or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory")
