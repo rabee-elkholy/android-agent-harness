@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.14] - 2026-11-09
+
+### Smart Context Rotation (`CONTEXT_ROTATION_RECOMMENDED`), Task-to-Task & Mid-Task Context Bridge (`task bridge`), and Universal PM Command Pack Unification
+
+- **Smart Context Rotation & Conversation Health Tracking (`agents/scripts/task_bridge.py`, `agents/scripts/pre_tool_safety.py`, `agents/scripts/_workflow/router.py`, `agents/scripts/_workflow/engine.py`, `agents/harness.py`)**: Track non-reviewer conversation turns in `.agents/state/active-conversation.json` and inspect the tail of Antigravity JSONL transcripts (`_inspect_transcript_tail`) to estimate active steps and context tokens; emit non-blocking `CONTEXT_ROTATION_RECOMMENDED` advisories at clean boundaries (`>= 120` steps / `>= 80,000` tokens for post-task follow-up boundaries and `>= 220` steps / `>= 110,000` tokens for mid-task phase/verification checkpoints); and support `python .agents/harness.py task bridge --snooze` so developers who prefer to stay in the current chat are never nagged repeatedly.
+- **Task-to-Task & Mid-Task Context Bridge (`agents/scripts/task_bridge.py`, `agents/scripts/_workflow/engine.py`, `agents/scripts/mutation_guard.py`, `agents/scripts/_public_commands.py`, `agents/rules/harness-rules.md`, `agents/workflows/efficient-context.md`, `README.md`)**: Add `python .agents/harness.py task bridge --save [--task-id <id>] [--next-outcome "<follow-up request>"] [--summary "<decisions & context>"]` and `python .agents/harness.py task bridge` to persist an integrity-checked `.agents/state/task-bridge.json` (plus `.agents/state/bridge-history/<bridge_id>.json`) and restore full task context in a fresh chat in one command, automatically minting a fresh conversation-local Discovery Receipt (`mode="task_bridge"`) and updating `.agents/cache/last-task-context.json` so `task draft` and bounded searches work immediately without re-running repository discovery.
+- **Universal PM Tracker Command Pack & Workflow Unification (`agents/command-packs/pm-tracker.md.template`, `agents/workflows/pm-tracker.md`, `agents/pm/mcp_registration.jira.md`, `agents/pm/mcp_registration.linear.md`, `agents/scripts/pm_policy.py`, `agents/scripts/doctor/models.py`, `docs/workflows/pm-integrations.md`)**: Unify project-management command packs and workflows across Zoho Sprints, Zoho Projects, Jira, Linear, Monday.com, GitHub, ClickUp, Asana, and Trello.
+
 ## [1.2.13] - 2026-11-09
 
 ### Tool-First Anti-Loop Guard, 7 Scannable RTL-Aware Question Cards, Automatic Surface/Skill Drift Reconciliation, and Verified Claude Code Subagent Transcripts

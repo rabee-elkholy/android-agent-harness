@@ -237,7 +237,7 @@
     "agents/tool-adapters/QWEN.md.template": "ce8e8380f3a13cace4f4ae1414272eba5f2be744ba96351aa5d3c9f286a658da",
     "agents/tool-adapters/README.md": "52fdd031b08d16eed1b0608b45b1f494176f5d49e82e48fd9b9028a4966f8109",
     "agents/tool-adapters/windsurf-android-harness.md.template": "e2fbf8da4ce4facd93b2f9749a1fc571d5a530afce5a3810869ca3b95021870a",
-    "agents/VERSION": "c21698334b1e2308b8556ac1d10402342b8d3e837f65fa1c431eb23392824b1d",
+    "agents/VERSION": "22e988bfb2127d8584cc829f76868c2c85e138af32fe0989b29f7580b88a00a5",
     "agents/workflows/android-inspection.md": "86b6091efae4ebbaaa9cf575dd0f82502e331827cb1037b2e6c8734755b9d233",
     "agents/workflows/android-ui.md": "fe97a2c83ad3df6ca3c485dd9e0f7206d21055b176e04b637cb87174abf54f54",
     "agents/workflows/check-strings.md": "7a3b3a13f4647374cb2f60b632e586a277fc6102470eadb4a82f4bf595652d58",
