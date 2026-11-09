@@ -1,10 +1,10 @@
 # Android Agent Harness
 
-> **Stricter proof, not heavier daily workflow — purpose-built for Google Antigravity on Native Android & KMM / KMP (Kotlin Multiplatform Mobile).**
+> **Stricter proof, not heavier daily workflow — purpose-built for Google Antigravity, Claude Code, and AI coding agents on Native Android & KMM / KMP (Kotlin Multiplatform Mobile).**
 
-Android Agent Harness is an approval-first **Android & KMM / KMP (Kotlin Multiplatform Mobile)** engineering layer purpose-built for **Google Antigravity**.
+Android Agent Harness is an approval-first **Android & KMM / KMP (Kotlin Multiplatform Mobile)** engineering layer for **Google Antigravity**, **Claude Code**, **Codex**, **Cursor**, and 12+ AI coding hosts.
 
-It gives Antigravity bounded AST and symbol context across Native Android (`Kotlin`, `Java`, `Jetpack Compose`, `XML`) and Multiplatform projects (`commonMain`, `androidMain`, `iosMain`, `composeApp`, and iOS `.swift`), records the approved architecture and scope, intercepts out-of-scope file mutations via native `hooks.json`, orchestrates parallel epistemically isolated reviewer subagents (`HARNESS_REVIEW_RESULT_V2`), and binds every test, build, review, and physical device check to cryptographic delivery snapshots.
+It gives AI coding agents bounded AST and symbol context across Native Android (`Kotlin`, `Java`, `Jetpack Compose`, `XML`) and Multiplatform projects (`commonMain`, `androidMain`, `iosMain`, `composeApp`, and iOS `.swift`), records the approved architecture and scope, intercepts out-of-scope file mutations via native `PreToolUse` hooks (`hooks.json` / `.claude/settings.json`), orchestrates parallel epistemically isolated reviewer subagents (`HARNESS_REVIEW_RESULT_V2`), and binds every test, build, review, and physical device check to cryptographic delivery snapshots.
 
 The model focuses on engineering. The harness handles workflow state, proof, and safety boundaries.
 
@@ -193,7 +193,7 @@ Task A
 Open your Android project in **Google Antigravity** and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.12/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.13/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -216,7 +216,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.2.12 --single-branch \
+git clone --depth 1 --branch v1.2.13 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \

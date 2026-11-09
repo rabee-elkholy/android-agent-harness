@@ -1,17 +1,17 @@
 cff-version: 1.2.0
 type: software
-title: "Android Agent Harness: Deterministic Android & KMM/KMP Engineering for Google Antigravity"
+title: "Android Agent Harness: Deterministic Android & KMM/KMP Engineering for Google Antigravity, Claude Code & AI Coding Agents"
 message: "If you use this software in your research or engineering workflows, please cite it as below."
 authors:
   - family-names: "Elkholy"
     given-names: "Rabee"
 abstract: >-
-  An approval-first, evidence-bound AI coding harness purpose-built for Google Antigravity
+  An approval-first, evidence-bound AI coding harness purpose-built for Google Antigravity, Claude Code, and AI coding agents
   on Gradle Android and KMM/KMP (Kotlin Multiplatform Mobile) projects with AST/symbol graph
   discovery across Kotlin, Java, XML, and Swift, 6-tier dynamic risk routing, independent
   multi-agent code review, and deterministic verification gates.
-version: 1.2.12
-date-released: 2026-11-08
+version: 1.2.13
+date-released: 2026-11-09
 license: "MIT"
 url: "https://github.com/rabee-elkholy/android-agent-harness"
 repository-code: "https://github.com/rabee-elkholy/android-agent-harness"

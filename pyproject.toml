@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-agent-harness"
-version = "1.2.12"
-description = "Approval-first, evidence-bound engineering harness for Android and KMM/KMP (Kotlin Multiplatform Mobile) projects on Google Antigravity."
+version = "1.2.13"
+description = "Approval-first, evidence-bound engineering harness for Android and KMM/KMP (Kotlin Multiplatform Mobile) projects across Google Antigravity, Claude Code, Codex, Cursor, and AI coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Rabee Elkholy" }]
-keywords = ["android", "kmm", "kmp", "kotlin-multiplatform", "antigravity", "ai-agents", "code-review", "governance", "mcp"]
+keywords = ["android", "kmm", "kmp", "kotlin-multiplatform", "antigravity", "claude-code", "ai-agents", "code-review", "governance", "mcp"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
