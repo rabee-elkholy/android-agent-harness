@@ -147,14 +147,13 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
 
 VIEW_UI_RE = re.compile(
     r"\b("
-    r"(?:androidx\.fragment\.app\.)?Fragment\b|"
-    r"(?:DialogFragment|BottomSheetDialogFragment|ListFragment)\b|"
-    r"(?:AppCompatActivity|ComponentActivity|FragmentActivity|android\.app\.Activity)\b|"
+    r"(?:androidx\.fragment\.app\.)?(?:Base\w*)?(?:Fragment|DialogFragment|BottomSheetDialogFragment|ListFragment)\b|"
+    r"(?:Base\w*)?(?:AppCompatActivity|ComponentActivity|FragmentActivity|android\.app\.Activity)\b|"
     r"(?:RecyclerView\.(?:Adapter|ViewHolder)|ListAdapter|BaseAdapter|ArrayAdapter|PagerAdapter)\b|"
     r"(?:onCreateViewHolder|onBindViewHolder|getItemCount)\b|"
-    r"(?:ViewBinding|DataBindingUtil|LayoutInflater)\b|"
+    r"(?:ViewBinding|DataBindingUtil|LayoutInflater|(?:Fragment|Activity|Dialog|BottomSheet|Item|Layout)\w*Binding)\b|"
     r"(?:findViewById|setOnClickListener|setContentView)\b|"
-    r":\s*(?:Fragment|AppCompatActivity|ComponentActivity|RecyclerView\.Adapter|ListAdapter)\b"
+    r":\s*(?:Base\w*)?(?:Fragment|DialogFragment|BottomSheetDialogFragment|AppCompatActivity|ComponentActivity|Activity|RecyclerView\.Adapter|ListAdapter)\b"
     r")"
 )
 

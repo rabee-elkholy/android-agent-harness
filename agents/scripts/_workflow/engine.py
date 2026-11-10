@@ -2179,7 +2179,9 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
     live_repo = manifest.get("repository") or {}
     if not isinstance(frozen_repo, dict):
         return {"fresh": False, "reason_code": "REPOSITORY_IDENTITY_MISSING", "reason": "verification run has no frozen repository identity"}
-    for field in ("root_sha256", "git_common_dir_sha256", "branch", "head"):
+    is_ready_completed = bool(allow_completed and plan.get("status") == "READY_FOR_DELIVERY")
+    repo_fields = ("root_sha256", "git_common_dir_sha256", "branch") if is_ready_completed else ("root_sha256", "git_common_dir_sha256", "branch", "head")
+    for field in repo_fields:
         if frozen_repo.get(field) != live_repo.get(field):
             return {
                 "fresh": False,
@@ -2188,7 +2190,7 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
             }
     checks = [
         ("delivery_snapshot_sha256", "DELIVERY_SNAPSHOT_CHANGED"),
-        ("change_set_sha256", "CHANGE_SET_CHANGED"),
+        *([] if is_ready_completed else [("change_set_sha256", "CHANGE_SET_CHANGED")]),
         ("external_inputs_sha256", "EXTERNAL_INPUTS_CHANGED"),
     ]
     for key, reason_code in checks:
@@ -2209,7 +2211,7 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
             }
 
     task_cs = current.get("task_change_set_sha256")
-    if task_cs:
+    if task_cs and not is_ready_completed:
         try:
             task_baseline = load_task_baseline(repo, task_id)
             task_base_head = (
@@ -2242,10 +2244,10 @@ def verification_freshness(repo: Path, task_id: str, current_run: dict | None = 
     }
 
 
-def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None) -> dict:
+def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None, *, allow_completed: bool = False) -> dict:
     """Validate that the active verification run is fresh and matches current repository state."""
     plan = _load_plan(repo, task_id)
-    if plan.get("status") != "VERIFYING":
+    if plan.get("status") != "VERIFYING" and not (allow_completed and plan.get("status") == "READY_FOR_DELIVERY"):
         raise ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not VERIFYING")
     directory = task_dir(repo, task_id)
     current_path = directory / "current-run.json"
@@ -2277,7 +2279,7 @@ def assert_active_run_fresh(repo: Path, task_id: str, run_id: str | None = None)
     active_run_id = str(current.get("run_id") or "")
     if run_id and active_run_id != run_id:
         raise ValidationError(f"verification run mismatch: expected run '{run_id}', found '{active_run_id}'")
-    freshness = verification_freshness(repo, task_id, current)
+    freshness = verification_freshness(repo, task_id, current, allow_completed=allow_completed)
     if not freshness.get("fresh"):
         raise ValidationError(freshness.get("reason", "Verification run is stale"))
     return current

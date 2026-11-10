@@ -83,6 +83,11 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
     import io
     import json
 
+    if step_args and step_args[0] == "device" and (
+        exit_code != 0 or step_args[1:2] in (["install-start"], ["start"])
+    ):
+        return
+
     try:
         sys.path.insert(0, str(SCRIPTS))
         from mutation_guard import active_plan

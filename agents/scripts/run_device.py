@@ -123,12 +123,32 @@ def record_device(
         payload["preexisting_package"] = preexisting_package
     if startup_probe is not None:
         payload['startup_probe'] = startup_probe
-    name = "device_install" if action == "install" else "device_launch" if action == "start" else "device"
+    name = "device_install" if action in ("install", "install-start") else "device_launch" if action == "start" else "device"
     write_gate_result(name, payload)
     write_gate_result("device", payload)
 
 
-def require_serial(explicit: str | None) -> str:
+def _emit_device_not_installed_guidance(reason: str) -> None:
+    live_print(
+        f"[!] DEVICE_NOT_INSTALLED: The APK was NOT installed or launched on any device ({reason}).",
+        err=True,
+    )
+    live_print(
+        "[!] DO NOT present the Mobile Verification Walkthrough or claim the build is installed!",
+        err=True,
+    )
+    live_print("NEXT_ACTION=CONNECT_DEVICE_AND_RETRY: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
+    live_print("TOOL_CALL_REQUIRED=ask_question")
+    live_print(
+        "NEXT_INSTRUCTIONS=The APK could NOT be installed on the phone ("
+        + reason
+        + "). Invoke `ask_question` immediately (ZERO chat prose before the tool call) to inform the developer and offer: "
+        "(1) 'Connected phone — retry install now' (`python .agents/harness.py device install-start`), or "
+        "(2) 'Skip phone installation'. NEVER present the 3-section Mobile Verification Walkthrough until `device install-start` succeeds with `[+] Launched`."
+    )
+
+
+def require_serial(explicit: str | None, action: str = "install") -> str:
     policy = str(DEVICE_TARGET_POLICY or ("allow" if ALLOW_EMULATOR else "physical-only"))
     if explicit:
         serial = explicit
@@ -136,16 +156,18 @@ def require_serial(explicit: str | None) -> str:
         matches = matching_adb_serials(policy=policy)
         if not matches:
             verdict = no_device_verdict()
-            record_device("require-serial", "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
+            record_device(action, "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
             emit_env_failure(verdict, "run_device.py")
+            _emit_device_not_installed_guidance(verdict.reason)
             sys.exit(EXIT_ENV)
         if len(matches) > 1:
             verdict = FailureVerdict(
                 CLASS_ENV,
                 f"Multiple matching target devices detected ({', '.join(matches)}). Specify device explicitly via --serial <serial>.",
             )
-            record_device("require-serial", "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
+            record_device(action, "ENV", EXIT_ENV, None, verdict.env_class, verdict.reason)
             emit_env_failure(verdict, "run_device.py")
+            _emit_device_not_installed_guidance(verdict.reason)
             sys.exit(EXIT_ENV)
         serial = matches[0]
     is_emulator = adb_serial_is_emulator(serial)
@@ -154,13 +176,15 @@ def require_serial(explicit: str | None) -> str:
             CLASS_ENV,
             "Emulator targeting is forbidden by project policy. Connect a physical device.",
         )
-        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+        record_device(action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
         emit_env_failure(verdict, "run_device.py", serial=serial)
+        _emit_device_not_installed_guidance(verdict.reason)
         sys.exit(EXIT_ENV)
     if policy == "emulator-only" and not is_emulator:
         verdict = FailureVerdict(CLASS_ENV, "Physical-device targeting is forbidden by project policy. Start an emulator.")
-        record_device("require-serial", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
+        record_device(action, "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
         emit_env_failure(verdict, "run_device.py", serial=serial)
+        _emit_device_not_installed_guidance(verdict.reason)
         sys.exit(EXIT_ENV)
     return serial
 
@@ -597,6 +621,16 @@ def _check_device_prerequisites(args: argparse.Namespace) -> int | None:
             err=True,
         )
         return EXIT_ENV
+    if status == "READY_FOR_DELIVERY" and args.action in ("install", "start", "install-start"):
+        task_id = str(active.get("task_id") or "")
+        expected_run_id = str(active.get("ready_run_id") or active.get("verification_run_id") or "")
+        try:
+            from workflow import assert_active_run_fresh
+            assert_active_run_fresh(REPO, task_id, expected_run_id or None, allow_completed=True)
+        except Exception as exc:
+            live_print(f"[FAIL] {exc}", err=True)
+            return EXIT_ENV
+        return None
     if status == "VERIFYING" and args.action in ("install", "start", "install-start"):
         task_id = str(active.get("task_id") or "")
         state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
@@ -769,7 +803,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
 
     state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
     try:
-        current_run = assert_active_run_fresh(REPO, task_id)
+        current_run = assert_active_run_fresh(REPO, task_id, allow_completed=True)
     except Exception as exc:
         live_print(f"[FAIL] Active run freshness check failed for device sign-off: {exc}", err=True)
         return 1
@@ -897,7 +931,7 @@ def _record_signoff(args: argparse.Namespace) -> int:
         from verification_contract import bind_evidence
         from evidence_store import StateLock
         with StateLock(state):
-            assert_active_run_fresh(REPO, task_id)
+            assert_active_run_fresh(REPO, task_id, allow_completed=True)
             signoff = store.read(snapshot, run_id, "device_signoff")
             store.write(snapshot=snapshot, run_id=run_id, name="device_validation_result", producer="device_validation",
                         harness_version=harness_version, change_set=change_set, status=verdict,
@@ -940,7 +974,7 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
     from workflow import assert_active_run_fresh
     state = REPO / ".agents/state" if (REPO / ".agents").is_dir() else REPO / "agents/state"
     try:
-        current_run = assert_active_run_fresh(REPO, task_id)
+        current_run = assert_active_run_fresh(REPO, task_id, allow_completed=True)
     except Exception as exc:
         live_print(f"[FAIL] Active run freshness check failed for skip-validation: {exc}", err=True)
         return 1
@@ -951,10 +985,6 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
         bool(policy.get("device_required"))
         or "device" in (policy.get("gates") or [])
     )
-    if not device_required:
-        live_print("[FAIL] MOBILE_VALIDATION_NOT_REQUIRED: device validation is not required for this task.", err=True)
-        return 1
-
     snapshot = str(current_run.get("delivery_snapshot_sha256") or "")
     run_id = str(current_run.get("run_id") or "")
     change_set = str(current_run.get("change_set_sha256") or "")
@@ -963,6 +993,15 @@ def _handle_skip_validation(args: argparse.Namespace) -> int:
 
     from evidence_store import EvidenceStore
     store = EvidenceStore(state)
+    if not device_required:
+        try:
+            rec_inst = store.read(snapshot, run_id, "device_install")
+            device_required = str(rec_inst.get("status") or "").upper() != "PASS"
+        except (OSError, ValueError, ValidationError):
+            pass
+    if not device_required:
+        live_print("[FAIL] MOBILE_VALIDATION_NOT_REQUIRED: device validation is not required for this task.", err=True)
+        return 1
     harness_version = _read_harness_version(REPO)
 
     evidence = {
@@ -1097,7 +1136,7 @@ def main() -> int:
         return 1
 
     variant_note = f" (variant: {active_flavor})" if active_flavor else ""
-    serial = require_serial(args.serial)
+    serial = require_serial(args.serial, action=args.action)
     live_print(f"[*] Physical device{variant_note}: {serial}")
 
     if args.action == "uninstall":
@@ -1116,6 +1155,18 @@ def main() -> int:
         record_device(args.action, "PASS", 0, serial)
         live_print(f"[+] Uninstall finished for {args.package}")
         return 0
+
+    active_status = ""
+    try:
+        from mutation_guard import active_plan
+        active_status = str((active_plan(REPO) or {}).get("status") or "")
+    except Exception:
+        active_status = ""
+    manifest_fields = (
+        ("delivery_snapshot_sha256", "external_inputs_sha256")
+        if active_status == "READY_FOR_DELIVERY"
+        else ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256")
+    )
 
     artifact_set = None
     apk_paths: list[Path] = []
@@ -1145,13 +1196,24 @@ def main() -> int:
                     if requested["artifact_set_sha256"] != recorded.get("artifact_set_sha256"):
                         raise HarnessError("explicit APK paths do not match the active assemble artifact set")
                 current_manifest = build_manifest(REPO)
-                for field in ("delivery_snapshot_sha256", "change_set_sha256", "external_inputs_sha256"):
+                for field in manifest_fields:
                     if assemble_record.get(field) != current_manifest.get(field):
                         raise HarnessError(f"assemble evidence is stale: {field}")
         except HarnessError as exc:
             verdict = FailureVerdict(CLASS_ENV, str(exc))
             record_device("install", "ENV", EXIT_ENV, serial, verdict.env_class, verdict.reason)
             emit_env_failure(verdict, "run_device.py", serial=serial)
+            if "assemble evidence" in str(exc):
+                live_print(
+                    f"[!] DEVICE_NOT_INSTALLED: Fresh assemble evidence is required before installing on device ({exc}).",
+                    err=True,
+                )
+                live_print(f"NEXT_ACTION=ASSEMBLE_BEFORE_DEVICE: python .agents/harness.py assemble {_task}")
+                live_print(
+                    f"NEXT_REASON=Run `python .agents/harness.py assemble {_task}` first, then re-run `python .agents/harness.py device {args.action}`."
+                )
+            else:
+                _emit_device_not_installed_guidance(verdict.reason)
             return EXIT_ENV
     artifact_set_sha = str((artifact_set or {}).get("artifact_set_sha256") or "")
     actual_application_id = str((artifact_set or {}).get("application_id") or APPLICATION_ID)
@@ -1256,6 +1318,7 @@ def main() -> int:
                 )
             record_device("install", "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, artifact_set_sha=artifact_set_sha, application_id=actual_application_id, target_user=target_user, preexisting_package=preexisting_package)
             emit_env_failure(verdict, "run_device.py", serial=serial)
+            _emit_device_not_installed_guidance(verdict.reason)
             return exit_for(verdict)
         install_status = "EMERGENCY_UNVERIFIED" if args.force else "PASS"
         detail = "runtime permissions granted by explicit flag" if args.grant_runtime_permissions else ""
@@ -1277,6 +1340,7 @@ def main() -> int:
             live_print(f"[!] am start failed (exit {code})", err=True)
             record_device("start", "ENV" if verdict.env_class != "CODE" else "FAIL", exit_for(verdict), serial, verdict.env_class, verdict.reason, artifact_set_sha=artifact_set_sha, install_reference=artifact_set_sha, application_id=actual_application_id, target_user=target_user)
             emit_env_failure(verdict, "run_device.py", serial=serial)
+            _emit_device_not_installed_guidance(verdict.reason)
             return exit_for(verdict)
         with step_progress('Checking installed APK, foreground and startup UI'):
             startup = check_startup(serial, actual_application_id, target_user, artifact_set,
@@ -1286,8 +1350,7 @@ def main() -> int:
                 verify_artifact_set(REPO, artifact_set)
                 if not args.force:
                     after_startup = build_manifest(REPO)
-                    if any(after_startup.get(key) != current_manifest.get(key) for key in (
-                        'delivery_snapshot_sha256', 'change_set_sha256', 'external_inputs_sha256')):
+                    if any(after_startup.get(key) != current_manifest.get(key) for key in manifest_fields):
                         raise HarnessError('delivery inputs changed during startup')
             except (HarnessError, OSError):
                 startup = {**startup, 'status': 'ENV', 'detail': 'Assemble inputs or APK artifacts changed during startup'}
@@ -1301,6 +1364,7 @@ def main() -> int:
         if exit_code:
             if exit_code == EXIT_ENV:
                 emit_env_failure(FailureVerdict(CLASS_ENV, startup['detail']), 'run_device.py', serial=serial)
+            _emit_device_not_installed_guidance(str(startup.get('detail') or 'startup verification failed'))
             return exit_code
         live_print(f"[+] Launched {target_activity}")
         try:
@@ -1372,16 +1436,30 @@ def main() -> int:
             for e in walkthrough["edge_cases"] + walkthrough["regression_checks"]:
                 live_print(f"   - {e}")
             live_print("=" * 60)
-            live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
-            live_print("TOOL_CALL_REQUIRED=ask_question")
-            live_print(
-                "[!] CRITICAL: Do NOT write any chat text (`content`), horizontal rules (`---`), or parenthetical notes (`*(...)*`) before calling `ask_question`! "
-                "Emit the `ask_question` tool call immediately and place the entire 3-section walkthrough (using numbered lines for steps, NEVER a `| ... |` pipe table) inside the `question` field "
-                "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise; "
-                "translate all lines, table headers, and options into the developer's language, and in an RTL language start every line and every option with a word in that language, e.g. 'ناجح (PASS) — ...', never starting with English 'PASS'/'FAIL').\n"
-            )
-            if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
-                live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
+            if str(active.get("status") or "") == "READY_FOR_DELIVERY":
+                live_print("NEXT_ACTION=READY_FOR_DELIVERY_PHONE_CHECK: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
+                live_print("TOOL_CALL_REQUIRED=ask_question")
+                live_print(
+                    "[!] CRITICAL: The task is ALREADY verified in `READY_FOR_DELIVERY` (do NOT run `device signoff` or `task resume --reopen` unless the developer asks for code changes). "
+                    "Invoke `ask_question` immediately with ZERO chat text before the tool call, placing the 3-section walkthrough above inside `question` "
+                    "(options: 'Verified on phone & committed — finalize delivery' -> run `python .agents/harness.py task deliver --task-id "
+                    + task_id
+                    + "`, 'Verified on phone — show git commit card', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start`, "
+                    "'Found an issue — request code changes' -> run `python .agents/harness.py task resume --task-id "
+                    + task_id
+                    + " --reopen`; translate all lines and options into the developer's language, starting every line and option with a word in that language).\n"
+                )
+            else:
+                live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
+                live_print("TOOL_CALL_REQUIRED=ask_question")
+                live_print(
+                    "[!] CRITICAL: Do NOT write any chat text (`content`), horizontal rules (`---`), or parenthetical notes (`*(...)*`) before calling `ask_question`! "
+                    "Emit the `ask_question` tool call immediately and place the entire 3-section walkthrough (using numbered lines for steps, NEVER a `| ... |` pipe table) inside the `question` field "
+                    "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise; "
+                    "translate all lines, table headers, and options into the developer's language, and in an RTL language start every line and every option with a word in that language, e.g. 'ناجح (PASS) — ...', never starting with English 'PASS'/'FAIL').\n"
+                )
+                if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
+                    live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
         except (OSError, ValueError, ImportError, ValidationError):
             pass
 

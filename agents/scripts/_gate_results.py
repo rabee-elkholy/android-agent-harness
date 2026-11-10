@@ -69,14 +69,25 @@ def write_gate_result(
             if active is not None:
                 task_id = validate_id(str(active.get("task_id") or ""), "task_id")
                 plan = read_json(state_root / "tasks" / task_id / "plan.json")
-                if plan.get("status") == "VERIFYING":
+                if plan.get("status") in ("VERIFYING", "READY_FOR_DELIVERY"):
                     current = read_json(state_root / "tasks" / task_id / "current-run.json")
                     current_run_id = validate_id(str(current.get("run_id") or ""), "run_id")
                     if run_id and run_id != current_run_id:
                         raise ValidationError("explicit verification run identity mismatch")
                     run_id = current_run_id
-                    if plan.get("verification_run_id") and plan["verification_run_id"] != run_id:
+                    expected_run_id = (
+                        plan.get("ready_run_id") or plan.get("verification_run_id")
+                        if plan.get("status") == "READY_FOR_DELIVERY"
+                        else plan.get("verification_run_id")
+                    )
+                    if expected_run_id and expected_run_id != run_id:
                         raise ValidationError("active verification run identity mismatch")
+                    if (
+                        plan.get("status") == "READY_FOR_DELIVERY"
+                        and current.get("delivery_snapshot_sha256") == payload.get("delivery_snapshot_sha256")
+                        and current.get("change_set_sha256")
+                    ):
+                        payload["change_set_sha256"] = current["change_set_sha256"]
         except Exception as exc:
             raise AuthoritativeEvidenceError("authoritative evidence run discovery failed") from exc
         if run_id and name != "device":

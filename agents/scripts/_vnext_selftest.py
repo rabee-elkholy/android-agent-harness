@@ -4265,6 +4265,85 @@ class CleanInstallV2SpecificationTests(RepoCase):
         meta = q.get("conditional_text_input") or {}
         self.assertEqual("review_call_budget_text", meta.get("answer_key"))
 
+    def test_CLASSIFIER_BASE_FRAGMENT_001_detects_custom_base_fragment_and_view_binding(self) -> None:
+        from change_classifier import classify
+        from review_policy import decide
+
+        frag_rel = "app/src/main/java/com/example/clean/HealthConnectOnboardingFragment.kt"
+        write(
+            self.repo / frag_rel,
+            "package com.example.clean\n\n"
+            "class HealthConnectOnboardingFragment : BaseFragment<FragmentHealthConnectOnboardingBinding>() {\n"
+            "    fun bindUi() {}\n"
+            "}\n",
+        )
+        cls_res = classify(self.repo, task_changes=[{"path": frag_rel}], candidate_paths=[frag_rel], progress=False)
+        surfaces = set(cls_res.get("surfaces") or [])
+        self.assertIn("XML_UI", surfaces)
+        self.assertIn("BUSINESS_LOGIC", surfaces)
+        pol = decide(cls_res, KIT / "agents/skills")
+        self.assertIn("device", pol.get("gates") or [])
+        self.assertIn("assemble", pol.get("gates") or [])
+
+    def test_READY_FOR_DELIVERY_DEVICE_001_allows_device_assemble_and_e2e_without_reopen(self) -> None:
+        from mutation_guard import command_allowed
+
+        plan_dir = self.repo / ".agents/state/tasks/ready-dev-test"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        plan_path = plan_dir / "plan.json"
+        write(
+            plan_path,
+            json.dumps({
+                "task_id": "ready-dev-test",
+                "status": "READY_FOR_DELIVERY",
+                "expected_files": ["app/src/main/kotlin/A.kt"],
+                "expected_modules": ["app"],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+            }),
+        )
+        write(
+            self.repo / ".agents/state/active-task.json",
+            json.dumps({"task_id": "ready-dev-test", "plan_path": str(plan_path)}),
+        )
+        for cmd in (
+            "python .agents/harness.py device install-start",
+            "python .agents/harness.py assemble assembleDebug",
+            "python .agents/harness.py e2e start",
+            "python .agents/scripts/run_device.py install-start",
+        ):
+            allowed, reason = command_allowed(self.repo, cmd)
+            self.assertTrue(allowed, f"Expected '{cmd}' to be allowed in READY_FOR_DELIVERY, got: {reason}")
+
+    def test_DEVICE_NOT_CONNECTED_GUARD_001_emits_anti_hallucination_and_skips_next_step_override(self) -> None:
+        import io
+        import contextlib
+        import run_device
+        import agents.harness as harness_entry
+
+        buf = io.StringIO()
+        with (
+            mock.patch.object(run_device, "matching_adb_serials", return_value=[]),
+            mock.patch.object(run_device, "record_device") as rec_mock,
+            mock.patch.object(run_device, "emit_env_failure"),
+            contextlib.redirect_stdout(buf),
+            contextlib.redirect_stderr(buf),
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                run_device.require_serial(None, action="install-start")
+        self.assertEqual(run_device.EXIT_ENV, ctx.exception.code)
+        rec_mock.assert_called_once()
+        self.assertEqual("install-start", rec_mock.call_args.args[0])
+        self.assertEqual("ENV", rec_mock.call_args.args[1])
+        output = buf.getvalue()
+        self.assertIn("DEVICE_NOT_INSTALLED", output)
+        self.assertIn("NEXT_ACTION=CONNECT_DEVICE_AND_RETRY", output)
+
+        step_buf = io.StringIO()
+        with contextlib.redirect_stdout(step_buf):
+            harness_entry._print_next_step(step_args=["device", "install-start"], exit_code=30)
+            harness_entry._print_next_step(step_args=["device", "install-start"], exit_code=0)
+        self.assertEqual("", step_buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

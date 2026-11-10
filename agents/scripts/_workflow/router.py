@@ -635,7 +635,8 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "reason": (
                 f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
                 "Human Git Authority requires the developer to review and commit changes before final delivery. "
-                f"If the developer requests changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
+                "If the developer asks to install or test the APK on their phone before committing, run `python .agents/harness.py device install-start` directly (no `--reopen` needed). "
+                f"If the developer requests code changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
             ),
             "suggested_commit": suggested_commit,
             "suggested_commit_block": suggested_commit_full,
@@ -657,7 +658,8 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 "(in the developer's active conversation language) directly inside the `ask_question` `question` text:\n"
                 "(1) Compact verified files summary (show total file count and at most 3 key file names in `backticks`, noting any pre-existing edits),\n"
                 "(2) The full Conventional Commit message (subject line + bullet body) inside a copyable fenced ```text code block, and\n"
-                "(3) Options 'Committed - verify and deliver' / 'Request changes' / 'Cancel task' (translated into the developer's language; in an RTL language, start every line, bullet, and option with a word in that language).\n"
+                "(3) Options 'Committed - verify and deliver' / 'Install & test on phone first' / 'Request changes' / 'Cancel task' (translated into the developer's language; in an RTL language, start every line, bullet, and option with a word in that language).\n"
+                "NOTE: If the developer asks to install/test on their phone before committing, run `python .agents/harness.py device install-start` directly in `READY_FOR_DELIVERY` (do NOT run `task resume --reopen` unless code changes are needed).\n"
                 "CRITICAL: Emit ZERO chat text, NO `---` dividers, and NO `*(...)*` status notes before calling `ask_question`! "
                 "The model must NOT run git commit commands. Await developer commit."
             ),

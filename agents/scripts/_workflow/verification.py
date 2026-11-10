@@ -611,16 +611,32 @@ def build_device_action(context: VerificationContext) -> dict | None:
             }
 
     # 6. Device deploy
-    device_required = bool(policy.get("device_required")) or ("device" in policy_gates)
+    try:
+        install_record = store.read(snapshot, run_id, "device_install")
+        install_attempted = True
+    except Exception:
+        install_record = {}
+        install_attempted = False
+    install_failed = install_attempted and str((install_record or {}).get("status") or "").upper() != "PASS"
+    device_required = bool(policy.get("device_required")) or ("device" in policy_gates) or install_failed
+    if install_attempted and not device_required:
+        try:
+            sign_rec = store.read(snapshot, run_id, "device_signoff")
+            if str(sign_rec.get("status") or "").upper() == "FAIL":
+                return {
+                    "code": "RESUME_IMPLEMENTATION",
+                    "kind": "TASK_STATE",
+                    "command": f"python .agents/harness.py task resume --task-id {task_id}",
+                    "blocking": True,
+                    "reason": "Developer marked device sign-off as FAIL; resume implementation to resolve issues.",
+                    "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
+                    "expected": {"success_statuses": ["IMPLEMENTING"]},
+                }
+        except (OSError, ValueError, _engine.ValidationError):
+            pass
     if device_required:
         if not has_skip_evidence("mobile_validation_skip"):
             if not has_pass_evidence("device_install") or not has_pass_evidence("device_launch"):
-                try:
-                    install_record = store.read(snapshot, run_id, "device_install")
-                    install_attempted = True
-                except Exception:
-                    install_record = {}
-                    install_attempted = False
                 if _engine._install_confirm_policy() == "allow" and not install_attempted:
                     # The developer chose unattended install at setup; ask only if it does not work.
                     return {

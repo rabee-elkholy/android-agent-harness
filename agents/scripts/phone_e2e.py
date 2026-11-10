@@ -65,8 +65,8 @@ def session_dir(repo: Path, task_id: str, run_id: str) -> Path:
 def _load_session(repo: Path, task_id: str) -> tuple[dict, Path]:
     from workflow import _load_plan, task_dir
     plan = _load_plan(repo, task_id)
-    if plan.get("status") != "VERIFYING":
-        raise ValidationError(f"phone E2E requires a VERIFYING task (task is {plan.get('status')})")
+    if plan.get("status") not in ("VERIFYING", "READY_FOR_DELIVERY"):
+        raise ValidationError(f"phone E2E requires a VERIFYING or READY_FOR_DELIVERY task (task is {plan.get('status')})")
     current = read_json(task_dir(repo, task_id) / "current-run.json")
     directory = session_dir(repo, task_id, str(current.get("run_id") or ""))
     path = directory / "session.json"
@@ -87,7 +87,7 @@ def _bound_device(repo: Path, task_id: str) -> tuple[dict, dict, str, dict]:
     """Fresh run + valid install/launch evidence + the one connected phone that matches it."""
     from verification_contract import active_context
     from final_verifier import _validate_artifact
-    plan, current, store = active_context(repo, task_id, require_fresh=True)
+    plan, current, store = active_context(repo, task_id, require_fresh=True, allow_completed=True)
     version = (state_root(repo).parent / "VERSION").read_text(encoding="utf-8").strip()
     records = []
     for name in ("device_install", "device_launch"):

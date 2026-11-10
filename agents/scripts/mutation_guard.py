@@ -1292,6 +1292,12 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
+    if status == "READY_FOR_DELIVERY" and (
+        entry in {"run_device", "phone_e2e", "run_gradle_task"}
+        or action in {"verify"}
+        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["device"], ["assemble"], ["e2e"], ["verify"]))
+    ):
+        return True, f"post-verification device/build command authorized for ready plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.
     if status in ("VERIFYING", "BLOCKED", "READY_FOR_DELIVERY") and action in {"resume", "change-decision"}:
         return True, f"resume authorized for {status.lower()} plan {plan.get('plan_id')}"

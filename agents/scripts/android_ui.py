@@ -134,11 +134,11 @@ def authorize(repo: Path, action: str) -> dict:
     assert_execution_session(repo, plan.get("task_id"))
     if plan.get("status") == "IMPLEMENTING" and action in {"list", "render"}:
         require_mutation(plan)
-    elif plan.get("status") == "VERIFYING":
+    elif plan.get("status") in ("VERIFYING", "READY_FOR_DELIVERY"):
         from workflow import assert_active_run_fresh
-        assert_active_run_fresh(repo, plan["task_id"])
+        assert_active_run_fresh(repo, plan["task_id"], allow_completed=True)
     else:
-        raise ValidationError("Preview requires IMPLEMENTING/VERIFYING; Device Hub requires VERIFYING.")
+        raise ValidationError("Preview requires IMPLEMENTING/VERIFYING; Device Hub requires VERIFYING or READY_FOR_DELIVERY.")
     return plan
 
 

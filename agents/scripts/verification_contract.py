@@ -448,7 +448,7 @@ def journey_next_action(plan, current, store):
     return None
 
 
-def active_context(repo, task_id, require_fresh=False):
+def active_context(repo, task_id, require_fresh=False, *, allow_completed=False):
     from workflow import task_dir, state_root, verification_freshness
     from plan_authority import validate_plan_hash
     directory = task_dir(repo, task_id)
@@ -458,9 +458,9 @@ def active_context(repo, task_id, require_fresh=False):
     current_path = directory / "current-run.json"
     current = read_json(current_path) if current_path.exists() else {}
     if require_fresh:
-        if plan.get("status") != "VERIFYING":
+        if plan.get("status") != "VERIFYING" and not (allow_completed and plan.get("status") == "READY_FOR_DELIVERY"):
             raise ValidationError("evidence association requires VERIFYING")
-        freshness = verification_freshness(repo, task_id)
+        freshness = verification_freshness(repo, task_id, allow_completed=allow_completed)
         if not freshness.get("fresh"):
             raise ValidationError(str(freshness.get("reason")))
     return plan, current, EvidenceStore(state_root(repo))
