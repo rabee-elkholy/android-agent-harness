@@ -51,13 +51,22 @@ follow-up task in a clean chat without re-explaining the previous task:
 1. **Save the bridge in the current chat**:
    `python .agents/harness.py task bridge --save [--task-id <id>] [--next-outcome "<follow-up request>"] [--summary "<key decisions & files>"]`
    - For a completed/delivered task (`FOLLOW_UP_TASK`), this captures the completed task's
-     outcome, approach, architecture contract, modified files, and plan notes.
+     outcome, approach, architecture contract, modified files, compact declaration signatures
+     (`interface_delta`), and plan notes, plus a copy-ready `BRIDGE_HANDOFF_CARD`.
    - For an active in-progress task (`MID_TASK_HANDOFF`), this captures the live task state
      and marks the source session stopped for seamless continuation.
-2. **Load the bridge in the new chat**:
+2. **Load the bridge in the new chat (100% optional & intent-conditional)**:
    `python .agents/harness.py task bridge`
    - Mints a fresh conversation-local Discovery Receipt (`st_mtime >= RECEIPT_NOT_BEFORE`)
      and refreshes `.agents/cache/last-task-context.json` so bounded searches and
      `task draft` work immediately with zero re-discovery overhead.
+   - **Non-forced continuation & Multi-Bridge Queue**: `pre_invocation_reminder.py` surfaces an
+     intent-conditional notice in the new chat. If multiple unconsumed bridges exist in
+     `.agents/state/task-bridges.json`, `task bridge` returns `MULTIPLE_BRIDGES_PENDING`
+     (`SELECT_PENDING_BRIDGE`) so the developer can choose via `ask_question` (`--bridge-id <id>`),
+     consuming only the selected bridge and keeping the others queued. If the developer opens the
+     new chat for a **different or unrelated topic**, address their actual request directly without
+     running or consuming `task bridge` (leaving saved bridges untouched in the background, or run
+     `python .agents/harness.py task bridge --clear [--bridge-id <id> | --all]` if they ask to discard).
    - If the developer chooses to stay in the current chat instead of rotating, suppress
      repeated advisories with `python .agents/harness.py task bridge --snooze`.

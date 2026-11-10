@@ -747,6 +747,190 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
         self.assertEqual(185, t_metrics["steps"])
         self.assertEqual(96500, t_metrics["tokens"])
 
+    def test_task_bridge_interface_delta_intent_aware_reminder_and_clear(self):
+        import pre_invocation_reminder
+        from task_bridge import pending_bridge_reminder
+
+        app_kt = self.repo / "app/src/main/java/com/example/App.kt"
+        write_file(
+            app_kt,
+            "package com.example\n\n"
+            "// Comment should be ignored\n"
+            "data class LoginUiState(val email: String = \"\", val isLoading: Boolean = false)\n\n"
+            "class LoginViewModel {\n"
+            "    suspend fun submitCredentials(email: String, pass: String): Boolean {\n"
+            "        return true\n"
+            "    }\n"
+            "}\n",
+        )
+        task_id = self.simple_task()
+        directory = workflow.task_dir(self.repo, task_id)
+        plan = read_json(directory / "plan.json")
+        plan["status"] = "DELIVERED"
+        plan["delivered_at"] = "2026-11-10T08:00:00+00:00"
+        plan["expected_files"] = ["app/src/main/java/com/example/App.kt"]
+        workflow.save_plan(directory / "plan.json", plan)
+        (self.repo / ".agents/state/active-task.json").unlink(missing_ok=True)
+
+        # 1. Save bridge and verify interface_delta + handoff_card + optional_notice
+        save_out = io.StringIO()
+        with contextlib.redirect_stdout(save_out):
+            self.assertEqual(0, workflow.main([
+                "bridge", "--save", "--repo", str(self.repo),
+                "--next-outcome", "Add forgot password flow",
+                "--json",
+            ]))
+        saved = json.loads(save_out.getvalue())
+        self.assertIn("optional_notice", saved)
+        self.assertIn("handoff_card", saved)
+        self.assertIn("BRIDGE_HANDOFF_CARD_BEGIN", saved["handoff_card"])
+        self.assertEqual("python .agents/harness.py task bridge --clear", saved["clear_command"])
+        idelta = saved["task_snapshot"].get("interface_delta") or []
+        self.assertEqual(1, len(idelta))
+        self.assertEqual("app/src/main/java/com/example/App.kt", idelta[0]["path"])
+        decls_joined = "\n".join(idelta[0]["declarations"])
+        self.assertIn("data class LoginUiState", decls_joined)
+        self.assertIn("class LoginViewModel", decls_joined)
+        self.assertIn("suspend fun submitCredentials", decls_joined)
+
+        # 2. PreInvocation reminder surfaces intent-conditional non-forced notice while unconsumed
+        rem = pending_bridge_reminder(self.repo)
+        self.assertIn("OPTIONAL & INTENT-CONDITIONAL", rem)
+        self.assertIn("DIFFERENT or UNRELATED topic", rem)
+        self.assertIn("Add forgot password flow", rem)
+        with mock.patch.object(pre_invocation_reminder, "REPO", self.repo):
+            compact = pre_invocation_reminder._compact_message()
+        self.assertTrue(compact.startswith("Android Harness: Idle (no active task)."))
+        self.assertIn("Pending Task Bridge", compact)
+
+        # 3. Unrelated read-only tool call in the new chat does NOT consume or delete task-bridge.json
+        b_path = self.repo / ".agents/state/task-bridge.json"
+        self.assertTrue(b_path.is_file())
+        self.assertEqual(0, int(read_json(b_path).get("consumed_count") or 0))
+        code, res = self._run_pre_tool_safety({
+            "conversationId": "22222222-3333-4444-5555-666666666666",
+            "toolName": "view_file",
+            "toolArgs": {"AbsolutePath": str(app_kt)},
+        })
+        self.assertEqual(0, code, res)
+        self.assertTrue(b_path.is_file())
+        self.assertEqual(0, int(read_json(b_path).get("consumed_count") or 0))
+
+        # 4. Loading the bridge marks it consumed (consumed_count == 1) and stops repeating the reminder
+        load_out = io.StringIO()
+        with contextlib.redirect_stdout(load_out):
+            self.assertEqual(0, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        loaded = json.loads(load_out.getvalue())
+        self.assertEqual(1, len((loaded.get("previous_task") or {}).get("interface_delta") or []))
+        self.assertEqual(1, int(read_json(b_path).get("consumed_count") or 0))
+        self.assertEqual("", pending_bridge_reminder(self.repo))
+
+        # 5. Save again, then test explicit --clear (and idempotency when already cleared)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, workflow.main(["bridge", "--save", "--repo", str(self.repo), "--task-id", task_id, "--next-outcome", "Second follow-up", "--json"]))
+        self.assertTrue(b_path.is_file())
+        self.assertNotEqual("", pending_bridge_reminder(self.repo))
+
+        clear_out = io.StringIO()
+        with contextlib.redirect_stdout(clear_out):
+            self.assertEqual(0, workflow.main(["bridge", "--clear", "--repo", str(self.repo), "--json"]))
+        cleared = json.loads(clear_out.getvalue())
+        self.assertEqual("BRIDGE_CLEARED", cleared["status"])
+        self.assertTrue(cleared["archived_in_history"])
+        self.assertFalse(b_path.is_file())
+        self.assertEqual("", pending_bridge_reminder(self.repo))
+
+        # Second --clear is idempotent
+        clear_out_2 = io.StringIO()
+        with contextlib.redirect_stdout(clear_out_2):
+            self.assertEqual(0, workflow.main(["bridge", "--clear", "--repo", str(self.repo), "--json"]))
+        cleared_2 = json.loads(clear_out_2.getvalue())
+        self.assertEqual("BRIDGE_CLEARED", cleared_2["status"])
+        self.assertEqual("", cleared_2["bridge_id"])
+
+    def test_multi_bridge_queue_disambiguation_and_selective_consumption(self):
+        from task_bridge import pending_bridge_reminder
+
+        task_a = self.simple_task()
+        dir_a = workflow.task_dir(self.repo, task_a)
+        plan_a = read_json(dir_a / "plan.json")
+        plan_a["status"] = "DELIVERED"
+        plan_a["delivered_at"] = "2026-11-10T08:10:00+00:00"
+        workflow.save_plan(dir_a / "plan.json", plan_a)
+        (self.repo / ".agents/state/active-task.json").unlink(missing_ok=True)
+
+        # Save bridge 1 (follow-up A) and bridge 2 (follow-up B)
+        out_1 = io.StringIO()
+        with contextlib.redirect_stdout(out_1):
+            self.assertEqual(0, workflow.main([
+                "bridge", "--save", "--repo", str(self.repo),
+                "--task-id", task_a,
+                "--next-outcome", "Add biometric login",
+                "--json",
+            ]))
+        b1 = json.loads(out_1.getvalue())
+
+        out_2 = io.StringIO()
+        with contextlib.redirect_stdout(out_2):
+            self.assertEqual(0, workflow.main([
+                "bridge", "--save", "--repo", str(self.repo),
+                "--task-id", task_a,
+                "--next-outcome", "Add dark mode toggle",
+                "--json",
+            ]))
+        b2 = json.loads(out_2.getvalue())
+        self.assertEqual(2, b2["pending_bridges_count"])
+        self.assertNotEqual(b1["bridge_id"], b2["bridge_id"])
+
+        # Reminder lists both waiting bridges
+        rem = pending_bridge_reminder(self.repo)
+        self.assertIn("2 waiting", rem)
+        self.assertIn(b1["bridge_id"], rem)
+        self.assertIn(b2["bridge_id"], rem)
+
+        # Calling `task bridge` without --bridge-id returns MULTIPLE_BRIDGES_PENDING + SELECT_PENDING_BRIDGE
+        ambig_out = io.StringIO()
+        with contextlib.redirect_stdout(ambig_out):
+            self.assertEqual(0, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        ambig = json.loads(ambig_out.getvalue())
+        self.assertEqual("MULTIPLE_BRIDGES_PENDING", ambig["status"])
+        self.assertEqual(2, ambig["pending_bridges_count"])
+        self.assertEqual("SELECT_PENDING_BRIDGE", ambig["next_action"]["code"])
+        self.assertEqual("ask_question", ambig["next_action"]["tool"])
+
+        # Calling `task bridge --task-id <same>` when 2 follow-up bridges share that task_id ALSO disambiguates
+        ambig_tid_out = io.StringIO()
+        with contextlib.redirect_stdout(ambig_tid_out):
+            self.assertEqual(0, workflow.main(["bridge", "--repo", str(self.repo), "--task-id", task_a, "--json"]))
+        ambig_tid = json.loads(ambig_tid_out.getvalue())
+        self.assertEqual("MULTIPLE_BRIDGES_PENDING", ambig_tid["status"])
+        self.assertEqual(2, ambig_tid["pending_bridges_count"])
+
+        # Load bridge 1 specifically via --bridge-id -> consumes only b1, leaving b2 pending
+        load_b1_out = io.StringIO()
+        with contextlib.redirect_stdout(load_b1_out):
+            self.assertEqual(0, workflow.main([
+                "bridge", "--repo", str(self.repo),
+                "--bridge-id", b1["bridge_id"],
+                "--json",
+            ]))
+        loaded_b1 = json.loads(load_b1_out.getvalue())
+        self.assertEqual("BRIDGE_LOADED", loaded_b1["status"])
+        self.assertEqual("Add biometric login", loaded_b1["next_outcome"])
+
+        # Now only 1 unconsumed bridge (b2) remains, so plain `task bridge` loads b2 directly without ambiguity!
+        rem_after = pending_bridge_reminder(self.repo)
+        self.assertIn(b2["bridge_id"], rem_after)
+        self.assertNotIn("2 waiting", rem_after)
+
+        load_b2_out = io.StringIO()
+        with contextlib.redirect_stdout(load_b2_out):
+            self.assertEqual(0, workflow.main(["bridge", "--repo", str(self.repo), "--json"]))
+        loaded_b2 = json.loads(load_b2_out.getvalue())
+        self.assertEqual("BRIDGE_LOADED", loaded_b2["status"])
+        self.assertEqual("Add dark mode toggle", loaded_b2["next_outcome"])
+        self.assertEqual("", pending_bridge_reminder(self.repo))
+
 
 # Avoid running the parent suite again when this focused suite is discovered.
 for _name in dir(phase_fixtures.PhaseReviewV2Selftest):

@@ -3623,8 +3623,11 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_cmd = sub.add_parser("bridge", help="Save, load, inspect, or snooze a Smart Context Rotation & Task-to-Task Context Bridge")
     bridge_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     bridge_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active or most recently delivered task)")
+    bridge_cmd.add_argument("--bridge-id", default="", help="Specific bridge ID when loading or clearing from a multi-bridge queue")
     bridge_cmd.add_argument("--save", action="store_true", help="Save a context bridge artifact for a new conversation")
     bridge_cmd.add_argument("--load", action="store_true", help="Load the saved context bridge in a new conversation (default action)")
+    bridge_cmd.add_argument("--clear", action="store_true", help="Clear the active task-bridge.json while keeping bridge-history archived")
+    bridge_cmd.add_argument("--all", action="store_true", help="With --clear, clear all pending bridges in the queue")
     bridge_cmd.add_argument("--status", action="store_true", help="Inspect conversation bloat metrics, rotation advisory, and saved bridge status")
     bridge_cmd.add_argument("--snooze", action="store_true", help="Snooze context rotation advisories for the current conversation")
     bridge_cmd.add_argument("--snooze-steps", type=int, default=120, help="Number of additional steps before recommending rotation again (default: 120)")
@@ -4364,13 +4367,35 @@ def main(argv: list[str] | None = None) -> int:
             if b_status == "BRIDGE_SAVED":
                 print(f"BRIDGE_SHA256={result.get('bridge_sha256', '')}")
                 print(f"NEW_CHAT_COMMAND={result.get('new_chat_command', 'python .agents/harness.py task bridge')}")
+                print(f"CLEAR_COMMAND={result.get('clear_command', 'python .agents/harness.py task bridge --clear')}")
                 print(f"NEW_CHAT_PROMPT={result.get('new_chat_prompt', '')}")
+                if result.get("optional_notice"):
+                    print(f"OPTIONAL_NOTICE={result.get('optional_notice')}")
+                if result.get("handoff_card"):
+                    print(result["handoff_card"])
+            elif b_status == "BRIDGE_CLEARED":
+                print(f"ARCHIVED_IN_HISTORY={result.get('archived_in_history', False)}")
+                print(f"REMAINING_BRIDGES={result.get('remaining_count', 0)}")
+            elif b_status == "MULTIPLE_BRIDGES_PENDING":
+                print(f"PENDING_BRIDGES_COUNT={result.get('pending_bridges_count', 0)}")
+                for pb in result.get("pending_bridges") or []:
+                    print(f"PENDING_BRIDGE={pb.get('bridge_id')} TASK={pb.get('task_id')} MODE={pb.get('mode')} LOAD={pb.get('load_command')}")
+                upcoming = result.get("next_action") or {}
+                if upcoming.get("code"):
+                    print(f"NEXT_ACTION={upcoming.get('code')}: {upcoming.get('command') or ''}")
+                    print(f"NEXT_REASON={upcoming.get('reason') or ''}")
+                    if upcoming.get("instructions"):
+                        print(f"NEXT_INSTRUCTIONS={upcoming.get('instructions')}")
             elif b_status in ("BRIDGE_LOADED", "BRIDGE_CONTINUED"):
                 if result.get("session_id"):
                     print(f"HOST_EXECUTOR={result.get('host')} SESSION={result.get('session_id')} ENFORCEMENT={result.get('enforcement_tier')}")
                 disc = result.get("discovery_receipt") or {}
                 if disc.get("id"):
                     print(f"DISCOVERY_RECEIPT={disc.get('id')} FILES={len(disc.get('resolved_paths') or [])}")
+                prev = result.get("previous_task") or {}
+                idelta = prev.get("interface_delta") or []
+                if idelta:
+                    print(f"INTERFACE_DELTA_FILES={len(idelta)}")
                 if result.get("context_summary"):
                     print(f"CONTEXT_SUMMARY={result.get('context_summary')}")
                 if result.get("next_outcome"):

@@ -55,6 +55,10 @@ def _bridge_file(repo: Path) -> Path:
     return state_root(repo) / "task-bridge.json"
 
 
+def _bridges_queue_file(repo: Path) -> Path:
+    return state_root(repo) / "task-bridges.json"
+
+
 def _bridge_history_dir(repo: Path) -> Path:
     return state_root(repo) / "bridge-history"
 
@@ -170,8 +174,8 @@ def measure_conversation_health(repo: Path) -> dict[str, Any]:
     if conv_id and re.fullmatch(r"[0-9a-fA-F-]{20,64}", conv_id):
         try:
             from antigravity_runtime import resolve_transcript
-            transcript, _err = resolve_transcript(conv_id)
-            if transcript and transcript.is_file():
+            transcript = resolve_transcript(conv_id)
+            if isinstance(transcript, Path) and transcript.is_file():
                 t_metrics = _inspect_transcript_tail(transcript)
                 transcript_bytes = t_metrics["bytes"]
                 if t_metrics["steps"] > steps:
@@ -428,6 +432,71 @@ def _collect_task_modified_files(repo: Path, task_id: str, plan: dict[str, Any])
     return paths
 
 
+_DECL_RE = re.compile(
+    r"^\s*(?:@(?:Composable|JvmStatic|HiltViewModel|Inject)\s+)*"
+    r"(?:(?:public|internal|protected|private|open|abstract|final|sealed|data|value|inline|suspend|override|actual|expect|external|operator|infix|tailrec|companion)\s+)*"
+    r"(?P<kind>class|interface|object|enum\s+class|fun|func|struct|protocol|def|typealias)\s+"
+    r"(?P<sig>[A-Za-z_][A-Za-z0-9_<>.,:\s?()*=\[\]]*)"
+)
+
+
+def _extract_interface_delta(repo: Path, paths: list[str], *, max_files: int = 12, max_decls_per_file: int = 8) -> list[dict[str, Any]]:
+    """Extract compact top-level/member declaration signatures from modified/expected source files."""
+    supported_exts = {".kt", ".java", ".swift", ".py"}
+    results: list[dict[str, Any]] = []
+    for rel in paths:
+        if len(results) >= max_files:
+            break
+        norm = str(rel or "").replace("\\", "/").strip().strip("/")
+        if not norm or norm.startswith((".agents/", ".harness-")):
+            continue
+        full = repo / norm
+        if not full.is_file() or full.suffix.lower() not in supported_exts:
+            continue
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        decls: list[str] = []
+        in_block_comment = False
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if in_block_comment:
+                if "*/" in line:
+                    in_block_comment = False
+                continue
+            if line.startswith("/*"):
+                if "*/" not in line:
+                    in_block_comment = True
+                continue
+            if line.startswith(("//", "#", "*")):
+                continue
+            # Strip trailing inline comment and body brace
+            clean = re.split(r"\s+//|\s+#", line, maxsplit=1)[0].strip()
+            if "{" in clean:
+                clean = clean.split("{", 1)[0].strip()
+            if clean.endswith(":") and full.suffix.lower() == ".py":
+                clean = clean[:-1].strip()
+            m = _DECL_RE.match(clean)
+            if not m:
+                continue
+            # Skip private declarations unless no public ones exist yet
+            if re.search(r"\bprivate\b", clean) and len(decls) >= 2:
+                continue
+            compact_sig = re.sub(r"\s+", " ", clean).strip()
+            if len(compact_sig) > 120:
+                compact_sig = compact_sig[:117] + "..."
+            if compact_sig and compact_sig not in decls:
+                decls.append(compact_sig)
+                if len(decls) >= max_decls_per_file:
+                    break
+        if decls:
+            results.append({"path": norm, "declarations": decls})
+    return results
+
+
 def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) -> dict[str, Any]:
     if not task_id or not plan:
         return {
@@ -441,6 +510,7 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
             "expected_modules": [],
             "expected_surfaces": [],
             "modified_files": [],
+            "interface_delta": [],
             "architecture_contract": {},
             "phases_summary": [],
             "plan_notes": [],
@@ -488,6 +558,7 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
     } if isinstance(arch, dict) else {}
 
     modified_files = _collect_task_modified_files(repo, task_id, plan)
+    interface_delta = _extract_interface_delta(repo, modified_files)
 
     return {
         "task_id": task_id,
@@ -500,6 +571,7 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
         "expected_modules": [str(m) for m in (plan.get("expected_modules") or []) if str(m).strip()],
         "expected_surfaces": [str(s) for s in (plan.get("expected_surfaces") or []) if str(s).strip()],
         "modified_files": modified_files,
+        "interface_delta": interface_delta,
         "architecture_contract": compact_arch,
         "phases_summary": phases_summary,
         "plan_notes": notes_list,
@@ -509,8 +581,107 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
 
 
 def _bridge_canonical_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    excluded = {"bridge_sha256", "consumed_at", "consumed_count", "consumed_by_host"}
+    excluded = {"bridge_sha256", "consumed_at", "consumed_count", "consumed_by_host", "pending_bridges_count"}
     return {k: v for k, v in payload.items() if k not in excluded}
+
+
+def _load_bridge_queue(repo: Path) -> list[dict[str, Any]]:
+    """Load the multi-bridge queue from `.agents/state/task-bridges.json`, falling back to `task-bridge.json`."""
+    q_path = _bridges_queue_file(repo)
+    bridges: list[dict[str, Any]] = []
+    if q_path.is_file():
+        try:
+            raw = read_json(q_path)
+            if isinstance(raw, dict) and isinstance(raw.get("bridges"), list):
+                bridges = [b for b in raw["bridges"] if isinstance(b, dict) and b.get("bridge_id")]
+        except (OSError, ValueError, ValidationError):
+            bridges = []
+
+    single_path = _bridge_file(repo)
+    if single_path.is_file():
+        try:
+            single = read_json(single_path)
+            if isinstance(single, dict) and single.get("bridge_id"):
+                existing_ids = {str(b.get("bridge_id")) for b in bridges}
+                if str(single["bridge_id"]) not in existing_ids:
+                    bridges.append(single)
+                else:
+                    bridges = [single if str(b.get("bridge_id")) == str(single["bridge_id"]) else b for b in bridges]
+        except (OSError, ValueError, ValidationError):
+            pass
+    return bridges
+
+
+def _save_bridge_queue(repo: Path, bridges: list[dict[str, Any]]) -> None:
+    """Persist the multi-bridge queue and sync `.agents/state/task-bridge.json` to the preferred/latest entry."""
+    q_path = _bridges_queue_file(repo)
+    single_path = _bridge_file(repo)
+    if not bridges:
+        q_path.unlink(missing_ok=True)
+        single_path.unlink(missing_ok=True)
+        return
+    q_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(q_path, {"schema_version": BRIDGE_SCHEMA_VERSION, "bridges": bridges})
+    unconsumed = [b for b in bridges if int(b.get("consumed_count") or 0) == 0]
+    latest = unconsumed[-1] if unconsumed else bridges[-1]
+    atomic_write_json(single_path, latest)
+
+
+def _live_tasks_summary(repo: Path) -> list[dict[str, str]]:
+    """Return a compact list of all live non-terminal tasks in the repository."""
+    tasks_dir = state_root(repo) / "tasks"
+    if not tasks_dir.is_dir():
+        return []
+    live_states = {"AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED", "READY_FOR_DELIVERY"}
+    items: list[dict[str, str]] = []
+    for sub in sorted(tasks_dir.iterdir()):
+        if not sub.is_dir():
+            continue
+        p_file = sub / "plan.json"
+        if not p_file.is_file():
+            continue
+        try:
+            plan = read_json(p_file)
+            if not isinstance(plan, dict):
+                continue
+            st = str(plan.get("status") or "").upper()
+            if st in live_states:
+                tid = str(plan.get("task_id") or sub.name)
+                items.append({
+                    "task_id": tid,
+                    "status": st,
+                    "requested_outcome": str(redact(plan.get("requested_outcome") or ""))[:100],
+                })
+        except (OSError, ValueError, ValidationError):
+            continue
+    return items
+
+
+def _active_candidate_bridges(repo: Path, queue: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return unconsumed bridges excluding cancelled tasks, plus synthetic entries for unbridged sibling live tasks when >1 candidate exists."""
+    valid_unconsumed: list[dict[str, Any]] = []
+    covered_task_ids: set[str] = set()
+    for b in queue:
+        if not isinstance(b, dict) or int(b.get("consumed_count") or 0) > 0:
+            continue
+        snap = b.get("task_snapshot") or {}
+        tid = str(snap.get("task_id") or "").strip()
+        mode = str(b.get("mode") or "FOLLOW_UP_TASK").upper()
+        if tid:
+            covered_task_ids.add(tid)
+            p_file = state_root(repo) / "tasks" / tid / "plan.json"
+            if p_file.is_file():
+                try:
+                    live_p = read_json(p_file)
+                    if isinstance(live_p, dict):
+                        live_st = str(live_p.get("status") or "").upper()
+                        # Drop MID_TASK_HANDOFF bridges for tasks that were cancelled after the bridge was saved
+                        if live_st == "CANCELLED" and mode == "MID_TASK_HANDOFF":
+                            continue
+                except (OSError, ValueError, ValidationError):
+                    pass
+        valid_unconsumed.append(b)
+    return valid_unconsumed
 
 
 def save_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
@@ -614,6 +785,25 @@ def save_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
     bridge_id = f"bridge-{seed_hash}"
 
     bootstrap_prompt = "python .agents/harness.py task bridge"
+    clear_cmd = "python .agents/harness.py task bridge --clear"
+    if next_outcome:
+        copy_prompt = f"Run `{bootstrap_prompt}` and start the follow-up task: {redact(next_outcome)}"
+    elif task_id:
+        copy_prompt = f"Run `{bootstrap_prompt}` and continue from task '{task_id}'."
+    else:
+        copy_prompt = f"Run `{bootstrap_prompt}` and continue from the bridged context."
+    optional_notice = (
+        "Continuation in a new chat is 100% optional: if you open a new chat for a different topic, "
+        "simply state your unrelated request and this bridge will stay untouched in the background "
+        f"(or run `{clear_cmd}` to discard it)."
+    )
+    handoff_card = (
+        f"BRIDGE_HANDOFF_CARD_BEGIN\n"
+        f"- Bridge ID: `{bridge_id}` ({mode})\n"
+        f"- To continue in a new chat (copy-paste): `{copy_prompt}`\n"
+        f"- Non-forced: {optional_notice}\n"
+        f"BRIDGE_HANDOFF_CARD_END"
+    )
     payload: dict[str, Any] = {
         "schema_version": BRIDGE_SCHEMA_VERSION,
         "status": "BRIDGE_SAVED",
@@ -635,19 +825,38 @@ def save_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
         "context_summary": str(redact(custom_summary)),
         "next_outcome": str(redact(next_outcome)),
         "new_chat_command": bootstrap_prompt,
-        "new_chat_prompt": f"Run `{bootstrap_prompt}` and continue from the bridged context.",
+        "clear_command": clear_cmd,
+        "new_chat_prompt": copy_prompt,
+        "optional_notice": optional_notice,
+        "handoff_card": handoff_card,
     }
     payload["bridge_sha256"] = canonical_sha256(_bridge_canonical_fields(payload))
 
-    bridge_path = _bridge_file(repo)
-    bridge_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(bridge_path, payload)
+    queue = _load_bridge_queue(repo)
+    # Replace an existing unconsumed entry for the same (task_id, mode, next_outcome), otherwise append
+    replaced = False
+    new_queue: list[dict[str, Any]] = []
+    for item in queue:
+        item_tid = str((item.get("task_snapshot") or {}).get("task_id") or "")
+        item_mode = str(item.get("mode") or "")
+        item_next = str(item.get("next_outcome") or "")
+        if int(item.get("consumed_count") or 0) == 0 and item_tid == task_id and item_mode == mode and item_next == str(redact(next_outcome)):
+            new_queue.append(payload)
+            replaced = True
+        else:
+            new_queue.append(item)
+    if not replaced:
+        new_queue.append(payload)
+    # Keep at most 10 entries in the queue
+    new_queue = new_queue[-10:]
+    _save_bridge_queue(repo, new_queue)
 
     hist_dir = _bridge_history_dir(repo)
     hist_dir.mkdir(parents=True, exist_ok=True)
     atomic_write_json(hist_dir / f"{bridge_id}.json", payload)
 
-    return payload
+    unconsumed_count = len([b for b in new_queue if int(b.get("consumed_count") or 0) == 0])
+    return {**payload, "pending_bridges_count": unconsumed_count}
 
 
 def _mint_bridge_discovery_receipt(repo: Path, bridge: dict[str, Any]) -> dict[str, Any]:
@@ -732,17 +941,119 @@ def _suggest_followup_task_id(prev_task_id: str, next_outcome: str) -> str:
     return "followup-task"
 
 
+def _select_bridge_from_queue(
+    repo: Path,
+    queue: list[dict[str, Any]],
+    *,
+    requested_bridge_id: str = "",
+    requested_task_id: str = "",
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Select the target bridge from the queue or return a structured disambiguation response when multiple unconsumed bridges exist."""
+    req_bid = str(requested_bridge_id or "").strip()
+    req_tid = str(requested_task_id or "").strip()
+    if req_bid:
+        for b in reversed(queue):
+            if str(b.get("bridge_id") or "") == req_bid:
+                return b, None
+        raise ValidationError(f"TASK_BRIDGE_NOT_FOUND: No saved bridge with --bridge-id '{req_bid}' found.")
+    if req_tid:
+        # Prefer unconsumed matching task_id first, then any matching task_id
+        matches = [b for b in queue if str((b.get("task_snapshot") or {}).get("task_id") or "") == req_tid]
+        if matches:
+            unconsumed_m = [b for b in matches if int(b.get("consumed_count") or 0) == 0]
+            if len(unconsumed_m) == 1:
+                return unconsumed_m[0], None
+            if len(unconsumed_m) == 0:
+                return matches[-1], None
+            # Multiple unconsumed bridges share this task_id; fall through to disambiguation filtered to unconsumed_m
+            queue = unconsumed_m
+        else:
+            raise ValidationError(f"TASK_BRIDGE_NOT_FOUND: No saved bridge for --task-id '{req_tid}' found.")
+
+    unconsumed = _active_candidate_bridges(repo, queue)
+    if len(unconsumed) == 1:
+        return unconsumed[0], None
+    if len(unconsumed) > 1:
+        choices = []
+        options_list = []
+        bridged_tids: set[str] = set()
+        for idx, b in enumerate(unconsumed, 1):
+            bid = str(b.get("bridge_id") or "")
+            b_mode = str(b.get("mode") or "FOLLOW_UP_TASK")
+            b_snap = b.get("task_snapshot") or {}
+            b_tid = str(b_snap.get("task_id") or "")
+            if b_tid:
+                bridged_tids.add(b_tid)
+            b_next = str(b.get("next_outcome") or "")
+            b_sum = str(b.get("context_summary") or "")
+            label = f"{b_tid or bid} ({b_mode}): {b_next or b_sum[:70]}"
+            cmd = f"python .agents/harness.py task bridge --bridge-id {bid}"
+            choices.append({
+                "bridge_id": bid,
+                "task_id": b_tid,
+                "mode": b_mode,
+                "next_outcome": b_next,
+                "context_summary": b_sum,
+                "load_command": cmd,
+                "clear_command": f"python .agents/harness.py task bridge --clear --bridge-id {bid}",
+            })
+            prefix = "(Recommended) " if idx == len(unconsumed) else ""
+            options_list.append(f"{prefix}{label}")
+        live_tasks = _live_tasks_summary(repo)
+        for lt in live_tasks:
+            lt_id = str(lt.get("task_id") or "")
+            if lt_id and lt_id not in bridged_tids:
+                options_list.append(f"Live task '{lt_id}' ({lt.get('status')}): {lt.get('requested_outcome', '')}")
+        options_list.append("Start a new unrelated task (keep saved bridges untouched)")
+        return None, {
+            "status": "MULTIPLE_BRIDGES_PENDING",
+            "pending_bridges_count": len(unconsumed),
+            "pending_bridges": choices,
+            "live_tasks": live_tasks,
+            "next_action": {
+                "code": "SELECT_PENDING_BRIDGE",
+                "kind": "DEVELOPER_ACTION",
+                "tool": "ask_question",
+                "command": choices[-1]["load_command"],
+                "blocking": True,
+                "reason": (
+                    f"There are {len(unconsumed)} unconsumed task bridges waiting in the queue. "
+                    "Ask the developer via `ask_question` which bridged task they want to continue now (or if they are starting a new unrelated topic), "
+                    "then run the corresponding `load_command` (`python .agents/harness.py task bridge --bridge-id <id>`)."
+                ),
+                "inputs": {
+                    "pending_bridges": choices,
+                    "suggested_options": options_list,
+                },
+                "instructions": (
+                    "Invoke `ask_question` in the developer's language listing each pending bridge (its task/topic and mode) "
+                    "plus an option for an unrelated request. Once chosen, run `python .agents/harness.py task bridge --bridge-id <id>`."
+                ),
+            },
+        }
+    return (queue[-1] if queue else None), None
+
+
 def load_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
     """Load the saved Task Bridge in a fresh conversation, minting a fresh Discovery Receipt and resuming/bridging."""
     repo = Path(getattr(args, "repo", ".") or ".").resolve()
-    bridge_path = _bridge_file(repo)
-    if not bridge_path.is_file():
+    queue = _load_bridge_queue(repo)
+    if not queue:
         raise ValidationError(
             "TASK_BRIDGE_NOT_FOUND: No saved task bridge exists at .agents/state/task-bridge.json. "
             "Save one first with `python .agents/harness.py task bridge --save`."
         )
 
-    bridge = read_json(bridge_path)
+    req_bid = str(getattr(args, "bridge_id", "") or "").strip()
+    req_tid = str(getattr(args, "task_id", "") or "").strip()
+    bridge, multi_resp = _select_bridge_from_queue(
+        repo,
+        queue,
+        requested_bridge_id=req_bid,
+        requested_task_id=req_tid,
+    )
+    if multi_resp is not None:
+        return multi_resp
     if not isinstance(bridge, dict):
         raise ValidationError("TASK_BRIDGE_CORRUPTED: .agents/state/task-bridge.json is not a JSON object.")
 
@@ -778,12 +1089,15 @@ def load_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
             except (OSError, ValueError, ValidationError):
                 live_plan = None
 
-    # Update consumption metadata on bridge file (excluded from bridge_sha256 so repeated loads remain idempotent)
+    # Update consumption metadata on bridge and sync queue (excluded from bridge_sha256 so repeated loads remain idempotent)
     bridge["consumed_at"] = utc_now()
     bridge["consumed_count"] = int(bridge.get("consumed_count") or 0) + 1
     bridge["consumed_by_host"] = target_host
+    updated_queue = [bridge if str(b.get("bridge_id")) == str(bridge.get("bridge_id")) else b for b in queue]
     try:
-        atomic_write_json(bridge_path, bridge)
+        _save_bridge_queue(repo, updated_queue)
+        if not req_bid and not req_tid:
+            atomic_write_json(_bridge_file(repo), bridge)
     except OSError:
         pass
 
@@ -943,7 +1257,7 @@ def snooze_rotation(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def bridge_status(args: argparse.Namespace) -> dict[str, Any]:
-    """Read-only inspection of conversation health, rotation advisory, and saved task bridge."""
+    """Read-only inspection of conversation health, rotation advisory, and saved task bridge queue."""
     repo = Path(getattr(args, "repo", ".") or ".").resolve()
     explicit_tid = str(getattr(args, "task_id", "") or "").strip()
     task_id, plan = _resolve_target_task(repo, explicit_tid)
@@ -954,23 +1268,20 @@ def bridge_status(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_kind = "FOLLOW_UP_BOUNDARY" if task_state in {"DELIVERED", "READY_FOR_DELIVERY", "CANCELLED", "NONE"} else "MID_TASK_CHECKPOINT"
     advisory = evaluate_rotation_advisory(repo, checkpoint_kind, task_id=task_id, plan=plan)
 
-    bridge_path = _bridge_file(repo)
-    saved_bridge: dict[str, Any] | None = None
-    if bridge_path.is_file():
-        try:
-            loaded = read_json(bridge_path)
-            if isinstance(loaded, dict):
-                saved_bridge = {
-                    "bridge_id": loaded.get("bridge_id"),
-                    "mode": loaded.get("mode"),
-                    "created_at": loaded.get("created_at"),
-                    "task_id": (loaded.get("task_snapshot") or {}).get("task_id", ""),
-                    "next_outcome": loaded.get("next_outcome", ""),
-                    "consumed_at": loaded.get("consumed_at"),
-                    "consumed_count": loaded.get("consumed_count", 0),
-                }
-        except (OSError, ValueError, ValidationError):
-            saved_bridge = None
+    queue = _load_bridge_queue(repo)
+    pending_bridges: list[dict[str, Any]] = []
+    for item in queue:
+        pending_bridges.append({
+            "bridge_id": item.get("bridge_id"),
+            "mode": item.get("mode"),
+            "created_at": item.get("created_at"),
+            "task_id": (item.get("task_snapshot") or {}).get("task_id", ""),
+            "next_outcome": item.get("next_outcome", ""),
+            "consumed_at": item.get("consumed_at"),
+            "consumed_count": item.get("consumed_count", 0),
+        })
+    unconsumed = [b for b in pending_bridges if int(b.get("consumed_count") or 0) == 0]
+    saved_bridge: dict[str, Any] | None = unconsumed[-1] if unconsumed else (pending_bridges[-1] if pending_bridges else None)
 
     return {
         "status": "READY",
@@ -981,11 +1292,123 @@ def bridge_status(args: argparse.Namespace) -> dict[str, Any]:
         "snooze": snooze_data if snoozed else None,
         "context_rotation": advisory,
         "saved_bridge": saved_bridge,
+        "pending_bridges": unconsumed,
+        "all_bridges": pending_bridges,
+        "live_tasks": _live_tasks_summary(repo),
     }
+
+
+def clear_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
+    """Explicitly clear one or all saved bridges while keeping `.agents/state/bridge-history/<bridge_id>.json` archived."""
+    repo = Path(getattr(args, "repo", ".") or ".").resolve()
+    req_bid = str(getattr(args, "bridge_id", "") or "").strip()
+    req_tid = str(getattr(args, "task_id", "") or "").strip()
+    clear_all = bool(getattr(args, "all", False))
+    queue = _load_bridge_queue(repo)
+    if not queue:
+        _bridge_file(repo).unlink(missing_ok=True)
+        _bridges_queue_file(repo).unlink(missing_ok=True)
+        return {
+            "status": "BRIDGE_CLEARED",
+            "bridge_id": "",
+            "cleared_ids": [],
+            "remaining_count": 0,
+            "archived_in_history": False,
+        }
+
+    if clear_all or (not req_bid and not req_tid and len([b for b in queue if int(b.get("consumed_count") or 0) == 0]) <= 1):
+        cleared_ids = [str(b.get("bridge_id") or "") for b in queue if b.get("bridge_id")]
+        primary_id = cleared_ids[-1] if cleared_ids else ""
+        _save_bridge_queue(repo, [])
+        return {
+            "status": "BRIDGE_CLEARED",
+            "bridge_id": primary_id,
+            "cleared_ids": cleared_ids,
+            "remaining_count": 0,
+            "archived_in_history": bool(primary_id and (_bridge_history_dir(repo) / f"{primary_id}.json").is_file()),
+        }
+
+    # Selective clear when --bridge-id or --task-id is passed (or multiple bridges exist and no --all was passed)
+    cleared_ids = []
+    remaining: list[dict[str, Any]] = []
+    target_id_to_remove = req_bid
+    if not target_id_to_remove and not req_tid:
+        # Remove only the most recent unconsumed bridge
+        unconsumed = [b for b in queue if int(b.get("consumed_count") or 0) == 0]
+        target_id_to_remove = str((unconsumed[-1] if unconsumed else queue[-1]).get("bridge_id") or "")
+
+    for b in queue:
+        bid = str(b.get("bridge_id") or "")
+        btid = str((b.get("task_snapshot") or {}).get("task_id") or "")
+        if (target_id_to_remove and bid == target_id_to_remove) or (req_tid and btid == req_tid):
+            cleared_ids.append(bid)
+        else:
+            remaining.append(b)
+
+    _save_bridge_queue(repo, remaining)
+    primary_id = cleared_ids[-1] if cleared_ids else ""
+    return {
+        "status": "BRIDGE_CLEARED",
+        "bridge_id": primary_id,
+        "cleared_ids": cleared_ids,
+        "remaining_count": len([b for b in remaining if int(b.get("consumed_count") or 0) == 0]),
+        "archived_in_history": bool(primary_id and (_bridge_history_dir(repo) / f"{primary_id}.json").is_file()),
+    }
+
+
+def pending_bridge_reminder(repo: Path) -> str:
+    """Return a concise, strictly intent-conditional reminder when one or more unconsumed bridges exist."""
+    try:
+        queue = _load_bridge_queue(repo)
+        unconsumed = _active_candidate_bridges(repo, queue)
+        if not unconsumed:
+            return ""
+        live_tasks = _live_tasks_summary(repo)
+        bridged_tids = {str((b.get("task_snapshot") or {}).get("task_id") or "") for b in unconsumed}
+        extra_live = [lt for lt in live_tasks if lt.get("task_id") and lt.get("task_id") not in bridged_tids]
+        extra_live_str = ", ".join(f"{lt.get('task_id')} [{lt.get('status')}]" for lt in extra_live[:3])
+        extra_live_note = (
+            f" (Also live in worktree: {extra_live_str}; use `task switch --task-id <id>` to focus.)"
+            if extra_live else ""
+        )
+        if len(unconsumed) == 1 and not extra_live:
+            bridge = unconsumed[0]
+            b_id = str(bridge.get("bridge_id") or "bridge")
+            mode = str(bridge.get("mode") or "FOLLOW_UP_TASK")
+            snap = bridge.get("task_snapshot") or {}
+            tid = str(snap.get("task_id") or "").strip()
+            next_out = str(bridge.get("next_outcome") or "").strip()
+            topic = f"'{next_out[:60]}'" if next_out else (f"task '{tid}'" if tid else "previous session")
+            return (
+                f" [Pending Task Bridge ({b_id}, mode={mode}, topic={topic}): "
+                "OPTIONAL & INTENT-CONDITIONAL — If the developer's message asks to continue previous work or start the bridged follow-up, "
+                "run `python .agents/harness.py task bridge` automatically. "
+                "If the developer is asking about a DIFFERENT or UNRELATED topic, address their request directly without running or consuming `task bridge` "
+                "(leave `task-bridge.json` intact in the background, or run `python .agents/harness.py task bridge --clear` only if they ask to discard it).]"
+            )
+        items_desc = []
+        for b in unconsumed[:4]:
+            bid = str(b.get("bridge_id") or "")
+            bmode = str(b.get("mode") or "FOLLOW_UP_TASK")
+            btid = str((b.get("task_snapshot") or {}).get("task_id") or "")
+            bnext = str(b.get("next_outcome") or "").strip()
+            btopic = bnext[:40] if bnext else (btid or bid)
+            items_desc.append(f"{bid} ({bmode}: '{btopic}')")
+        joined = "; ".join(items_desc)
+        return (
+            f" [Pending Task Bridges ({len(unconsumed)} waiting: {joined}){extra_live_note}: "
+            "OPTIONAL & INTENT-CONDITIONAL — If the developer names a specific bridged task/topic, run `python .agents/harness.py task bridge --bridge-id <id>` (or `--task-id <id>`) for that bridge only. "
+            "If the developer generally asks to continue without specifying which one, run `python .agents/harness.py task bridge` and ask via `ask_question` (`SELECT_PENDING_BRIDGE`). "
+            "If the developer is asking about a DIFFERENT or UNRELATED topic, address their request directly without running or consuming any bridge.]"
+        )
+    except (OSError, ValueError, ValidationError):
+        return ""
 
 
 def cmd_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
     """Entry point for `python .agents/harness.py task bridge`."""
+    if getattr(args, "clear", False):
+        return clear_task_bridge(args)
     if getattr(args, "snooze", False):
         return snooze_rotation(args)
     if getattr(args, "status", False):
