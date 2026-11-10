@@ -280,9 +280,11 @@ def evaluate_rotation_advisory(
             "completed task's architecture contract, modified files, and a fresh Discovery Receipt with zero re-explanation."
         )
         instructions = (
-            "Mention briefly (or ask via `ask_question` when starting a follow-up task) that this chat has grown large "
-            f"(~{steps} steps / ~{tokens:,} tokens) and offer to bridge context to a fresh chat (`{save_cmd}` then "
-            "`python .agents/harness.py task bridge` in the new chat) or snooze (`python .agents/harness.py task bridge --snooze`)."
+            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`. "
+            "Either ask via `ask_question` with options or add a short plain-language note at the end of your message telling the developer "
+            f"that this chat has grown large (~{steps} steps / ~{tokens:,} tokens) and if they want to save a context bridge for a new chat "
+            "(or snooze this reminder), they can just tell you and you will run it for them "
+            f"(`{save_cmd}` or `python .agents/harness.py task bridge --snooze`)."
         )
     else:
         save_cmd = f'python .agents/harness.py task bridge --save{tid_arg} --summary "<current progress & next step>"'
@@ -292,9 +294,11 @@ def evaluate_rotation_advisory(
             "task state, approval, or verification proof."
         )
         instructions = (
-            "At this checkpoint, you may inform the developer that the conversation is large "
-            f"(~{steps} steps / ~{tokens:,} tokens) and can be continued seamlessly in a new chat by running "
-            f"`{save_cmd}` now and `python .agents/harness.py task bridge` in the new chat (or `--snooze` to stay here)."
+            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`. "
+            "At this checkpoint, either ask via `ask_question` with options or add a short plain-language note telling the developer "
+            f"that the conversation is large (~{steps} steps / ~{tokens:,} tokens) and if they want to save a context bridge to continue "
+            "in a new chat (or snooze this reminder), they can just tell you and you will run it for them "
+            f"(`{save_cmd}` or `python .agents/harness.py task bridge --snooze`)."
         )
 
     return {
@@ -787,21 +791,22 @@ def save_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
     bootstrap_prompt = "python .agents/harness.py task bridge"
     clear_cmd = "python .agents/harness.py task bridge --clear"
     if next_outcome:
-        copy_prompt = f"Run `{bootstrap_prompt}` and start the follow-up task: {redact(next_outcome)}"
+        copy_prompt = f"Continue from the saved context bridge and start the follow-up task: {redact(next_outcome)}"
     elif task_id:
-        copy_prompt = f"Run `{bootstrap_prompt}` and continue from task '{task_id}'."
+        copy_prompt = f"Continue from the saved context bridge for task '{task_id}'."
     else:
-        copy_prompt = f"Run `{bootstrap_prompt}` and continue from the bridged context."
+        copy_prompt = "Continue from the saved context bridge."
     optional_notice = (
         "Continuation in a new chat is 100% optional: if you open a new chat for a different topic, "
         "simply state your unrelated request and this bridge will stay untouched in the background "
-        f"(or run `{clear_cmd}` to discard it)."
+        "(or tell me to discard it and I will clear it for you)."
     )
     handoff_card = (
         f"BRIDGE_HANDOFF_CARD_BEGIN\n"
         f"- Bridge ID: `{bridge_id}` ({mode})\n"
-        f"- To continue in a new chat (copy-paste): `{copy_prompt}`\n"
+        f"- In the new chat, just say: \"{copy_prompt}\"\n"
         f"- Non-forced: {optional_notice}\n"
+        f"- Agent rule: Never show CLI commands (`python .agents/harness.py task bridge ...`) for the developer to run; tell them in plain language (or via `ask_question`) what they can ask you to do and execute the command yourself.\n"
         f"BRIDGE_HANDOFF_CARD_END"
     )
     payload: dict[str, Any] = {

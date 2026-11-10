@@ -4221,6 +4221,8 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
             if rot_adv:
                 lines.append(f"CONTEXT_ROTATION_RECOMMENDED={rot_adv.get('mode')}: {rot_adv.get('save_command')}")
                 lines.append(f"CONTEXT_ROTATION_REASON={rot_adv.get('reason')}")
+                if rot_adv.get("instructions"):
+                    lines.append(f"CONTEXT_ROTATION_INSTRUCTIONS={rot_adv.get('instructions')}")
         except (ImportError, OSError, ValueError, ValidationError):
             pass
     if reapproval:
@@ -4417,6 +4419,8 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(rot, dict) and rot.get("recommended"):
                     print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}")
                     print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}")
+                    if rot.get("instructions"):
+                        print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot.get('instructions')}")
         return 0
     elif args.action == "debug-evidence":
         print(f"DEBUG_EVIDENCE_RECORDED={len(result.get('entries', []))}")
@@ -4485,6 +4489,8 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(rot, dict) and rot.get("recommended"):
                 print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}")
                 print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}")
+                if rot.get("instructions"):
+                    print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot.get('instructions')}")
             if item.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"}:
                 # Preserve the router's exact payload once, including current briefs.
                 print("NEXT_ACTION_INPUTS=" + json.dumps(item.get("inputs", {}), ensure_ascii=False))
@@ -4496,6 +4502,8 @@ def main(argv: list[str] | None = None) -> int:
                 if rot_adv:
                     print(f"CONTEXT_ROTATION_RECOMMENDED={rot_adv.get('mode')}: {rot_adv.get('save_command')}")
                     print(f"CONTEXT_ROTATION_REASON={rot_adv.get('reason')}")
+                    if rot_adv.get("instructions"):
+                        print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot_adv.get('instructions')}")
             except (ImportError, OSError, ValueError, ValidationError):
                 pass
     if args.action in ("draft", "revise", "recover-active", "reconcile-delivery"):

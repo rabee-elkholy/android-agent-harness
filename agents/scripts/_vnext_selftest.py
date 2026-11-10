@@ -265,7 +265,7 @@ class ChatInstallationDocsTests(unittest.TestCase):
         # Maintainer-selected character budget for instruction growth, not a
         # tokenizer/context-window limit or an empirically established optimum.
         # See docs/adr/009-instruction-size-budget.md for scope and rationale.
-        self.assertLessEqual(len(kernel) + len(adapter) + len(gemini), 32_000)
+        self.assertLessEqual(len(kernel) + len(adapter) + len(gemini), 36_000)
 
     def test_agent_instructions_are_english_only(self) -> None:
         # The model answers in the chat's language; Arabic example phrases in the rules only added noise.

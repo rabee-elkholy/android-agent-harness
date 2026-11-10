@@ -145,6 +145,8 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
     if isinstance(rot, dict) and rot.get("recommended"):
         print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}", flush=True)
         print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}", flush=True)
+        if rot.get("instructions"):
+            print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot.get('instructions')}", flush=True)
     if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
         try:
             compact_inputs = _compact_for_host(action["inputs"])

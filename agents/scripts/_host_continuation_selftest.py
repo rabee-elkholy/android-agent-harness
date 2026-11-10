@@ -664,6 +664,13 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
             self.assertEqual("TASK_DELIVERED", act["code"])
             self.assertIn("context_rotation", act)
             self.assertEqual("FOLLOW_UP_TASK", act["context_rotation"]["mode"])
+            self.assertIn("Never show or ask the developer to run CLI commands", act["context_rotation"]["instructions"])
+
+            st_out = io.StringIO()
+            with contextlib.redirect_stdout(st_out):
+                self.assertEqual(0, workflow.main(["bridge", "--status", "--repo", str(self.repo)]))
+            self.assertIn("CONTEXT_ROTATION_INSTRUCTIONS=", st_out.getvalue())
+            self.assertIn("Never show or ask the developer to run CLI commands", st_out.getvalue())
 
             # Snooze for 100 steps (until 250)
             snooze_out = io.StringIO()
@@ -784,6 +791,8 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
         self.assertIn("optional_notice", saved)
         self.assertIn("handoff_card", saved)
         self.assertIn("BRIDGE_HANDOFF_CARD_BEGIN", saved["handoff_card"])
+        self.assertIn("Never show CLI commands", saved["handoff_card"])
+        self.assertNotIn("Run `python .agents/harness.py task bridge`", saved["new_chat_prompt"])
         self.assertEqual("python .agents/harness.py task bridge --clear", saved["clear_command"])
         idelta = saved["task_snapshot"].get("interface_delta") or []
         self.assertEqual(1, len(idelta))

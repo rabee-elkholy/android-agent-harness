@@ -48,6 +48,8 @@ When a conversation grows large (`CONTEXT_ROTATION_RECOMMENDED` at post-task del
 phase checkpoints, or pre-verification) or when the developer wants to start a related
 follow-up task in a clean chat without re-explaining the previous task:
 
+- **Zero developer CLI ceremony**: Never display `python .agents/harness.py task bridge ...` commands in chat or `ask_question` for the developer to run manually. Instead, either ask via `ask_question` with options or add a natural-language note telling the developer that if they want to save a context bridge for a new chat, snooze the reminder, or discard a saved bridge, they only need to tell you and you will run the command for them.
+
 1. **Save the bridge in the current chat**:
    `python .agents/harness.py task bridge --save [--task-id <id>] [--next-outcome "<follow-up request>"] [--summary "<key decisions & files>"]`
    - For a completed/delivered task (`FOLLOW_UP_TASK`), this captures the completed task's

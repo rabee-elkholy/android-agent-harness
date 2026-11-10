@@ -12,8 +12,10 @@ establishing 12,000 as an optimal or necessary threshold.
 
 ## Decision
 
-Use a maintainer-selected ceiling of 32,000 Unicode characters, counting
-`agents/rules/harness-rules.md` plus `agents/tool-adapters/AGENTS.md.template`.
+Use a maintainer-selected ceiling of 36,000 Unicode characters, counting
+`agents/rules/harness-rules.md`, `agents/tool-adapters/AGENTS.md.template`, and
+`agents/tool-adapters/GEMINI.md.template` (raised from 32,000 on 2026-11-10 by
+maintainer authorization so rules remain fully explicit without abbreviation).
 This is a local regression budget for instruction growth. It is not a token
 count, host context-window limit, performance guarantee, or empirical optimum.
 It does not measure the complete prompt supplied by any host.
