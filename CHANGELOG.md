@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.15] - 2026-11-10
+
+### Multi-Bridge Queue & Disambiguation (`MULTIPLE_BRIDGES_PENDING`), Non-Forced Intent-Conditional Reminder, AST/Interface Delta Extraction, and Explicit Bridge Clear (`--clear`)
+
+- **Multi-Bridge Queue & Structured Disambiguation (`agents/scripts/task_bridge.py`, `agents/scripts/_workflow/engine.py`, `agents/scripts/_public_commands.py`, `agents/workflows/efficient-context.md`, `README.md`)**: Persist up to 10 saved bridges in `.agents/state/task-bridges.json` while keeping `.agents/state/task-bridge.json` synced to the latest unconsumed entry; return `status="MULTIPLE_BRIDGES_PENDING"` with `next_action.code="SELECT_PENDING_BRIDGE"` (`tool="ask_question"`) whenever `python .agents/harness.py task bridge` (or `--task-id <id>`) matches multiple unconsumed bridges, surfacing each waiting bridge plus any live sibling tasks in the worktree; support `--bridge-id <bridge_id>` to load or clear a specific bridge without consuming others; and automatically filter out `MID_TASK_HANDOFF` bridges whose underlying task was later `CANCELLED`.
+- **Intent-Aware, Non-Forced Continuation Reminder (`agents/scripts/pre_invocation_reminder.py`, `agents/scripts/task_bridge.py`)**: Inject a concise, strictly intent-conditional reminder into `pre_invocation_reminder.py` when unconsumed bridges exist so the agent runs `python .agents/harness.py task bridge` automatically when the developer asks to continue previous work or start a bridged follow-up, while addressing unrelated topics directly without consuming or deleting saved bridges.
+- **Interface / AST Delta Extraction, Copy Card, and Explicit `--clear` (`agents/scripts/task_bridge.py`, `agents/scripts/_workflow/engine.py`)**: Extract compact declaration signatures (`class`, `interface`, `object`, `enum class`, `fun`, `func`, `struct`, `protocol`, `def`, `typealias`) from up to 12 modified/expected source files (`.kt`, `.java`, `.swift`, `.py`) into `task_snapshot.interface_delta` and `previous_task.interface_delta`; emit a copy-pasteable `handoff_card` (`BRIDGE_HANDOFF_CARD_BEGIN ... END`) and `optional_notice` on `task bridge --save`; add `python .agents/harness.py task bridge --clear [--bridge-id <id> | --task-id <id> | --all]` while keeping `.agents/state/bridge-history/<bridge_id>.json` archived; and fix `resolve_transcript` return handling in `measure_conversation_health`.
+
 ## [1.2.14] - 2026-11-09
 
 ### Smart Context Rotation (`CONTEXT_ROTATION_RECOMMENDED`), Task-to-Task & Mid-Task Context Bridge (`task bridge`), and Universal PM Command Pack Unification

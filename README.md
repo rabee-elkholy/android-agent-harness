@@ -161,10 +161,14 @@ one task approval
     --next-outcome "Add input validation and error state to LoginScreen" \
     --summary "Completed LoginViewModel and AuthRepository; preserve existing UiState contract"
 
-  # 2. Open a fresh chat and run one bootstrap command:
+  # 2. Open a fresh chat and run one bootstrap command (or simply ask to continue):
   python .agents/harness.py task bridge
+
+  # 3. Optional: select a specific bridge from a multi-bridge queue or clear saved bridges:
+  python .agents/harness.py task bridge --bridge-id <bridge_id>
+  python .agents/harness.py task bridge --clear [--bridge-id <bridge_id> | --all]
   ```
-  Running `python .agents/harness.py task bridge` in the new chat validates `.agents/state/task-bridge.json`, mints a **fresh conversation-local Discovery Receipt** (`mode="task_bridge"`) for the bridged files and modules so `task draft` and bounded searches work immediately without re-running `task-context`, and either pre-fills the follow-up `task draft` command (`FOLLOW_UP_TASK`) or transfers the active execution session (`MID_TASK_HANDOFF`). Developers who prefer to stay in the current chat can snooze advisories with `python .agents/harness.py task bridge --snooze`.
+  Running `python .agents/harness.py task bridge` in the new chat validates `.agents/state/task-bridge.json` (and the multi-bridge queue in `.agents/state/task-bridges.json`), carries compact declaration signatures (`interface_delta`) for modified/expected source files, mints a **fresh conversation-local Discovery Receipt** (`mode="task_bridge"`) for the bridged files and modules so `task draft` and bounded searches work immediately without re-running `task-context`, and either pre-fills the follow-up `task draft` command (`FOLLOW_UP_TASK`) or transfers the active execution session (`MID_TASK_HANDOFF`). If multiple unconsumed bridges are queued, `task bridge` returns `MULTIPLE_BRIDGES_PENDING` (`SELECT_PENDING_BRIDGE`) so the developer can pick which task to continue via `ask_question` while keeping the others queued. Continuation in a new chat is **100% optional and intent-aware**: if you open a new chat for an unrelated topic, the `PreInvocation` reminder leaves saved bridges untouched in the background while answering your unrelated request directly. Developers who prefer to stay in the current chat can snooze advisories with `python .agents/harness.py task bridge --snooze`.
 
 ### Incremental Changes & External Writes
 
@@ -203,7 +207,7 @@ Task A
 Open your Android project in **Google Antigravity** and provide this bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.14/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.2.15/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
@@ -226,7 +230,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned source clone without global installation:
 
 ```bash
-git clone --depth 1 --branch v1.2.14 --single-branch \
+git clone --depth 1 --branch v1.2.15 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
