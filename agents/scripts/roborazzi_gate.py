@@ -1,9 +1,14 @@
-"""Headless JVM UI & RTL layout bounds verification via Roborazzi `.uitree.json` sidecars.
+"""Roborazzi Headless Visual & Layout Bounds Gate (Capability-Detected).
 
 Auto-detects `io.github.takahirom.roborazzi` in project Gradle configurations (silent 0 ms
-no-op when absent), inspects deterministic `.uitree.json` files for viewport/RTL clipping,
-zero-dimension visible controls, and interactive sibling collisions, and records compact
-mathematical UI bounds evidence into `EvidenceStore` for specialist reviewers.
+no-op when absent). Parses `.uitree.json` semantic/view hierarchy sidecars produced by
+`-Proborazzi.dumpUiTree=true` to deterministically catch:
+  1. Horizontal/RTL viewport clipping (`left < viewport_left` or `right > viewport_right`).
+  2. Zero-width or zero-height visible interactive/text nodes (`width <= 0` or `height <= 0`).
+  3. Overlapping sibling clickable targets (`OnClick` / `clickable` sibling collision > 25% area).
+
+Writes snapshot-bound `roborazzi_ui` evidence via `evidence_store.write_gate_result` so
+reviewers receive concise verified layout-bounds proof without consuming vision tokens.
 """
 from __future__ import annotations
 
@@ -20,18 +25,57 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _repo_files import repo_glob  # noqa: E402
+from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _vnext_common import ValidationError  # noqa: E402
 
-ROBORAZZI_MARKER_RE = re.compile(r"io\.github\.takahirom\.roborazzi|roborazzi-gradle-plugin|roborazzi-compose", re.I)
+ROBORAZZI_MARKER_RE = re.compile(
+    r"io\.github\.takahirom\.roborazzi|roborazzi-gradle-plugin|roborazzi-compose"
+    r"|libs\.(?:plugins|libraries|bundles)\.[a-zA-Z0-9_.-]*roborazzi",
+    re.I,
+)
+APPLY_FALSE_RE = re.compile(r"\bapply\s+false\b", re.I)
+
+
+def _norm_bounds(raw: Any) -> list[float] | None:
+    if isinstance(raw, list) and len(raw) == 4:
+        try:
+            return [float(x) for x in raw]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, dict) and all(k in raw for k in ("left", "top", "right", "bottom")):
+        try:
+            return [float(raw["left"]), float(raw["top"]), float(raw["right"]), float(raw["bottom"])]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _is_clickable(node: dict[str, Any]) -> bool:
+    actions = node.get("actions") if isinstance(node.get("actions"), list) else []
+    return ("OnClick" in actions) or bool(node.get("clickable") is True)
 
 
 def detect_roborazzi(repo: Path) -> dict[str, Any]:
-    """Detect Roborazzi plugin/dependency presence across root and module Gradle files."""
-    modules_with_roborazzi: list[str] = []
+    """Detect Roborazzi plugin/dependency presence across root, catalog, and module Gradle files."""
+    toml = repo / "gradle" / "libs.versions.toml"
+    in_catalog = False
     preview_scanner = False
-    for gf in sorted(repo_glob(repo, "**/build.gradle*"))[:50]:
+    catalog_plugin_aliases: list[str] = []
+    if toml.is_file():
+        try:
+            t_txt = toml.read_text(encoding="utf-8", errors="replace")
+            in_catalog = bool(ROBORAZZI_MARKER_RE.search(t_txt))
+            if "composablepreviewscanner" in t_txt.lower():
+                preview_scanner = True
+            for m in re.finditer(r"^\s*([A-Za-z0-9_-]+)\s*=\s*\{[^\n}]*roborazzi", t_txt, re.I | re.M):
+                alias_dot = m.group(1).replace("-", ".")
+                catalog_plugin_aliases.append(f"libs.plugins.{alias_dot}")
+        except OSError:
+            pass
+
+    modules_with_roborazzi: list[str] = []
+    for gf in sorted(repo_glob(repo, "**/build.gradle*"))[:80]:
         if not gf.is_file():
             continue
         try:
@@ -40,22 +84,22 @@ def detect_roborazzi(repo: Path) -> dict[str, Any]:
             continue
         if "composablepreviewscanner" in txt.lower():
             preview_scanner = True
-        if ROBORAZZI_MARKER_RE.search(txt):
+        active_lines = [
+            ln for ln in txt.splitlines()
+            if not ln.lstrip().startswith("//") and not APPLY_FALSE_RE.search(ln)
+        ]
+        active_txt = "\n".join(active_lines)
+        matched = bool(ROBORAZZI_MARKER_RE.search(active_txt)) or any(
+            alias in active_txt for alias in catalog_plugin_aliases
+        )
+        if matched:
             rel_parent = gf.parent.relative_to(repo).as_posix()
             mod_name = ":" if rel_parent in ("", ".") else ":" + rel_parent.replace("/", ":")
             if mod_name not in modules_with_roborazzi:
                 modules_with_roborazzi.append(mod_name)
 
-    toml = repo / "gradle" / "libs.versions.toml"
-    in_catalog = False
-    if toml.is_file():
-        try:
-            t_txt = toml.read_text(encoding="utf-8", errors="replace")
-            in_catalog = bool(ROBORAZZI_MARKER_RE.search(t_txt))
-            if "composablepreviewscanner" in t_txt.lower():
-                preview_scanner = True
-        except OSError:
-            pass
+    # Prefer subproject modules over root ":" when ordering candidates.
+    modules_with_roborazzi.sort(key=lambda m: (0 if m != ":" else 1, m))
 
     uitree_files = [
         p.relative_to(repo).as_posix()
@@ -78,24 +122,24 @@ def _flatten_nodes(
 ) -> None:
     if not isinstance(node, dict):
         return
-    bounds = node.get("bounds")
+    bounds = _norm_bounds(node.get("bounds"))
     props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
-    actions = node.get("actions") if isinstance(node.get("actions"), list) else []
     label = str(
         node.get("testTag")
         or props.get("Text")
         or props.get("ContentDescription")
         or node.get("resourceId")
+        or node.get("id")
         or ""
     ).strip()
     entry = {
         "n": node.get("n"),
         "type": str(node.get("type") or ""),
         "label": label[:80],
-        "bounds": bounds if (isinstance(bounds, list) and len(bounds) == 4) else None,
-        "clickable": "OnClick" in actions,
+        "bounds": bounds,
+        "clickable": _is_clickable(node),
     }
-    if entry["label"] or entry["n"] is not None:
+    if entry["label"] or entry["n"] is not None or bounds is not None:
         out.append(entry)
     children = [c for c in (node.get("children") or []) if isinstance(c, dict)]
     if parent_children_siblings is not None and len(children) >= 2:
@@ -138,9 +182,13 @@ def inspect_uitree_files(repo: Path, uitree_paths: list[Path] | None = None) -> 
         root = doc["root"]
         capture = doc.get("capture") if isinstance(doc.get("capture"), dict) else {}
         scale = float(capture.get("scale") or 1.0) or 1.0
-        root_bounds = root.get("bounds")
-        if isinstance(root_bounds, list) and len(root_bounds) == 4:
-            vp_left, vp_top, vp_right, vp_bottom = [float(x) for x in root_bounds]
+        root_bounds = _norm_bounds(root.get("bounds"))
+        if doc.get("screenWidth") and doc.get("screenHeight"):
+            vp_left, vp_top = 0.0, 0.0
+            vp_right = float(doc["screenWidth"])
+            vp_bottom = float(doc["screenHeight"])
+        elif root_bounds is not None:
+            vp_left, vp_top, vp_right, vp_bottom = root_bounds
         else:
             vp_left, vp_top = 0.0, 0.0
             vp_right = float(capture.get("imageWidth") or 1080) / scale
@@ -182,11 +230,10 @@ def inspect_uitree_files(repo: Path, uitree_paths: list[Path] | None = None) -> 
         for grp in sibling_groups:
             clickables = []
             for ch in grp["children"]:
-                acts = ch.get("actions") if isinstance(ch.get("actions"), list) else []
-                cb = ch.get("bounds")
-                if "OnClick" in acts and isinstance(cb, list) and len(cb) == 4:
+                cb = _norm_bounds(ch.get("bounds"))
+                if _is_clickable(ch) and cb is not None:
                     p = ch.get("properties") if isinstance(ch.get("properties"), dict) else {}
-                    clbl = str(ch.get("testTag") or p.get("Text") or ch.get("n") or "clickable")
+                    clbl = str(ch.get("testTag") or p.get("Text") or ch.get("id") or ch.get("n") or "clickable")
                     clickables.append((clbl, cb))
             for idx_a in range(len(clickables)):
                 for idx_b in range(idx_a + 1, len(clickables)):

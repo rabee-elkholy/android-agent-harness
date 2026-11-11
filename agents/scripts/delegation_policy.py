@@ -1029,16 +1029,39 @@ def check_post_reviewer_reread_guard(
             revs = ledger.get("reviewers") or {}
             if not revs:
                 continue
+            verdicts: list[str] = []
+            has_findings = False
+            all_finished = True
+            for r_role, d in revs.items():
+                if not isinstance(d, dict):
+                    all_finished = False
+                    continue
+                st = str(d.get("state") or "")
+                v = str(d.get("verdict") or "")
+                f_list = d.get("findings") or []
+                if st == "INGESTED" and not v:
+                    res_p = ledger_path.parent / "results" / f"{r_role}.json"
+                    if res_p.is_file():
+                        res_doc = read_json(res_p)
+                        inner = res_doc.get("result") if isinstance(res_doc.get("result"), dict) else res_doc
+                        v = str(inner.get("verdict") or "")
+                        f_list = inner.get("findings") or []
+                if v == "FINDINGS" or f_list:
+                    has_findings = True
+                if st in {"COMPLETED", "INGESTED"} and v:
+                    verdicts.append(v)
+                else:
+                    all_finished = False
             # If any reviewer has FINDINGS, do not block reads (task will block/resume for fixes)
-            if any(d.get("verdict") == "FINDINGS" or d.get("findings") for d in revs.values() if isinstance(d, dict)):
+            if has_findings:
                 return (True, "", "")
-            # Case 1: All reviewers completed with PASS -> advance to finalize / assemble, do NOT re-read code!
-            if all(isinstance(d, dict) and d.get("state") == "COMPLETED" and d.get("verdict") == "PASS" for d in revs.values()):
-                if status == "VERIFYING":
+            # Case 1: All reviewers completed/ingested with PASS -> advance to next phase / assemble, do NOT re-read code!
+            if all_finished and verdicts and all(v == "PASS" for v in verdicts):
+                if status in {"VERIFYING", "IMPLEMENTING"}:
                     return (
                         False,
                         "POST_REVIEW_REREAD_BLOCKED: All specialist reviewers already passed. Do NOT re-read source files on the Lead Model — "
-                        "follow NEXT_ACTION (`review finalize` / `assemble` / `device install-start`) immediately.",
+                        "follow NEXT_ACTION (`begin-next-phase` / `prepare-verification` / `assemble` / `device install-start`) immediately.",
                         "POST_REVIEW_REREAD_BLOCKED",
                     )
             # Case 2: Dispatched reviewers whose transcripts are all finished (`DONE`) -> ingest verdicts first instead of reading code!

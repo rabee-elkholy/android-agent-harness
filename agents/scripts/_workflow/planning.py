@@ -374,7 +374,11 @@ def _build_and_save_plan(
         ".md", ".txt", ".rst", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif",
         ".xml", ".json", ".properties", ".pro", ".ico"
     }
-    impl_files = [f for f in norm_expected_files if _engine.Path(f).suffix.lower() not in DOC_RESOURCE_SUFFIXES]
+    from _modules import is_kmp_or_android_test_path as _is_test_path
+    impl_files = [
+        f for f in norm_expected_files
+        if _engine.Path(f).suffix.lower() not in DOC_RESOURCE_SUFFIXES and not _is_test_path(f)
+    ]
 
     surfaces_for_layer_check = set(raw_expected)
     if not surfaces_for_layer_check and norm_expected_files:

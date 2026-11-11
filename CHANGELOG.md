@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.3] - 2026-11-11
+
+### Live 5-Module Android E2E Hardening: Roborazzi Version Catalog & Dict Bounds, Final-Review `INGESTED` Anti-Reread Guard, Local `val`/`var` in Private Edits, and Single-Phase Test Path Filtering
+
+- **Live 5-Module Android E2E Hardening (`agents/scripts/roborazzi_gate.py`, `agents/scripts/delegation_policy.py`, `agents/scripts/session_forensics.py`, `agents/scripts/change_classifier.py`, `agents/scripts/_workflow/planning.py`)**: Resolve Gradle Version Catalog plugin aliases (`libs.plugins.*roborazzi`) while ignoring root `apply false` declarations and supporting both list and dict bounds in `.uitree.json`; extend `check_post_reviewer_reread_guard` (`POST_REVIEW_REREAD_BLOCKED`) to inspect `review_orchestrator`'s `INGESTED` ledger + `results/<role>.json` schema on final reviews; include `.agents/state/audit_log.jsonl` in `session_forensics` audit log discovery; allow local `val`/`var` declarations inside `private fun` bodies in `_is_isolated_private_kotlin_edit` (`ISOLATED_PRIVATE_EDIT` single-reviewer consolidation) while rejecting mixed public+private hunks; and exclude test source paths from `impl_files` in `PHASE_PLAN_REQUIRED` so single-file Room/feature changes paired with unit tests stay single-phase.
+
 ## [1.3.2] - 2026-11-11
 
 ### Project-Wide Multi-Wave Subagent Step Budgets, Post-Subagent Anti-Reread Caps, Antigravity `research`/`explore` Loophole Closure, and Phase-Review GraphEngine/Zero-Hop Parity

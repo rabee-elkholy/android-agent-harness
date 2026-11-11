@@ -1914,5 +1914,96 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         })["decision"])
 
 
+    def test_v132_live_e2e_bugfix_regressions(self) -> None:
+        """Lock in all 5 real-world bugs discovered & fixed during Live 5-Module Android E2E Monitoring."""
+        import argparse
+        import roborazzi_gate as rg
+        import session_forensics as sf
+        import delegation_policy as dp
+        import change_classifier as cc
+        import workflow
+
+        # 1. Roborazzi Version Catalog `alias(libs.plugins.roborazzi)` + `apply false` + dict-bounds `.uitree.json`
+        (self.repo / "gradle").mkdir(parents=True, exist_ok=True)
+        (self.repo / "gradle/libs.versions.toml").write_text(
+            '[plugins]\nroborazzi = { id = "io.github.takahirom.roborazzi", version = "1.39.0" }\n',
+            encoding="utf-8",
+        )
+        (self.repo / "build.gradle.kts").write_text(
+            'plugins { alias(libs.plugins.roborazzi) apply false }\n',
+            encoding="utf-8",
+        )
+        (self.repo / "feature/home").mkdir(parents=True, exist_ok=True)
+        (self.repo / "feature/home/build.gradle.kts").write_text(
+            'plugins { alias(libs.plugins.roborazzi) }\n',
+            encoding="utf-8",
+        )
+        caps = rg.detect_roborazzi(self.repo)
+        self.assertTrue(caps["installed"])
+        self.assertIn(":feature:home", caps["modules"])
+        self.assertNotIn(":", caps["modules"])
+
+        uitree_p = self.repo / "feature/home/build/outputs/roborazzi/Card.uitree.json"
+        uitree_p.parent.mkdir(parents=True, exist_ok=True)
+        uitree_p.write_text(json.dumps({
+            "screenWidth": 360,
+            "screenHeight": 800,
+            "root": {
+                "id": "RootCard",
+                "bounds": {"left": 0, "top": 0, "right": 360, "bottom": 200},
+                "children": [
+                    {"id": "OverflowLabel", "bounds": {"left": 16, "top": 20, "right": 410, "bottom": 60}, "clickable": False}
+                ],
+            },
+        }), encoding="utf-8")
+        audit = rg.inspect_uitree_files(self.repo, [uitree_p])
+        self.assertEqual("FAIL", audit["status"])
+        self.assertEqual("HORIZONTAL_VIEWPORT_CLIP", audit["issues"][0]["code"])
+        uitree_p.unlink()
+
+        # 2. `session_forensics` discovers live `.agents/state/audit_log.jsonl`
+        live_audit = self.repo / ".agents/state/audit_log.jsonl"
+        live_audit.parent.mkdir(parents=True, exist_ok=True)
+        live_audit.write_text(
+            json.dumps({"decision": "deny", "reason_code": "USE_HARNESS_SCOUT_AGENT", "tool": "invoke_subagent", "reason": "blocked"}) + "\n"
+            + json.dumps({"decision": "allow", "reason_code": "HARNESS_COMMAND", "tool": "run_command", "reason": "ok"}) + "\n",
+            encoding="utf-8",
+        )
+        ha = sf._analyze_hook_audit(self.repo)
+        self.assertTrue(ha["audit_file"].endswith("audit_log.jsonl"))
+        self.assertEqual(2, ha["total_events"])
+        self.assertEqual(1, ha["deny_count"])
+
+        # 3. `change_classifier._is_isolated_private_kotlin_edit` allows local `val`/`var` inside `private fun`
+        #    while rejecting mixed public+private function edits!
+        self.assertTrue(cc._is_isolated_private_kotlin_edit(
+            "+        val safe = kcal.coerceAtLeast(0)\n+        return safe.toString()",
+            "class HomeScreen {\n    private fun formatKcal(kcal: Int): String {",
+        ))
+        self.assertFalse(cc._is_isolated_private_kotlin_edit(
+            "+        val safe = kcal.coerceAtLeast(0)",
+            "class HomeScreen {\n    fun render(): String {\n    private fun formatKcal(kcal: Int): String {",
+        ))
+
+        # 4. `_workflow/planning.py`: 1 Room entity + 1 unit test does NOT falsely trigger `PHASE_PLAN_REQUIRED`!
+        args_room = argparse.Namespace(
+            repo=str(self.repo),
+            task_id="t-single-room-with-test",
+            outcome="Add column to entity with unit test",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="ROOM_SCHEMA,BUSINESS_LOGIC",
+            expected_modules=":app",
+            architecture_intent="EXISTING_CHANGE",
+            architecture_target_scope="",
+            architecture_target_family=None,
+            expected_files="app/src/main/java/com/demo/LogEntity.kt,app/src/test/java/com/demo/LogEntityTest.kt",
+            phases=None,
+            force=False,
+        )
+        workflow.draft(args_room)
+        workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-single-room-with-test"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

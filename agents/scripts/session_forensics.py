@@ -31,6 +31,8 @@ def _audit_log_candidates(repo: Path) -> list[Path]:
     if env_p:
         cands.append(Path(env_p))
     cands.extend([
+        state_root(repo) / "audit_log.jsonl",
+        repo / ".agents" / "state" / "audit_log.jsonl",
         repo / ".agents" / "cache" / "hook-audit.jsonl",
         repo / ".agents" / "state" / "hook-audit.jsonl",
         Path.home() / ".android-harness" / "hook-audit.jsonl",

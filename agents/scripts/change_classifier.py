@@ -180,8 +180,21 @@ COMPOSE_SCOPED_RE = re.compile(
 NON_PRIVATE_DECL_IN_DIFF_RE = re.compile(
     r"^(?!private\b)(?:(?:public|internal|protected|open|abstract|final|sealed|data|value|enum|override|suspend|inline|operator|infix|tailrec|actual|expect)\s+)*(?:class|interface|object|fun|val|var|constructor)\s+[A-Za-z0-9_<]"
 )
+NON_PRIVATE_TYPE_OR_FUN_IN_DIFF_RE = re.compile(
+    r"^(?!private\b)(?:(?:public|internal|protected|open|abstract|final|sealed|data|value|enum|override|suspend|inline|operator|infix|tailrec|actual|expect)\s+)*(?:class|interface|object|fun|constructor)\s+[A-Za-z0-9_<]"
+)
+EXPLICIT_NON_PRIVATE_PROP_RE = re.compile(
+    r"^(?:public|internal|protected|open|abstract|override|const|lateinit)\s+(?:[a-z]+\s+)*(?:val|var)\s+[A-Za-z0-9_<]"
+)
 PRIVATE_SCOPE_RE = re.compile(
     r"\bprivate\s+(?:(?:suspend|inline|operator|infix|tailrec)\s+)*(?:fun|val|var)\b"
+)
+PRIVATE_FUN_SCOPE_RE = re.compile(
+    r"\bprivate\s+(?:(?:suspend|inline|operator|infix|tailrec)\s+)*fun\b"
+)
+NON_PRIVATE_FUN_SCOPE_RE = re.compile(
+    r"^(?!.*\bprivate\b).*\bfun\s+[A-Za-z0-9_<]",
+    re.MULTILINE,
 )
 
 
@@ -198,10 +211,20 @@ def _is_isolated_private_kotlin_edit(diff_text: str, context_text: str) -> bool:
                 changed_code_lines.append(stripped)
     if not changed_code_lines:
         return False
+    in_private_fun_body = (
+        bool(context_text.strip())
+        and bool(PRIVATE_FUN_SCOPE_RE.search(context_text))
+        and not bool(NON_PRIVATE_FUN_SCOPE_RE.search(context_text))
+    )
     for line in changed_code_lines:
-        if NON_PRIVATE_DECL_IN_DIFF_RE.match(line):
+        if in_private_fun_body:
+            if NON_PRIVATE_TYPE_OR_FUN_IN_DIFF_RE.match(line) or EXPLICIT_NON_PRIVATE_PROP_RE.match(line):
+                return False
+        elif NON_PRIVATE_DECL_IN_DIFF_RE.match(line):
             return False
     if context_text.strip():
+        if NON_PRIVATE_FUN_SCOPE_RE.search(context_text):
+            return False
         return bool(PRIVATE_SCOPE_RE.search(context_text))
     return all(
         PRIVATE_SCOPE_RE.search(line) or not DECL_RE.search(line)
