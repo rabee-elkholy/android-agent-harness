@@ -265,6 +265,22 @@ def main(argv: list[str] | None = None) -> int:
                 diagnostics["KMP expect/actual"] = expect_msg
             sublog(f"[{'OK' if expect_ok else 'FAIL'}] {expect_msg}")
 
+    static_health_active = False
+    static_health_ok = True
+    try:
+        from static_health_bridge import check_task_static_health
+        sh_paths = task_change_paths if task_change_paths is not None else modified
+        static_health_ok, static_health_msg, static_health_details = check_task_static_health(repo_target, sh_paths)
+        static_health_active = bool(static_health_details.get("active"))
+        if static_health_active:
+            with step_progress("8. Task-scoped static health (SARIF / BuildHealth)"):
+                if not static_health_ok:
+                    diagnostics["static health reports"] = static_health_msg
+                sublog(f"[{'OK' if static_health_ok else 'FAIL'}] {static_health_msg}")
+    except (ImportError, OSError, ValueError, ValidationError):
+        static_health_active = False
+        static_health_ok = True
+
     live_print("\n==================================================")
     overall_pass = (
         (hook_code == 0)
@@ -275,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         and arch_ok
         and exported_ok
         and expect_ok
+        and static_health_ok
         and not extra_checks
     )
     checks_list = [
@@ -288,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if has_kmp_common:
         checks_list.append(("KMP expect/actual", expect_ok))
+    if static_health_active:
+        checks_list.append(("static health reports", static_health_ok))
     checks_list.extend(extra_checks)
     checks = tuple(checks_list)
     failed_checks = [name for name, ok in checks if not ok]

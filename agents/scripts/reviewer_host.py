@@ -290,6 +290,34 @@ def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
         return {"code": "REVIEWER_CANCELLED", "kind": "DEVELOPER_ACTION", "blocking": True,
                 "command": command, "reason": f"The developer cancelled {role}; explicit resume authority is required. No replacement or extra call is authorized.",
                 "inputs": inputs, "expected": {}}
+    # Auto-bind any dispatched reviewer whose PostToolUse hook missed binding its child execution_id.
+    if any(d.get("state") == "DISPATCHED" and not d.get("execution_id") for d in reviewers.values()):
+        try:
+            from antigravity_runtime import candidate_brain_roots
+            for brain_root in candidate_brain_roots():
+                if not brain_root.is_dir():
+                    continue
+                recent_dirs = sorted(
+                    (d for d in brain_root.iterdir() if d.is_dir() and not d.is_symlink()),
+                    key=lambda d: d.stat().st_mtime_ns,
+                    reverse=True,
+                )[:24]
+                for child_dir in recent_dirs:
+                    try:
+                        reviewer_context(repo, child_dir.name, bind=True)
+                    except (OSError, ValueError, KeyError, ValidationError):
+                        continue
+            for cand_run, ledger_path in active_reviews(repo):
+                if (
+                    cand_run.get("task_id") == run.get("task_id")
+                    and str(cand_run.get("phase_id") or "") == str(run.get("phase_id") or "")
+                    and ledger_path.is_file()
+                ):
+                    reviewers = _load_ledger(cand_run, ledger_path).get("reviewers", reviewers)
+                    break
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
+
     # A finished native reply is ready for ingestion, not an endless WAIT. The
     # existing completion command still validates protocol, snapshot and model.
     ready: list[tuple[str, str]] = []

@@ -645,6 +645,15 @@ Keep the main Antigravity chat on `Gemini 4 Carbon (Medium)` for architectural r
 
 ---
 
+
+### Capability-Detected Android Ecosystem Bridges (`0` Forced Dependencies)
+
+- **Maestro YAML Flow Runner & Recorder**: `python .agents/harness.py maestro run --flow .maestro/<flow>.yaml` & `maestro export-e2e --task-id <id>` (blocks `clearState`/`uninstallApp` unless developer-authorized).
+- **Roborazzi Headless `.uitree.json` Bounds Audit**: `python .agents/harness.py roborazzi verify` / `roborazzi inspect-tree` (verifies `[left, top, right, bottom]` RTL/viewport bounds on the JVM).
+- **Semantic Symbol Surgery (`Kotlin`/`Java`/`Swift`)**: `python .agents/harness.py symbol outline|read|replace-body|insert-after --file <path> --symbol <Class.method>`.
+- **Task-Scoped Static & Memory Health**: `python .agents/harness.py health report` (`SARIF` + `buildHealth` filtered strictly to modified files) & post-E2E `LeakCanary` checks.
+- **Session & Token Forensics**: `python .agents/harness.py diagnose-session [--export-bundle]`.
+
 ## License
 
 MIT License. See [LICENSE](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE).

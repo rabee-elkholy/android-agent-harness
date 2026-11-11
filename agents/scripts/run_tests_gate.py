@@ -1116,6 +1116,17 @@ def main(argv=None) -> int:
         "detail": detail,
         **data,
     })
+    if ok and not diagnostic_mode:
+        try:
+            from change_classifier import classify as _cls_ui
+            from roborazzi_gate import auto_collect_after_unit_tests
+            live_surfaces = _cls_ui(REPO, include_type_index=False).get("surfaces") or []
+            rb_res = auto_collect_after_unit_tests(REPO, live_surfaces)
+            if isinstance(rb_res, dict) and rb_res.get("status") == "FAIL":
+                live_print(f"[FAIL] Roborazzi UI bounds check failed: {rb_res.get('detail')}", err=True)
+                return 1
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
     return 0 if ok else int(data.get('exit_code') or code or 1)
 
 

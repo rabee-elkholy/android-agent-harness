@@ -729,6 +729,27 @@ def _handle_command(command: str) -> None:
         decision, reason, code = classify_workspace_cli(workspace_tokens)
         emit(decision, reason, tool="run_command", command=command, reason_code=code, task_id=active_tid)
         return
+    try:
+        from delegation_policy import extract_symbol_write_targets
+        is_sym_write, sym_write_targets = extract_symbol_write_targets(command)
+    except (ImportError, OSError, ValueError):
+        is_sym_write, sym_write_targets = False, []
+    if is_sym_write:
+        if not sym_write_targets:
+            emit("deny", "Malformed or chained `symbol` write command; pass a single explicit `--file <path>`.", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+            return
+        for st in sym_write_targets:
+            safe_st, detail_st, _ = _safe_target(st)
+            if not safe_st:
+                emit("deny", detail_st, tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+                return
+        if _pending_cancel(active_tid):
+            emit("deny", _cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
+            return
+        sym_allowed, sym_reason, sym_code = file_mutation_allowed(REPO, targets=sym_write_targets)
+        if not sym_allowed:
+            emit("deny", sym_reason, tool="run_command", command=command, reason_code=sym_code, task_id=active_tid)
+            return
     allowed, reason = command_allowed(REPO, command)
     if allowed and re.search(r"project_graph(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+graph\b", command, re.I):
         reason = f"project_graph executed: {reason}"
@@ -2263,6 +2284,16 @@ def _main() -> None:
                     if not ok_w_cmd:
                         emit("deny", reason_w_cmd, tool=name, command=cmd_str, reason_code="WORKER_LIFECYCLE_COMMAND_FORBIDDEN")
                         return
+                    from delegation_policy import extract_symbol_write_targets, worker_write_allowed
+                    is_sym_w, sym_targets = extract_symbol_write_targets(cmd_str)
+                    if is_sym_w:
+                        if not sym_targets:
+                            emit("deny", "Malformed or chained `symbol` write command; pass a single `--file <path>`.", tool=name, command=cmd_str, reason_code="PROTECTED_PATH")
+                            return
+                        w_ok, w_reason, w_code = worker_write_allowed(REPO, sym_targets, utility_ctx)
+                        if not w_ok:
+                            emit("deny", w_reason, tool=name, command=cmd_str, reason_code=w_code)
+                            return
 
         if conversation and not reviewer and utility_ctx is None:
             try:

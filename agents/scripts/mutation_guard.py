@@ -11,13 +11,15 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
     "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps", "android_ui",
     "phone_e2e",
+    "roborazzi_gate",
+    "maestro_bridge",
 }
 BOOTSTRAP_ACTIONS = {
     "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
@@ -137,7 +139,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "repair", "zoho_sync"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "zoho_sync"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -376,8 +378,22 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return not any(arg.startswith("--out") for arg in args)
     if name == "setup_wizard" and args[:1] == ["questions"]:
         return True
+    if name == "symbol_edit" and args[:1] in (["outline"], ["read"]):
+        return True
+    if name == "roborazzi_gate" and args[:1] in (["capabilities"], ["inspect-tree"]):
+        return True
+    if name == "maestro_bridge" and args[:1] in (["capabilities"], ["list"]):
+        return True
     if name in {"harness_cli", "android-harness"}:
         if args[:2] in (["debug", "status"], ["debug", "logs"]):
+            return True
+        if args[:2] in (
+            ["symbol", "outline"], ["symbol", "read"],
+            ["roborazzi", "capabilities"], ["roborazzi", "inspect-tree"],
+            ["maestro", "capabilities"], ["maestro", "list"],
+        ):
+            return True
+        if args[:1] in (["health"], ["diagnose-session"]):
             return True
         if args in (["device", "status"], ["device", "ios-status"]):
             return True
@@ -395,7 +411,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if args[:1] == ["graph"]:
             return not any(arg.startswith("--out") for arg in args)
     # Only known harness parsers implement help without running arbitrary code.
-    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
+    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
 
 
 def _is_harness_cache_path(raw: str) -> bool:
@@ -1236,6 +1252,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         entry_no_task, args_no_task = _entry(normalized, repo)
         if entry_no_task in {"harness_cli", "android-harness"} and args_no_task in (["compile"], ["compile", "--ios"]):
             return True, "compile check without a task writes build outputs only"
+        if (
+            (entry_no_task in {"harness_cli", "android-harness"} and args_no_task[:2] == ["maestro", "export-e2e"])
+            or (entry_no_task == "maestro_bridge" and args_no_task[:1] == ["export-e2e"])
+        ) and not any(a.startswith("--out") for a in args_no_task):
+            return True, "post-delivery maestro export-e2e writes bounded .maestro/<task_id>.yaml from recorded E2E session"
         lower = normalized.lower()
         if any(kw in lower for kw in ("task-context", "task_context", "project_graph", "doctor", "preflight")):
             return False, (
@@ -1281,7 +1302,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
         if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
             return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
-        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"workflow", "setup_wizard", "harness_cli", "android-harness", "compileall"}
+        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "harness_cli", "android-harness", "compileall"}
         if entry not in allowed_implementing_entries:
             return False, "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host file-edit tools where protected roots are enforced."
         try:
@@ -1292,13 +1313,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete", "bind-evidence"}
-        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"]))
+        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["roborazzi"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"], ["maestro"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status == "READY_FOR_DELIVERY" and (
-        entry in {"run_device", "phone_e2e", "run_gradle_task"}
+        entry in {"run_device", "phone_e2e", "maestro_bridge", "run_gradle_task"}
         or action in {"verify"}
-        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["device"], ["assemble"], ["e2e"], ["verify"]))
+        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["device"], ["assemble"], ["e2e"], ["maestro"], ["verify"]))
     ):
         return True, f"post-verification device/build command authorized for ready plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.

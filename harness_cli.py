@@ -831,6 +831,13 @@ def cmd_delegate_plan(args: argparse.Namespace) -> int:
         arguments.extend(["--task-id", args.task_id])
     return _dispatch_pipeline_script(args, "delegation_policy.py", arguments)
 
+
+def cmd_passthrough_script(args: argparse.Namespace) -> int:
+    forwarded = list(getattr(args, "extra_args", None) or [])
+    if forwarded[:1] == ["--"]:
+        forwarded = forwarded[1:]
+    return _dispatch_pipeline_script(args, args._target_script, forwarded)
+
 def cmd_graph(args: argparse.Namespace) -> int:
     """Query the Universal Android Code & Architecture Graph."""
     kit = ensure_kit(args.kit)
@@ -1154,6 +1161,7 @@ FULL_SELFTEST_SUITES = (
     "_workflow_insight_selftest.py",
     "_task_isolation_selftest.py",
     "_external_write_policy_selftest.py",
+    "_ecosystem_upgrades_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1172,6 +1180,7 @@ QUICK_SELFTEST_SUITES = (
     "_graph_discovery_selftest.py",
     "_antigravity_stability_selftest.py",
     "_verification_value_selftest.py",
+    "_ecosystem_upgrades_selftest.py",
 )
 
 assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
@@ -1761,6 +1770,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task-id", help="Optional task scope.")
     sp.add_argument("--json", action="store_true", help="Print delegation strategy JSON.")
     sp.set_defaults(func=cmd_delegate_plan)
+
+    for sub_name, script_file, help_txt in (
+        ("symbol", "symbol_edit.py", "Semantic symbol outline, read, replace-body, and insert-after surgery."),
+        ("health", "static_health_bridge.py", "Task-scoped SARIF, Gradle BuildHealth, and LeakCanary inspection."),
+        ("roborazzi", "roborazzi_gate.py", "Roborazzi headless JVM UI verification and .uitree.json bounds audit."),
+        ("maestro", "maestro_bridge.py", "Physical-device Maestro YAML execution and phone_e2e YAML exporter."),
+        ("diagnose-session", "session_forensics.py", "Session hook-streak and token forensics with Zero-PII bundle export."),
+    ):
+        sp_ext = sub.add_parser(sub_name, help=help_txt)
+        sp_ext.add_argument("--repo", help="Android project root.")
+        sp_ext.add_argument("--kit", help="Kit checkout to use.")
+        sp_ext.add_argument("extra_args", nargs=argparse.REMAINDER, help="Arguments forwarded to engine module.")
+        sp_ext.set_defaults(func=cmd_passthrough_script, _target_script=script_file)
 
     sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or a batch of up to 8 targets.")
     target = sp.add_mutually_exclusive_group(required=True)

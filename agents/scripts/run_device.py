@@ -1460,6 +1460,13 @@ def main() -> int:
                 )
                 if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
                     live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")
+                try:
+                    from maestro_bridge import walkthrough_maestro_hint
+                    m_hint = walkthrough_maestro_hint(REPO, task_id)
+                    if m_hint:
+                        live_print(m_hint)
+                except (ImportError, OSError, ValueError):
+                    pass
         except (OSError, ValueError, ImportError, ValidationError):
             pass
 

@@ -49,13 +49,18 @@ def _verified_deterministic_gate_summary(repo: Path, snapshot_sha: str, run_id: 
     except (ImportError, OSError, ValueError, ValidationError):
         return []
     passed_gates: list[str] = []
-    for gate_name in ("preflight", "unit_tests", "localization", "room"):
+    roborazzi_digests: list[str] = []
+    for gate_name in ("preflight", "unit_tests", "localization", "room", "roborazzi_ui", "maestro_e2e"):
         try:
             rec = store.read(snapshot_sha, run_id, gate_name)
         except (OSError, ValueError, KeyError, ValidationError):
             continue
         if isinstance(rec, dict) and rec.get("status") == "PASS" and rec.get("change_set_sha256") == change_set_sha:
             passed_gates.append(gate_name)
+            if gate_name == "roborazzi_ui":
+                ev = rec.get("evidence") if isinstance(rec.get("evidence"), dict) else {}
+                audit = ev.get("uitree_audit") if isinstance(ev.get("uitree_audit"), dict) else {}
+                roborazzi_digests = [str(d) for d in (audit.get("digests") or [])[:4]]
     if not passed_gates:
         return []
     lines = [
@@ -66,6 +71,12 @@ def _verified_deterministic_gate_summary(repo: Path, snapshot_sha: str, run_id: 
             "Deterministic preflight AST/regex checks ALREADY VERIFIED zero wildcard imports, zero inline FQCNs, "
             "explicit PendingIntent immutability flags, suspend CancellationException rethrow safety, @Immutable/@Stable MVI state annotations, "
             "Fragment ViewBinding nulling, and secret/cleartext/Bidi hygiene — do NOT spend turns re-linting syntax line-by-line; focus strictly on behavioral logic, callers, concurrency/lifecycle bugs, security, and architecture."
+        )
+    if "roborazzi_ui" in passed_gates:
+        digest_str = (" Bounds digest: " + "; ".join(roborazzi_digests)) if roborazzi_digests else ""
+        lines.append(
+            "Roborazzi headless JVM `.uitree.json` layout audit ALREADY VERIFIED zero horizontal/RTL viewport clipping, "
+            f"zero 0dp controls, and zero clickable sibling collisions.{digest_str}"
         )
     if "localization" in passed_gates:
         lines.append(

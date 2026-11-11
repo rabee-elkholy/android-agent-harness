@@ -163,6 +163,13 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
         previous_policy = _engine.read_json(_engine.Path(_engine.read_json(previous)["policy"])) if previous.is_file() else {}
         round_block = review_round_cap_action(repo, plan, previous_policy)
         if round_block:
+            try:
+                from session_forensics import capture_auto_stall_summary
+                stall_diag = capture_auto_stall_summary(repo, task_id=task_id)
+                if stall_diag:
+                    round_block = {**round_block, "session_diagnosis": stall_diag}
+            except (ImportError, OSError, ValueError):
+                pass
             return round_block
     budget_block = plan.get("review_budget_blocked") or {}
     if budget_block.get("plan_sha256") == plan.get("plan_sha256") and budget_block:
@@ -217,6 +224,26 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 "`python .agents/harness.py test --capture-red` before changing production code."
             )
             capture["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
+        if run_host == "antigravity":
+            try:
+                from delegation_policy import evaluate_delegation_policy
+                bfe_c = str((capture.get("before_first_edit") or {}).get("command") or "")
+                adv_red = evaluate_delegation_policy(
+                    repo,
+                    task_id=task_id,
+                    plan=plan,
+                    router_action="CAPTURE_RED_EVIDENCE",
+                    before_first_edit_cmd=bfe_c,
+                )
+                capture["delegation_advisory"] = {
+                    "strategy": adv_red.get("strategy"),
+                    "recommended_subagent": adv_red.get("recommended_subagent"),
+                    "worker_mode": adv_red.get("worker_mode"),
+                    "target_files": adv_red.get("target_files"),
+                    "reason": adv_red.get("reason"),
+                }
+            except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
+                pass
         return capture
 
     pending_handoff_f = tdir / "pending-handoff.json"

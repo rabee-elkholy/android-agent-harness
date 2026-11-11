@@ -391,22 +391,49 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
 
 def _resolve_active_policy(repo: Path, tid: str, plan: dict[str, Any]) -> dict[str, Any]:
     tdir = task_dir(repo, tid)
+    crun_file = tdir / "current-run.json"
+    if crun_file.is_file():
+        try:
+            pol_p = Path(str(read_json(crun_file).get("policy") or ""))
+            if pol_p.is_file():
+                return read_json(pol_p)
+        except (OSError, ValueError, ValidationError):
+            pass
     pol_file = tdir / "policy.json"
     if pol_file.is_file():
         try:
             return read_json(pol_file)
         except (OSError, ValueError, ValidationError):
             pass
+    phases = plan.get("phases") or []
+    active_idx = int(plan.get("active_phase_index") or 0)
+    if phases and 0 <= active_idx < len(phases):
+        cur_p = phases[active_idx]
+        phase_surfaces = list(cur_p.get("surfaces") or plan.get("expected_surfaces") or [])
+        phase_files = list(cur_p.get("expected_files") or plan.get("expected_files") or [])
+    else:
+        phase_surfaces = list(plan.get("expected_surfaces") or [])
+        phase_files = list(plan.get("expected_files") or [])
     try:
-        from review_policy import evaluate_policy
-        return evaluate_policy(
-            surfaces=list(plan.get("expected_surfaces") or []),
-            kind=str(plan.get("task_kind") or plan.get("kind") or "FEATURE"),
-            repo=repo,
-            changed_files=list(plan.get("expected_files") or []),
-            planning_depth=str(plan.get("planning_depth") or "BOUNDED"),
+        from review_policy import decide
+        skills_root = (repo / ".agents" / "skills") if (repo / ".agents" / "skills").is_dir() else Path(__file__).resolve().parents[1] / "skills"
+        surf_set = {str(s).upper() for s in phase_surfaces if s}
+        synthetic_cls = {
+            "surfaces": sorted(surf_set),
+            "severity": "LOW" if (surf_set and surf_set <= {"DOCS", "LOCALIZATION", "RESOURCE_UI"}) else "MEDIUM",
+            "changed_files": len(phase_files),
+            "changed_lines": 10 if phase_files else 0,
+            "has_delete_or_rename": False,
+            "planning_depth": str(plan.get("planning_depth") or "BOUNDED"),
+            "details": {},
+        }
+        return decide(
+            synthetic_cls,
+            skills_root,
+            task_kind=str(plan.get("task_kind") or plan.get("kind") or "FEATURE"),
+            plan=plan,
         )
-    except Exception:
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
         return {}
 
 
@@ -792,8 +819,9 @@ def worker_write_allowed(repo: Path, targets: list[str], utility_ctx: dict[str, 
 
 _SCOUT_SAFE_COMMAND_RE = re.compile(
     r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+"
-    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|android-inspect|doctor)\b"
-    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|android_inspect\.py)\"?\b)",
+    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|android-inspect|doctor|health|symbol\s+(?:outline|read))\b"
+    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|android_inspect\.py|static_health_bridge\.py)\"?\b"
+    r"|\"?[^\"]*?symbol_edit\.py\"?\s+(?:outline|read)\b)",
     re.IGNORECASE,
 )
 _SCOUT_SAFE_GIT_RE = re.compile(
@@ -819,6 +847,51 @@ def scout_command_allowed(command: str) -> bool:
     if "--inspect-file" in cmd or "--repair" in cmd or "--fix" in cmd:
         return False
     return bool(_SCOUT_SAFE_COMMAND_RE.search(cmd) or _SCOUT_SAFE_GIT_RE.search(cmd))
+
+
+def extract_symbol_write_targets(command: str) -> tuple[bool, list[str]]:
+    """Return `(is_symbol_write, file_targets)` for `symbol replace-body/insert-after` CLI calls.
+
+    If `is_symbol_write` is True and `file_targets` is empty, the command is malformed or chained
+    and callers must fail closed.
+    """
+    cmd = str(command or "").strip()
+    if not cmd:
+        return False, []
+    if not re.search(
+        r"(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness)\s+symbol\s+(?:replace-body|insert-after)\b"
+        r"|symbol_edit\.py\"?\s+(?:replace-body|insert-after)\b",
+        cmd,
+        re.IGNORECASE,
+    ):
+        return False, []
+    if any(op in cmd for op in ("&&", "||", ";", "|", "`", "$(")):
+        return True, []
+    import shlex
+    try:
+        tokens = shlex.split(cmd, posix=False)
+    except ValueError:
+        return True, []
+    cleaned = [
+        t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t
+        for t in tokens
+    ]
+    targets: list[str] = []
+    idx = 0
+    while idx < len(cleaned):
+        tok = cleaned[idx]
+        if tok == "--file" and idx + 1 < len(cleaned):
+            val = cleaned[idx + 1].strip()
+            if val and not val.startswith("-"):
+                targets.append(val)
+            idx += 2
+            continue
+        if tok.startswith("--file="):
+            val = tok.split("=", 1)[1].strip()
+            if val:
+                targets.append(val)
+        idx += 1
+    return True, targets
 
 
 def worker_command_allowed(command: str) -> tuple[bool, str]:

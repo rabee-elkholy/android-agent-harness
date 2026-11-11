@@ -364,7 +364,12 @@ def cmd_type(repo: Path, args) -> dict:
         phone.call(["shell", "input", "tap", str(x), str(y)])
         time.sleep(0.4)
     phone.call(["shell", "input", "text", value.replace(" ", "%s")])
-    _log(session, "type", {"length": len(value)})
+    selector_hint = f"{args.resource_id or ''} {args.desc or ''} {args.text or ''}"
+    is_sensitive_field = bool(re.search(r"pass|token|secret|key|otp|pin|cvv", selector_hint, re.I))
+    log_meta: dict = {"length": len(value)}
+    if not is_sensitive_field:
+        log_meta["text_preview"] = value[:120]
+    _log(session, "type", log_meta)
     _save(path, session)
     return {"status": "DONE", "typed_length": len(value)}
 
@@ -401,7 +406,7 @@ def cmd_wait(repo: Path, args) -> dict:
     query = {"text": args.until_text} if args.until_text else {"resource_id": args.until_id}
     while True:
         if find_nodes(phone.nodes(), exact=False, **query):
-            _log(session, "wait", {"found": True})
+            _log(session, "wait", {"found": True, "query": query})
             _save(path, session)
             return {"status": "FOUND", "query": query}
         if time.monotonic() >= deadline:
@@ -511,8 +516,17 @@ def cmd_finish(repo: Path, args) -> dict:
                                  f"- **Run**: `{session['run_id']}`", "- Advisory: not delivery evidence; the developer signs off.", "",
                                  *rows, ""]), encoding="utf-8")
     session["report_sha256"] = hashlib.sha256(report.read_bytes()).hexdigest()
+    leak_summary: dict = {"status": "SKIPPED"}
+    try:
+        from static_health_bridge import check_device_leaks
+        leak_summary = check_device_leaks(repo, application_id=str(session.get("application_id") or ""))
+        session["leak_check"] = leak_summary
+    except (ImportError, OSError, ValueError):
+        pass
     _save(path, session)
     return {"status": verdict, "counts": counts, "report": str(report), "report_uri": report.resolve().as_uri(),
+            "leak_check": leak_summary,
+            "export_maestro_command": f"python .agents/harness.py maestro export-e2e --task-id {task_id}",
             "next_action": "DEVICE_SIGNOFF_REQUIRED",
             "instruction": ("Invoke ask_question IMMEDIATELY as your first action (ZERO pre-tool chat prose) and place the compact result table (failed/blocked scenarios first, at most 8 rows, link the report) "
                             "directly inside ask_question's `question` field for sign-off: 'PASS - approve (E2E report)' / 'FAIL - needs fixes' (translate lines and options into the developer's language starting every line, link label, and option with a word in that language). "

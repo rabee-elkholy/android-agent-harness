@@ -38,7 +38,15 @@ def _run(script: str, args: list[str]) -> int:
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
     read_only = read_only or script == "incident_reporter.py"
     # Merge checks the execution sessions of every source before applying; preview is read-only.
-    read_only = read_only or (script == "workflow.py" and args[:1] == ["merge"])
+    read_only = (
+        read_only
+        or (script == "workflow.py" and args[:1] == ["merge"])
+        or (script == "symbol_edit.py" and args[:1] in (["outline"], ["read"]))
+        or (script == "static_health_bridge.py")
+        or (script == "roborazzi_gate.py" and args[:1] in (["capabilities"], ["inspect-tree"]))
+        or (script == "maestro_bridge.py" and args[:1] in (["capabilities"], ["list"]))
+        or (script == "session_forensics.py")
+    )
     # The bounded verification runner owns its execution lease, including when
     # invoked directly; taking it here too would create a nested lock.
     if script != "verification_steps.py" and not read_only and not {"--help", "-h"} & set(args):
@@ -63,7 +71,9 @@ def _run(script: str, args: list[str]) -> int:
     in_process_ok = (
         os.environ.get("HARNESS_FORCE_SUBPROCESS") != "1"
         and (
-            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py"}
+            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py", "session_forensics.py"}
+            or (script == "static_health_bridge.py" and args[:1] in (["capabilities"], ["report"]))
+            or (script == "symbol_edit.py" and args[:1] in (["outline"], ["read"]))
             or (script == "workflow.py" and args[:1] == ["status"])
         )
     )
@@ -299,7 +309,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|task|doctor|policy|verify-steps|preflight|test|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|symbol|task|doctor|diagnose-session|health|policy|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -351,6 +361,16 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("task_context.py", ["--repo", str(REPO_ROOT), *args])
     if command == "delegate-plan":
         return _run("delegation_policy.py", ["--repo", str(REPO_ROOT), *args])
+    if command == "symbol":
+        return _run("symbol_edit.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "health":
+        return _run("static_health_bridge.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "roborazzi":
+        return _run("roborazzi_gate.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "maestro":
+        return _run("maestro_bridge.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "diagnose-session":
+        return _run("session_forensics.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "graph":
         forwarded = list(args)
         if "--repo" not in forwarded:
