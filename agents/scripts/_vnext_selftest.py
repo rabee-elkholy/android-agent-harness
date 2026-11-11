@@ -499,7 +499,11 @@ class ChatInstallationLifecycleTests(RepoCase):
         temp_kit_dir = tempfile.TemporaryDirectory()
         try:
             kit_copy = Path(temp_kit_dir.name) / "kit"
-            shutil.copytree(KIT / "agents", kit_copy / "agents")
+            shutil.copytree(
+                KIT / "agents",
+                kit_copy / "agents",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*", "state", "cache", "*.lock", ".audit-lock"),
+            )
             harness_cli._verify_kit_checksums(kit_copy)
 
             tampered_file = kit_copy / "agents" / "VERSION"

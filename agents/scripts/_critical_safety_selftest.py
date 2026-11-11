@@ -980,7 +980,11 @@ class CriticalSafetyTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             kit = Path(directory)
-            shutil.copytree(fixtures.KIT / "agents", kit / "agents")
+            shutil.copytree(
+                fixtures.KIT / "agents",
+                kit / "agents",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*", "state", "cache", "*.lock", ".audit-lock"),
+            )
 
             # 1. Valid kit passes all 3 verifiers
             self.assertEqual(0, cli._verify_kit_checksums(kit) or 0)

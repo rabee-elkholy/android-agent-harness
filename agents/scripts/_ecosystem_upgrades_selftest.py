@@ -435,7 +435,11 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
 
         # Install full .agents engine into repo
         kit_root = Path(__file__).resolve().parents[2]
-        shutil.copytree(kit_root / "agents", self.repo / ".agents")
+        shutil.copytree(
+            kit_root / "agents",
+            self.repo / ".agents",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*", "state", "cache", "*.lock", ".audit-lock"),
+        )
 
         # Seed minimal Android project structure
         (self.repo / "settings.gradle.kts").write_text(

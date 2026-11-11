@@ -30,9 +30,15 @@ sys.path.insert(0, str(KIT))
 
 
 def _copy_kit_tree(source: Path, destination: Path, **kwargs):
-    # Concurrent interpreters atomically rename temporary bytecode files.
-    # Fixture inputs are source assets, never the shared interpreter cache.
-    return shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*"), **kwargs)
+    # Concurrent interpreters atomically rename temporary bytecode files and
+    # ephemeral state/cache locks in the shared kit checkout.
+    # Fixture inputs are source assets, never the shared interpreter cache or runtime state.
+    return shutil.copytree(
+        source,
+        destination,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyc.*", "state", "cache", "*.lock", ".audit-lock"),
+        **kwargs,
+    )
 
 
 class KitCopyIsolationSelftest(unittest.TestCase):
@@ -44,11 +50,15 @@ class KitCopyIsolationSelftest(unittest.TestCase):
             (cache / 'engine.pyc.temporary').write_bytes(b'in-flight bytecode')
             (source / 'scripts/doctor/engine.py').write_text('value = 1\n')
             (source / 'legacy.pyc').write_bytes(b'compiled')
+            audit_lock = source / 'state/.audit-lock'
+            audit_lock.mkdir(parents=True)
+            (audit_lock / '.write.lock').write_bytes(b'ephemeral')
             destination = Path(td) / 'copy'
             _copy_kit_tree(source, destination)
             self.assertTrue((destination / 'scripts/doctor/engine.py').is_file())
             self.assertFalse((destination / 'scripts/doctor/__pycache__').exists())
             self.assertFalse((destination / 'legacy.pyc').exists())
+            self.assertFalse((destination / 'state').exists())
 
 
 def run_git(repo: Path, *args: str) -> None:
