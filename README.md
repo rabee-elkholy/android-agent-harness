@@ -28,6 +28,7 @@ The model focuses on engineering. The harness handles workflow state, proof, and
 - [6-Tier Dynamic Risk Model](#6-tier-risk-model)
 - [Persistent Project Knowledge & Truth Hierarchy](#persistent-project-knowledge)
 - [Antigravity-First Architecture & Review Protocol V2](#antigravity-first-architecture--review-protocol-v2)
+- [Capability-Detected Android Ecosystem Bridges & AST Symbol Surgery](#capability-detected-android-ecosystem-bridges--ast-symbol-surgery)
 - [Universal Multi-Provider PM MCP & Resilient Self-Healing](#universal-pm-mcp--resilient-self-healing)
 - [Supported AI Hosts & Enforcement Matrix](#supported-hosts--enforcement-model)
 - [Documentation Map & FAQ](#faq)
@@ -47,6 +48,7 @@ The model focuses on engineering. The harness handles workflow state, proof, and
 | **Universal Zero-Config PM MCP Integration** | Accidental ticket closures, overwritten Bug descriptions, or leaked code identifiers in QA reports | Auto-discovers installed PM MCPs (Zoho Projects, Zoho Sprints, Jira, Linear, Monday.com, GitHub, ClickUp, Asana, Trello), enforces mandatory preview-and-approval (`pm authorize`), protects original Bug descriptions, blocks automatic `Done`/`Closed` transitions, and generates 5-section RTL/LTR functional QA reports. |
 | **Smart Context Rotation & Task Bridge (`task bridge`)** | Token bloat and latency in long chats, or having to re-explain completed work when starting a related follow-up task in a new chat | Monitors conversation length/tokens via native hooks and transcript tail inspection, surfaces non-blocking rotation advisories (`CONTEXT_ROTATION_RECOMMENDED`) at clean checkpoints, and transfers architectural contracts, modified file scopes, plan notes, and a fresh Discovery Receipt into a new chat via `python .agents/harness.py task bridge`. |
 | **Risk-Gated Hybrid Flash Delegation & Quota Protection** | Exhausting weekly frontier model quota (`Carbon` / `Argon` / `Claude`) on multi-file codebase sweeps, boilerplate slices, and Gradle compile/test loops | Installs two pinned `gemini-3.8-flash-medium` utility subagents (`harness-scout-agent` for `<1,500`-token read-only architectural digests and `harness-worker-agent` for single-instance, `plan.json`-scoped implementation & Gradle gates via `delegate-plan --json`), while keeping `T4/T5` sensitive production logic (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect. |
+| **Capability-Detected Ecosystem Bridges & Symbol Surgery** | Fragile UI tests, RTL/viewport clipping missed by unit tests, full-file edits on 600-line classes, and noisy full-repo lint reports | Zero-dependency, capability-detected bridges for **Maestro YAML** physical-device flows (`maestro run` / `export-e2e`), **Roborazzi** headless `.uitree.json` viewport/RTL bounds auditing (`roborazzi verify`), pure-stdlib **AST Symbol Surgery** (`symbol outline\|read\|replace-body\|insert-after`), task-scoped **SARIF / BuildHealth / LeakCanary** gating (`health report`), and read-only **Session Forensics** (`diagnose-session`). |
 
 ---
 
@@ -645,14 +647,49 @@ Keep the main Antigravity chat on `Gemini 4 Carbon (Medium)` for architectural r
 
 ---
 
+## Capability-Detected Android Ecosystem Bridges & AST Symbol Surgery
 
-### Capability-Detected Android Ecosystem Bridges (`0` Forced Dependencies)
+The harness integrates high-leverage Android engineering tools through **capability-detected, zero-forced-dependency bridges**. Projects that do not use Maestro, Roborazzi, Detekt/Lint SARIF, or LeakCanary incur zero overhead (`0 ms`), while projects that configure them gain deterministic, snapshot-bound verification automatically:
 
-- **Maestro YAML Flow Runner & Recorder**: `python .agents/harness.py maestro run --flow .maestro/<flow>.yaml` & `maestro export-e2e --task-id <id>` (blocks `clearState`/`uninstallApp` unless developer-authorized).
-- **Roborazzi Headless `.uitree.json` Bounds Audit**: `python .agents/harness.py roborazzi verify` / `roborazzi inspect-tree` (verifies `[left, top, right, bottom]` RTL/viewport bounds on the JVM).
-- **Semantic Symbol Surgery (`Kotlin`/`Java`/`Swift`)**: `python .agents/harness.py symbol outline|read|replace-body|insert-after --file <path> --symbol <Class.method>`.
-- **Task-Scoped Static & Memory Health**: `python .agents/harness.py health report` (`SARIF` + `buildHealth` filtered strictly to modified files) & post-E2E `LeakCanary` checks.
-- **Session & Token Forensics**: `python .agents/harness.py diagnose-session [--export-bundle]`.
+### 1. Maestro YAML Physical-Device Bridge & Live E2E Exporter (`maestro`)
+- **Snapshot-Bound Physical Device Execution**: `python .agents/harness.py maestro run --flow .maestro/<flow>.yaml [--task-id <id>]` executes declarative `.maestro/*.yaml` flows against the exact verified physical device (`_bound_device`) and binds the pass/fail result to `delivery_snapshot_sha256` in `EvidenceStore`.
+- **Fail-Closed Destructive Command Guard (`MAESTRO_DESTRUCTIVE_COMMAND_FORBIDDEN`)**: Automatically scans YAML flows before execution and blocks destructive device mutations (`clearState`, `clearKeychain`, `uninstallApp`) unless the developer explicitly authorizes them (`--allow-clear-state --source conversation --proof-reference "<developer approval>"`).
+- **One-Command `phone_e2e` to `.maestro/*.yaml` Exporter**: After an interactive `phone_e2e` physical-device verification session passes, `python .agents/harness.py maestro export-e2e --task-id <id>` compiles the recorded device steps directly into a repeatable `.maestro/<task_id>.yaml` regression flow (staging under `.agents/state/tasks/<id>/maestro/` while verification snapshots are frozen and exporting to `.maestro/` post-delivery).
+
+### 2. Roborazzi Headless `.uitree.json` Viewport & RTL Bounds Gate (`roborazzi`)
+- **Headless JVM Compose & View Bounds Auditing**: When `io.github.takahirom.roborazzi` (and optional `ComposablePreviewScanner`) is detected in Gradle, `python .agents/harness.py roborazzi verify` runs `verifyRoborazziDebug -Proborazzi.dumpUiTree=true` under the shared Gradle build lock—verifying UI hierarchy geometry on the JVM without requiring a booted emulator.
+- **Deterministic Visual Defect Detection**: `roborazzi inspect-tree` parses generated `.uitree.json` sidecars to catch three high-frequency UI bugs that standard unit tests miss:
+  - `HORIZONTAL_VIEWPORT_CLIP`: Child nodes whose `[left, top, right, bottom]` coordinates overflow the parent viewport (catching Arabic RTL and localized string clipping).
+  - `ZERO_DIMENSION_NODE`: Visible interactive or text nodes rendered with `0px` width or height due to broken `Modifier.weight` / `ConstraintLayout` constraints.
+  - `CLICKABLE_SIBLING_COLLISION`: Overlapping clickable touch targets that steal tap events.
+- **Reviewer Brief Injection**: Verified UI bounds digests are automatically injected into `review-package.md` and `brief-<role>.md` so specialist reviewers see deterministic layout proof.
+
+### 3. Pure-Stdlib AST Symbol Surgery (`symbol`)
+- **Surgical Declaration-Level Editing (`Kotlin`, `Java`, `Swift`)**: Instead of reading and replacing 300+ lines of a large `ViewModel`, `Repository`, or `Screen` file, agents can inspect and edit individual classes, methods, or functions by symbol name:
+  ```bash
+  # List top-level and nested declarations with exact line spans and SHA-256 digests:
+  python .agents/harness.py symbol outline --file app/src/main/java/.../ProfileViewModel.kt
+
+  # Read only a single symbol (e.g., Class.method) without loading the rest of the file:
+  python .agents/harness.py symbol read --file app/src/main/java/.../ProfileViewModel.kt --symbol ProfileViewModel.refresh
+
+  # Replace a symbol body or insert a new member with optimistic concurrency & brace-balance verification:
+  python .agents/harness.py symbol replace-body \
+    --file app/src/main/java/.../ProfileViewModel.kt \
+    --symbol ProfileViewModel.refresh \
+    --expected-sha256 <symbol_sha256> \
+    --replacement-file <path_or_code>
+  ```
+- **Multiline String, Comment, & Scope Safety**: The pure-Python lexer scrubs raw multiline strings (`"""..."""`), character literals, and nested block comments (`/* ... */`) before brace matching, verifies whole-file brace balance before writing to disk, and enforces `mutation_guard` + `worker_write_allowed` inside `PreToolUse`.
+
+### 4. Zero-Token Task-Scoped Static & Memory Health Bridge (`health`)
+- **Diff-Scoped `SARIF` & `buildHealth` Filtering**: `python .agents/harness.py health report [--task-id <id>]` (and automatic `preflight` integration) inspects existing Detekt / Android Lint `*.sarif` reports and Gradle Dependency Analysis (`build-health-report.json` / `advice.json`) outputs **strictly filtered to the files and Gradle modules modified by the active task**, surfacing actionable regressions without drowning the agent in pre-existing repository warnings.
+- **Post-E2E `LeakCanary` Application-Leak Gate**: During live physical-device E2E verification on debug builds where `leakcanary-android` is present, the harness automatically checks for retained application heap leaks before marking the walkthrough passed.
+
+### 5. Read-Only Session & Token Forensics (`diagnose-session`)
+- **Instant Trajectory & Token Bottleneck Diagnostics**: `python .agents/harness.py diagnose-session [--conversation-id <id>] [--task-id <id>] [--export-bundle] [--json]` analyzes the active session for consecutive hook-denial streaks, out-of-scope file read sprawl, malformed tool calls, and peak context token steps, with optional Zero-PII scrubbed diagnostic bundle export.
+
+---
 
 ## License
 
