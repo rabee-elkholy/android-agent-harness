@@ -1231,6 +1231,13 @@ DEFAULT_PROJECT_NOTES_PLACEHOLDER = (
     "- Add specific team idioms, legacy constraints, or non-obvious architecture requirements here."
 )
 
+_NOTES_MEM_CACHE: dict[tuple[str, bytes, int], dict[str, Any]] = {}
+_DEV_INST_MEM_CACHE: dict[tuple[str, bytes], list[dict[str, Any]]] = {}
+_PM_SECTION_HEADER_RE = re.compile(
+    r"^##\s+[^\n]*(?:zoho|pm\b|tracker|jira|atlassian|linear|monday|clickup|asana|trello|task\s*(?:&|and)\s*bug|description\s+standard)[^\n]*$",
+    re.IGNORECASE,
+)
+
 
 def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
     """Load human-authored project-notes.md metadata and content when customized."""
@@ -1244,7 +1251,16 @@ def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
             "sections": [],
             "content": "",
         }
-    raw = _safe_read(notes_file)
+    try:
+        raw_bytes = notes_file.read_bytes()
+    except OSError:
+        raw_bytes = b""
+    digest_key = (str(notes_file.resolve()), hashlib.blake2b(raw_bytes, digest_size=16).digest(), int(max_chars))
+    cached = _NOTES_MEM_CACHE.get(digest_key)
+    if cached is not None:
+        return {**cached, "sections": list(cached["sections"])}
+
+    raw = raw_bytes.decode("utf-8", errors="ignore")
     norm = raw.replace("\r\n", "\n").strip()
     sha = _sha256_text(norm) if norm else ""
     stripped_lines = [
@@ -1266,7 +1282,7 @@ def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
             if sec and (sec != "Domain Conventions & Context" or has_custom):
                 sections.append(sec)
     content = norm[:max_chars] if has_custom else ""
-    return {
+    result = {
         "path": ".agents/project-context/project-notes.md",
         "exists": True,
         "has_custom_notes": has_custom,
@@ -1274,6 +1290,101 @@ def load_project_notes(repo: Path, *, max_chars: int = 16000) -> dict[str, Any]:
         "sections": sections,
         "content": content,
     }
+    if len(_NOTES_MEM_CACHE) >= 32:
+        _NOTES_MEM_CACHE.clear()
+    _NOTES_MEM_CACHE[digest_key] = result
+    return {**result, "sections": list(sections)}
+
+
+def filter_code_relevant_notes_dict(
+    base: dict[str, Any],
+    *,
+    include_pm: bool = False,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    """Filter an already-loaded project_notes dict to omit pure PM/Zoho HTML template sections unless requested."""
+    if not base.get("has_custom_notes") or not base.get("content"):
+        return dict(base)
+    if include_pm:
+        return {**base, "content": str(base["content"])[:max_chars]}
+
+    kept_lines: list[str] = []
+    code_sections: list[str] = []
+    skipping_pm_section = False
+    omitted_pm_sections: list[str] = []
+    for line in str(base["content"]).splitlines():
+        stripped = line.strip()
+        sec_match = re.match(r"^##\s+(.+?)\s*$", stripped)
+        if sec_match:
+            sec_title = sec_match.group(1).replace(r"\.", ".").replace(r"\&", "&").replace(r"\*", "*").strip()
+            if _PM_SECTION_HEADER_RE.match(stripped):
+                skipping_pm_section = True
+                omitted_pm_sections.append(sec_title)
+                continue
+            skipping_pm_section = False
+            if sec_title:
+                code_sections.append(sec_title)
+        if not skipping_pm_section:
+            kept_lines.append(line)
+
+    filtered_text = "\n".join(kept_lines).strip()
+    filtered_text = re.sub(r"(?:\n+\\?---\s*)+\Z", "", filtered_text).strip()
+    non_boilerplate = [
+        ln.strip()
+        for ln in filtered_text.splitlines()
+        if ln.strip()
+        and not ln.strip().startswith("# Human-Authored Project Architectural Notes")
+        and not ln.strip().startswith("> This file is owned and maintained by the project engineering team.")
+        and not ln.strip().startswith("> When instructed by the developer, AI agents may append or update project notes and conventions here.")
+        and ln.strip() != "## Domain Conventions & Context"
+        and ln.strip() != DEFAULT_PROJECT_NOTES_PLACEHOLDER
+    ]
+    return {
+        **base,
+        "has_code_notes": bool(non_boilerplate),
+        "sections": list(base.get("sections") or []),
+        "code_sections": code_sections,
+        **({"omitted_pm_sections": omitted_pm_sections} if omitted_pm_sections else {}),
+        "content": filtered_text[:max_chars] if non_boilerplate else "",
+    }
+
+
+def load_code_relevant_project_notes(
+    repo: Path,
+    *,
+    include_pm: bool = False,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    """Return project-notes.md filtered for code/architecture reviewers (omitting pure PM/Zoho HTML templates unless requested)."""
+    base = load_project_notes(repo, max_chars=max(max_chars, 16000))
+    return filter_code_relevant_notes_dict(base, include_pm=include_pm, max_chars=max_chars)
+
+
+def load_developer_instructions_cached(repo: Path, *, active_only: bool = False) -> list[dict[str, Any]]:
+    """Load `.agents/project-context/developer-instructions.json` with content-digest caching."""
+    inst_file = repo / ".agents" / "project-context" / "developer-instructions.json"
+    if not inst_file.is_file():
+        return []
+    try:
+        raw_bytes = inst_file.read_bytes()
+    except OSError:
+        return []
+    digest_key = (str(inst_file.resolve()), hashlib.blake2b(raw_bytes, digest_size=16).digest())
+    cached = _DEV_INST_MEM_CACHE.get(digest_key)
+    if cached is None:
+        try:
+            data = json.loads(raw_bytes.decode("utf-8"))
+            raw_list = data.get("instructions") if isinstance(data, dict) else None
+            cached = [dict(item) for item in raw_list if isinstance(item, dict)] if isinstance(raw_list, list) else []
+        except (UnicodeDecodeError, ValueError, TypeError):
+            cached = []
+        if len(_DEV_INST_MEM_CACHE) >= 32:
+            _DEV_INST_MEM_CACHE.clear()
+        _DEV_INST_MEM_CACHE[digest_key] = cached
+    items = [dict(item) for item in cached]
+    if active_only:
+        return [item for item in items if item.get("status", "ACTIVE") == "ACTIVE"]
+    return items
 
 
 def extract_pm_notes_section(notes_text: str) -> str:

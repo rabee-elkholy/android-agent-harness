@@ -866,8 +866,34 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
     if metadata.get("plan_clarifications"):
         content_lines.append(metadata["plan_clarifications"])
     try:
-        from project_context import load_project_notes
-        notes_info = load_project_notes(repo)
+        active_task_plan = _load_plan(repo, task_id)
+    except (OSError, ValueError, KeyError, ValidationError):
+        active_task_plan = {}
+    phase_dev_instructions = list((active_task_plan or {}).get("developer_instructions") or [])
+    if not phase_dev_instructions:
+        try:
+            from project_context import load_developer_instructions_cached
+            phase_dev_instructions = load_developer_instructions_cached(repo, active_only=True)
+        except (ImportError, OSError, ValueError):
+            phase_dev_instructions = []
+    if phase_dev_instructions:
+        content_lines.extend(["", "## Applicable Developer Constraints", ""])
+        for inst in phase_dev_instructions:
+            iid = inst.get("id", "unknown")
+            itxt = inst.get("text", "")
+            istr = inst.get("strength", "REQUIREMENT")
+            iscope = inst.get("scope", {})
+            sc_str = f"{iscope.get('kind', 'GLOBAL')}:{iscope.get('value', '*')}" if isinstance(iscope, dict) else str(iscope)
+            line = f"- **[{iid}]** ({istr}, scope: `{sc_str}`): {itxt}"
+            if inst.get("rationale"):
+                line += f" | *Rationale*: {inst.get('rationale')}"
+            if inst.get("alternatives_rejected"):
+                line += f" | *Rejected alternatives*: {inst.get('alternatives_rejected')}"
+            content_lines.append(line)
+    try:
+        from project_context import load_code_relevant_project_notes
+        include_pm_notes = bool((active_task_plan or {}).get("external_writes"))
+        notes_info = load_code_relevant_project_notes(repo, include_pm=include_pm_notes)
         if notes_info.get("has_custom_notes") and notes_info.get("content"):
             content_lines.extend([
                 "",

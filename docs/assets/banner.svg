@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360">
   <defs>
     <linearGradient id="hero-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#080B11"/>
-      <stop offset="50%" stop-color="#0E1422"/>
-      <stop offset="100%" stop-color="#070A0F"/>
+      <stop offset="0%" stop-color="#070B14"/>
+      <stop offset="50%" stop-color="#0D1526"/>
+      <stop offset="100%" stop-color="#060911"/>
     </linearGradient>
     <linearGradient id="accent-grad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#3DDC84"/>
@@ -15,79 +15,60 @@
       <stop offset="100%" stop-color="#0284C7"/>
     </linearGradient>
     <filter id="subtle-glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="40" result="blur"/>
+      <feGaussianBlur stdDeviation="42" result="blur"/>
     </filter>
   </defs>
 
-  <!-- Background Frame -->
-  <rect width="1200" height="360" rx="16" fill="url(#hero-bg)" stroke="#1E293B" stroke-width="1.5"/>
+  <rect width="1200" height="360" rx="18" fill="url(#hero-bg)" stroke="#1E293B" stroke-width="1.5"/>
 
-  <!-- Ambient Lighting -->
-  <circle cx="150" cy="180" r="140" fill="#3DDC84" opacity="0.08" filter="url(#subtle-glow)"/>
-  <circle cx="1050" cy="180" r="140" fill="#818CF8" opacity="0.08" filter="url(#subtle-glow)"/>
+  <circle cx="150" cy="180" r="145" fill="#3DDC84" opacity="0.09" filter="url(#subtle-glow)"/>
+  <circle cx="1050" cy="180" r="145" fill="#818CF8" opacity="0.09" filter="url(#subtle-glow)"/>
 
-  <!-- Left Geometric Brand Shield Icon -->
-  <g transform="translate(90, 105)">
-    <!-- Outer Shield Outline -->
-    <path d="M75 10 L140 35 L140 100 C140 142 75 170 75 170 C75 170 10 142 10 100 L10 35 Z" fill="#0F172A" stroke="url(#shield-grad)" stroke-width="3" stroke-linejoin="round"/>
-    
-    <!-- Inner Android Robot Head Geometric Silhouette -->
-    <path d="M42 74 C42 55 57 40 75 40 C93 40 108 55 108 74 Z" fill="#3DDC84"/>
-    <!-- Antennas -->
-    <line x1="53" y1="38" x2="45" y2="24" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round"/>
-    <line x1="97" y1="38" x2="105" y2="24" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round"/>
-    <!-- Eyes -->
-    <circle cx="60" cy="58" r="3.5" fill="#0F172A"/>
-    <circle cx="90" cy="58" r="3.5" fill="#0F172A"/>
-    
-    <!-- Geometric Quality Node Network -->
-    <circle cx="75" cy="112" r="5.5" fill="#38BDF8"/>
-    <circle cx="48" cy="128" r="4.5" fill="#818CF8"/>
-    <circle cx="102" cy="128" r="4.5" fill="#818CF8"/>
-    <line x1="75" y1="112" x2="48" y2="128" stroke="#334155" stroke-width="2"/>
-    <line x1="75" y1="112" x2="102" y2="128" stroke="#334155" stroke-width="2"/>
-    <line x1="75" y1="84" x2="75" y2="112" stroke="#334155" stroke-width="2"/>
+  <g transform="translate(86, 98)">
+    <path d="M78 8 L146 35 L146 104 C146 148 78 176 78 176 C78 176 10 148 10 104 L10 35 Z" fill="#0F172A" stroke="url(#shield-grad)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M44 76 C44 56 59 41 78 41 C97 41 112 56 112 76 Z" fill="#3DDC84"/>
+    <line x1="56" y1="39" x2="47" y2="24" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="100" y1="39" x2="109" y2="24" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="63" cy="60" r="3.6" fill="#0F172A"/>
+    <circle cx="93" cy="60" r="3.6" fill="#0F172A"/>
+    <circle cx="78" cy="115" r="5.5" fill="#38BDF8"/>
+    <circle cx="50" cy="132" r="4.5" fill="#818CF8"/>
+    <circle cx="106" cy="132" r="4.5" fill="#818CF8"/>
+    <line x1="78" y1="115" x2="50" y2="132" stroke="#334155" stroke-width="2"/>
+    <line x1="78" y1="115" x2="106" y2="132" stroke="#334155" stroke-width="2"/>
+    <line x1="78" y1="86" x2="78" y2="115" stroke="#334155" stroke-width="2"/>
   </g>
 
-  <!-- Typography Content Area -->
-  <g transform="translate(280, 0)">
-    <!-- Top System Tag (Exact Project Name) -->
-    <g transform="translate(0, 68)">
-      <rect width="250" height="32" rx="16" fill="#0F172A" stroke="#3DDC84" stroke-width="1.5"/>
+  <g transform="translate(278, 0)">
+    <g transform="translate(0, 60)">
+      <rect width="276" height="32" rx="16" fill="#0F172A" stroke="#3DDC84" stroke-width="1.5"/>
       <circle cx="18" cy="16" r="4.5" fill="#3DDC84"/>
-      <text x="34" y="21" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800" letter-spacing="1">ANDROID-HARNESS-KIT</text>
+      <text x="34" y="21" fill="#3DDC84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="800" letter-spacing="1.1">ANDROID AGENT HARNESS</text>
     </g>
 
-    <!-- Main Title -->
-    <text x="0" y="142" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" letter-spacing="-0.5">
-      Deterministic Android Engineering
+    <text x="0" y="136" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" letter-spacing="-0.5">
+      Stricter Proof, Not Heavier Workflow
     </text>
-    <text x="0" y="190" fill="url(#accent-grad)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="900" letter-spacing="-0.5">
-      for the AI Era
-    </text>
-
-    <!-- Subtitle -->
-    <text x="0" y="230" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="500">
-      Turn Any AI Assistant into an Uncompromising Senior Android Engineering Team.
+    <text x="0" y="182" fill="url(#accent-grad)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="33" font-weight="900" letter-spacing="-0.5">
+      Deterministic Android &amp; KMP Engineering
     </text>
 
-    <!-- Bottom Feature Pills (Universal Stacks & Invariants) -->
-    <g transform="translate(0, 264)">
-      <!-- Pill 1 -->
-      <rect x="0" y="0" width="185" height="34" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
-      <text x="16" y="22" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Adaptive Review</text>
+    <text x="0" y="222" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="500">
+      Approval-first governance, AST context, Hybrid Flash subagents &amp; SHA-256 verification for Google Antigravity &amp; Claude Code.
+    </text>
 
-      <!-- Pill 2 -->
-      <rect x="198" y="0" width="198" height="34" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
-      <text x="214" y="22" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Deterministic OS Hooks</text>
+    <g transform="translate(0, 258)">
+      <rect x="0" y="0" width="196" height="36" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
+      <text x="16" y="23" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">PreToolUse Scope Hooks</text>
 
-      <!-- Pill 3 -->
-      <rect x="408" y="0" width="190" height="34" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
-      <text x="424" y="22" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Autonomous Device QA</text>
+      <rect x="208" y="0" width="206" height="36" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
+      <text x="224" y="23" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Hybrid Flash Orchestration</text>
 
-      <!-- Pill 4 (Universal Stacks) -->
-      <rect x="610" y="0" width="200" height="34" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
-      <text x="626" y="22" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Universal Android &amp; KMP</text>
+      <rect x="426" y="0" width="198" height="36" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
+      <text x="442" y="23" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Epistemic Review V2</text>
+
+      <rect x="636" y="0" width="212" height="36" rx="8" fill="#131D31" stroke="#1E293B" stroke-width="1"/>
+      <text x="652" y="23" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600">Native Android &amp; KMM/KMP</text>
     </g>
   </g>
 </svg>

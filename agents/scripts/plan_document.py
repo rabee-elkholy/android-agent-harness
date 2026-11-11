@@ -306,6 +306,14 @@ def render_plan_document(
                 lines.append(f"  - {redact(sec)}")
     except (ImportError, OSError, ValueError, KeyError):
         notes_info = {}
+    bound_insts = plan.get("developer_instructions") or []
+    if bound_insts:
+        lines += ["", "## Applicable developer instructions", ""]
+        for inst in bound_insts:
+            iid = redact(str(inst.get("id") or "instruction"))
+            istr = redact(str(inst.get("strength") or "REQUIREMENT"))
+            itxt = redact(str(inst.get("text") or ""))
+            lines.append(f"- **[{iid}]** ({istr}): {itxt}")
     lines += [
         "",
         "## Tests",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.4] - 2026-11-11
+
+### `.agents/project-context/` Full-Surface Propagation, PM-Template Stripping, Content-Addressed Caching, and Flagship Open-Source `README.md` & Architecture SVG Refresh
+
+- **`.agents/project-context/` Full-Surface Propagation, PM-Template Stripping & Content-Addressed Caching (`agents/scripts/project_context.py`, `agents/scripts/task_context.py`, `agents/scripts/project_graph.py`, `agents/scripts/pre_invocation_reminder.py`, `agents/scripts/phase_review.py`, `agents/scripts/review_package.py`, `agents/scripts/plan_document.py`, `agents/scripts/delegation_policy.py`, `agents/scripts/generate_project_context.py`, `agents/scripts/doctor/engine.py`, `docs/benchmark/v1.3.2-engine-and-context-benchmarks.md`)**: Propagate active `developer-instructions.json` constraints across all `7/7` execution and review surfaces (`PreInvocation` hook reminder, `harness.py graph`, `task-context` JSON & CLI, `plan.md`, `delegate-plan`, `phase_review.py` `p1..pN`, and `review_package.py`); add `load_code_relevant_project_notes` to strip non-code PM/Zoho HTML ticket templates from code discovery and non-PM reviewer packages (`-97.79%` reviewer notes bytes, `-87.24%` `graph --json` bytes) while preserving full PM templates for `zoho_sync`/`pm_discovery`; remove the unused raw `project_facts` dump from `FILE_FALLBACK` (`-88.38%` `strings.xml` `task-context` payload); make `context note` bullet insertion idempotent (`UNCHANGED_DUPLICATE`); add content-addressed `blake2b` in-memory caches for `project-notes.md`, `developer-instructions.json`, and `project-facts.json`; and refresh `v1.3.2` engine & context benchmark artifacts.
+- **Flagship Open-Source `README.md` & Architecture SVG Refresh (`README.md`, `docs/assets/banner.svg`, `docs/assets/architecture-pipeline.svg`)**: Redesign `README.md` with a centered hero banner, 5-stage deterministic pipeline SVG, 10-capability executive summary, vanilla-vs-harness guarantee matrix, Hybrid Flash quota orchestration guide, measured `v1.3.2` benchmark table, CLI cheatsheet, and collapsible FAQ while preserving 100% PyPI absolute-URL portability.
+
 ## [1.3.3] - 2026-11-11
 
 ### Live 5-Module Android E2E Hardening: Roborazzi Version Catalog & Dict Bounds, Final-Review `INGESTED` Anti-Reread Guard, Local `val`/`var` in Private Edits, and Single-Phase Test Path Filtering

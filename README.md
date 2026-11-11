@@ -1,205 +1,72 @@
-# Android Agent Harness
+<div align="center">
 
-> **Stricter proof, not heavier daily workflow — purpose-built for Google Antigravity, Claude Code, and AI coding agents on Native Android & KMM / KMP (Kotlin Multiplatform Mobile).**
+<img src="https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/banner.svg" alt="Android Agent Harness — Stricter Proof, Not Heavier Workflow" width="100%" />
 
-Android Agent Harness is an approval-first **Android & KMM / KMP (Kotlin Multiplatform Mobile)** engineering layer for **Google Antigravity**, **Claude Code**, **Codex**, **Cursor**, and 12+ AI coding hosts.
-
-It gives AI coding agents bounded AST and symbol context across Native Android (`Kotlin`, `Java`, `Jetpack Compose`, `XML`) and Multiplatform projects (`commonMain`, `androidMain`, `iosMain`, `composeApp`, and iOS `.swift`), records the approved architecture and scope, intercepts out-of-scope file mutations via native `PreToolUse` hooks (`hooks.json` / `.claude/settings.json`), orchestrates parallel epistemically isolated reviewer subagents (`HARNESS_REVIEW_RESULT_V2`), and binds every test, build, review, and physical device check to cryptographic delivery snapshots.
-
-The model focuses on engineering. The harness handles workflow state, proof, and safety boundaries.
+<br />
 
 [![CI](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?label=release)](https://github.com/rabee-elkholy/android-agent-harness/releases)
-[![PyPI](https://img.shields.io/pypi/v/android-agent-harness)](https://pypi.org/project/android-agent-harness/)
+[![Release](https://img.shields.io/github/v/release/rabee-elkholy/android-agent-harness?label=release&color=3DDC84)](https://github.com/rabee-elkholy/android-agent-harness/releases)
+[![PyPI](https://img.shields.io/pypi/v/android-agent-harness?color=38BDF8)](https://pypi.org/project/android-agent-harness/)
 [![Targets](https://img.shields.io/badge/Android%20%7C%20KMM%20%2F%20KMP-Kotlin%20%7C%20Java%20%7C%20Compose%20%7C%20Swift-7F52FF)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
-[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14-blue)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
-[![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-success)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
-[![License](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10%E2%80%933.14%20%7C%20Zero%20Deps-2563EB)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
+[![Platforms](https://img.shields.io/badge/Linux%20%7C%20macOS%20%7C%20Windows-supported-10B981)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
+[![License: MIT](https://img.shields.io/github/license/rabee-elkholy/android-agent-harness)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/rabee-elkholy/badge.svg)](https://hub.xerj.org/contributors/rabee-elkholy)
 
+<h3>An approval-first, cryptographically verified engineering layer for AI coding agents on Native Android &amp; Kotlin Multiplatform (KMM / KMP).</h3>
+
+<p>
+  <a href="#quick-start"><b>Quick Start</b></a> ·
+  <a href="#why-android-agent-harness"><b>Why Harness?</b></a> ·
+  <a href="#what-daily-use-looks-like"><b>Daily Workflow</b></a> ·
+  <a href="#antigravity-first-architecture--review-protocol-v2"><b>Antigravity &amp; Review V2</b></a> ·
+  <a href="#hybrid-flash-orchestration--frontier-quota-protection"><b>Hybrid Models &amp; Quota</b></a> ·
+  <a href="#capability-detected-android-ecosystem-bridges--ast-symbol-surgery"><b>Ecosystem Bridges</b></a> ·
+  <a href="#measured-performance--context-efficiency"><b>Benchmarks</b></a> ·
+  <a href="#faq"><b>FAQ</b></a>
+</p>
+
+</div>
+
 ---
 
-## Navigation
+**Android Agent Harness** turns general-purpose AI coding assistants — primary-first on **Google Antigravity**, plus **Claude Code**, **Codex**, **Cursor**, and `AGENTS.md` hosts — into a disciplined, senior-grade Android and KMM/KMP engineering workflow.
 
-- [Key Architectural Pillars](#key-architectural-pillars)
-- [Why It Exists & Failure Modes Checked](#why-it-exists)
-- [Daily Developer Experience & Multi-Phase Flow](#what-daily-use-looks-like)
-- [Quick Start (Chat & Terminal)](#quick-start)
-- [6-Tier Dynamic Risk Model](#6-tier-risk-model)
-- [Persistent Project Knowledge & Truth Hierarchy](#persistent-project-knowledge)
-- [Antigravity-First Architecture & Review Protocol V2](#antigravity-first-architecture--review-protocol-v2)
-- [Capability-Detected Android Ecosystem Bridges & AST Symbol Surgery](#capability-detected-android-ecosystem-bridges--ast-symbol-surgery)
-- [Universal Multi-Provider PM MCP & Resilient Self-Healing](#universal-pm-mcp--resilient-self-healing)
-- [Supported AI Hosts & Enforcement Matrix](#supported-hosts--enforcement-model)
-- [Documentation Map & FAQ](#faq)
+Instead of relying on fragile prompt instructions that decay as chat context grows, the harness moves architectural discovery, scope boundaries, TDD bug reproduction, specialist code review, physical-device QA, and delivery proof into a **zero-dependency Python standard-library runtime** living cleanly under `.agents/`.
+
+> **Core Philosophy — Stricter proof, not heavier daily workflow:** You approve one clear plan, keep 100% authority over Git and external mutations, and receive changes backed by SHA-256 snapshot-bound compile, test, review, and device evidence.
 
 ---
 
-## Key Architectural Pillars
+## At a Glance: 10 Core Engineering Capabilities
 
-| Pillar | What It Solves | How the Harness Enforces It |
+| Capability | Problem Solved | How Android Agent Harness Enforces It |
 |---|---|---|
-| **Graph-Backed AST & Symbol Discovery** | Blind grep loops and token-heavy full-file reads across large multi-module repos | Single-pass symbol/dependency graph (`task-context` & `graph`) across Kotlin (`.kt`), Java (`.java`), Android XML (`.xml`), and KMP/iOS Swift (`.swift`), plus codebase reuse candidate detection (`reuse_candidates`). |
-| **Single-Approval Lifecycle & Scope Guard** | Silent scope creep, unapproved refactors, and mid-task confirmation fatigue | One initial plan approval (`plan_sha256` + single-use nonce) covers all phases. Native `PreToolUse` hooks (`hooks.json`) block unapproved file writes while automatically extending in-scope task files at phase/verification checkpoints. |
-| **6-Tier Dynamic Risk & Epistemic Review V2** | Over-reviewing trivial edits or under-reviewing critical Auth/Billing/Room changes | Classifies the final diff from `T0_TRIVIAL` (0 reviewers, instant delivery for docs/prose) to `T5_CRITICAL`, dispatching 3 consolidated domain specialists (`bug-test-reviewer-agent`, `arch-regression-reviewer-agent`, `security-perf-reviewer-agent`) under Goldfish epistemic isolation (`HARNESS_REVIEW_RESULT_V2`). |
-| **Android & KMP Domain Gates** | Room migration crashes, missing locale strings, UI-to-DAO layer bypass, and KMP leaks | Deterministic preflight checks for Room schema migrations, localized string/plural parity (`values-*`), `UI_TO_DATA_SOURCE_BYPASS`, KMP `commonMain` purity (`android.*` / JVM leak blocking), and exported component permission guards. |
-| **Cryptographic Evidence & Physical Device Proof** | Claiming "tests pass" from stale runs or shipping broken UI without device checks | Every test run, review verdict, APK artifact hash, `device install-start` foreground observation, and live `e2e` phone session is bound to `delivery_snapshot_sha256` and `change_set_sha256`. Any post-verification edit invalidates stale proof. |
-| **Self-Healing State & Consent-First Zero-PII Telemetry** | Wedged task state after developer Android Studio edits or unexpected crashes | Automatic stable checkpoint snapshots (`task heal`), preview-bound incremental scope decisions (`task change-decision`), and organized local Zero-PII incident reports (`.agents/state/incidents/<id>.md`) with consent-first `ask_question` GitHub reporting. |
-| **Universal Zero-Config PM MCP Integration** | Accidental ticket closures, overwritten Bug descriptions, or leaked code identifiers in QA reports | Auto-discovers installed PM MCPs (Zoho Projects, Zoho Sprints, Jira, Linear, Monday.com, GitHub, ClickUp, Asana, Trello), enforces mandatory preview-and-approval (`pm authorize`), protects original Bug descriptions, blocks automatic `Done`/`Closed` transitions, and generates 5-section RTL/LTR functional QA reports. |
-| **Smart Context Rotation & Task Bridge (`task bridge`)** | Token bloat and latency in long chats, or having to re-explain completed work when starting a related follow-up task in a new chat | Monitors conversation length/tokens via native hooks and transcript tail inspection, surfaces non-blocking rotation advisories (`CONTEXT_ROTATION_RECOMMENDED`) at clean checkpoints, and transfers architectural contracts, modified file scopes, plan notes, and a fresh Discovery Receipt into a new chat via `python .agents/harness.py task bridge`. |
-| **Risk-Gated Hybrid Flash Delegation & Quota Protection** | Exhausting weekly frontier model quota (`Carbon` / `Argon` / `Claude`) on multi-file codebase sweeps, boilerplate slices, and Gradle compile/test loops | Installs two pinned `gemini-3.8-flash-medium` utility subagents (`harness-scout-agent` for `<1,500`-token read-only architectural digests and `harness-worker-agent` for single-instance, `plan.json`-scoped implementation & Gradle gates via `delegate-plan --json`), while keeping `T4/T5` sensitive production logic (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect. |
-| **Capability-Detected Ecosystem Bridges & Symbol Surgery** | Fragile UI tests, RTL/viewport clipping missed by unit tests, full-file edits on 600-line classes, and noisy full-repo lint reports | Zero-dependency, capability-detected bridges for **Maestro YAML** physical-device flows (`maestro run` / `export-e2e`), **Roborazzi** headless `.uitree.json` viewport/RTL bounds auditing (`roborazzi verify`), pure-stdlib **AST Symbol Surgery** (`symbol outline\|read\|replace-body\|insert-after`), task-scoped **SARIF / BuildHealth / LeakCanary** gating (`health report`), and read-only **Session Forensics** (`diagnose-session`). |
+| **1. AST & Symbol Graph Discovery** | Blind grep loops and token-heavy full-file reads across large multi-module repos | Incremental code graph (`graph` & `task-context`) across `Kotlin`, `Java`, `XML`, and `Swift`, surfacing exact line ranges, callers, reuse candidates, and matching tests in `~14 ms`. |
+| **2. Single-Approval Scope Guard** | Silent scope creep, unapproved refactors, and repetitive confirmation prompts | One plan approval (`plan_sha256` + single-use nonce) unlocks execution. Native `PreToolUse` hooks (`hooks.json`) block unapproved writes in real time. |
+| **3. Multi-Wave Hybrid Flash Delegation** | Burning weekly frontier model quota on file exploration, boilerplate slices, and Gradle loops | Pinned `gemini-3.8-flash-medium` `harness-scout-agent` and `harness-worker-agent` absorb discovery and `T0–T3` slices with hard step caps (`24`/`32`) and Lead anti-reread guards (`<=3` reads). |
+| **4. 6-Tier Risk & Epistemic Review V2** | Over-reviewing trivial docs or under-reviewing `Auth` / `Billing` / `Room` changes | Classifies actual diffs from `T0_TRIVIAL` (instant delivery) to `T5_CRITICAL`, dispatching epistemically isolated specialists returning machine-verified `HARNESS_REVIEW_RESULT_V2` verdicts. |
+| **5. Android & KMM / KMP Domain Gates** | Room migration crashes, missing `values-*` translations, layer bypasses, and `commonMain` leaks | Deterministic preflight checks for Room schema bumps & migrations, locale string/plural parity, Clean Architecture `UI -> DAO` bypass, Android 15/16 lint, and `commonMain` purity. |
+| **6. Persistent Repo Memory (`.agents/project-context/`)** | Repeating team conventions and architectural rules in every new chat | Combines machine-extracted `project-facts.json`, human `project-notes.md`, and scoped `developer-instructions.json` propagated across all `7/7` discovery, planning, worker, and review surfaces. |
+| **7. AST Symbol Surgery & Ecosystem Bridges** | Fragile 600-line file edits, RTL clipping missed by unit tests, and noisy repo-wide lint | Built-in declaration-level AST editor (`symbol replace-body`), **Maestro YAML** physical-device runner & exporter, **Roborazzi** headless `.uitree.json` RTL/bounds gate, and diff-scoped **SARIF / BuildHealth / LeakCanary** checks. |
+| **8. Cryptographic Snapshot & Device Proof** | Claiming "tests pass" from stale runs before the latest edit | Binds unit tests, reviews, APK artifacts, `device install-start`, and live phone E2E journeys to `delivery_snapshot_sha256` and `change_set_sha256`. Any edit invalidates stale proof. |
+| **9. Smart Context Rotation & Task Bridge** | High latency in `100k+`-token chats and re-explaining context across follow-up tasks | Tracks session health, recommends clean rotation boundaries, and transfers contracts, `interface_delta` signatures, and a fresh Discovery Receipt to a new chat via `task bridge`. |
+| **10. Universal PM MCP & Self-Healing State** | Accidental ticket closures, overwritten Bug descriptions, or wedged task states | Zero-config discovery for Zoho Sprints/Projects, Jira, Linear, GitHub, ClickUp, Asana, Monday, and Trello with `pm authorize` previews, protected Bug bodies, `task heal` rollback, and Zero-PII forensics. |
 
 ---
 
-## Why it exists
+## Why Android Agent Harness?
 
-AI coding agents are good at writing code, but production Android work has a second problem: keeping the agent aligned over time.
+AI models write Kotlin and Compose code fast — keeping them aligned with a real, evolving multi-module Android codebase over dozens of turns is the hard part.
 
-As context grows, an agent can infer the wrong local architecture, touch more files than intended, modernize legacy code accidentally, report stale tests/builds as current, miss Room/device/platform risks, or lose track of the approved scope.
-
-Prompt rules help guide behavior. Android Agent Harness moves selected guarantees outside model memory and into deterministic tooling.
-
----
-
-## Failure modes it checks
-
-The mechanisms below check these failure modes within the configured host and verification boundaries. Native interception depends on the host; downstream verification applies to commands run through the harness.
-
-| Without the harness | With the harness |
+| Failure Mode in Vanilla AI Sessions | Deterministic Guarantee with Android Agent Harness |
 |---|---|
-| The agent reports "tests pass" from a run that predates its last edit. | Test, review, assemble and device evidence is bound to a frozen delivery snapshot. Any later edit makes it stale, and delivery fails closed. |
-| A bug is "fixed" without ever being reproduced. | Applicable BUG tasks require a new failing-test reproduction before the fix. Presentational changes and explicitly supported manual, device, or log reproductions follow the reproduction policy; a pre-existing failure alone does not establish RED. |
-| Tests that were already broken block the task or get blamed on the change. | Installation and task-start captures can identify pre-existing failures. Recognized unrelated debt is reported separately; unmatched failures and suspected flaky results still block verification. |
-| The agent edits files the developer never agreed to. | The plan pins expected files and surfaces. On Antigravity, installed native hooks can deny supported out-of-scope tool writes. Verification checks scope drift on every supported host. |
-| The agent approves its own plan, cancels its own task, or commits. | Approval must cite the developer's words in chat. Cancel, commit, merge, rebase and push stay with the developer. |
-| A risky change gets the same light review as a string fix. | A 6-tier risk model routes 3 comprehensive specialist reviewers (`bug-test-reviewer-agent`, `arch-regression-reviewer-agent`, `security-perf-reviewer-agent`) plus optional `spec-compliance-agent` and gates from the final diff: none for trivial changes, targeted specialists for logic/UI/Room/security/device surfaces. |
-| A large change is reviewed only once, at the end. | Multi-phase tasks run fast deterministic checkpoints at each phase boundary (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests) without pausing for mid-phase AI subagent reviews unless explicitly opted in (`scoped_phase_review_enabled`). |
-| The developer asks for a change after verification and the workflow wedges. | `task change-decision` (`extend-scope`, `accept-edits`, `review-edits`) and `task resume --reopen` record incremental scope or post-verification changes under the same task without re-drafting from scratch. |
-| External CLI or MCP writes (Google Drive/Docs/Sheets/Slides/Calendar, generic MCP tools) either get blocked by task plan state or run silently. | External writes are independent of code task plan state and route through a native developer confirmation prompt (`ask`/`force_ask`), while secret files (`.env`, keystores, `local.properties`, `google-services.json`, credentials) are hard-denied. |
-| A new chat forgets the team's conventions. | Project notes and scoped developer instructions live in the repo. Applicable instructions are selected during planning; this does not provide memory to the chat provider. |
-
----
-
-## What the harness adds
-
-The harness adds these engineering capabilities around your AI coding assistant:
-
-- **Persistent project knowledge & living context drift detection**: Generated project facts plus human project notes and scoped developer instructions (including optional decision `--rationale` and `--alternatives-rejected`) give future task sessions durable repo-local context without depending on one chat history, while `context drift-report` and `doctor` detect stale file or module references in `project-notes.md` and `developer-instructions.json` and suggest self-healed paths via the symbol graph.
-- **Project-aware discovery**: Bounded AST slicing via Task Context, symbol dependency mapping via Project Graph (across Kotlin, Java, XML, and KMP/iOS Swift files), source-set awareness, and automatic detection of local architecture families in mixed codebases.
-- **Focused Android feedback**: Optional Studio declaration/usages lookup, file analysis and official documentation through [Android inspection](https://github.com/rabee-elkholy/android-agent-harness/blob/main/agents/workflows/android-inspection.md). Compose preview filtering/dependency discovery, bounded Gradle output with retained full logs, and scoped Antigravity guidance reduce irrelevant context without replacing delivery gates.
-- **Approval-first execution & Zero-Decision readiness**: Plan-before-mutation flow, graph-backed codebase reuse candidate detection (`reuse_candidates`), path grounding warnings (`PATH_GROUNDING_WARNING`), multi-phase Gradle module DAG ordering checks (`PHASE_MODULE_DAG_ORDER`), standalone plan readiness auditing (`task plan-check`), plan hashes, and approval receipts, with scope drift checks. Conversation-based approval is rule-enforced; a hash binds the recorded plan but does not authenticate the human who approved it.
-- **Adaptive Android & KMP verification**: Canonical 6-tier risk classification matching blast radius to verification requirements, including specialized checks for Room schemas, localized string parity, coroutine dispatchers, Clean Architecture UI-to-Data-Source layer bypass (`UI_TO_DATA_SOURCE_BYPASS`), KMP `commonMain` platform purity, and device APIs.
-- **Epistemically isolated specialist reviews**: Role-scoped lean briefs enforce Goldfish epistemic independence—one designated reviewer verifies every item of the approved approach, while specialist reviewers evaluate runtime behavior, security, performance, and YAGNI/codebase reuse without being biased by implementer self-justification.
-- **Evidence-bound delivery**: Tests, reviews, assemble, and device verification are cryptographically bound to the final frozen delivery snapshot. Stale or partial evidence fails closed.
-- **Recovery and developer control**: Environment and installation diagnostics (`doctor`), restoration from a checksum-verified pinned kit (`repair`), transactional updates with rollback, and developer authority over Git operations.
-
----
-
-## What daily use looks like
-
-Developer:
-
-> Fix the refresh bug in `ProfileViewModel`.
-
-Harness-assisted agent:
-
-1. Resolves the exact target and local project context.
-2. Shows one implementation plan.
-3. Waits for explicit approval.
-4. Applies only the approved change.
-5. Follows the next action reported by the harness (`task status --task-id <id> --next`).
-6. Runs only the checks required by the final risk policy.
-7. Reports the result with bound test/build/device evidence.
-
-The developer sees the plan, approval point, important blockers, and final result — not the internal plumbing.
-
-```text
-Request
-  ↓
-Project Context
-  ↓
-Plan + Approval
-  ↓
-Implementation
-  ↓
-Adaptive Verification
-  ↓
-Evidence-Bound Result
-```
-
-### Large-Task & Multi-Phase Flow
-
-> Large tasks can be split into coherent phases. Each phase runs a fast deterministic checkpoint before the next phase begins, while final verification performs a comprehensive integration review across the completed task. Opt-in scoped phase delta reviews (`scoped_phase_review_enabled`) remain available when explicitly requested.
-
-Complex tasks execute through sequential phases under a single initial approval:
-```text
-one task approval
-→ phase implementation
-→ deterministic checkpoint
-→ scoped phase delta review (when selected)
-→ next phase
-→ final integration review
-→ assemble/device
-→ developer signoff
-→ final verify
-→ developer Git commit
-→ deliver
-```
-
-- **Semantic boundaries**: Phases represent coherent engineering steps, not mechanical 200-line splits.
-- **Fast deterministic phase checkpoints by default**: Phase transitions use fast deterministic checkpoints (`preflight`, Room guards, localized string parity, fast ktlint, and targeted unit tests) and auto-extend approved in-scope file paths without pausing for mid-phase AI subagent reviews unless `scoped_phase_review_enabled` is explicitly set.
-- **Final integration review**: Intermediate phase reviews do not replace the final integration review across the completed task.
-
-### Continuing across AI hosts & Smart Context Rotation (`task bridge`)
-
-- **Cross-host continuation (`task continue`)**: An approved task can continue in another supported AI host using the same checkout. Stop the former executor, then let the receiving agent run `task continue --host <actual-host> --source-stopped`. The task keeps its approval and progress; interrupted review runs are archived and restarted through the receiving host's real protocol, while valid deterministic proof is retained with its original provenance. See [cross-host continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md) for commands and enforcement limits.
-- **Smart Context Rotation (`CONTEXT_ROTATION_RECOMMENDED`)**: Long conversations accumulate large context windows (`80k–150k+` tokens), increasing token cost and latency on every turn. The harness tracks active conversation turns and token estimates in the background and surfaces a non-blocking advisory at clean checkpoints:
-  - **Post-task / Follow-up boundary** (`>= 120` steps or `>= 80,000` estimated context tokens): When delivering a task or starting discovery/drafting for a related follow-up task in a large chat.
-  - **Mid-task clean checkpoints** (`>= 220` steps or `>= 110,000` estimated context tokens): At phase boundaries (`checkpoint-phase` / `begin-next-phase`) or before final verification (`prepare-verification`).
-- **Zero-Friction Task-to-Task & Mid-Task Bridge (`task bridge`)**: Instead of starting a new chat from scratch and re-explaining what was just built (or paying for full repository re-discovery), the agent bridges the exact engineering state in one command:
-  ```bash
-  # 1. In the current chat, save the bridge (follow-up task or mid-task handoff):
-  python .agents/harness.py task bridge --save \
-    --next-outcome "Add input validation and error state to LoginScreen" \
-    --summary "Completed LoginViewModel and AuthRepository; preserve existing UiState contract"
-
-  # 2. Open a fresh chat and run one bootstrap command (or simply ask to continue):
-  python .agents/harness.py task bridge
-
-  # 3. Optional: select a specific bridge from a multi-bridge queue or clear saved bridges:
-  python .agents/harness.py task bridge --bridge-id <bridge_id>
-  python .agents/harness.py task bridge --clear [--bridge-id <bridge_id> | --all]
-  ```
-  Running `python .agents/harness.py task bridge` in the new chat validates `.agents/state/task-bridge.json` (and the multi-bridge queue in `.agents/state/task-bridges.json`), carries compact declaration signatures (`interface_delta`) for modified/expected source files, mints a **fresh conversation-local Discovery Receipt** (`mode="task_bridge"`) for the bridged files and modules so `task draft` and bounded searches work immediately without re-running `task-context`, and either pre-fills the follow-up `task draft` command (`FOLLOW_UP_TASK`) or transfers the active execution session (`MID_TASK_HANDOFF`). If multiple unconsumed bridges are queued, `task bridge` returns `MULTIPLE_BRIDGES_PENDING` (`SELECT_PENDING_BRIDGE`) so the developer can pick which task to continue via `ask_question` while keeping the others queued. Continuation in a new chat is **100% optional and intent-aware**: if you open a new chat for an unrelated topic, the `PreInvocation` reminder leaves saved bridges untouched in the background while answering your unrelated request directly. Developers who prefer to stay in the current chat can snooze advisories with `python .agents/harness.py task bridge --snooze`.
-
-### Incremental Changes & External Writes
-
-- **Incremental change decisions (`task change-decision`)**: When same-goal support files are needed or the developer edits files directly during implementation or verification, `python .agents/harness.py task change-decision --task-id <id> --mode <extend-scope|accept-edits|review-edits>` records a preview-bound receipt (`--expect-preview <preview_sha256>`) without discarding the active plan, approval, completed phase checkpoints, or prior `PASS` reviewer coverage ([ADR-016](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/016-incremental-task-change-decisions.md)).
-- **Review corrections and plan clarifications**: After all semantic phases complete, in-scope corrections use the same task and fresh final gates, retaining historical phase proof. `task plan-note --text "<clarification>" --source conversation --proof-reference "<decision>"` explains an existing decision without replacing approval or restarting phase reviews. Notes grant no scope or PASS. Genuine requirement changes still use `task revise` and approval; narrative-only revisions require `--material-change-reason` ([ADR-018](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/018-integration-corrections.md)).
-- **Developer-confirmed external writes**: External writes are evaluated independently of the code task plan state. Read-only external commands remain allowed, project tracker mutations (`zoho_sprints`, `jira`, `linear`, `gh`) follow configured tracker triggers, and external writes via Google Workspace CLIs (`gdrive`, `gdocs`, `gsheets`, `gslides`, `gcalendar`) or generic MCP tools raise a native host confirmation prompt (`ask` for standard writes, `force_ask` for destructive/permission/unknown actions) while always blocking secret and signing files (`.env*`, keystores, `local.properties`, `key.properties`, `google-services.json`, private keys, and service-account JSON) ([ADR-017](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/adr/017-developer-confirmed-external-writes.md)).
-
-### Urgent Task Interruption & Worktree Handoff
-
-For overlapping files or independent builds, use a separate worktree. When an urgent hotfix or bug interrupts an in-progress task (Task A):
-```text
-Task A
-→ task handoff (freeze WIP snapshot)
-→ developer WIP commit
-→ reconcile handoff (lineage receipt verified)
-→ developer creates separate worktree (git worktree add ../repo-task-b HEAD)
-→ Task B in new chat / worktree
-→ return to Task A worktree / chat
-→ task status --next
-```
-
-**Key Invariants & Boundaries:**
-- **At most three live tasks per worktree**: Each task reserves explicit, disjoint files and keeps its own approval, baseline, reviews, and evidence. Pending approval and READY_FOR_DELIVERY tasks count toward the limit. Deliver or cancel a task before opening a fourth.
-- **Lineage preservation**: An accepted WIP commit does not cancel or pause Task A; it preserves Task A's lineage receipt chain.
-- **Developer Git authority**: Installed client-project policy reserves commit, worktree, branch, merge, rebase, and push decisions for the developer. Technical interception depends on host capabilities.
-- **Bound commit lineage**: Validated WIP checkpoints and commits matching verified files of a disjoint sibling task are accepted. Unrelated commits and commits that mix unverified files remain lineage violations.
-- **Arbitrary merges blocked**: Arbitrary external merge/rebase into an active Task A worktree remains blocked; finish or hand off first.
-- **Chat independence**: Returning to Task A uses persisted harness state on disk (`task status --next`), never chat memory.
+| **Stale verification**: Agent reports "all tests pass" from a run before its last edit. | Every test, review, APK, and device check is bound to `delivery_snapshot_sha256`. Any later edit marks proof stale and blocks delivery. |
+| **Unreproduced bug fixes**: Agent guesses at a fix without proving the bug existed. | Applicable `BUG` tasks enforce `CAPTURE_RED_EVIDENCE` (`--capture-red`) so a failing test reproduces the defect before production code is touched. |
+| **Scope drift & drive-by refactors**: Agent edits unrelated modules or modernizes legacy Java/XML unasked. | Local architecture contracts preserve per-module patterns (`MVP`, `MVVM`, `MVI`), and native `PreToolUse` hooks block out-of-scope file mutations. |
+| **Self-approved plans & unwanted Git commits**: Agent rubber-stamps its own plan or runs `git commit`/`push`. | Plan approval requires developer words in chat; `commit`, `branch`, `merge`, `rebase`, and `push` remain strictly under **Human Git Authority**. |
+| **Frontier quota exhaustion**: Lead model re-reads 800-line files after subagents finish or spawns unpinned explore loops. | Built-in unpinned `research`/`explore` loops are redirected to Flash `harness-scout-agent`, and post-wave Lead re-reads are capped at `<=3` surgical checks. |
+| **Context amnesia across chats**: Every new conversation forgets module rules and past architectural decisions. | `project-notes.md` and scoped `developer-instructions.json` live in the repo, automatically rehydrating constraints and checking code-to-doc drift (`context drift-report`). |
 
 ---
 
@@ -207,30 +74,33 @@ Task A
 
 ### Chat installation (recommended)
 
-Open your Android project in **Google Antigravity** and provide this bootstrap prompt:
+Open your Android or KMM/KMP project in **Google Antigravity** (or Claude Code) and paste this single bootstrap prompt:
 
 ```text
 Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.3/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
-The installer runs non-destructively: it inspects project Gradle modules, asks a few essential setup questions, presents an installation plan, installs the managed engine under `.agents/`, and runs environment diagnostics. The full harness kit source checkout lives outside the target application (`~/.android-harness/kit`), while your Android project receives only the managed harness runtime payload under `.agents/`.
+What happens automatically and non-destructively:
+1. **Read-only inspection**: Discovers Gradle modules (`:app`, `:composeApp`, `:core:*`, `:feature:*`), flavors, UI toolkits, and locales without modifying a single app file.
+2. **Setup preview & approval**: Asks essential project questions, previews the installation plan, and waits for your approval.
+3. **Clean isolation**: Stores the pinned kit outside your repo (`~/.android-harness/kit`), installs only the managed runtime under `.agents/`, configures `.git/info/exclude` (zero `git status` noise when gitignored mode is chosen), and verifies installation health via `doctor --install-check`.
 
 ### Terminal installation (alternative)
 
-Install the CLI globally with `pipx`:
+Install globally via `pipx`:
 
 ```bash
-# Install the CLI in an isolated environment
+# 1. Install the standalone CLI
 pipx install android-agent-harness
 
-# Initialize harness in your Android repository root
+# 2. Initialize inside your Android / KMP repository
 android-harness init --repo /path/to/android-project
 
-# Inspect environment and installation health
+# 3. Run the 13-dimension health diagnostic
 android-harness doctor --repo /path/to/android-project --json
 ```
 
-Or run directly from a pinned source clone without global installation:
+Or run directly from a pinned shallow clone with **zero global packages**:
 
 ```bash
 git clone --depth 1 --branch v1.3.3 --single-branch \
@@ -241,468 +111,316 @@ python ~/.android-harness/kit/harness_cli.py init \
   --kit ~/.android-harness/kit
 ```
 
-In an installed repository, daily commands use the local launcher:
+Inside an installed repository, all daily operations run through the in-process local launcher:
 
 ```bash
 python .agents/harness.py doctor --json
 ```
 
-### Updating
+### Transactional Zero-Clobber Updates
 
-At the start of a conversation, an installed harness tells the agent (at most once a day, checking for new releases every six hours) when a newer release exists. Ask the agent to update and it runs `python .agents/harness.py update-info`, which prints the exact prompt and command for this installation. To update, finish or cancel the active task, then paste the same prompt with the new version in a new chat, or run:
+Installed repositories check for newer releases in the background (at most once per day) and provide the exact upgrade command via `python .agents/harness.py update-info`:
 
 ```bash
+# Update from a pinned tag checkout:
 python ~/.android-harness/kit/harness_cli.py update --repo /path/to/android-project
+
+# Or update from a local maintainer working branch:
+python /path/to/android-agent-harness/harness_cli.py update --repo /path/to/android-project --kit /path/to/android-agent-harness --no-refresh
 ```
 
-The update is transactional, synchronizes `.agents/` files in place (preserving existing `.agents/`, `.agents/subagents/`, and `.agents/agents/` directories for open IDE file watchers), and rolls back on failure. It keeps task history and state, setup answers, project notes and developer instructions. The default update refuses while tasks are active and lists locally edited managed files. An explicit stopped-source update (`--preserve-active-task <id> --source-stopped`) can preserve one active task and its reviewer model frontmatter; reload the IDE window (`Developer: Reload Window`) if the host keeps open handles to custom subagent definitions. Multiple live tasks still block that path. An explicit discard-local-edits option keeps a backup before replacing eligible managed edits. If an update is interrupted (the process is killed), `.agents/VERSION` keeps the previous release and `doctor` reports it; running the update again rolls the interrupted one back, including `GEMINI.md`/`AGENTS.md`/`CLAUDE.md`, and applies it from the start.
-
-For advanced configuration, see [docs/install-or-update-prompt.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) and [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md).
+Updates synchronize `.agents/` in place (friendly to open IDE file watchers), preserve `project-notes.md`, `developer-instructions.json`, setup answers, and task history, refuse by default while a task is mid-flight (unless `--preserve-active-task <id> --source-stopped` is explicitly requested), and automatically roll back if interrupted. See [Install & Update Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md).
 
 ---
 
-## Prompt Rules vs Harness
+## What daily use looks like
 
-| Capability | Prompt / AGENTS.md only | Android Agent Harness |
-|---|---|---|
-| Architecture guidance | Model remembers it | Local project evidence |
-| Cross-chat project conventions | Repeated manually / prompt-dependent | Repo-local Project Notes + scoped Developer Instructions |
-| Scope control | Instruction | Plan + deterministic drift checks |
-| Approval | Conversational convention | Recorded and plan-bound |
-| Tests | Model may run/report them | Execution evidence gate |
-| Review | Model judgment | Runtime-policy-routed evidence |
-| APK/device | Often ad hoc | Artifact/install/launch identity |
-| Dirty tree | Model reasons about it | Baseline-aware task isolation |
-| Recovery | Manual | Doctor + deterministic Repair |
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/architecture-pipeline.svg" alt="Android Agent Harness 5-Stage Pipeline" width="100%" />
+</p>
 
-> Prompt rules remain useful; the harness makes selected parts verifiable outside the model.
+You write natural engineering requests; the harness keeps state, routing, and verification deterministic behind the scenes:
 
----
+> **Developer:** *"Fix the calories calculation bug in `CaloriesViewModel` when `weightGoal` is blank for `STEPS` users."*
 
-## 6-Tier Risk Model
+1. **Anchored Discovery**: Resolves exact callers, tests, and repo-local constraints via `graph` and `task-context` (or parallel Flash `harness-scout-agent` waves on multi-subsystem tasks).
+2. **One Concise Plan**: Generates a readable `plan.md` and presents a language-adaptive approval card via `ask_question`.
+3. **Explicit Developer Approval**: Waits once for your approval (`Approve` / `Request changes` / `Cancel task`) — no mid-task nagging.
+4. **Scoped Execution**: Follows the deterministic router (`task status --task-id <id> --next`), reproduces the bug (`--capture-red`), and applies surgical edits strictly inside approved files.
+5. **Risk-Adaptive Gates**: Runs preflight checks, targeted module unit tests, and epistemically isolated V2 specialist reviews matched to the final diff's risk tier.
+6. **Device & Walkthrough Sign-off**: Installs/launches on a connected device when required (`device install-start` or `maestro run`) and presents a concise mobile verification card.
+7. **Human Git Delivery**: Leaves verified changes unstaged (or ready for your commit) and closes out cleanly once you commit.
 
-The harness inspects the final classified working tree diff and selects an adaptive verification tier:
+### Multi-Phase Tasks, Disjoint Parallel Tasks & Smart Context Bridging
 
-| Tier | Name | Typical examples | Typical verification |
-|---|---|---|---|
-| T0 | TRIVIAL | docs / non-runtime | structural / preflight |
-| T1 | LOW_RISK | strings, resources, visual-only UI | bounded deterministic checks, compile as needed |
-| T2 | FEATURE | ViewModel, UseCase, structured Flow/suspend, lightweight DataStore/SharedPreferences | tests + targeted review (1 reviewer on isolated <=25-line private helper edits; 2 on contract/feature edits) + assemble |
-| T3 | SUBSYSTEM | multi-module, DI, network, dispatcher/threading primitives, architecture integration | stronger integration/architecture verification |
-| T4 | DATA_DEVICE | Room, SQLDelight/SQLite schemas, migrations, FGS, camera/BT/sensor device APIs | specialized gates + runtime/device proof as applicable |
-| T5 | CRITICAL | Billing, Auth, Security, Crypto, Sensitive Data | highest applicable review/evidence across all 3 core specialist reviewers |
+- **Coherent Multi-Phase Execution**: Large features execute across semantic phases (`p1 -> p2 -> ...`) under **one initial approval**. Phase boundaries run fast deterministic checkpoints (`preflight`, Room guards, string parity, fast ktlint, and targeted unit tests) without pausing for mid-phase AI subagents unless `scoped_phase_review_enabled` is explicitly enabled, followed by a full final integration review.
+- **Up to 3 Live Disjoint Tasks per Worktree**: Keep up to three independent tasks open simultaneously on non-overlapping files (`task switch --task-id <id>`), combine pre-approval plans safely (`task merge`), or freeze urgent hotfix interruptions with cryptographic lineage (`task handoff` -> developer WIP commit -> `task reconcile-handoff`).
+- **Smart Context Rotation & `task bridge`**: Long chats (`>=120` steps / `>=80k` tokens at task boundaries) surface a non-blocking rotation advisory. One command transfers full architectural context, `interface_delta` signatures, and a fresh conversation-local Discovery Receipt to a clean chat — or across AI hosts (`task continue --host <host> --source-stopped`):
 
-> Exact reviewers, gates, and device requirements are calculated by the current runtime policy from the final classified change set.
-
----
-
-## Project-aware, not project-assuming
-
-Real Android repositories are rarely uniform.
-
-One codebase may contain Java + XML + MVP, Kotlin + XML + MVVM, Kotlin + Compose + MVI, callbacks next to Flow, and several source sets/modules.
-
-The harness does not assume one global architecture. It resolves the current task against the nearest evidence-backed local context and preserves that local style unless a migration is explicitly approved.
-
-```text
-legacy/profile  → Java + XML + MVP
-home            → Kotlin + XML + MVVM
-tracking        → Kotlin + Compose + MVI
-```
-
----
-
-## Persistent Project Knowledge
-
-> **The project remembers, even when the chat doesn’t.**
->
-> Android Agent Harness keeps durable engineering context inside the repository instead of relying on one chat session or one model’s memory.
-
-Persistent project knowledge is structured across three distinct layers:
-
-### 1. Generated Project Facts
-Machine-derived local architecture, Gradle modules, source sets, UI frameworks (Compose, XML, ViewBinding), persistence patterns (Room, SQLite, DataStore), conventions, and symbol dependency graphs. These live in `.agents/project-context/` (`project-facts.json`, `architecture.md`, `ui.md`, `persistence.md`, `conventions.md`) and are refreshed deterministically from source code.
-
-### 2. Human Project Notes
-For durable domain knowledge, team conventions, and non-obvious engineering decisions that cannot be inferred from code alone.
-
-```text
-Developer:
-"Never inject or call Retrofit APIs directly from ViewModels. Always route through Repository interfaces, map DTOs to domain models, and expose state via StateFlow."
-```
-
-Command:
 ```bash
-python .agents/harness.py context note \
-  "Never inject or call Retrofit APIs directly from ViewModels. Always route through Repository interfaces, map DTOs to domain models, and expose state via StateFlow."
+# Save follow-up or mid-task handoff state in the current chat:
+python .agents/harness.py task bridge --save \
+  --next-outcome "Wire CaloriesSettingsScreen state into HomeMviScreen" \
+  --summary "Completed CaloriesViewModel maintenance equation; preserve UiState contract"
+
+# Restore immediately in a fresh chat with zero re-discovery overhead:
+python .agents/harness.py task bridge
 ```
-
-- Stored in `.agents/project-context/project-notes.md`.
-- Preserved across context refreshes.
-- Informs future task discovery and planning. Applicable scoped Developer Instructions are pinned into the plan and review package.
-- Clarifies developer intent; cannot overrule contradictory source code facts.
-
-### 3. Scoped Developer Instructions
-For explicit engineering rules intended to apply to future matching tasks based on module, package, path, or feature scope.
-
-```text
-Developer:
-"Whenever we touch payments, preserve the existing callback bridge. Do not migrate it to Flow unless I explicitly ask."
-```
-
-Command:
-```bash
-python .agents/harness.py context instruct \
-  "Preserve the existing callback bridge. Do not migrate it to Flow unless explicitly requested." \
-  --scope "MODULE::payments" \
-  --source conversation \
-  --proof-reference "<developer phrase>" \
-  --strength REQUIREMENT
-```
-
-Supported scopes: `GLOBAL`, `MODULE`, `SOURCE_SET`, `PACKAGE`, `FEATURE`, `ARCH_FAMILY`, `PATH`.
-
-### Truth Hierarchy
-
-When resolving context for task planning and review, the harness applies a strict hierarchy of authority:
-
-```text
-Current source evidence
-    ↓
-Generated project facts
-    ↓
-Developer notes / scoped instructions
-    ↓
-Generic Android guidance
-```
-
-Current source code evidence is always the highest truth. Project notes and scoped instructions explain developer intent and constraints. Generic model advice or external best-practices never override local codebase evidence.
-
-### Cross-Chat Example
-
-```text
-Monday — Chat A
-Developer: "Never use destructive Room migration in this app."
-→ record as project instruction
-
-Two weeks later — Chat B
-Developer: "Add a field to UserEntity."
-→ Task Context resolves the applicable persistence instruction
-→ plan includes the existing migration constraint
-→ agent does not depend on remembering Chat A
-```
-
-The harness rehydrates and matches repo-local context; the chat provider itself is not claimed to remember.
-
----
-
-## Android & KMM / KMP (Kotlin Multiplatform) protection
-
-- **KMM / KMP Multiplatform & Source-Set Purity (`commonMain` / `androidMain` / `iosMain`)**:
-  - **Source-set isolation**: Blocks accidental platform leaks (`android.*`, `java.io.*`, or JVM-only APIs inside `commonMain`) during preflight and specialist reviews.
-  - **Cross-platform symbol graph (`Kotlin` + `Swift`)**: Indexes `.kt`, `.java`, `.xml`, and iOS `.swift` declarations and call sites in `task-context` and `graph` so shared KMM domain/data changes automatically surface both Android (`androidMain` / `composeApp`) and iOS (`iosMain` / `iosApp`) usages.
-  - **`expect` / `actual` contract verification**: Tracks multiplatform boundary declarations across `commonMain`, `androidMain`, and `iosMain` to prevent broken platform implementations.
-  - **KMM / Compose Multiplatform APK & module awareness**: Automatically discovers and validates standard Android (`:app` -> `app-debug.apk`) and KMM / Compose Multiplatform (`:composeApp` -> `composeApp-debug.apk`, `:androidApp` -> `androidApp-debug.apk`, `:shared`) topologies.
-- **Room database & schemas**: Source-based checks for version changes, numeric migration paths, Kotlin/Java embedded types, risky schema changes, and unconditional destructive fallback. These heuristics do not replace Room schema export validation or migration tests.
-- **Compose, XML & resources**: String parity across locales (`values/`, `values-ar/`, etc.), plural/placeholder validation, ViewBinding lifecycle leak checks, and Compose UI state handling.
-- **Coroutines, ANR & threading**: Pattern-based checks for selected blocking calls, coroutine scope risks, and exception-handling patterns. Static checks cannot establish freedom from ANRs or concurrency bugs.
-- **Device & platform APIs**: Foreground services, runtime permissions, location, notifications, Bluetooth/camera, and Android user ID (`u0`) continuity.
-- **Gradle build variants & multi-module**: Real variant-aware compilation tasks, split APK handling, artifact set identity, and cross-module dependency validation.
-
----
-
-## Evidence-bound verification
-
-```text
-Final Change Set
-      ↓
-Runtime Policy
-      ↓
-Tests / Reviews / Assemble / Device
-      ↓
-Bound Evidence
-      ↓
-Final Verifier
-```
-
-> Evidence is bound to the exact delivery snapshot/change set. Stale, mismatched, incomplete, or invalid evidence cannot approve delivery.
 
 ---
 
 ## Antigravity-First Architecture & Review Protocol V2
 
-The harness is engineered primary-first for **Google Antigravity**:
+Android Agent Harness is engineered primary-first for **Google Antigravity** with `HARD_ENFORCED` native hooks (`.agents/hooks.json`), custom subagent definitions under `.agents/agents/<role>/agent.md`, and native transcript execution verification:
 
-For design, migration, compatibility and security decisions the agent asks the developer before drafting the plan. After approval it follows the Harness router, the authority for next actions and completion, until the task ends. Every plan also gets a readable, generated `plan.md` linked from the approval question.
-
-- **Review Protocol V2**: Specialist reviewers return structured, machine-verifiable JSON (`HARNESS_REVIEW_RESULT_V2`) rather than fragile text tokens. Findings are typed, prioritized, and cryptographically bound to the frozen delivery snapshot, change set, and review package digest.
-- **Dedicated Custom Reviewer Subagents**: Three comprehensive specialist reviewers plus the architectural compliance reviewer are installed directly as Antigravity custom agents under `.agents/agents/<reviewer>/agent.md`:
-  - `bug-test-reviewer-agent` (logic, nullability, coroutines, lifecycle/UI state, and unit test quality/assertions),
-  - `arch-regression-reviewer-agent` (caller/navigation/schema regressions, project conventions, architecture layer boundaries, KDoc, localization, and YAGNI/codebase reuse),
-  - `security-perf-reviewer-agent` (security, privacy, auth/billing/crypto, exported components, main-thread I/O & ANR prevention, memory leaks, Compose stability, and WakeLock/sensor/FGS lifecycle),
-  - `spec-compliance-agent` (architectural plan and specification compliance when routed).
-- **Risk-Gated Flash Utility Subagents (`harness-scout-agent` & `harness-worker-agent`)**: Alongside the 4 read-only reviewers, Antigravity installations generate two quota-saving utility subagents under `.agents/agents/<role>/agent.md` pinned to `gemini-3.8-flash-medium`:
-  - `harness-scout-agent`: Read-only discovery explorer (`SCOUT_READ_ONLY_BOUNDARY`, up to 3 in parallel) that runs `graph`/`task-context` and returns compact `<1,500`-token architectural digests before planning.
-  - `harness-worker-agent`: Single-instance (`PARALLEL_WORKER_FORBIDDEN`), `Workspace="inherit"` implementation and Gradle compile/test worker governed by `python .agents/harness.py delegate-plan --json` (`FULL_SLICE` on `T0–T3` tasks within exact `expected_files`, `CAPTURE_RED_ONLY` on `BUG` tasks before `red-evidence.json`, and `TESTS_AND_GATES_ONLY` on `T4/T5` sensitive or `CONFLICT` tasks where the Lead Architect owns core production edits). Native hooks block `Model="pro"` quota leaks (`UTILITY_MODEL_QUOTA_GUARD`), unlisted production file writes (`WORKER_OUTSIDE_PLANNED_FILES`), lifecycle/approval commands (`WORKER_LIFECYCLE_COMMAND_FORBIDDEN`), and parent `active-conversation.json` clobbering.
-- **Developer-selected reviewer models & per-reviewer model visibility**: Inheritance remains the default. On Google Antigravity, the router prompts once before first dispatch (`SELECT_REVIEW_MODEL`: `flash-dynamic-task`, `flash-dynamic-once`, `carbon-dynamic-task`, `inherit-task`, `inherit-once`, `hybrid-smart-task`) or accepts explicit model/thinking choices (`gemini-3.8-flash-*`, `gemini-4-carbon-*`, `gemini-4-argon-*`, `gemini-3.1-pro-*`), syncs `.agents/agents/<role>/agent.md` frontmatter, and verifies native SQLite execution metadata (`NATIVE_METADATA_OBSERVED`). Claude Code supports native model aliases (`sonnet`, `opus`, `haiku`) or per-role choices. Every router action, status report, and chat update displays each reviewer alongside its active model (`<role> [<model>]`). See [reviewer model configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
-- **Parallel Routed Reviews & Single-Turn Batch Completion**: Central policy selects the required reviewer roster. Antigravity dispatch commands prepare concurrent `invoke_subagent` calls, and `python .agents/harness.py review complete-all --task <id>` (or `phase-review complete-all --task-id <id> --phase-id <phase>`) auto-binds finished native reviewer transcripts and finalizes the review summary table in a single turn.
-- **Low-Latency Engine & Worktree RAM Guard**: Read-only launcher commands (`graph`, `task-context`, `delegate-plan`, `policy`, `task status`) execute in-process with zero child-interpreter spawn overhead, single-file `PreToolUse` edits use a fast classifier path, and Gradle runs inside linked Git worktrees (`/swarm`) automatically inject `--no-daemon` to prevent multi-daemon RAM exhaustion.
-- **Reviewer Call Safety Cap**: Maximum safety ceiling on total reviewer model calls (recommended: 20).
-- **Same-Conversation Protocol Recovery**: Malformed initial reviewer responses trigger exact `send_message` corrections within the same conversation ID, preventing runaway subagent spawns.
-- **PostToolUse Launch Reconciliation**: Subagent invocation errors are trapped by native `PostToolUse` hooks, transitioning pending reviewers to `ENV_BLOCKED` and returning actionable diagnostic guidance.
-- **Mutation Interception**: Installed `.agents/hooks.json` commands check supported tool writes (`multi_replace_file_content`, `replace_file_content`, `write_to_file`) against approved scope and phases. This is a host hook boundary, not an operating-system sandbox.
+- **Machine-Verified `HARNESS_REVIEW_RESULT_V2`**: Reviewers return structured JSON payloads cryptographically bound to `delivery_snapshot_sha256`, `change_set_sha256`, and `package_sha256` — eliminating prose-parsing hallucinations.
+- **Epistemically Isolated Specialist Roster (`.agents/agents/`)**:
+  - `bug-test-reviewer-agent` — Behavioral logic, edge cases, nullability, coroutine cancellation/structured concurrency, lifecycle state, and unit test assertion strength.
+  - `arch-regression-reviewer-agent` — Caller/navigation/schema blast radius, Clean Architecture layer boundaries, KMP source-set purity, localization parity, and codebase reuse.
+  - `security-perf-reviewer-agent` — Auth/Billing/Crypto safety, exported components, `PendingIntent` mutability, main-thread I/O & ANR hazards, Compose stability, and FGS/sensor leaks.
+  - `spec-compliance-agent` — Requirement-by-requirement verification against the approved plan when routed.
+- **`Zero-Hop` Inlined Briefs & Single-Turn Batch Completion**: Canonical review packages (`<= 24 KB` / `520` lines), pre-computed `GraphEngine` blast-radius topologies, and already-passed deterministic gate summaries (`preflight`, `compile`, `unit_tests`) are embedded directly inside `brief-<role>.md` (and `phase-brief-<role>.md`). Once parallel reviewers finish, `python .agents/harness.py review complete-all --task <id>` ingests all verdicts in a single turn.
+- **Flexible Reviewer Models & Reviewer Call Safety Cap**: Supports default parent inheritance, interactive presets (`risk-hybrid`, `flash-dynamic`, `carbon-dynamic`), or explicit Antigravity/Claude model pins, guarded by a configurable **Reviewer Call Safety Cap** (default: `20`, per-reviewer tool budget: `12` calls). See [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
 
 ---
 
-## Universal PM MCP & Resilient Self-Healing
+## Hybrid Flash Orchestration & Frontier Quota Protection
 
-### 1. Universal Zero-Config Multi-Provider PM MCP Engine
-The harness dynamically discovers and inspects external Project Management MCP servers installed in the AI host (`zoho-projects_mcp`, `zoho-sprints`, `atlassian-mcp-server` / Jira, Linear, Monday.com, GitHub Projects, ClickUp, Asana, and Trello) without bundling vendor credentials inside the repository:
-- **Mandatory Preview & Approval (`PM_PREVIEW_AND_APPROVAL_REQUIRED`)**: Before any tracker mutation, the agent presents the exact target item ID, status change, and comment/description payload to the developer and records explicit authorization (`python .agents/harness.py pm authorize --proof-reference "<developer approval>"`).
-- **Non-Destructive Tracker Guardrails**: Original Bug/Issue descriptions are strictly protected from being overwritten or cleared (QA reports are posted as comments on Bugs and updated in descriptions on Tasks/Stories). Terminal states (`Done`, `Closed`, `Solved`) and opaque transition IDs are blocked unless the developer explicitly grants `--allow-close`.
-- **5-Section RTL/LTR Functional QA Reports**: `python .agents/harness.py pm prepare-report` generates structured HTML/Markdown QA handoff reports in the project's configured tracker language without leaking internal source filenames, class names, or stack traces.
+Large Android repositories can drain weekly frontier quotas (`Gemini 4 Carbon` / `Argon` / `Claude 5.5`) if the primary model performs every multi-file search, boilerplate edit, and Gradle test loop itself. Version `1.3.2` enforces **project-wide multi-wave subagent governance**:
 
-### 2. Self-Healing Task State & Last-Known-Good Snapshot Rollback
-- **Automatic Checkpoint Snapshots**: At every stable lifecycle boundary (`APPROVED`, `IMPLEMENTING`, `checkpoint-phase`, `VERIFYING`, `READY_FOR_DELIVERY`), the harness persists a cryptographically verified snapshot under `.agents/state/tasks/<id>/snapshots/` bound to the task identity, plan hash, and execution nonce.
-- **One-Command State Recovery (`task heal`)**: If `current-run.json` becomes stale or a developer modifies verified files before committing, `python .agents/harness.py task heal --task-id <id> --prepare-fresh-run` steps internal state back to the nearest valid checkpoint while preserving application source code, Git history, completed phases, and passed reviewer accounting.
-
-### 3. Organized Local Zero-PII Incident Reports & Consent-First Submission
-- **Local Zero-PII Diagnostics**: Unhandled harness exceptions or self-healing events are captured locally in `.agents/state/incidents/<incident_id>.json` and a human-readable `.agents/state/incidents/<incident_id>.md` report with strict Zero-PII redaction (scrubbing emails, phone numbers, IPv4 addresses, local paths, and tokens).
-- **Developer Consent via `ask_question`**: Public reporting never runs silently by default. On an unexpected incident, the harness instructs the agent to ask the developer via `ask_question` whether to submit the allowlisted anonymous metadata once (`python .agents/harness.py report-issue --submit --incident-id <id>`), enable always-auto-submit (`--submit --always-auto-submit`), or keep the report local only.
+| Layer / Role | Pinned / Recommended Model | Responsibility & Enforced Guardrails |
+|---|---|---|
+| **Lead Architect** (Main Chat) | `Gemini 4 Carbon (Medium)` / `Argon` ⇄ rotate to `Claude Sonnet/Opus 5.5` at `~50%` weekly bar | Architectural reasoning, interactive `ask_question` alignment, `T4/T5` sensitive production code (`AUTH`, `BILLING`, `SECURITY`, `CRYPTO`), semantic conflict resolution, and final `git diff` inspection. |
+| **`harness-scout-agent`** (`1–3` parallel) | `gemini-3.8-flash-medium` | Read-only `graph` / `task-context` anchoring and parallel `view_file` sweeps returning `<1,500`-token `file:line` digests. Hard hook cap: **`24` tool calls/instance**, max **`2` waves/turn**. Unpinned built-in `research`/`explore` subagents are blocked (`USE_HARNESS_SCOUT_AGENT`). |
+| **`harness-worker-agent`** (Single active) | `gemini-3.8-flash-medium` | Executes decision-complete slices via `delegate-plan --json` (`FULL_SLICE` on `T0–T3`, `CAPTURE_RED_ONLY` on `BUG` pre-RED, `TESTS_AND_GATES_ONLY` on `T4/T5` & `CONFLICT`). Hard hook cap: **`32` read/search calls**; edits and `compile`/`test` gates uncapped. |
+| **Post-Wave Anti-Reread Guard** | Native `PreToolUse` + `PostToolUse` | Blocks bloated `>220`-line reads on `>350`-line files after subagent waves and caps Lead post-wave checks at **`<=3` surgical reads** (`0` redundant re-reads after `APPROVE` reviews). |
 
 ---
 
-## Supported hosts / enforcement model
+## Adaptive 6-Tier Risk Model & Android / KMP Protection
 
-Android Agent Harness is dedicated to **Google Antigravity** as its native target runtime:
+Verification scales strictly with the **classified final diff** — never slowing down documentation or string tweaks while never cutting corners on database migrations or billing flows:
 
-| Host | Adapter | Mutation Interception | Review proof | Downstream verifier |
-|---|---|---|---|---|
-| **Google Antigravity** (Primary & Dedicated Target) | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, custom reviewer subagents (`.agents/agents/`), rules, skills | Native hooks (`HARD_ENFORCED`) | Trusted transcript Review V2 (`HARNESS_REVIEW_RESULT_V2`) | Yes |
-| Legacy / External `AGENTS.md` Readers | Optional compatibility templates (`CLAUDE.md`, `CODEX.md`, `.cursor/rules`) | Rule-enforced (`RULE_ENFORCED`) unless host hook is active | V1 response ingestion | Yes |
+| Tier | Classification | Representative Changes | Routed Verification Profile |
+|---|---|---|---|
+| **T0** | `TRIVIAL` | Markdown docs, comments, non-runtime prose | Fast structural / preflight check — zero reviewers, instant delivery |
+| **T1** | `LOW_RISK` | `strings.xml`, colors/dimens, static resource tweaks | Localized string/plural parity + bounded compile check as needed |
+| **T2** | `FEATURE` | `ViewModel`, `UseCase`, structured `Flow`/`suspend`, Compose/XML UI, `DataStore` | Module unit tests + targeted V2 review (consolidated single reviewer on isolated `<=25`-line private helper edits) + APK assemble |
+| **T3** | `SUBSYSTEM` | Multi-module contracts, Hilt/Koin DI, Retrofit/Ktor networking, custom dispatchers | Integration & architecture boundary review + cross-module compile/test gates |
+| **T4** | `DATA_DEVICE` | Room / SQLDelight schemas & migrations, `ForegroundService`, Camera, Bluetooth, Sensors | Room migration guard + specialist reviews + physical device / Maestro proof |
+| **T5** | `CRITICAL` | `Auth`, `Billing`, `Crypto`, `Keystore`, permissions, sensitive user data | Full specialist roster (`risk-hybrid` escalation eligible) + explicit sensitive approval |
 
-On **Google Antigravity**, installed native hooks (`hooks.json`) intercept supported file mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and subagent boundaries (`invoke_subagent`). The harness always reports the detected enforcement tier (`HARD_ENFORCED` vs `RULE_ENFORCED`) honestly.
-
-See [docs/tool-support.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) for full integration details.
-
----
-
-## What it does not do
-
-- It is not an Android IDE.
-- It is not a coding model.
-- It does not replace Android Studio or Gradle.
-- It does not guarantee bug-free code.
-- It does not make every host OS-sandboxed.
-- It does not automatically modernize legacy architecture.
-- It does not remove developer authority over Git/release decisions.
-- It is not a general-purpose cross-project/cloud chat-memory system; persistent project knowledge is repo-local harness context.
-- It does not automatically merge/rebase concurrent worktrees or infer ownership of arbitrary external commits.
+### Native Android & Kotlin Multiplatform (`KMM / KMP`) Safeguards
+- **Multiplatform Source-Set Purity**: Indexes `commonMain`, `androidMain`, `iosMain`, `:composeApp`, `:shared`, and iOS `.swift` symbols; blocks accidental `android.*` / JVM-only API leaks in `commonMain`; and validates `expect` / `actual` declaration pairing.
+- **Mixed Legacy & Modern Codebases**: Resolves local architecture profiles per directory/module (`Java + XML + MVP` alongside `Kotlin + XML + MVVM` and `Kotlin + Compose + MVI`) without forcing unapproved rewrites.
+- **Android 15 / 16 & Platform Readiness**: Zero-token static checks in `fast_kt_lint.py` catch missing `PendingIntent` immutability flags, swallowed `CancellationException` in `suspend` functions, hardcoded UI strings, UI-to-DAO layer bypasses, and exported Manifest components missing permissions.
 
 ---
 
-## Who should use it
+## Persistent Project Knowledge (`.agents/project-context/`)
 
-**Best fit:**
-- Production Android teams using AI coding agents regularly
-- Mixed/legacy codebases (Java/Kotlin, XML/Compose, multi-module)
-- Apps with Room, payments, auth, permissions, foreground services, or device behavior
-- Developers who want AI speed without giving up explicit engineering control
-
-**Probably unnecessary for:**
-- Throwaway prototypes
-- Tiny demo apps
-- One-off code generation
-
----
-
-## Repository architecture
+> **Your repository remembers architectural truth across every chat, model, and teammate.**
 
 ```text
-agents/
-├── rules/         # Canonical harness rules and behavioral invariants
-├── scripts/       # Deterministic Python standard-library engine and verification gates
-├── skills/        # AI host skill definitions and reference contracts
-├── subagents/     # Independent specialized reviewer agent definitions
-├── tool-adapters/ # Host-specific configuration templates (Claude, Gemini, Cursor, etc.)
-└── workflows/     # Task lifecycle and multi-phase orchestration workflows
+1. Current Source Code Evidence   (Highest authority — live AST & working tree)
+            ↓
+2. Generated Project Facts        (.agents/project-context/project-facts.json + architecture/ui/persistence/conventions.md)
+            ↓
+3. Human Notes & Instructions     (project-notes.md + scoped developer-instructions.json across all 7/7 surfaces)
+            ↓
+4. Generic Android Guidance       (Lowest authority — never overrides local codebase evidence)
 ```
-
-The Python runtime engine uses the standard library. Git, a compatible JDK/Android SDK, the project Gradle Wrapper, ADB for device workflows, and the selected AI host are separate external requirements. Wheel building and publishing use development dependencies.
-
----
-
-## Testing / CI
-
-- **Configured runners**: Ubuntu 24.04, Windows Server 2025, and Intel macOS 15.
-- **Configured Python coverage**: Full suite on Linux/Python 3.12; quick suite on Linux/Python 3.10, 3.11, 3.13, and 3.14, and on Windows/macOS with Python 3.12. Wheel lifecycle checks run on all three operating systems.
-- **Validation**: Full deterministic selftest suite (`python harness_cli.py selftest`), syntax compilation across all scripts (`python -m compileall`), wheel packaging and lifecycle tests, security/adversarial boundary validation, and multi-phase Android workflow scenario tests.
-
-Pushes and pull requests targeting `main` trigger the configured [GitHub Actions jobs](https://github.com/rabee-elkholy/android-agent-harness/actions/workflows/ci.yml). This is a selected compatibility matrix, not every OS/Python combination. A configured job is not evidence of a pass: consult results for the exact commit. Release policy requires successful validation and CI before tagging.
-
----
-
-## Recorded client validation
-
-Historical client runs and their evidence are documented in [benchmark status](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/benchmark-status.md) and its linked reports. That record includes passed, failed, incomplete, and pending scenarios. Results apply to the frozen versions and environments named in each report; they do not certify every scenario on the current release.
-
-The deterministic selftests exercise simulated Android projects and workflow contracts. They do not replace real-device testing or end-to-end validation on your own application.
-
-## Maturity / roadmap
-
-Antigravity is the primary host. Other hosts use their detected hook or rule enforcement plus downstream verification. Evaluate the current commit's CI results, supported boundaries, and client validation before relying on it for a particular project.
-
-**Roadmap:**
-- Real-repo burn-in across diverse Android topologies
-- Performance tuning of Task Context AST slicing
-- Host integration refinement for emerging AI environments
-- Documentation simplification and developer onboarding polish
-
----
-
-## Contributing
-
-We welcome contributions! Please review [CONTRIBUTING.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) before submitting pull requests.
-
-1. **Standard Library Only**: All runtime engine code must use Python standard library only.
-2. **Safety Invariants**: Never weaken approval gates, plan nonces, or evidence binding.
-3. **Deterministic Selftests**: Run `python harness_cli.py selftest` and `python -m compileall -q harness_cli.py agents/scripts` to verify all tests pass cleanly. Suites run in parallel (`--jobs N`, default up to 8; the largest suites are split into shards; `--jobs 1` streams output). On Windows, pointing `HARNESS_SELFTEST_TMP` at a folder excluded from antivirus scanning shortens the run considerably.
-
-For security reports, refer to [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
-
----
-
-## FAQ
-
-**1. Does this replace Android Studio?**
-No. Android Studio remains the primary IDE for Android development, debugging, and profiling. The harness is an engineering control layer for AI coding tools working within the repository.
-
-**2. Does this make the AI autonomous?**
-No. The harness is approval-first. All task scopes and risk classifications require explicit developer approval before modifications begin, and delivery requires verified evidence.
-
-**3. Can it work with KMM / KMP (Kotlin Multiplatform Mobile) and mixed Java/Kotlin/XML/Compose/Swift codebases?**
-Yes. It natively supports both standard Android apps and KMM / KMP projects (`commonMain`, `androidMain`, `iosMain`, `:shared`, `:composeApp`, `:androidApp`, and iOS `.swift` files). It derives local architectural evidence per module and source set, checks `commonMain` platform purity, and verifies changes against the approved architecture.
-
-**4. Does every task run many reviewers?**
-No. The 6-tier risk model dynamically assigns verification: trivial edits (T0) and low-risk changes (T1) skip reviewer subagents entirely. Specialized reviewers run only when justified by the final classified blast radius.
-
-**5. Does every task require a device?**
-No. Device deployment and mobile verification are required only for tiers and changes involving device-facing surfaces (such as T4/T5 with Room, permissions, or system services) or when explicitly requested.
-
-**6. Why is the harness focused on Google Antigravity?**
-Specializing in Google Antigravity enables deep native integration: `HARD_ENFORCED` pre-tool and post-tool hooks (`hooks.json`), parallel subagent orchestration (`invoke_subagent`) with native SQLite execution proof (`HARNESS_REVIEW_RESULT_V2`), interactive `ask_question` decision cards, and Android Studio / Device Hub / Compose Preview diagnostics (`android-ui`, `android-inspect`). Legacy adapter templates remain in the kit for backward compatibility during updates.
-
-**7. Does the harness commit/push code?**
-Installed client-project workflows leave Git mutations to the developer and normally leave edits unstaged. Maintenance of this harness repository may use Git or publish only when its maintainer explicitly authorizes those actions.
-
-**8. What happens if the harness itself is corrupted?**
-The harness includes deterministic health diagnostics (`doctor`) and self-healing repair (`repair`) that can restore managed engine files from the pinned kit without touching your application source code.
-
-**9. Will a new chat remember my project rules?**
-Future sessions can load repo-local context. Project notes (`project-notes.md`) and scoped developer instructions (`developer-instructions.json`) persist inside the repository. When a new chat begins, Task Context and Discovery automatically carry applicable instructions into task planning. The chat provider itself does not need to remember previous conversations. Current source evidence remains the highest authority.
-
-**10. Can I keep several local tasks without worktrees or committing the previous task first?**
-Yes. Up to **three live tasks** may share one worktree when their explicitly planned files do not overlap. Pending approvals, implementation, verification, blocked tasks, and READY_FOR_DELIVERY tasks all count. A fourth task is refused until one is delivered or cancelled; switching focus does not free a slot.
-
-Start each task with its own `--task-id` and `--expected-files`. A ready task may remain uncommitted while you work on another disjoint task. Switch focus before editing or running commands that use the active task:
 
 ```bash
-python .agents/harness.py task switch --task-id task-b
-python .agents/harness.py task status --task-id task-b --next --brief
+# Record an idempotent team convention in .agents/project-context/project-notes.md:
+python .agents/harness.py context note \
+  --section "Domain Conventions & Context" \
+  "Never subtract 500 kcal when weightGoal is empty on STEPS users; default to maintenance calories."
+
+# Record a cryptographically bound, scope-matched instruction in developer-instructions.json:
+python .agents/harness.py context instruct \
+  "Preserve the callback bridge in payments; do not migrate to Flow unless explicitly requested." \
+  --scope "MODULE::payments" \
+  --strength REQUIREMENT \
+  --source conversation \
+  --proof-reference "Keep payments callback bridge"
+
+# Audit project-notes.md, developer-instructions.json, and project-facts.json for stale paths/modules:
+python .agents/harness.py context drift-report --json
 ```
 
-Explicit `--task-id` selects the task for commands that accept it. `task switch` preserves the task's status and approval; a pending plan still requires approval, and a verifying task still needs `task resume` before edits. Without an active pointer, several live tasks require explicit selection. Revisions cannot reserve another live task's files.
-
-When tasks conflict, the harness names the affected tasks and files and offers understandable choices: finish the existing task first, agree separate file scopes, explicitly cancel an unwanted task while keeping its edits, or use a developer-created worktree. Even edits to different lines of the same file overlap. The three-task limit instead offers delivery, cancellation, or another worktree. `--json` includes structured options and a `RESOLVE_TASK_CONFLICT` next action so the host can present these choices in your language. No resolution runs automatically.
-
-**Combine plans before starting:** The conflict choices also offer **Combine plans before implementation**, with an eligibility explanation. You can consolidate two or three plans awaiting their first approval into a new task. Preview their combined goals, files, execution phases, tests and newly evaluated review policy:
-
-```bash
-python .agents/harness.py task merge --task-id combined --from-task-id task-a --from-task-id task-b --json
-```
-
-Repeat `--from-task-id` in the desired execution order, adding a third source if needed. The preview changes no task state or project files. After you explicitly select the merge, the agent applies that exact preview:
-
-```bash
-python .agents/harness.py task merge --task-id combined --from-task-id task-a --from-task-id task-b --apply --expect-preview <merge_preview_sha256> --source conversation --proof-reference "<your merge choice>"
-```
-
-The source tasks become CANCELLED with their original plans and a `merged_into` reference retained. The new task awaits **one fresh implementation approval**; selecting a merge grants no permission to edit application files. Changed plans or inputs require a fresh preview. No approval, execution evidence, or spending transfers. Started tasks remain separate, even if revised back to pending approval. Conflicting architecture, acceptance or Zoho links require a reviewed consolidated plan rather than silently dropping an obligation. If the conflicting request has no saved task yet, the host offers to include its complete goals in a revision of the existing pending plan. Interrupted application blocks project writes and can be recovered by repeating the recorded apply command. This feature consolidates plans; file changes and Git branches are unaffected.
-
-When a task is ready, commit only its verified files yourself, then run:
-
-```bash
-python .agents/harness.py task reconcile-delivery --task-id task-b
-```
-
-Only that task becomes DELIVERED. Other tasks keep their local changes and accept the verified sibling commit in their lineage. Unrelated commits, overlapping edits, and changed verified content still block delivery.
-
-**Shared build limitation:** Gradle, unit tests, assembly, and the APK use the entire working tree, including unfinished sibling changes. Keep parked work compilable. Editing any task during another task's frozen verification makes that run stale; rerun verification against the actual tree. Use separate developer-created worktrees when you need overlapping files or independent builds. The existing `task handoff` / `task reconcile-handoff` WIP checkpoint flow remains available.
-
-**11. Does every phase run AI reviewers?**
-No. Phase boundaries run fast deterministic checks (Room schema guards, string parity, fast ktlint, and targeted unit tests) by default without spawning mid-phase AI reviewer subagents. Scoped phase delta review runs only when explicitly opted in via `scoped_phase_review_enabled`, in which case 1–2 policy-routed specialists inspect the phase delta. Final integration review across the completed task remains authoritative.
-
-**12. How do I preserve weekly frontier model quota (e.g., Google AI Ultra) on large Android repositories without losing code quality?**
-Keep the main Antigravity chat on `Gemini 4 Carbon (Medium)` for architectural reasoning, planning, `T4/T5` sensitive production edits, and final diff review, and rotate the main chat selector to `Claude Sonnet 5.5` / `Claude Opus 5.5` when `/usage` shows the Gemini weekly bar near `~50%` (separate quota pool; `task continue` and `task bridge` preserve full task state). Meanwhile, `harness-scout-agent` and `harness-worker-agent` stay pinned to `gemini-3.8-flash-medium` to absorb multi-file discovery sweeps, `T0–T3` scoped implementation slices (`delegate-plan --json`), unit-test authoring, and Gradle compile/test loops, while `review complete-all --task <id>` finalizes all V2 reviewers in a single turn.
+Supported instruction scopes: `GLOBAL`, `MODULE`, `SOURCE_SET`, `PACKAGE`, `FEATURE`, `ARCH_FAMILY`, and `PATH`. Active instructions propagate automatically across `PreInvocation` reminders, `graph`, `task-context`, `plan.md`, `delegate-plan`, `phase_review`, and final `review_package` briefs, while non-code PM/Zoho HTML templates in `project-notes.md` are automatically stripped from code discovery and code-review prompts (`-97.8%` note payload bloat).
 
 ---
 
 ## Capability-Detected Android Ecosystem Bridges & AST Symbol Surgery
 
-The harness integrates high-leverage Android engineering tools through **capability-detected, zero-forced-dependency bridges**. Projects that do not use Maestro, Roborazzi, Detekt/Lint SARIF, or LeakCanary incur zero overhead (`0 ms`), while projects that configure them gain deterministic, snapshot-bound verification automatically:
+Zero external dependencies are forced on your project: tools that aren't configured add **`0 ms`** overhead, while detected capabilities unlock snapshot-bound verification automatically.
 
-### 1. Maestro YAML Physical-Device Bridge & Live E2E Exporter (`maestro`)
-- **Snapshot-Bound Physical Device Execution**: `python .agents/harness.py maestro run --flow .maestro/<flow>.yaml [--task-id <id>]` executes declarative `.maestro/*.yaml` flows against the exact verified physical device (`_bound_device`) and binds the pass/fail result to `delivery_snapshot_sha256` in `EvidenceStore`.
-- **Fail-Closed Destructive Command Guard (`MAESTRO_DESTRUCTIVE_COMMAND_FORBIDDEN`)**: Automatically scans YAML flows before execution and blocks destructive device mutations (`clearState`, `clearKeychain`, `uninstallApp`) unless the developer explicitly authorizes them (`--allow-clear-state --source conversation --proof-reference "<developer approval>"`).
-- **One-Command `phone_e2e` to `.maestro/*.yaml` Exporter**: After an interactive `phone_e2e` physical-device verification session passes, `python .agents/harness.py maestro export-e2e --task-id <id>` compiles the recorded device steps directly into a repeatable `.maestro/<task_id>.yaml` regression flow (staging under `.agents/state/tasks/<id>/maestro/` while verification snapshots are frozen and exporting to `.maestro/` post-delivery).
+### 1. Pure-Stdlib AST Symbol Surgery (`Kotlin`, `Java`, `Swift`)
+Inspect and edit individual declarations inside 800-line classes without loading surrounding boilerplate — complete with multiline raw-string/comment scrubbing, `--expected-sha256` optimistic concurrency, whole-file brace-balance verification, and `PreToolUse` scope enforcement:
 
-### 2. Roborazzi Headless `.uitree.json` Viewport & RTL Bounds Gate (`roborazzi`)
-- **Headless JVM Compose & View Bounds Auditing**: When `io.github.takahirom.roborazzi` (and optional `ComposablePreviewScanner`) is detected in Gradle, `python .agents/harness.py roborazzi verify` runs `verifyRoborazziDebug -Proborazzi.dumpUiTree=true` under the shared Gradle build lock—verifying UI hierarchy geometry on the JVM without requiring a booted emulator.
-- **Deterministic Visual Defect Detection**: `roborazzi inspect-tree` parses generated `.uitree.json` sidecars to catch three high-frequency UI bugs that standard unit tests miss:
-  - `HORIZONTAL_VIEWPORT_CLIP`: Child nodes whose `[left, top, right, bottom]` coordinates overflow the parent viewport (catching Arabic RTL and localized string clipping).
-  - `ZERO_DIMENSION_NODE`: Visible interactive or text nodes rendered with `0px` width or height due to broken `Modifier.weight` / `ConstraintLayout` constraints.
-  - `CLICKABLE_SIBLING_COLLISION`: Overlapping clickable touch targets that steal tap events.
-- **Reviewer Brief Injection**: Verified UI bounds digests are automatically injected into `review-package.md` and `brief-<role>.md` so specialist reviewers see deterministic layout proof.
+```bash
+python .agents/harness.py symbol outline --file app/src/main/java/.../ProfileViewModel.kt
+python .agents/harness.py symbol read    --file app/src/main/java/.../ProfileViewModel.kt --symbol ProfileViewModel.refresh
+python .agents/harness.py symbol replace-body \
+  --file app/src/main/java/.../ProfileViewModel.kt \
+  --symbol ProfileViewModel.refresh \
+  --expected-sha256 <symbol_sha256> \
+  --replacement-file <path>
+```
 
-### 3. Pure-Stdlib AST Symbol Surgery (`symbol`)
-- **Surgical Declaration-Level Editing (`Kotlin`, `Java`, `Swift`)**: Instead of reading and replacing 300+ lines of a large `ViewModel`, `Repository`, or `Screen` file, agents can inspect and edit individual classes, methods, or functions by symbol name:
-  ```bash
-  # List top-level and nested declarations with exact line spans and SHA-256 digests:
-  python .agents/harness.py symbol outline --file app/src/main/java/.../ProfileViewModel.kt
+### 2. Maestro YAML Physical-Device Bridge & Live E2E Exporter (`maestro`)
+- Runs `.maestro/*.yaml` flows against the bound physical device (`python .agents/harness.py maestro run --flow .maestro/login.yaml`) and binds results to `delivery_snapshot_sha256`.
+- Blocks destructive YAML commands (`clearState`, `clearKeychain`, `uninstallApp`) fail-closed unless explicitly authorized (`--allow-clear-state`).
+- Compiles passing interactive `phone_e2e` sessions into repeatable `.maestro/<task_id>.yaml` regression flows (`maestro export-e2e`).
 
-  # Read only a single symbol (e.g., Class.method) without loading the rest of the file:
-  python .agents/harness.py symbol read --file app/src/main/java/.../ProfileViewModel.kt --symbol ProfileViewModel.refresh
+### 3. Roborazzi Headless `.uitree.json` Viewport & RTL Bounds Gate (`roborazzi`)
+- Auto-detects `io.github.takahirom.roborazzi` (including Gradle Version Catalog `libs.plugins.*` aliases) and audits `.uitree.json` sidecars on the JVM for `HORIZONTAL_VIEWPORT_CLIP` (catching Arabic RTL & locale clipping), `ZERO_DIMENSION_NODE`, and `CLICKABLE_SIBLING_COLLISION`, injecting verified UI bounds digests directly into reviewer briefs.
 
-  # Replace a symbol body or insert a new member with optimistic concurrency & brace-balance verification:
-  python .agents/harness.py symbol replace-body \
-    --file app/src/main/java/.../ProfileViewModel.kt \
-    --symbol ProfileViewModel.refresh \
-    --expected-sha256 <symbol_sha256> \
-    --replacement-file <path_or_code>
-  ```
-- **Multiline String, Comment, & Scope Safety**: The pure-Python lexer scrubs raw multiline strings (`"""..."""`), character literals, and nested block comments (`/* ... */`) before brace matching, verifies whole-file brace balance before writing to disk, and enforces `mutation_guard` + `worker_write_allowed` inside `PreToolUse`.
+### 4. Diff-Scoped Static Health (`SARIF` / `BuildHealth` / `LeakCanary`) & Session Forensics
+- **`health report`**: Filters Detekt / Android Lint `*.sarif` and Gradle `build-health-report.json` findings strictly to task-modified files and modules, plus post-E2E `LeakCanary` heap-leak checks on debug builds.
+- **`diagnose-session`**: Audits session transcripts and `.agents/state/audit_log.jsonl` for hook-denial streaks, read sprawl, and peak token steps with Zero-PII bundle export (`--export-bundle`).
 
-### 4. Zero-Token Task-Scoped Static & Memory Health Bridge (`health`)
-- **Diff-Scoped `SARIF` & `buildHealth` Filtering**: `python .agents/harness.py health report [--task-id <id>]` (and automatic `preflight` integration) inspects existing Detekt / Android Lint `*.sarif` reports and Gradle Dependency Analysis (`build-health-report.json` / `advice.json`) outputs **strictly filtered to the files and Gradle modules modified by the active task**, surfacing actionable regressions without drowning the agent in pre-existing repository warnings.
-- **Post-E2E `LeakCanary` Application-Leak Gate**: During live physical-device E2E verification on debug builds where `leakcanary-android` is present, the harness automatically checks for retained application heap leaks before marking the walkthrough passed.
+### 5. Universal Zero-Config Multi-Provider PM MCP & Self-Healing (`pm` & `task heal`)
+- Auto-discovers installed MCP servers for **Zoho Sprints**, **Zoho Projects**, **Jira**, **Linear**, **GitHub Projects**, **ClickUp**, **Asana**, **Monday.com**, and **Trello**.
+- Enforces preview-and-approval (`pm authorize`), protects original Bug descriptions from overwrite, blocks unauthorized `Done`/`Closed` transitions, and generates 5-section RTL/LTR QA handoff reports (`pm prepare-report`) with zero code identifier leaks.
+- Captures last-known-good state snapshots at every lifecycle boundary for one-command recovery (`task heal --prepare-fresh-run`) and consent-first Zero-PII incident diagnostics (`report-issue`).
 
-### 5. Read-Only Session & Token Forensics (`diagnose-session`)
-- **Instant Trajectory & Token Bottleneck Diagnostics**: `python .agents/harness.py diagnose-session [--conversation-id <id>] [--task-id <id>] [--export-bundle] [--json]` analyzes the active session for consecutive hook-denial streaks, out-of-scope file read sprawl, malformed tool calls, and peak context token steps, with optional Zero-PII scrubbed diagnostic bundle export.
+---
+
+## Measured Performance & Context Efficiency
+
+All runtime operations execute in pure Python 3.10–3.14 standard library with content-addressed `blake2b` caching and in-process CLI dispatch:
+
+| Benchmark / Measurement | Baseline (`v1.3.1` / Unoptimized) | Current (`v1.3.2`) | Measured Gain |
+|---|---:|---:|---:|
+| Read-only `harness.py` CLI dispatch (in-process fast path) | `145.1 ms` | **`18.1 ms`** | **8.02x faster** |
+| Warm `workflow.py revise` on 19-module / 760-file repo | `564.0 ms` | **`109.4 ms`** | **5.15x faster** |
+| `task-context` XML/Gradle `FILE_FALLBACK` JSON payload | `40,394 B` | **`4,694 B`** | **-88.38% bytes** |
+| `harness.py graph --module :app --format json` payload | `16,689 B` | **`2,130 B`** | **-87.24% bytes** |
+| Non-PM code reviewer `project-notes.md` block (with Zoho HTML) | `15,408 B` | **`341 B`** | **-97.79% bytes** |
+| Repeated `task-context --since <digest>` (`UNCHANGED` mode) | `22,568 B` | **`11,233 B`** | **-50.23% bytes** |
+| Warm `resolve_task_contexts` batch (`mixed` / `kmp` / `+500` files) | `14.59 ms` | **`14.14 ms` / `14.46 ms` / `47.39 ms`** | **`1` facts read/batch** |
+| Warm `resolve_next_action` router (`1` doc / `500` docs) | `8.77 ms` / `14.64 ms` | **`8.74 ms` / `14.46 ms`** | **Sub-15 ms deterministic** |
+| Always-loaded instruction budget (`harness-rules` + `AGENTS` + `GEMINI`) | `36,000` char ceiling | **`24,372` chars (`67.7%`)** | **`11,628` chars headroom** |
+
+Full methodology, reproducible scripts, and historical client certification reports (`Automattic/pocket-casts-android` frozen runs) are published in:
+- [v1.3.2 Engine, Project-Context & Subagent Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/v1.3.2-engine-and-context-benchmarks.md)
+- [Context Summary Compaction Measurements (JSON)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/implementation/context-summary-measurements.json)
+- [End-to-End Client Benchmark Status](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/benchmark-status.md)
+
+---
+
+## Supported Hosts & Enforcement Model
+
+| AI Coding Host | Installed Adapters & Assets | Scope & Mutation Enforcement | Review Protocol | Final Snapshot Verifier |
+|---|---|---|---|---|
+| **Google Antigravity** *(Primary Target)* | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, `.agents/agents/*/agent.md` (4 V2 reviewers + 2 Flash utility subagents), rules, skills | **`HARD_ENFORCED`** (`PreToolUse` & `PostToolUse` native hooks) | Trusted transcript `HARNESS_REVIEW_RESULT_V2` | **Yes** (SHA-256 bound) |
+| **Claude Code** | `CLAUDE.md`, `AGENTS.md`, `.claude/settings.json` hooks, `.claude/agents/` subagents | Hook + Rule enforced | Native subagent transcript verification | **Yes** (SHA-256 bound) |
+| **Cursor / Codex / Windsurf / Copilot / `AGENTS.md` Hosts** | `AGENTS.md` + host rule adapters (`.cursor/rules`, `CODEX.md`, `.windsurf/rules`, `.github/copilot-instructions.md`) | **`RULE_ENFORCED`** + downstream CLI gates | Structured response ingestion | **Yes** (SHA-256 bound) |
+
+See [AI Tool Support Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) and [Cross-Host Continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md).
+
+---
+
+## Essential CLI Reference
+
+| Goal | Command |
+|---|---|
+| **Check installation & 13-dimension health** | `python .agents/harness.py doctor [--install-check] [--json]` |
+| **Explore module/feature symbol graph** | `python .agents/harness.py graph --feature <name> --json` |
+| **Resolve target file/symbol AST context** | `python .agents/harness.py task-context --file <path> [--since <digest>] --json` |
+| **Inspect Hybrid Flash delegation strategy** | `python .agents/harness.py delegate-plan [--task-id <id>] --json` |
+| **Check active task next action** | `python .agents/harness.py task status --task-id <id> --next` |
+| **Surgical AST symbol outline / edit** | `python .agents/harness.py symbol <outline\|read\|replace-body\|insert-after> ...` |
+| **Record persistent project note / rule** | `python .agents/harness.py context <note\|instruct\|drift-report> ...` |
+| **Bridge context to a fresh chat** | `python .agents/harness.py task bridge [--save \| --bridge-id <id> \| --snooze]` |
+| **Complete parallel V2 reviews in 1 turn** | `python .agents/harness.py review complete-all --task <id>` |
+| **Run physical-device / Maestro / UI gates** | `python .agents/harness.py <device install-start \| maestro run \| roborazzi verify>` |
+| **Self-heal task state / session forensics** | `python .agents/harness.py <task heal --task-id <id> \| diagnose-session --json>` |
+
+---
+
+## Clear Boundaries: What It Is & What It Isn't
+
+| Best Fit For | Not Intended To Be |
+|---|---|
+| Production Android & KMM/KMP teams shipping daily with AI agents | A replacement for Android Studio, Gradle, or physical-device testing |
+| Multi-module, mixed legacy/modern repos (`Java` + `Kotlin`, `XML` + `Compose`, `Swift`) | An autonomous "no-human-in-the-loop" auto-committer (`GIT_POLICY = never`) |
+| Apps with `Room`, `Auth`, `Billing`, permissions, `ForegroundService`, or RTL localization | An OS kernel sandbox (hooks enforce boundaries at the AI host tool layer) |
+| Engineers who want frontier AI speed **without** surrendering architectural control | Needed for 50-line throwaway prototypes or one-off snippets |
+
+---
+
+## Repository Architecture & CI Validation
+
+```text
+agents/
+├── harness.py             # Zero-overhead in-process CLI router & command dispatcher
+├── rules/                 # Canonical English-only behavioral kernel (<= 36k combined budget)
+├── scripts/               # Pure Python 3.10–3.14 stdlib governance, AST graph, gates & doctor
+├── skills/                # On-demand domain skills (efficient-context, phone-e2e, UI diagnostics)
+├── subagents/             # Epistemically isolated V2 reviewer & specialist templates
+├── tool-adapters/         # Managed templates for Antigravity, Claude Code, Cursor, Codex & more
+└── workflows/             # Multi-phase, phone-e2e, Android inspection & PM tracker playbooks
+```
+
+- **Cross-Platform CI Matrix**: Validated on **Ubuntu 24.04**, **Windows Server 2025**, and **macOS 15** across **Python 3.10–3.14**, including `37` deterministic selftest suites (`python harness_cli.py selftest`), wheel packaging lifecycle tests, release checksum verification (`263` tracked files), and adversarial hook/security tests.
+- **Contributing**: Runtime code uses **Python standard library only** (`0` third-party runtime dependencies) and preserves all approval, nonce, and snapshot-binding invariants. See [CONTRIBUTING.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
+
+---
+
+## FAQ
+
+<details>
+<summary><b>1. Does this make the AI agent fully autonomous or allow it to run git commit / push?</b></summary>
+<br />
+No. Android Agent Harness is strictly <b>approval-first</b> and enforces <b>Human Git Authority</b>. The agent must obtain explicit developer approval on the plan before mutating source files, and client installations leave <code>git commit</code>, <code>branch</code>, <code>merge</code>, <code>rebase</code>, and <code>push</code> exclusively to the developer.
+</details>
+
+<details>
+<summary><b>2. Does every task spawn multiple AI reviewers or require a physical phone?</b></summary>
+<br />
+No. The 6-tier risk engine routes verification from the actual diff: <code>T0</code> docs and <code>T1</code> resource tweaks skip AI reviewer subagents completely, isolated <code>&lt;=25</code>-line private Kotlin edits consolidate to a single logic/test reviewer, and physical-device verification runs only when device/UI/Room surfaces warrant it (or when requested).
+</details>
+
+<details>
+<summary><b>3. Does it work with KMM / KMP (Kotlin Multiplatform) and mixed legacy Java + XML projects?</b></summary>
+<br />
+Yes. It indexes <code>Kotlin</code>, <code>Java</code>, <code>XML</code>, and iOS <code>Swift</code> across <code>commonMain</code>, <code>androidMain</code>, <code>iosMain</code>, <code>:shared</code>, and <code>:composeApp</code>, enforces <code>commonMain</code> platform purity and <code>expect</code>/<code>actual</code> pairing, and preserves local module architectures (<code>MVP</code>, <code>MVVM</code>, <code>MVI</code>) without forcing migrations.
+</details>
+
+<details>
+<summary><b>4. Can I keep multiple tasks open in the same worktree without committing first?</b></summary>
+<br />
+Yes — up to <b>three live tasks</b> may share a single worktree simultaneously as long as their planned file sets are disjoint. Switch active tasks with <code>python .agents/harness.py task switch --task-id &lt;id&gt;</code>, preview/combine pre-approval plans with <code>task merge</code>, and finalize individual developer commits via <code>task reconcile-delivery --task-id &lt;id&gt;</code>.
+</details>
+
+<details>
+<summary><b>5. How do I maximize weekly frontier model quota (e.g., Google AI Ultra) on large repositories?</b></summary>
+<br />
+Keep your main Antigravity chat on <code>Gemini 4 Carbon (Medium)</code> for architecture, planning, and <code>T4/T5</code> sensitive edits, and rotate to <code>Claude Sonnet 5.5</code> / <code>Opus 5.5</code> when <code>/usage</code> approaches <code>~50%</code> (separate quota pool; <code>task bridge</code> and <code>task continue</code> preserve full task state). Meanwhile, pinned <code>gemini-3.8-flash-medium</code> <code>harness-scout-agent</code> and <code>harness-worker-agent</code> absorb discovery sweeps, <code>T0–T3</code> implementation slices, and Gradle compile/test loops.
+</details>
+
+<details>
+<summary><b>6. What happens if managed files under .agents/ are accidentally edited or corrupted?</b></summary>
+<br />
+Run <code>python .agents/harness.py doctor</code> to diagnose any drift across 13 health dimensions, and <code>python ~/.android-harness/kit/harness_cli.py repair --repo /path/to/app</code> to restore checksum-verified engine files without touching your application source code or project notes.
+</details>
+
+---
+
+## Documentation Hub
+
+- [Quickstart Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md) · [Install or Update Prompt](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/install-or-update-prompt.md) · [Setup Wizard Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md)
+- [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md) · [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md) · [Efficient Task Context](https://github.com/rabee-elkholy/android-agent-harness/blob/main/agents/workflows/efficient-context.md)
+- [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md) · [Verification Value & Metrics](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/verification-value.md) · [PM MCP Integrations](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows/pm-integrations.md)
+- [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md) · [AI Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) · [Cross-Host Continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md)
+- [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md) · [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md) · [v1.3.2 Engine & Context Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/v1.3.2-engine-and-context-benchmarks.md)
 
 ---
 
 ## License
 
 MIT License. See [LICENSE](https://github.com/rabee-elkholy/android-agent-harness/blob/main/LICENSE).
-
-- [Optional acceptance evidence, reusable journeys, and local metrics](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/verification-value.md)
-- [Quickstart Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/quickstart.md)
-- [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md)
-- [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md)
-- [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md)
-- [AI Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md)
-- [Setup Wizard Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/setup-wizard.md)
-- [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md)
-- [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md)
-
-Optional [efficient task context](https://github.com/rabee-elkholy/android-agent-harness/blob/main/agents/workflows/efficient-context.md) supports explicit unchanged-context presentation and source-grounded architecture advice.

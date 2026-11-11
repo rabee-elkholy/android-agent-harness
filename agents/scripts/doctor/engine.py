@@ -809,7 +809,29 @@ class HarnessDoctor:
                 if not isinstance(inst_data, dict) or "instructions" not in inst_data or not isinstance(inst_data["instructions"], list):
                     self.log(category, "Developer Instructions", "FAIL", "developer-instructions.json must contain a root dictionary with 'instructions' list.")
                 else:
-                    self.log(category, "Developer Instructions", "PASS", f"Valid developer instruction store ({len(inst_data['instructions'])} instruction(s)).")
+                    malformed = [
+                        str(idx)
+                        for idx, entry in enumerate(inst_data["instructions"])
+                        if not isinstance(entry, dict)
+                        or not str(entry.get("id") or "").strip()
+                        or not str(entry.get("text") or "").strip()
+                        or (entry.get("status", "ACTIVE") == "ACTIVE" and str(entry.get("strength") or "REQUIREMENT") not in {"REQUIREMENT", "PROHIBITION", "RECOMMENDATION", "PREFERENCE"})
+                    ]
+                    if malformed:
+                        self.log(
+                            category,
+                            "Developer Instructions",
+                            "FAIL",
+                            f"developer-instructions.json has {len(malformed)} malformed instruction entry/entries at index(es): {', '.join(malformed)}.",
+                        )
+                    else:
+                        active_cnt = sum(1 for e in inst_data["instructions"] if isinstance(e, dict) and e.get("status", "ACTIVE") == "ACTIVE")
+                        self.log(
+                            category,
+                            "Developer Instructions",
+                            "PASS",
+                            f"Valid developer instruction store ({active_cnt} active / {len(inst_data['instructions'])} total instruction(s)).",
+                        )
             except Exception as exc:
                 self.log(category, "Developer Instructions", "FAIL", f"Invalid JSON in developer-instructions.json: {exc}")
 

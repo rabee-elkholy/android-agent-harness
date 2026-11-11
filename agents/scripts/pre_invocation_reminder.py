@@ -26,6 +26,25 @@ def _project_notes_reminder() -> str:
     return ""
 
 
+def _developer_instructions_reminder(plan: dict | None = None) -> str:
+    try:
+        bound = list((plan or {}).get("developer_instructions") or [])
+        if bound:
+            ids = ", ".join(str(i.get("id") or "inst") for i in bound[:3])
+            return f" Active developer instructions bound to task ({len(bound)}: {ids}) — enforce strictly."
+        from project_context import load_developer_instructions_cached
+        active = load_developer_instructions_cached(REPO, active_only=True)
+        if active:
+            ids = ", ".join(str(i.get("id") or "inst") for i in active[:3])
+            return (
+                f" Active developer instructions in `.agents/project-context/developer-instructions.json` "
+                f"({len(active)}: {ids}) — honor across discovery, planning, and edits."
+            )
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
+        return ""
+    return ""
+
+
 def _bridge_reminder() -> str:
     try:
         from task_bridge import pending_bridge_reminder
@@ -92,7 +111,7 @@ def _compact_message() -> str:
         plan = active_plan(REPO)
     except (ImportError, OSError, ValueError, KeyError, ValidationError):
         plan = {}
-    notes_rem = _project_notes_reminder()
+    notes_rem = _project_notes_reminder() + _developer_instructions_reminder(plan)
     if not plan:
         bridge_rem = _bridge_reminder()
         return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` (or `harness-scout-agent` on Flash for multi-file sweeps) for discovery, or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"

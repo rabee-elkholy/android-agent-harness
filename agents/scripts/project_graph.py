@@ -399,11 +399,31 @@ def main(argv: list[str] | None = None) -> int:
 
     # Format output
     notes_info = {}
+    matched_dev_instructions: list[dict] = []
     try:
-        from project_context import load_project_notes
-        notes_info = load_project_notes(repo_root)
+        from project_context import load_code_relevant_project_notes, load_developer_instructions_cached
+        notes_info = load_code_relevant_project_notes(repo_root, include_pm=False)
+        active_insts = load_developer_instructions_cached(repo_root, active_only=True)
+        if active_insts:
+            from task_context import _instruction_matches_node, _source_set
+            graph_nodes = list(graph_to_render.nodes.values())
+            for inst in active_insts:
+                scope = inst.get("scope") or {}
+                s_kind = str(scope.get("kind") or "GLOBAL").upper()
+                s_val = str(scope.get("value") or "").strip()
+                if s_kind == "GLOBAL" or s_val in ("", "*") or any(
+                    _instruction_matches_node(inst, node, _source_set(node.file_path), [])
+                    for node in graph_nodes
+                ):
+                    matched_dev_instructions.append({
+                        "id": inst.get("id", "unknown"),
+                        "text": inst.get("text", ""),
+                        "scope": scope,
+                        "strength": inst.get("strength", "REQUIREMENT"),
+                    })
     except Exception:
-        notes_info = {}
+        notes_info = notes_info or {}
+        matched_dev_instructions = []
 
     output_text = ""
     if args.format == "compact":
@@ -411,9 +431,18 @@ def main(argv: list[str] | None = None) -> int:
             focus_id=focus_node_id if graph_to_render is engine.graph else None,
             max_depth=args.depth,
         )
+        footer_lines: list[str] = []
         if notes_info.get("has_custom_notes"):
             secs = ", ".join(notes_info.get("sections") or []) or "active"
-            output_text = f"{output_text.rstrip()}\n\n[*] Project Notes (.agents/project-context/project-notes.md): {secs}"
+            footer_lines.append(f"[*] Project Notes (.agents/project-context/project-notes.md): {secs}")
+        if matched_dev_instructions:
+            i_ids = ", ".join(str(i.get("id") or "active") for i in matched_dev_instructions[:5])
+            footer_lines.append(
+                f"[*] Developer Instructions (.agents/project-context/developer-instructions.json): "
+                f"{len(matched_dev_instructions)} active ({i_ids})"
+            )
+        if footer_lines:
+            output_text = f"{output_text.rstrip()}\n\n" + "\n".join(footer_lines)
     elif args.format == "mermaid":
         output_text = graph_to_render.to_mermaid(title="Android Project Code Graph")
     elif args.format == "dot":
@@ -424,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
             payload["discovery"] = receipt
         if notes_info.get("has_custom_notes"):
             payload["project_notes"] = notes_info
+        if matched_dev_instructions:
+            payload["developer_instructions"] = matched_dev_instructions
         output_text = json.dumps(payload, indent=2, ensure_ascii=False)
 
     if args.output:

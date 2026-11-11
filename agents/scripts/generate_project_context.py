@@ -276,11 +276,29 @@ def cmd_note(args: argparse.Namespace) -> int:
         atomic_write_text(notes_file, "\n".join(initial_content))
     else:
         content = notes_file.read_text(encoding="utf-8")
+        norm_new = text.lstrip("-* ").strip()
+        sec_block_match = re.search(
+            rf"(^##\s+{re.escape(section)}[^\n]*\n)(.*?)(?=^##\s+|\Z)",
+            content,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if sec_block_match:
+            existing_bullets = {
+                ln.strip().lstrip("-* ").strip()
+                for ln in sec_block_match.group(2).splitlines()
+                if ln.strip().startswith(("-", "*"))
+            }
+            if norm_new and norm_new in existing_bullets:
+                if getattr(args, "json", False):
+                    print(json.dumps({"status": "PASS", "action": "UNCHANGED_DUPLICATE", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
+                else:
+                    print(f"[NOTE] Note already present in {notes_file} under section '{section}'")
+                return 0
         sec_pattern = rf"(##\s+{re.escape(section)}[^\n]*\n)"
         if re.search(sec_pattern, content):
-            updated = re.sub(sec_pattern, rf"\1- {text}\n", content, count=1)
+            updated = re.sub(sec_pattern, rf"\1- {norm_new}\n", content, count=1)
         else:
-            updated = content.rstrip() + f"\n\n## {section}\n- {text}\n"
+            updated = content.rstrip() + f"\n\n## {section}\n- {norm_new}\n"
         atomic_write_text(notes_file, updated)
 
     if getattr(args, "json", False):

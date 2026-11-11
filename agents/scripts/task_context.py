@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _graph_core import GraphEngine, GraphNode  # noqa: E402
 from project_context import (  # noqa: E402
     _safe_read,
+    filter_code_relevant_notes_dict,
     load_project_notes,
     source_identity,
     validate_advisory_knowledge,
@@ -133,15 +134,30 @@ def _resolve_symbol(
     return "NOT_FOUND", [], "Symbol was not found in the live graph."
 
 
+_FACTS_MEM_CACHE: dict[tuple[str, bytes], dict[str, Any]] = {}
+
+
 def _load_facts(repo: Path) -> dict[str, Any]:
     path = repo / ".agents" / "project-context" / "project-facts.json"
     if not path.is_file():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return payload if isinstance(payload, dict) else {}
-    except (OSError, json.JSONDecodeError):
+        raw_bytes = path.read_bytes()
+    except OSError:
         return {}
+    digest_key = (str(path.resolve()), hashlib.blake2b(raw_bytes, digest_size=16).digest())
+    cached = _FACTS_MEM_CACHE.get(digest_key)
+    if cached is not None:
+        return cached
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+        parsed = payload if isinstance(payload, dict) else {}
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = {}
+    if len(_FACTS_MEM_CACHE) >= 16:
+        _FACTS_MEM_CACHE.clear()
+    _FACTS_MEM_CACHE[digest_key] = parsed
+    return parsed
 
 
 def _profile_is_fresh(repo: Path, profile: dict[str, Any]) -> bool:
@@ -248,14 +264,9 @@ def _active_contract(repo: Path, target_path: str) -> dict[str, Any] | None:
 
 
 def _load_developer_instructions(repo: Path) -> list[dict[str, Any]]:
-    path = repo / ".agents" / "project-context" / "developer-instructions.json"
-    if not path.is_file():
-        return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("instructions"), list):
-            return data["instructions"]
-        return []
+        from project_context import load_developer_instructions_cached
+        return load_developer_instructions_cached(repo, active_only=False)
     except Exception:
         return []
 
@@ -587,7 +598,8 @@ def _resolve_task_context(
             with operation_span(root, "context-input", counters={counter: 1}):
                 read_inputs[key] = loader(root)
         return read_inputs[key]
-    project_notes = shared("notes", load_project_notes)
+    from project_context import filter_code_relevant_notes_dict
+    project_notes = filter_code_relevant_notes_dict(shared("notes", load_project_notes), include_pm=False)
 
     if status == "FILE_FALLBACK":
         rel_posix = str(candidates[0])
@@ -610,9 +622,6 @@ def _resolve_task_context(
             target_surfaces = list(cl.get("surfaces") or [])
         except Exception:
             target_surfaces = []
-
-        facts_payload = shared("facts", _load_facts)
-        facts = facts_payload.get("facts", {})
 
         contract = _active_contract(root, rel_posix)
 
@@ -685,7 +694,6 @@ def _resolve_task_context(
                 "files_opened": 0,
                 "status": "NOT_APPLICABLE",
             },
-            "project_facts": facts,
             "local_profiles": [],
             "architecture_contract": contract or {},
             "relevant_files": [rel_posix],
@@ -947,7 +955,7 @@ def resolve_task_contexts(
         "status": "BATCH_RESOLVED" if len(successful) == len(results) else "BATCH_PARTIAL" if successful else "BATCH_FAILED",
         "graph_sync": sync,
         "results": results,
-        "project_notes": read_inputs.get("notes") or load_project_notes(root),
+        "project_notes": filter_code_relevant_notes_dict(read_inputs.get("notes") or load_project_notes(root), include_pm=False),
         "read_ranges": list(dict.fromkeys(item for row in results for item in row.get("read_ranges", []))),
     }
     if compute_source_fingerprint(root)["source_fingerprint_sha256"] != before:
@@ -1090,6 +1098,10 @@ def main(argv: list[str] | None = None) -> int:
         if notes_info.get("has_custom_notes"):
             secs = ", ".join(notes_info.get("sections") or []) or "active"
             print(f"  Project notes (.agents/project-context/project-notes.md): {secs}")
+        dev_insts = result.get("developer_instructions") or []
+        if dev_insts:
+            inst_ids = ", ".join(str(i.get("id") or "active") for i in dev_insts[:5])
+            print(f"  Developer instructions (.agents/project-context/developer-instructions.json): {len(dev_insts)} active ({inst_ids})")
         for warning in result.get("warnings") or []:
             print(f"  Warning: {warning}")
         if result.get("read_ranges"):

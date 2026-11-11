@@ -1084,6 +1084,169 @@ class TaskContextFallbackTests(unittest.TestCase):
         self.assertEqual("CmpSuperApp", discover_product(self.repo))
 
 
+
+class ProjectContextV132EfficiencyAndParityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="projctx_v132_")
+        self.repo = Path(self.temp.name).resolve()
+        (self.repo / "settings.gradle.kts").write_text('include(":app", ":feature:calories")\n', encoding="utf-8")
+        (self.repo / "app").mkdir(parents=True, exist_ok=True)
+        (self.repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+        (self.repo / "feature/calories").mkdir(parents=True, exist_ok=True)
+        (self.repo / "feature/calories/build.gradle.kts").write_text('plugins { id("com.android.library") }\n', encoding="utf-8")
+        kt = self.repo / "feature/calories/src/main/kotlin/com/example/calories/CaloriesViewModel.kt"
+        kt.parent.mkdir(parents=True, exist_ok=True)
+        kt.write_text("package com.example.calories\nclass CaloriesViewModel { fun target(): Int = 2100 }\n", encoding="utf-8")
+        strings = self.repo / "app/src/main/res/values/strings.xml"
+        strings.parent.mkdir(parents=True, exist_ok=True)
+        strings.write_text('<resources><string name="app_name">Fitness</string></resources>\n', encoding="utf-8")
+
+        from project_context import extract_consistent_project_context, render_project_context, write_project_context
+        facts = extract_consistent_project_context(self.repo)
+        write_project_context(self.repo, facts, render_project_context(facts))
+
+        notes_md = (
+            "# Human-Authored Project Architectural Notes\n\n"
+            "## Domain Conventions & Context\n"
+            "- STEPS users with blank weightGoal must default to WeightGoal.ADJUST maintenance calories.\n"
+            "- Never hardcode 2000 kcal fallback before SaveTodayCaloriesTargetUseCase.\n\n"
+            "## 2. Zoho Sprints Task & Bug Description Standard\n"
+            + ("<div dir=\"rtl\"><h3>ملخص التذكرة</h3><table><tr><td>وصف تفصيلي طويل لتذاكر زوهو</td></tr></table></div>\n" * 40)
+        )
+        (self.repo / ".agents/project-context/project-notes.md").write_text(notes_md, encoding="utf-8")
+        inst_payload = {
+            "schema_version": 1,
+            "instructions": [
+                {
+                    "id": "inst-global-mvi",
+                    "status": "ACTIVE",
+                    "strength": "REQUIREMENT",
+                    "scope": {"kind": "GLOBAL", "value": "*"},
+                    "text": "Expose immutable StateFlow from ViewModels.",
+                },
+                {
+                    "id": "inst-calories-mod",
+                    "status": "ACTIVE",
+                    "strength": "PROHIBITION",
+                    "scope": {"kind": "MODULE", "value": ":feature:calories"},
+                    "text": "Never subtract 500 kcal when weightGoal is empty.",
+                },
+            ],
+        }
+        (self.repo / ".agents/project-context/developer-instructions.json").write_text(
+            json.dumps(inst_payload, indent=2), encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_V132_CTX_001_code_relevant_notes_strip_zoho_html_unless_pm_requested(self) -> None:
+        from project_context import load_code_relevant_project_notes, load_project_notes
+        full_notes = load_project_notes(self.repo)
+        code_notes = load_code_relevant_project_notes(self.repo, include_pm=False)
+        pm_notes = load_code_relevant_project_notes(self.repo, include_pm=True)
+        self.assertIn("Zoho Sprints", full_notes["content"])
+        self.assertNotIn("<table", code_notes["content"])
+        self.assertIn("WeightGoal.ADJUST", code_notes["content"])
+        self.assertLess(len(code_notes["content"]), len(full_notes["content"]) * 0.25)
+        self.assertIn("<table", pm_notes["content"])
+
+    def test_V132_CTX_002_idempotent_cmd_note_prevents_duplicate_bullets(self) -> None:
+        import argparse, io
+        from contextlib import redirect_stdout
+        from generate_project_context import cmd_note
+        ns = argparse.Namespace(
+            repo=str(self.repo),
+            section="Domain Conventions & Context",
+            note="STEPS users with blank weightGoal must default to WeightGoal.ADJUST maintenance calories.",
+            text=None,
+            replace=None,
+            remove=None,
+            json=True,
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cmd_note(ns)
+        self.assertEqual(0, rc)
+        out = json.loads(buf.getvalue())
+        self.assertEqual("UNCHANGED_DUPLICATE", out["action"])
+
+    def test_V132_CTX_003_file_fallback_omits_raw_project_facts_bloat(self) -> None:
+        from task_context import resolve_task_context
+        res = resolve_task_context(self.repo, file="app/src/main/res/values/strings.xml")
+        self.assertEqual("RESOLVED", res["status"])
+        self.assertEqual("FILE_FALLBACK", res["context_mode"])
+        self.assertNotIn("project_facts", res)
+        self.assertEqual({"inst-global-mvi"}, {i["id"] for i in res["developer_instructions"]})
+
+    def test_V132_CTX_004_graph_and_reminder_and_delegate_plan_surface_developer_instructions(self) -> None:
+        import subprocess, sys
+        graph_cmd = [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "project_graph.py"),
+            "--repo", str(self.repo),
+            "--module", ":feature:calories",
+            "--format", "json",
+        ]
+        graph_out = json.loads(subprocess.check_output(graph_cmd, text=True))
+        inst_ids = {i["id"] for i in graph_out.get("developer_instructions", [])}
+        self.assertEqual({"inst-global-mvi", "inst-calories-mod"}, inst_ids)
+
+        from delegation_policy import evaluate_delegation_policy
+        pol = evaluate_delegation_policy(
+            self.repo,
+            plan={
+                "task_id": "t-cal",
+                "status": "IMPLEMENTING",
+                "task_kind": "BUG",
+                "risk_tier": "T1_LOW",
+                "expected_surfaces": ["COMPOSE_UI", "DATABASE"],
+                "expected_files": ["feature/calories/src/main/kotlin/com/example/calories/CaloriesViewModel.kt"],
+            },
+            router_action="IMPLEMENT",
+        )
+        ctx = pol["project_context"]
+        self.assertEqual(2, ctx["active_developer_instructions_count"])
+        self.assertIn(".agents/project-context/ui.md", ctx["relevant_views"])
+        self.assertIn(".agents/project-context/persistence.md", ctx["relevant_views"])
+
+    def test_V132_CTX_005_phase_review_injects_developer_instructions_and_strips_pm_html(self) -> None:
+        from phase_review import _publish_phase_package
+        tdir = self.repo / ".agents/state/tasks/t-phase"
+        (tdir / "phases/p1/review").mkdir(parents=True, exist_ok=True)
+        plan = {
+            "task_id": "t-phase",
+            "status": "IMPLEMENTING",
+            "external_writes": [],
+            "developer_instructions": [
+                {
+                    "id": "inst-calories-mod",
+                    "strength": "PROHIBITION",
+                    "scope": {"kind": "MODULE", "value": ":feature:calories"},
+                    "text": "Never subtract 500 kcal when weightGoal is empty.",
+                }
+            ],
+        }
+        (tdir / "plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        meta = {
+            "task_id": "t-phase",
+            "phase_id": "p1",
+            "phase_review_run_id": "pr-1",
+            "selected_reviewers": ["bug-test-reviewer-agent"],
+            "phase_file_hashes": {"feature/calories/src/main/kotlin/com/example/calories/CaloriesViewModel.kt": "abc"},
+        }
+        pkg_meta = _publish_phase_package(
+            self.repo,
+            meta,
+            {"id": "p1", "title": "Calories equation fix"},
+            "diff --git a/CaloriesViewModel.kt b/CaloriesViewModel.kt\n+val maintenance = true\n",
+        )
+        pkg_text = Path(pkg_meta["package_path"]).read_text(encoding="utf-8")
+        self.assertIn("## Applicable Developer Constraints", pkg_text)
+        self.assertIn("inst-calories-mod", pkg_text)
+        self.assertIn("WeightGoal.ADJUST", pkg_text)
+        self.assertNotIn("<table", pkg_text)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

@@ -391,8 +391,9 @@ def build_package(repo: Path, task_id: str) -> tuple[Path, dict]:
         extras.append("\n".join(inst_lines))
 
     try:
-        from project_context import load_project_notes
-        notes_info = load_project_notes(repo)
+        from project_context import load_code_relevant_project_notes
+        include_pm_notes = bool(plan.get("external_writes"))
+        notes_info = load_code_relevant_project_notes(repo, include_pm=include_pm_notes)
         if notes_info.get("has_custom_notes") and notes_info.get("content"):
             extras.append(
                 "\n## Project Architectural & Domain Notes (.agents/project-context/project-notes.md)\n"
