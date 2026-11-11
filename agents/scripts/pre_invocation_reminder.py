@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _repo_files import REPO  # noqa: E402
+from _vnext_common import ValidationError  # noqa: E402
 
 
 def _project_notes_reminder() -> str:
@@ -20,7 +21,7 @@ def _project_notes_reminder() -> str:
                 f" Mandatory repo conventions in `.agents/project-context/project-notes.md` ({secs}) — "
                 "read and strictly follow before planning, coding, or Zoho updates."
             )
-    except (ImportError, OSError, ValueError, KeyError):
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
         return ""
     return ""
 
@@ -29,8 +30,42 @@ def _bridge_reminder() -> str:
     try:
         from task_bridge import pending_bridge_reminder
         return pending_bridge_reminder(REPO)
-    except (ImportError, OSError, ValueError, KeyError):
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
         return ""
+
+
+def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
+    """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents."""
+    if not conversation_id:
+        return False
+    try:
+        from delegation_policy import utility_subagent_context
+        if utility_subagent_context(repo, conversation_id, bind=False) is not None:
+            return True
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
+        pass
+    try:
+        from reviewer_host import active_reviews, reviewer_context
+        if not any(True for _ in active_reviews(repo)):
+            return False
+        ctx = reviewer_context(repo, conversation_id, bind=False)
+        if not ctx:
+            return False
+        # Only treat as reviewer when bound to a real reviewer role, or when
+        # the conversation actually has a subagent SYSTEM_MESSAGE transcript
+        # (never suppress an unknown parent conversation before any child launches).
+        if ctx.get("role"):
+            return True
+        if ctx.get("unverified_reviewer"):
+            from antigravity_runtime import resolve_transcript
+            tp = resolve_transcript(conversation_id)
+            if tp is not None and tp.is_file():
+                head = tp.read_text(encoding="utf-8", errors="replace")[:4096]
+                if "MESSAGE_PRIORITY_HIGH" in head and '"USER_EXPLICIT"' not in head:
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 def _message() -> str:
@@ -45,32 +80,40 @@ def _compact_message() -> str:
     try:
         from mutation_guard import active_plan
         plan = active_plan(REPO)
-    except Exception:
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
         plan = {}
     notes_rem = _project_notes_reminder()
-    bridge_rem = _bridge_reminder()
     if not plan:
+        bridge_rem = _bridge_reminder()
         return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` for discovery or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
-        return f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous multi-phase execution. Do not create new plans or ask for Proceed. If the developer modifies, simplifies, or drops any detail of the initial Outcome/Approach in chat (within approved file scope), immediately record `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary of developer refinement>\" --source conversation --proof-reference \"<developer words>\"` before `prepare-verification` so isolated reviewers see the updated decision. Wait for background task completion without reading `.system_generated/tasks/*.log`; on partial reviewer completion output at most one short count line (e.g. `1/2`) without listing reviewer names or `[<model>]` tags in prose; never emit '!]', '[Message]', or '<SYSTEM_MESSAGE>' in chat. For a separate disjoint task, draft a new task-id or use `task switch --task-id <id>`.{notes_rem}{bridge_rem}"
+        return (
+            f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous execution. Do not create new plans or ask for Proceed. "
+            f"Record in-scope developer refinements via `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary>\" --source conversation --proof-reference \"<words>\"` before `prepare-verification`. "
+            f"When a background command or subagent is still running, yield immediately with ZERO tool calls and never read `.system_generated/tasks/*.log` or emit '!]', '[Message]', '<SYSTEM_MESSAGE>'.{notes_rem}"
+        )
     if status == "VERIFYING":
-        return f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (only after ALL reviewers pass) -> 5. mandatory immediate `ask_question` tool call as your FIRST action (ZERO pre-tool chat prose, no `---`, no `*(...)*` notes) with the compact 3-section mobile walkthrough (`<= 5` table rows, no file-summary wall) placed directly inside `ask_question`'s `question` field -> 6. task complete. Never emit '!]', '[Message]', parenthetical status loops (e.g. '*(running...)*'), or fabricated subagent/task output in chat. Phone E2E requests require device journeys, not unit-test substitution; follow the router and .agents/workflows/phone-e2e.md. Run workflow.py resume for fixes; do not stall on follow-ups. Disjoint tasks can be drafted concurrently (`task draft` / `task switch`); editing tracked files stales frozen verification.{notes_rem}{bridge_rem}"
+        return (
+            f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (after ALL reviewers pass) -> 5. immediate `ask_question` first token (zero pre-tool prose, 3-section mobile walkthrough, no `|` tables) -> 6. task complete. "
+            f"Run workflow.py resume for fixes; do not stall on follow-ups (phone E2E follows .agents/workflows/phone-e2e.md). "
+            f"When a background command or subagent is running, yield immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` or emit '!]', '[Message]'.{notes_rem}"
+        )
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
         blocked_str = f" ({', '.join(blocked)})" if blocked else ""
-        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Resume before fixing issues: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}{bridge_rem}"
+        return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Resume before fixing issues: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
-        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Invoke `ask_question` IMMEDIATELY as your first token (ZERO pre-tool chat prose) with the Commit & Delivery Card inside `question`. Never emit '!]' or '[Message]' in chat.{notes_rem}{bridge_rem}"
-    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss requested edge cases in chat before planning. Up to 3 disjoint tasks may coexist (`task draft` / `task switch --task-id <id>`); only cancel when explicitly asked (workflow.py cancel). Ask developer before guessing missing scenarios.{notes_rem}{bridge_rem}"
+        return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Invoke `ask_question` IMMEDIATELY as your first token (ZERO pre-tool chat prose) with the Commit & Delivery Card inside `question`.{notes_rem}"
+    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss edge cases in chat before planning; only cancel when explicitly asked (workflow.py cancel).{notes_rem}"
 
 
 def _current_task_state() -> tuple[str, str]:
     try:
         from mutation_guard import active_plan
         plan = active_plan(REPO)
-    except (ImportError, OSError, ValueError, KeyError):
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
         plan = {}
     if not plan:
         return ("", "IDLE")
@@ -80,11 +123,24 @@ def _current_task_state() -> tuple[str, str]:
 def _unchanged_state_message(task_id: str, status: str) -> str:
     if not task_id or status == "IDLE":
         return "Android Harness: Idle (no active task)."
-    return f"Harness [Task {task_id}: {status}]: State unchanged; follow active {status} rules and invoke NEXT_ACTION tool first."
+    return f"Harness [{task_id}:{status}]: State unchanged; yield with ZERO tool calls if a bg task runs, else run NEXT_ACTION."
 
 
 def _is_raw_kit_repo(repo: Path) -> bool:
     return (repo / "harness_cli.py").is_file() and (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir()
+
+
+def _has_any_seen_state(conversation_id: str) -> bool:
+    if not conversation_id or _is_raw_kit_repo(REPO):
+        return False
+    cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
+    try:
+        if cache_path.is_file():
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            return isinstance(data, dict) and conversation_id in data
+    except (OSError, ValueError):
+        return False
+    return False
 
 
 def _has_seen_state(conversation_id: str, state_key: str) -> bool:
@@ -141,7 +197,15 @@ def main() -> None:
             (payload.get("conversationId") or payload.get("conversation_id") or "")
             if isinstance(payload, dict) else ""
         ).strip()
-        initial = type(invocation) is int and invocation in (0, 1)
+        if conversation_id and _is_reviewer_conversation(REPO, conversation_id):
+            print("{}")
+            return
+        # Antigravity is 0-indexed (0 is first call); 1-indexed hosts start at 1.
+        # Avoid dumping the full initial reminder + update check twice when invocation 0 already ran.
+        initial = type(invocation) is int and (
+            invocation == 0
+            or (invocation == 1 and (not conversation_id or not _has_any_seen_state(conversation_id)))
+        )
         if initial:
             msg = f"{_message()} {_update_notice()}".strip()
             if conversation_id:
@@ -164,4 +228,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -219,7 +219,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
                 rev_entry["dispatch_contract"]["agent_frontmatter_model"] = selected.get("agent_frontmatter_model")
             if selected.get("thinking_level") is not None:
                 rev_entry["dispatch_contract"]["thinking_level"] = selected.get("thinking_level")
-            if selected["requested_model"] != "inherit" and not is_antigravity:
+            if selected["requested_model"] != "inherit" and selected.get("resolved_model") != "inherit" and not is_antigravity:
                 rev_entry["required_model"] = selected["requested_model"]
         from review_models import effective_reviewer_model, reviewer_model_map
         rev_entry["effective_model"] = effective_reviewer_model(rev_entry)
@@ -246,7 +246,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
     }
     if selections:
         profile["review_models_sha256"] = current["review_models"]["sha256"]
-    if any(item.get("requested_model", "inherit") != "inherit" for item in resolved_reviewers.values()):
+    if any((item.get("resolved_model") or item.get("requested_model", "inherit")) != "inherit" for item in resolved_reviewers.values()):
         profile["model_policy"] = "DEVELOPER_SELECTED_NATIVE"
         if str(host).strip().lower() == "antigravity" or str(current.get("review_host") or "").strip().lower() == "antigravity":
             profile["dispatch_contract"] = {

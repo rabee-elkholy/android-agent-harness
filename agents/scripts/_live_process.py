@@ -144,6 +144,8 @@ def run_streaming(
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
+    merged_env.pop("BASH_ENV", None)
+    merged_env.pop("ENV", None)
     merged_env["PYTHONUNBUFFERED"] = "1"
     merged_env["PYTHONIOENCODING"] = "utf-8"
 

@@ -1380,10 +1380,21 @@ class HarnessDoctor:
                 except Exception as exc:
                     render_errors.append(f"{role}: render failed ({exc})")
 
+            from delegation_policy import UTILITY_AGENT_SPECS, render_utility_agent_markdown
+            for u_role, u_spec in UTILITY_AGENT_SPECS.items():
+                try:
+                    u_md = render_utility_agent_markdown(u_role)
+                    u_fm = _parse_frontmatter(u_md)
+                    if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
+                        render_errors.append(f"{u_role}: invalid frontmatter flags")
+                    if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
+                        render_errors.append(f"{u_role}: tool allowlist mismatch")
+                except Exception as exc:
+                    render_errors.append(f"{u_role}: render failed ({exc})")
             if render_errors:
                 self.log(cat, "Custom Reviewer Agents", "FAIL", f"Kit repository mode: reviewer validation failed: {'; '.join(render_errors)}")
             else:
-                self.log(cat, "Custom Reviewer Agents", "PASS", f"Kit repository mode: all {len(core_7)} core reviewers verified and rendered in memory with Review V2 contract.")
+                self.log(cat, "Custom Reviewer Agents", "PASS", f"Kit repository mode: all {len(core_7)} core reviewers + {len(UTILITY_AGENT_SPECS)} utility Flash subagents verified.")
         elif not is_ag:
             self.log(cat, "Custom Reviewer Agents", "PASS", "Antigravity custom agents optional (not selected).")
         else:
@@ -1420,6 +1431,22 @@ class HarnessDoctor:
                 except Exception as exc:
                     agent_errors.append(f"{role}: unreadable ({exc})")
 
+            from delegation_policy import UTILITY_AGENT_SPECS
+            for u_role, u_spec in UTILITY_AGENT_SPECS.items():
+                u_file = agents_base / u_role / "agent.md"
+                if not u_file.is_file():
+                    continue
+                try:
+                    u_txt = u_file.read_text(encoding="utf-8")
+                    u_fm = _parse_frontmatter(u_txt)
+                    if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
+                        agent_errors.append(f"{u_role}: invalid frontmatter")
+                    if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
+                        agent_errors.append(f"{u_role}: tools mismatch")
+                    if u_spec["fingerprint"] not in u_txt:
+                        agent_errors.append(f"{u_role}: missing fingerprint")
+                except Exception as exc:
+                    agent_errors.append(f"{u_role}: unreadable ({exc})")
             if agent_errors:
                 self.log(cat, "Custom Reviewer Agents", "FAIL", f"Reviewer agent check failed: {'; '.join(agent_errors)}")
             else:

@@ -30,7 +30,7 @@ def _run(script: str, args: list[str]) -> int:
     from _vnext_common import ValidationError, read_json
     from host_continuation import assert_execution_session
     from evidence_store import StateLock
-    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "android_inspect.py"}
+    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "delegation_policy.py", "android_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
     read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"], ["bridge"]))
@@ -60,6 +60,43 @@ def _run(script: str, args: list[str]) -> int:
             except ValidationError as exc:
                 print(f"[FAIL] {exc}", file=sys.stderr)
                 return 1
+    in_process_ok = (
+        os.environ.get("HARNESS_FORCE_SUBPROCESS") != "1"
+        and (
+            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py"}
+            or (script == "workflow.py" and args[:1] == ["status"])
+        )
+    )
+    if in_process_ok:
+        import importlib
+        import inspect
+        mod_name = target.stem
+        existing_mod = sys.modules.get(mod_name)
+        existing_file = Path(getattr(existing_mod, "__file__", "") or "") if existing_mod is not None else None
+        if existing_mod is None or (existing_file is not None and existing_file.is_file() and existing_file.resolve() == target.resolve()):
+            prev_argv = sys.argv[:]
+            prev_cwd = Path.cwd()
+            try:
+                with lease:
+                    os.chdir(REPO_ROOT)
+                    sys.path.insert(0, str(SCRIPTS))
+                    mod = existing_mod if existing_mod is not None else importlib.import_module(mod_name)
+                    main_fn = getattr(mod, "main")
+                    sys.argv = [str(target), *args]
+                    sig = inspect.signature(main_fn)
+                    rc = main_fn(args) if len(sig.parameters) >= 1 else main_fn()
+                    return int(rc) if isinstance(rc, int) else 0
+            except SystemExit as exc:
+                return int(exc.code) if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+            except ValidationError as exc:
+                print(f"[FAIL] {exc}", file=sys.stderr)
+                return 1
+            finally:
+                sys.argv = prev_argv
+                try:
+                    os.chdir(prev_cwd)
+                except OSError:
+                    pass
     try:
         with lease:
             proc = subprocess.run([sys.executable, "-u", str(target), *args], cwd=str(REPO_ROOT), check=False,
@@ -73,7 +110,7 @@ def _run(script: str, args: list[str]) -> int:
 # Commands after which the agent needs the next step. A real delivery called `task status --next --json`
 # after each of them (six times from review finalize to ready), one extra model turn each.
 # `verify` prints a JSON report and is left out so its output stays parseable.
-NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "review"})
+NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "review", "phase-review"})
 NEXT_STEP_TASK_ACTIONS = frozenset({"prepare-verification", "approve-sensitive", "complete", "resume"})
 
 
@@ -105,8 +142,29 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
                 or (len(step_args) > 1 and step_args[0] == "task" and step_args[1] == "prepare-verification")
             )
         )
+        step_host = os.environ.get("HARNESS_HOST", "").strip().lower() or None
+        if step_args:
+            for idx_arg, tok_arg in enumerate(step_args):
+                if tok_arg == "--host" and idx_arg + 1 < len(step_args):
+                    step_host = step_args[idx_arg + 1].strip().lower() or step_host
+                elif tok_arg.startswith("--host="):
+                    step_host = tok_arg.split("=", 1)[1].strip().lower() or step_host
+        if not step_host:
+            from _vnext_common import read_json as _rj
+            t_state_dir = AGENTS_ROOT / "state" / "tasks" / task_id
+            for cand_name, key_name in (("current-run.json", "review_host"), ("host-session.json", "host")):
+                cand_p = t_state_dir / cand_name
+                if cand_p.is_file():
+                    try:
+                        val_h = str(_rj(cand_p).get(key_name) or "").strip().lower()
+                        if val_h:
+                            step_host = val_h
+                            break
+                    except (OSError, ValueError):
+                        continue
+        host_kw = {"host": step_host} if step_host else {}
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            action = resolve_next_action(REPO_ROOT, task_id, plan)
+            action = resolve_next_action(REPO_ROOT, task_id, plan, **host_kw)
             if (
                 exit_code == 0
                 and is_verify_gate_step
@@ -116,7 +174,7 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
                 try:
                     from review_package import build_package
                     build_package(REPO_ROOT, task_id)
-                    action = resolve_next_action(REPO_ROOT, task_id, plan)
+                    action = resolve_next_action(REPO_ROOT, task_id, plan, **host_kw)
                 except (OSError, ValueError, ImportError):
                     pass
     except Exception:
@@ -143,10 +201,17 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
         print(f"NEXT_INSTRUCTIONS={action['instructions']}", flush=True)
     rot = action.get("context_rotation")
     if isinstance(rot, dict) and rot.get("recommended"):
-        print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}", flush=True)
-        print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}", flush=True)
-        if rot.get("instructions"):
-            print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot.get('instructions')}", flush=True)
+        emit_rot = True
+        try:
+            from task_bridge import should_emit_cli_rotation_advisory
+            emit_rot = should_emit_cli_rotation_advisory(REPO_ROOT, rot)
+        except (ImportError, OSError, ValueError):
+            emit_rot = True
+        if emit_rot:
+            print(f"CONTEXT_ROTATION_RECOMMENDED={rot.get('mode')}: {rot.get('save_command')}", flush=True)
+            print(f"CONTEXT_ROTATION_REASON={rot.get('reason')}", flush=True)
+            if rot.get("instructions"):
+                print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot.get('instructions')}", flush=True)
     if code in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and action.get("inputs"):
         try:
             compact_inputs = _compact_for_host(action["inputs"])
@@ -204,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             from task_metrics import record_operation
             actions = {"task": TASK_SUBCOMMANDS,
                        "device": {"install-start", "signoff", "skip-validation", "validate-automatically"},
-                       "review": {"package", "profile", "ingest", "complete", "finalize", "dispatch", "dispatch-batch", "status"},
+                       "review": {"package", "profile", "ingest", "complete", "complete-all", "finalize", "dispatch", "dispatch-batch", "status"},
                        "journey": {"validate", "list", "run"}}
             operation = args[0]
             if len(args) > 1 and args[1] in actions.get(args[0], ()):
@@ -284,6 +349,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("generate_project_context.py", [args[0], "--repo", str(REPO_ROOT), *args[1:]])
     if command == "task-context":
         return _run("task_context.py", ["--repo", str(REPO_ROOT), *args])
+    if command == "delegate-plan":
+        return _run("delegation_policy.py", ["--repo", str(REPO_ROOT), *args])
     if command == "graph":
         forwarded = list(args)
         if "--repo" not in forwarded:

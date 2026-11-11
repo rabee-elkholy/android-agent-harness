@@ -171,10 +171,29 @@ def result_line(outcome: str, task_label: str, duration: str, hidden_warnings: i
     return " | ".join(parts)
 
 
-def with_plain_console(task_args: list[str]) -> list[str]:
-    if any(arg == "--console" or arg.startswith("--console=") for arg in task_args):
+def is_linked_git_worktree(repo: Path | None = None) -> bool:
+    """Detect linked Git worktrees (e.g. Antigravity /swarm or branch subagents), where .git is a gitdir pointer file."""
+    root = Path(repo).resolve() if repo else REPO_ROOT
+    git_marker = root / ".git"
+    return git_marker.is_file() and not git_marker.is_dir()
+
+
+def with_worktree_daemon_guard(task_args: list[str], repo: Path | None = None) -> list[str]:
+    """Prevent multiple 4-8 GB Gradle/Kotlin daemons from spawning across ephemeral Git worktrees."""
+    if os.environ.get("HARNESS_WORKTREE_KEEP_DAEMON", "").strip().lower() in {"1", "true", "yes"}:
         return task_args
-    return ["--console=plain", *task_args]
+    if any(arg in {"--daemon", "--no-daemon"} for arg in task_args):
+        return task_args
+    if is_linked_git_worktree(repo):
+        return ["--no-daemon", *task_args]
+    return task_args
+
+
+def with_plain_console(task_args: list[str], *, repo: Path | None = None) -> list[str]:
+    guarded = with_worktree_daemon_guard(task_args, repo)
+    if any(arg == "--console" or arg.startswith("--console=") for arg in guarded):
+        return guarded
+    return ["--console=plain", *guarded]
 
 
 def gradle_wrapper(repo: Path | None = None) -> Path:
@@ -232,7 +251,10 @@ def unix_wrapper_cmd(wrapper: Path, gradle_args: list[str]) -> list[str]:
                 wrapper.write_bytes(b.replace(b"\r\n", b"\n"))
         except (OSError, ValueError, _ExpectedArtifactError):
             pass
-    target = "./gradlew" if wrapper.name == "gradlew" else str(wrapper)
+    if sys.platform != "win32" and wrapper.is_absolute():
+        target = str(wrapper)
+    else:
+        target = "./gradlew" if wrapper.name == "gradlew" else str(wrapper)
     for shell in posix_shell_candidates():
         return [shell, target, *gradle_args]
     return [str(wrapper), *gradle_args]
@@ -421,10 +443,10 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
     if outcome is not None:
         outcome.clear()
         outcome["test_failure_only"] = False
-    gradle_args = with_plain_console(task_args)
+    run_root = Path(cwd).resolve() if cwd else REPO_ROOT
+    gradle_args = with_plain_console(task_args, repo=run_root)
     task_label = task_args[0] if task_args else "gradle"
     artifact_name = gate_artifact_name(task_label)
-    run_root = Path(cwd).resolve() if cwd else REPO_ROOT
 
     def record(status: str, exit_code: int, env_class: str = "", detail: str = "", **extra) -> None:
         if diagnostic is not None:
@@ -479,6 +501,8 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
     started = time.time()
 
     env = os.environ.copy()
+    env.pop("BASH_ENV", None)
+    env.pop("ENV", None)
     env["PYTHONIOENCODING"] = "utf-8"
 
     # run_streaming owns the quiet-output heartbeat for this step.

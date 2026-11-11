@@ -172,10 +172,38 @@ def native_model_metadata(transcript: Path) -> dict:
     database = root.parent / "conversations" / f"{execution_id}.db"
     if database.is_symlink() or not database.resolve().is_relative_to(root.parent.resolve()) or not database.is_file():
         return {}
+    def _fetch_rows(db_path: Path) -> tuple[list, list]:
+        base_uri = db_path.resolve().as_uri()
+        try:
+            with closing(sqlite3.connect(base_uri + "?mode=ro", uri=True, timeout=1)) as connection:
+                cfg = connection.execute("SELECT data FROM executor_metadata WHERE idx = 0").fetchall()
+                gen = connection.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 4097").fetchall()
+                return cfg, gen
+        except sqlite3.OperationalError:
+            # Terminal Sandbox or read-only parent directories cannot create WAL -shm files under ?mode=ro.
+            try:
+                with closing(sqlite3.connect(base_uri + "?mode=ro&immutable=1", uri=True, timeout=1)) as connection:
+                    cfg = connection.execute("SELECT data FROM executor_metadata WHERE idx = 0").fetchall()
+                    gen = connection.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 4097").fetchall()
+                    return cfg, gen
+            except sqlite3.OperationalError:
+                if db_path.stat().st_size > 32 * 1024 * 1024:
+                    raise
+                import tempfile
+                with tempfile.TemporaryDirectory(prefix="ag_meta_ro_") as tmp_dir:
+                    snap_db = Path(tmp_dir) / "conv.db"
+                    snap_db.write_bytes(db_path.read_bytes())
+                    for suffix in ("-wal", "-shm"):
+                        side = db_path.with_name(db_path.name + suffix)
+                        if side.is_file() and not side.is_symlink() and side.stat().st_size <= 32 * 1024 * 1024:
+                            (Path(tmp_dir) / f"conv.db{suffix}").write_bytes(side.read_bytes())
+                    with closing(sqlite3.connect(snap_db.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
+                        cfg = connection.execute("SELECT data FROM executor_metadata WHERE idx = 0").fetchall()
+                        gen = connection.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 4097").fetchall()
+                        return cfg, gen
+
     try:
-        with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as connection:
-            configured_rows = connection.execute("SELECT data FROM executor_metadata WHERE idx = 0").fetchall()
-            generation_rows = connection.execute("SELECT data FROM gen_metadata ORDER BY idx LIMIT 4097").fetchall()
+        configured_rows, generation_rows = _fetch_rows(database)
         if len(generation_rows) > 4096 or any(not isinstance(r[0], bytes) or len(r[0]) > 32 * 1024 * 1024 for r in configured_rows + generation_rows):
             raise ValueError("native metadata exceeds inspection limits")
         configured = {_native_model_field(r[0], (10, 1, 28)) for r in configured_rows} - {None}

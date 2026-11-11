@@ -1,18 +1,85 @@
-"""PostToolUse hook reconciler for invoke_subagent failures."""
+"""PostToolUse hook reconciler for invoke_subagent bindings and failures."""
 from __future__ import annotations
 
 import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _vnext_common import read_json
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_SCRIPTS_DIR))
+from _vnext_common import ValidationError as _ExpectedArtifactError, read_json
+from antigravity_runtime import candidate_brain_roots, is_trusted_antigravity_path
 from evidence_store import StateLock
-from review_orchestrator import load_ledger, save_ledger, REVIEW_DISPATCHED, REVIEW_ENV_BLOCKED
+from review_orchestrator import REVIEW_DISPATCHED, REVIEW_ENV_BLOCKED, load_ledger, save_ledger
 from workflow import state_root, task_dir
-from _vnext_common import ValidationError as _ExpectedArtifactError
+
+
+def _resolve_hook_repo(payload: dict) -> Path:
+    """Resolve repository root reliably even when Antigravity invokes hooks with cwd=.agents."""
+    env_repo = os.environ.get("HARNESS_REPO", "").strip()
+    if env_repo:
+        return Path(env_repo).resolve()
+    workspaces = payload.get("workspacePaths") or payload.get("workspace_paths") or []
+    if isinstance(workspaces, list):
+        for raw_ws in workspaces:
+            if isinstance(raw_ws, str) and raw_ws.strip():
+                try:
+                    ws = Path(raw_ws.strip()).expanduser().resolve()
+                    if (ws / ".agents").is_dir() or (ws / "agents" / "VERSION").is_file():
+                        return ws
+                except (OSError, RuntimeError, ValueError):
+                    continue
+    if _SCRIPTS_DIR.parent.name in {".agents", "agents"}:
+        return _SCRIPTS_DIR.parent.parent.resolve()
+    return Path.cwd().resolve()
+
+
+def _bind_candidates_from_brain(repo: Path, payload: dict) -> None:
+    """Bind newly spawned reviewer executions when PostToolUse omits toolResult on stdin."""
+    from reviewer_host import reviewer_context
+
+    parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+    transcript_raw = str(payload.get("transcriptPath") or payload.get("transcript_path") or "").strip()
+    roots: list[Path] = []
+    if transcript_raw and is_trusted_antigravity_path(transcript_raw):
+        try:
+            tp = Path(transcript_raw).expanduser().resolve()
+            for br in candidate_brain_roots():
+                if br in tp.parents:
+                    roots.append(br)
+                    break
+        except (OSError, RuntimeError, ValueError):
+            pass
+    for br in candidate_brain_roots():
+        if br not in roots and br.is_dir():
+            roots.append(br)
+
+    cutoff = time.time() - 120.0
+    for brain_root in roots:
+        if not brain_root.is_dir():
+            continue
+        recent_dirs: list[tuple[float, str]] = []
+        try:
+            for entry in brain_root.iterdir():
+                if not entry.is_dir() or entry.is_symlink() or entry.name == parent_cid:
+                    continue
+                try:
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime >= cutoff:
+                    recent_dirs.append((mtime, entry.name))
+        except OSError:
+            continue
+        recent_dirs.sort(reverse=True)
+        for _, child_id in recent_dirs[:12]:
+            try:
+                reviewer_context(repo, child_id, bind=True)
+            except Exception:
+                continue
 
 
 def main() -> int:
@@ -26,18 +93,37 @@ def main() -> int:
             print(json.dumps({}))
             return 0
 
+        repo = _resolve_hook_repo(payload)
+        call = payload.get("toolCall") or payload.get("tool_call") or {}
+        call_name = str(call.get("name") or payload.get("toolName") or "")
         err = payload.get("error")
         if not err:
             # Host result shapes vary. IDs are merely candidates until the
             # canonical child transcript matches a dispatched review brief.
             from reviewer_host import reviewer_context
-            output = json.dumps(payload.get("toolResult") or payload.get("tool_response") or payload.get("toolOutput") or payload.get("output") or payload.get("result") or "")
-            for execution_id in set(re.findall(r'conversationId[\\"\s:]+([A-Za-z0-9_-]{4,128})', output)):
-                reviewer_context(Path(os.environ.get("HARNESS_REPO", ".")).resolve(), execution_id, bind=True)
+
+            output = json.dumps(
+                payload.get("toolResult")
+                or payload.get("tool_response")
+                or payload.get("toolOutput")
+                or payload.get("output")
+                or payload.get("result")
+                or ""
+            )
+            matched_ids = set(re.findall(r'conversationId[\"\s:]+([A-Za-z0-9_-]{4,128})', output))
+            for execution_id in matched_ids:
+                reviewer_context(repo, execution_id, bind=True)
+            if call_name in {"invoke_subagent", ""}:
+                try:
+                    from delegation_policy import bind_utility_from_post_tool
+                    bind_utility_from_post_tool(repo, payload)
+                except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                    pass
+            if not matched_ids and call_name in {"invoke_subagent", ""}:
+                _bind_candidates_from_brain(repo, payload)
             print(json.dumps({}))
             return 0
 
-        call = payload.get("toolCall") or payload.get("tool_call") or {}
         args = call.get("args") or payload.get("toolArgs") or payload.get("tool_input") or {}
         if isinstance(args, str):
             try:
@@ -45,10 +131,11 @@ def main() -> int:
             except Exception:
                 args = {}
 
-        if str(call.get("name") or payload.get("toolName") or "") == "send_message":
+        if call_name == "send_message":
             from reviewer_host import mark_resume_failed
+
             recipient = str(args.get("Recipient") or args.get("recipient") or "")
-            mark_resume_failed(Path(os.environ.get("HARNESS_REPO", ".")).resolve(), recipient, str(err))
+            mark_resume_failed(repo, recipient, str(err))
             print(json.dumps({}))
             return 0
 
@@ -65,8 +152,6 @@ def main() -> int:
             if top_r:
                 roles.append(str(top_r).strip())
 
-        repo_str = os.environ.get("HARNESS_REPO", ".")
-        repo = Path(repo_str).resolve()
         st_root = state_root(repo)
         active_task_file = st_root / "active-task.json"
         if not active_task_file.is_file():
@@ -90,14 +175,15 @@ def main() -> int:
 
             if status == "IMPLEMENTING" and phases and phase_state_f.is_file():
                 from phase_review import (
-                    phase_review_dir,
-                    phase_run_file,
-                    phase_ledger_file,
-                    load_phase_ledger,
+                    PHASE_REVIEWING,
                     compute_ledger_sha,
                     get_phase_substate,
-                    PHASE_REVIEWING,
+                    load_phase_ledger,
+                    phase_ledger_file,
+                    phase_review_dir,
+                    phase_run_file,
                 )
+
                 p_state = read_json(phase_state_f)
                 phase_id = str(p_state.get("current_phase_id") or "")
                 if not phase_id:
@@ -128,7 +214,8 @@ def main() -> int:
                                         to_transition.append(r_name)
                             if not to_transition and not target_roles:
                                 to_transition = [
-                                    r_name for r_name, r_data in reviewers.items()
+                                    r_name
+                                    for r_name, r_data in reviewers.items()
                                     if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id")
                                 ]
                             for r in to_transition:
@@ -137,10 +224,12 @@ def main() -> int:
 
                             ledger["ledger_sha256"] = compute_ledger_sha(ledger)
                             from _vnext_common import atomic_write_json
+
                             atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
                     except Exception as exc:
                         try:
                             from _vnext_common import atomic_write_json, utc_now
+
                             marker_data = {
                                 "schema_version": 1,
                                 "task_id": task_id,
@@ -170,7 +259,6 @@ def main() -> int:
             return 0
 
         sanitized_err = str(err).strip()[:1000]
-
         target_roles = set(roles)
         try:
             with StateLock(st_root):
@@ -185,10 +273,10 @@ def main() -> int:
                         else:
                             to_transition.append(r_name)
 
-                # Fallback if target_roles didn't match any dispatched reviewer
                 if not to_transition:
                     to_transition = [
-                        r_name for r_name, r_data in reviewers.items()
+                        r_name
+                        for r_name, r_data in reviewers.items()
                         if r_data.get("state") == REVIEW_DISPATCHED and not r_data.get("execution_id")
                     ]
 
@@ -202,14 +290,18 @@ def main() -> int:
                 marker_file = tdir / "review-execution" / run_id / "post-tool-reconcile-error.json"
                 marker_file.parent.mkdir(parents=True, exist_ok=True)
                 from _vnext_common import atomic_write_json, utc_now
-                atomic_write_json(marker_file, {
-                    "schema_version": 1,
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "error_type": type(exc).__name__,
-                    "error_code": "POST_TOOL_RECONCILE_FAILED",
-                    "occurred_at": utc_now(),
-                })
+
+                atomic_write_json(
+                    marker_file,
+                    {
+                        "schema_version": 1,
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "error_type": type(exc).__name__,
+                        "error_code": "POST_TOOL_RECONCILE_FAILED",
+                        "occurred_at": utc_now(),
+                    },
+                )
             except (OSError, ValueError, ImportError, _ExpectedArtifactError):
                 pass
 

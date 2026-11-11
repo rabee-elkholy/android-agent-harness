@@ -824,6 +824,13 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return _dispatch_pipeline_script(args, "review_policy.py", arguments)
 
 
+
+def cmd_delegate_plan(args: argparse.Namespace) -> int:
+    arguments = ["--json"] if args.json else []
+    if args.task_id:
+        arguments.extend(["--task-id", args.task_id])
+    return _dispatch_pipeline_script(args, "delegation_policy.py", arguments)
+
 def cmd_graph(args: argparse.Namespace) -> int:
     """Query the Universal Android Code & Architecture Graph."""
     kit = ensure_kit(args.kit)
@@ -1747,6 +1754,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--task-id", help="Optional task scope.")
     sp.add_argument("--json", action="store_true", help="Print policy JSON.")
     sp.set_defaults(func=cmd_policy)
+
+    sp = sub.add_parser("delegate-plan", help="Inspect Option 4 risk-gated Flash subagent delegation and quota rotation strategy.")
+    sp.add_argument("--repo", help="Android project root.")
+    sp.add_argument("--kit", help="Kit checkout to use.")
+    sp.add_argument("--task-id", help="Optional task scope.")
+    sp.add_argument("--json", action="store_true", help="Print delegation strategy JSON.")
+    sp.set_defaults(func=cmd_delegate_plan)
 
     sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or a batch of up to 8 targets.")
     target = sp.add_mutually_exclusive_group(required=True)

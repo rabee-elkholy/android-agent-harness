@@ -1468,7 +1468,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
                 checker._write_cache(first, True)
                 with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("unchanged source reread")):
                     self.assertEqual(first, checker.harness_fingerprint())
-                source.write_text("new", encoding="utf-8")
+                source.write_text("newer", encoding="utf-8")
                 self.assertNotEqual(first, checker.harness_fingerprint())
                 source.unlink()
                 self.assertNotEqual(first, checker.harness_fingerprint())

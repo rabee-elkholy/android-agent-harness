@@ -178,7 +178,7 @@ class ReviewerModelsTests(unittest.TestCase):
         return root, {"transcript_path": str(transcript)}
 
     def test_antigravity_native_model_metadata_is_distinct_from_configuration(self):
-        run = {"review_host": "antigravity", "review_models": models._resolve_policy(self.policy("flash-dynamic"), "task", "antigravity", [ROLE])}
+        run = {"review_host": "antigravity", "review_models": models._resolve_policy(self.policy("flash-dynamic"), "task", "antigravity", [ROLE], efforts_by_role={ROLE: "DEEP"})}
         root, identity = self.antigravity_identity()
         with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}):
             evidence = models.model_evidence(run, ROLE, identity)
@@ -190,7 +190,7 @@ class ReviewerModelsTests(unittest.TestCase):
             models.validate_model_evidence(run, ROLE, {**evidence, "host_configured_model": "gemini-3.8-pro-high"})
 
     def test_antigravity_wrong_native_model_blocks_acceptance(self):
-        run = {"review_host": "antigravity", "review_models": models._resolve_policy(self.policy("flash-dynamic"), "task", "antigravity", [ROLE])}
+        run = {"review_host": "antigravity", "review_models": models._resolve_policy(self.policy("flash-dynamic"), "task", "antigravity", [ROLE], efforts_by_role={ROLE: "DEEP"})}
         root, identity = self.antigravity_identity(observed="gemini-3.8-pro-n")
         with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}):
             with self.assertRaisesRegex(ValidationError, "MISMATCH"):
@@ -589,11 +589,11 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
         choice_ids = [c["id"] for c in prompt["choices"]]
         self.assertEqual(
-            ["flash-dynamic-task", "flash-dynamic-once", "inherit-task", "inherit-once", "hybrid-smart-task"],
+            ["flash-dynamic-task", "flash-dynamic-once", "inherit-task", "inherit-once", "hybrid-smart-task", "risk-hybrid-task"],
             choice_ids,
         )
 
-        # 1. flash-dynamic-task: medium for convention, high for bug & security
+        # 1. flash-dynamic-task on standard NORMAL task: medium for convention & bug, medium for unescalated security (high when DEEP/MAX)
         atomic_write_json(task_dir(self.repo, "task-ag") / "plan.json", {"status": "IMPLEMENTING"})
         args_set = [
             sys.executable, str(SCRIPT), "set", "--repo", str(self.repo), "--host", "antigravity",
@@ -602,11 +602,14 @@ class ReviewerModelsTests(unittest.TestCase):
         ]
         res = subprocess.run(args_set, text=True, capture_output=True)
         self.assertEqual(0, res.returncode, res.stdout + res.stderr)
-        frozen = models.freeze_models(self.repo, "task-ag", "antigravity", roster, run_id="run-1")
+        frozen = models.freeze_models(
+            self.repo, "task-ag", "antigravity", roster, run_id="run-1",
+            policy_data={"surfaces": ["BUSINESS_LOGIC", "COROUTINES"], "severity": "HIGH"},
+        )
         self.assertEqual("gemini-3.8-flash-medium", frozen["reviewers"][conv]["resolved_model"])
         self.assertEqual("medium", frozen["reviewers"][conv]["thinking_level"])
-        self.assertEqual("gemini-3.8-flash-high", frozen["reviewers"][ROLE]["resolved_model"])
-        self.assertEqual("high", frozen["reviewers"][ROLE]["thinking_level"])
+        self.assertEqual("gemini-3.8-flash-medium", frozen["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("medium", frozen["reviewers"][ROLE]["thinking_level"])
         self.assertEqual("gemini-3.8-flash-high", frozen["reviewers"][SECURITY]["resolved_model"])
         self.assertEqual({}, frozen["reviewers"][SECURITY]["native_arguments"])
 
@@ -679,7 +682,7 @@ class ReviewerModelsTests(unittest.TestCase):
         )
         updated_current = read_json(tdir / "current-run.json")
         self.assertEqual("run", updated_current["review_models"]["source"])
-        self.assertEqual("gemini-3.8-flash-high", updated_current["review_models"]["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("gemini-3.8-flash-medium", updated_current["review_models"]["reviewers"][ROLE]["resolved_model"])
 
         # Next run (run-2) does not match bound_run_id="run-1", so it reverts to default inherit!
         next_run_models = models.freeze_models(self.repo, "task-once", "antigravity", [ROLE], run_id="run-2")
@@ -841,6 +844,157 @@ class ReviewerModelsTests(unittest.TestCase):
             fixture.repo, {r: models.frozen_models(run)[r] for r in roster}
         )
         self.assertEqual([], updated)
+
+
+
+
+class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
+    """Edge-case regression tests for CRIT-1, CRIT-3, and CRIT-5."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.repo = Path(self.temp.name).resolve()
+        (self.repo / ".agents").mkdir()
+
+    def test_gemini_4_carbon_models_and_pro_dispatch_contract(self):
+        from install_tool_adapters import generate_antigravity_agents
+        import shutil
+
+        shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents")
+        generate_antigravity_agents(self.repo, dry_run=False)
+
+        pol = {
+            "schema_version": 1,
+            "default": models.normalize_model_token("carbon@dynamic"),
+            "overrides": {SECURITY: models.normalize_model_token("pro@high")},
+        }
+        rec = models.set_policy(
+            self.repo, pol, task_id=None, host="antigravity",
+            source="conversation", proof_reference="Use Carbon dynamic and Pro high for security",
+        )
+        self.assertEqual("carbon-dynamic", rec["policy"]["default"])
+        self.assertEqual("gemini-3.1-pro-high", rec["policy"]["overrides"][SECURITY])
+
+        frozen = models.freeze_models(
+            self.repo, "t-carbon", "antigravity",
+            [ROLE, SECURITY, "arch-regression-reviewer-agent"],
+            policy_data={"reviewer_efforts": {ROLE: "DEEP", SECURITY: "DEEP", "arch-regression-reviewer-agent": "NORMAL"}},
+        )
+        self.assertEqual("gemini-4-carbon-high", frozen["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("gemini-4-carbon-medium", frozen["reviewers"]["arch-regression-reviewer-agent"]["resolved_model"])
+        self.assertEqual("gemini-3.1-pro-high", frozen["reviewers"][SECURITY]["resolved_model"])
+
+        gemini_tpl = (Path(__file__).resolve().parents[1] / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        self.assertIn('Model = "pro"', gemini_tpl)
+        self.assertIn("carbon", gemini_tpl)
+
+    def test_native_model_metadata_readonly_wal_sandbox_fallback(self):
+        import sqlite3
+        from antigravity_runtime import native_model_metadata
+
+        root = self.repo / "ag_data"
+        conv_dir = root / "conversations"
+        brain_dir = root / "brain" / "exec-ro-1" / ".system_generated" / "logs"
+        conv_dir.mkdir(parents=True)
+        brain_dir.mkdir(parents=True)
+        transcript = brain_dir / "transcript.jsonl"
+        transcript.write_text('{"source":"MODEL","type":"PLANNER_RESPONSE","content":"ok"}\n', encoding="utf-8")
+
+        def pb_len(field_num: int, payload: bytes) -> bytes:
+            tag = (field_num << 3) | 2
+            out = bytearray()
+            v = tag
+            while v >= 128:
+                out.append((v & 127) | 128)
+                v >>= 7
+            out.append(v)
+            ln = len(payload)
+            while ln >= 128:
+                out.append((ln & 127) | 128)
+                ln >>= 7
+            out.append(ln)
+            out.extend(payload)
+            return bytes(out)
+
+        cfg_blob = pb_len(10, pb_len(1, pb_len(28, b"gemini-4-carbon-high")))
+        gen_blob = pb_len(1, pb_len(19, b"gemini-4-carbon-preview"))
+        db_path = conv_dir / "exec-ro-1.db"
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("CREATE TABLE executor_metadata (idx INTEGER, data BLOB)")
+            conn.execute("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)")
+            conn.execute("INSERT INTO executor_metadata VALUES (0, ?)", (cfg_blob,))
+            conn.execute("INSERT INTO gen_metadata VALUES (0, ?)", (gen_blob,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Make conversations directory read-only (simulating Terminal Sandbox blocking -shm creation)
+        conv_dir.chmod(0o555)
+        try:
+            with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}):
+                meta = native_model_metadata(transcript)
+                self.assertEqual("gemini-4-carbon-high", meta.get("host_configured_model"))
+                self.assertEqual(["gemini-4-carbon-preview"], meta.get("host_reported_models"))
+
+                frozen = models._resolve_policy(
+                    {"schema_version": 1, "default": "carbon-dynamic", "overrides": {}},
+                    "task", "antigravity", [ROLE], efforts_by_role={ROLE: "DEEP"},
+                )
+                run_doc = {"review_host": "antigravity", "review_models": frozen}
+                ev = models.model_evidence(run_doc, ROLE, {"transcript_path": str(transcript)})
+                self.assertEqual("NATIVE_METADATA_OBSERVED", ev["actual_model_status"])
+                models.validate_model_evidence(run_doc, ROLE, ev)
+        finally:
+            conv_dir.chmod(0o755)
+
+    def test_post_tool_reconcile_works_from_dot_agents_cwd_and_without_tool_result(self):
+        from phase_review import phase_ledger_file
+        import shutil
+
+        # Copy post_tool_reconcile + sibling scripts into a client-shaped .agents/scripts layout
+        fixture = ReviewerModelsTests("test_legacy_runs_ignore_new_project_configuration")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        inner_fixture, task, roster, run, root, role = fixture.reviewer_host_fixture()
+
+        # Simulate Antigravity invoking PostToolUse with cwd=<repo>/.agents and NO HARNESS_REPO env
+        client_agents = inner_fixture.repo / ".agents"
+        client_scripts = client_agents / "scripts"
+        if not (client_scripts / "post_tool_reconcile.py").is_file():
+            shutil.copytree(Path(__file__).resolve().parent, client_scripts, dirs_exist_ok=True)
+        client_shared = client_agents / "harness_shared"
+        if not client_shared.is_dir():
+            shutil.copytree(Path(__file__).resolve().parents[1] / "harness_shared", client_shared, dirs_exist_ok=True)
+
+        parent_tx = root / "brain/parent-999/.system_generated/logs/transcript.jsonl"
+        parent_tx.parent.mkdir(parents=True, exist_ok=True)
+        parent_tx.write_text("", encoding="utf-8")
+
+        env = {k: v for k, v in os.environ.items() if k != "HARNESS_REPO"}
+        env["ANTIGRAVITY_APP_DATA"] = str(root)
+        env["HARNESS_HOST"] = "antigravity"
+
+        # 1. Bind execution_id via transcriptPath sibling brain scan when toolResult is omitted!
+        payload_bind = {
+            "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"Role": role, "TypeName": role}]}},
+            "conversationId": "parent-999",
+            "transcriptPath": str(parent_tx),
+        }
+        proc = subprocess.run(
+            [sys.executable, "scripts/post_tool_reconcile.py"],
+            input=json.dumps(payload_bind),
+            cwd=str(client_agents),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        ledger = read_json(phase_ledger_file(task_dir(inner_fixture.repo, task), "p1"))
+        self.assertEqual("reviewer-123", ledger["reviewers"][role]["execution_id"])
 
 
 if __name__ == "__main__":

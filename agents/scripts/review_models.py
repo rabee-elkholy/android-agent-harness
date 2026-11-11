@@ -30,6 +30,7 @@ from policy_vocab import CORE_ROUTED_REVIEWERS
 CLAUDE_MODEL_CHOICES = ("inherit", "sonnet", "opus", "haiku")
 ANTIGRAVITY_MODEL_CHOICES = (
     "inherit",
+    "risk-hybrid",
     "flash-dynamic",
     "gemini-3.8-flash",
     "gemini-3.8-flash-fast",
@@ -43,6 +44,12 @@ ANTIGRAVITY_MODEL_CHOICES = (
     "gemini-4-argon-medium",
     "gemini-4-argon-high",
     "argon",
+    "carbon-dynamic",
+    "gemini-4-carbon",
+    "gemini-4-carbon-low",
+    "gemini-4-carbon-medium",
+    "gemini-4-carbon-high",
+    "carbon",
     "gemini-3.1-pro",
     "gemini-3.1-pro-low",
     "gemini-3.1-pro-high",
@@ -120,9 +127,29 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
+    "risk-hybrid-task": {
+        "id": "risk-hybrid-task",
+        "index": 7,
+        "scope": "task",
+        "preset": "risk-hybrid",
+        "label_ar": "الهجين التكيفي حسب الخطورة للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard T1-T3; Chat model automatically on DEEP/MAX T4-T5) — for this task",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
+    "risk-hybrid-once": {
+        "id": "risk-hybrid-once",
+        "index": 8,
+        "scope": "run",
+        "preset": "risk-hybrid",
+        "label_ar": "الهجين التكيفي حسب الخطورة لهذه المرة فقط (risk-hybrid-once)",
+        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard; Chat model on DEEP/MAX) — this review only",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
 }
 
 _SHORTHAND_MAP = {
+    "risk@hybrid": "risk-hybrid",
+    "hybrid@risk": "risk-hybrid",
     "flash@dynamic": "flash-dynamic",
     "flash@auto": "flash-dynamic",
     "gemini-3.8-flash@dynamic": "flash-dynamic",
@@ -145,6 +172,16 @@ _SHORTHAND_MAP = {
     "gemini-4-argon@low": "gemini-4-argon-low",
     "gemini-4-argon@medium": "gemini-4-argon-medium",
     "gemini-4-argon@high": "gemini-4-argon-high",
+    "carbon@dynamic": "carbon-dynamic",
+    "carbon@auto": "carbon-dynamic",
+    "gemini-4-carbon@dynamic": "carbon-dynamic",
+    "gemini-4-carbon@auto": "carbon-dynamic",
+    "carbon@low": "gemini-4-carbon-low",
+    "carbon@medium": "gemini-4-carbon-medium",
+    "carbon@high": "gemini-4-carbon-high",
+    "gemini-4-carbon@low": "gemini-4-carbon-low",
+    "gemini-4-carbon@medium": "gemini-4-carbon-medium",
+    "gemini-4-carbon@high": "gemini-4-carbon-high",
     "pro@low": "gemini-3.1-pro-low",
     "pro@high": "gemini-3.1-pro-high",
     "gemini-3.1-pro@low": "gemini-3.1-pro-low",
@@ -188,26 +225,36 @@ def resolve_preset_policy(preset: str) -> dict:
         return {"schema_version": 1, "default": "flash-dynamic", "overrides": {}}
     if norm == "inherit":
         return default_policy()
+    if norm in ("risk-hybrid", "adaptive-hybrid"):
+        return {"schema_version": 1, "default": "risk-hybrid", "overrides": {}}
     if norm in ("hybrid-smart", "hybrid"):
         return {
             "schema_version": 1,
             "default": "flash-dynamic",
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         }
-    raise ValidationError(f"unknown reviewer model preset '{preset}'; use flash-dynamic, inherit, or hybrid-smart")
+    raise ValidationError(f"unknown reviewer model preset '{preset}'; use flash-dynamic, risk-hybrid, inherit, or hybrid-smart")
 
 
 def resolve_antigravity_model(requested: str, role: str, effort_intent: str = "NORMAL") -> tuple[str, str]:
-    """Resolve an Antigravity model choice and dynamic thinking level for a specific reviewer role."""
+    """Resolve an Antigravity model choice and dynamic thinking level for a specific reviewer role.
+
+    Standard NORMAL-effort reviews run on medium thinking (preventing 10-minute Flash High
+    overthinking loops); high thinking or parent escalation activates strictly on DEEP/MAX effort.
+    """
     req = str(normalize_model_token(requested) or "inherit")
     intent = str(effort_intent or "NORMAL").upper()
-    is_deep = intent in ("DEEP", "MAX") or role in CRITICAL_HYBRID_REVIEWERS
+    is_deep = intent in ("DEEP", "MAX")
     if req == "inherit":
         return "inherit", "inherit"
+    if req == "risk-hybrid":
+        return ("inherit", "inherit") if is_deep else ("gemini-3.8-flash-medium", "medium")
     if req in ("flash-dynamic", "gemini-3.8-flash", "flash"):
         return ("gemini-3.8-flash-high", "high") if is_deep else ("gemini-3.8-flash-medium", "medium")
     if req in ("argon-dynamic", "gemini-4-argon", "argon"):
         return ("gemini-4-argon-high", "high") if is_deep else ("gemini-4-argon-medium", "medium")
+    if req in ("carbon-dynamic", "gemini-4-carbon", "carbon"):
+        return ("gemini-4-carbon-high", "high") if is_deep else ("gemini-4-carbon-medium", "medium")
     if req in ("gemini-3.1-pro", "pro"):
         return "gemini-3.1-pro-high", "high"
     for suffix in ("fast", "low", "medium", "high"):
@@ -225,7 +272,7 @@ def validate_policy(value: object) -> dict:
     if not isinstance(default_val, str) or default_val not in MODEL_CHOICES:
         raise ValidationError(
             "review_model_policy default must be a supported model choice "
-            "(inherit, sonnet, opus, haiku, flash-dynamic, gemini-3.8-flash-*, gemini-4-argon-*, gemini-3.1-pro-*)"
+            "(inherit, sonnet, opus, haiku, flash-dynamic, gemini-3.8-flash-*, gemini-4-argon-*, gemini-4-carbon-*, gemini-3.1-pro-*)"
         )
     overrides = value["overrides"]
     if not isinstance(overrides, dict):
@@ -269,7 +316,7 @@ def host_capability(host: str) -> dict:
                     "label_en": item["label_en"],
                 }
                 for item in ANTIGRAVITY_INTERACTIVE_CHOICES.values()
-                if item["index"] <= 5
+                if item["index"] in (1, 2, 3, 4, 5, 7)
             ],
             "argument_name": None,
             "agent_frontmatter_field": "model",
@@ -415,28 +462,49 @@ def _compute_efforts_by_role(
                     policy_data = read_json(tdir / "policy.json")
                 except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
                     policy_data = {}
+            elif (tdir / "phase-state.json").is_file():
+                try:
+                    cur_phase = str(read_json(tdir / "phase-state.json").get("current_phase_id") or "").strip()
+                    ckpt_f = tdir / "phases" / cur_phase / "checkpoint.json"
+                    if cur_phase and ckpt_f.is_file():
+                        ckpt = read_json(ckpt_f)
+                        reserve = ckpt.get("final_review_reserve") or {}
+                        ckpt_surfaces = ckpt.get("surfaces") or reserve.get("surfaces") or []
+                        if ckpt_surfaces:
+                            policy_data = {
+                                "surfaces": ckpt_surfaces,
+                                "severity": "CRITICAL" if set(ckpt_surfaces) & {"AUTH", "BILLING", "SECURITY", "CRYPTO", "SENSITIVE_DATA"} else "MEDIUM",
+                            }
+                except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
+                    policy_data = {}
+    explicit_efforts = (policy_data or {}).get("reviewer_efforts") if isinstance(policy_data, dict) else None
     try:
         from review_policy import reviewer_effort_for
         surfaces = (policy_data or {}).get("surfaces") or (plan or {}).get("expected_surfaces") or []
-        severity = (policy_data or {}).get("severity") or "HIGH"
+        critical_set = {"AUTH", "BILLING", "SECURITY", "CRYPTO", "SENSITIVE_DATA"}
+        default_sev = "CRITICAL" if (set(surfaces) & critical_set) else "MEDIUM"
+        severity = (policy_data or {}).get("severity") or default_sev
         round_number = int((policy_data or {}).get("review_round") or (((plan or {}).get("review_rounds") or 0) + 1))
         finding_owners = set(((policy_data or {}).get("later_round_source") or {}).get("finding_owners") or [])
         planning_depth = str((plan or {}).get("planning_depth") or "BOUNDED")
         raw_mods = (plan or {}).get("changed_modules") or (plan or {}).get("expected_modules") or []
         mod_count = len(raw_mods) if isinstance(raw_mods, list) and raw_mods else 1
         for role in reviewers:
-            efforts[role] = reviewer_effort_for(
-                role,
-                surfaces=surfaces,
-                severity=severity,
-                round_number=round_number,
-                is_finding_owner=(role in finding_owners),
-                planning_depth=planning_depth,
-                changed_modules_count=mod_count,
-            )
+            if isinstance(explicit_efforts, dict) and str(explicit_efforts.get(role) or "").upper() in ("NORMAL", "DEEP", "MAX"):
+                efforts[role] = str(explicit_efforts[role]).upper()
+            else:
+                efforts[role] = reviewer_effort_for(
+                    role,
+                    surfaces=surfaces,
+                    severity=severity,
+                    round_number=round_number,
+                    is_finding_owner=(role in finding_owners),
+                    planning_depth=planning_depth,
+                    changed_modules_count=mod_count,
+                )
     except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
         for role in reviewers:
-            efforts[role] = "DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"
+            efforts[role] = "DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"
     return efforts
 
 
@@ -553,17 +621,18 @@ def _resolve_policy(
             raise ValidationError(f"unknown reviewer role '{role}'")
         requested = policy["overrides"].get(role, policy["default"])
         if host_norm == "antigravity" and requested != "inherit":
-            effort_intent = efforts.get(role) or ("DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL")
+            effort_intent = efforts.get(role) or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
             resolved_model, thinking_level = resolve_antigravity_model(requested, role, effort_intent)
+            inherited_escalation = resolved_model == "inherit"
             selections[role] = {
                 "requested_model": requested,
                 "resolved_model": resolved_model,
                 "thinking_level": thinking_level,
                 "reasoning_intent": effort_intent,
-                "model_policy": "DEVELOPER_SELECTED_NATIVE",
+                "model_policy": "INHERIT_PARENT_BY_OMISSION" if inherited_escalation else "DEVELOPER_SELECTED_NATIVE",
                 "model_argument": None,
                 "native_arguments": {},
-                "agent_frontmatter_model": resolved_model,
+                "agent_frontmatter_model": None if inherited_escalation else resolved_model,
                 "actual_model": None,
                 "actual_model_status": "UNOBSERVED",
             }
@@ -588,7 +657,7 @@ def transfer_models(run: dict, host: str, reviewers: list[str], *, plan: dict | 
     frozen_models(run)
     old = run.get("review_models") or {}
     old_efforts = {
-        role: str(sel.get("reasoning_intent") or ("DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"))
+        role: str(sel.get("reasoning_intent") or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"))
         for role, sel in (old.get("reviewers") or {}).items()
         if isinstance(sel, dict)
     }
@@ -622,7 +691,7 @@ def frozen_models(run: dict) -> dict:
         if selection.get("native_arguments") != expected_args:
             raise ValidationError("invalid frozen native model arguments")
         if host_norm == "antigravity" and requested != "inherit":
-            intent = str(selection.get("reasoning_intent") or ("DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"))
+            intent = str(selection.get("reasoning_intent") or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"))
             exp_resolved, exp_thinking = resolve_antigravity_model(requested, role, intent)
             if selection.get("resolved_model") != exp_resolved or selection.get("thinking_level") != exp_thinking:
                 raise ValidationError("invalid frozen Antigravity resolved model or thinking level")
@@ -656,14 +725,15 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
 
     if host_norm == "antigravity":
         from antigravity_runtime import native_model_metadata
+        expected_resolved = selection.get("resolved_model")
+        effective_inherits = requested == "inherit" or expected_resolved == "inherit"
         try:
             observed = native_model_metadata(Path(identity["transcript_path"])) if identity.get("transcript_path") else {}
         except ValidationError:
-            if requested != "inherit":
+            if not effective_inherits:
                 raise
-            observed = {}  # Legacy inheritance requires no invented native proof.
-        expected_resolved = selection.get("resolved_model")
-        if requested != "inherit":
+            observed = {}  # Parent inheritance requires no invented native proof.
+        if not effective_inherits:
             if not observed:
                 raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native execution model metadata; frontmatter is configuration only")
             # The native runtime ID omits thinking and may use a backend suffix.
@@ -671,7 +741,7 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             family = re.sub(r"-(?:fast|low|medium|high|tiered)$", "", str(expected_resolved))
             valid_configured = {expected_resolved, f"{family}-tiered"}
             if observed.get("host_configured_model") not in valid_configured or any(
-                not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered))?", m) and m != expected_resolved
+                not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?", m) and m != expected_resolved
                 for m in observed.get("host_reported_models", [])
             ):
                 raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} native execution does not match {expected_resolved}")
@@ -714,7 +784,7 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
 
 def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
     selection = frozen_models(run).get(role)
-    if not selection or selection["requested_model"] == "inherit":
+    if not selection or selection["requested_model"] == "inherit" or selection.get("resolved_model") == "inherit":
         return
     host_norm = str(run.get("review_host") or "").strip().lower()
     if host_norm == "antigravity":
@@ -734,7 +804,7 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen Antigravity model evidence for {role}")
         native = {key: evidence[key] for key in ("execution_id", "host_configured_model", "host_reported_models", "native_metadata_source") if key in evidence}
         if evidence["native_metadata_sha256"] != canonical_sha256(native) or any(
-            not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered))?", m) and m != selection.get("resolved_model")
+            not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?", m) and m != selection.get("resolved_model")
             for m in evidence["host_reported_models"]
         ):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: native model evidence integrity mismatch for {role}")
@@ -759,7 +829,7 @@ def effective_reviewer_model(selection: dict | None) -> str:
     actual = str(selection.get("actual_model") or "").strip()
     if resolved and resolved != "inherit":
         return resolved
-    if requested != "inherit":
+    if requested not in ("inherit", "risk-hybrid"):
         return actual or requested
     if actual:
         return f"inherit ({actual})"
@@ -817,12 +887,17 @@ def build_antigravity_model_prompt(
         for role in reviewers
     }
     options = []
+    risk_hybrid_preview = {
+        role: resolve_antigravity_model("risk-hybrid", role, efforts.get(role, "NORMAL"))[0]
+        for role in reviewers
+    }
     for key in (
         "flash-dynamic-task",
         "flash-dynamic-once",
         "inherit-task",
         "inherit-once",
         "hybrid-smart-task",
+        "risk-hybrid-task",
     ):
         item = ANTIGRAVITY_INTERACTIVE_CHOICES[key]
         options.append({
@@ -846,6 +921,7 @@ def build_antigravity_model_prompt(
         "question_en": "Choose the reviewer model and thinking level before launching reviewers:",
         "flash_dynamic_resolution": flash_preview,
         "hybrid_smart_resolution": hybrid_preview,
+        "risk_hybrid_resolution": risk_hybrid_preview,
         "options": options,
         "choices": options,
     }
@@ -1093,8 +1169,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", "--task-id", dest="task")
     parser.add_argument("--host")
-    parser.add_argument("--choice", help="Interactive choice ID (e.g. flash-dynamic-task, flash-dynamic-once, inherit-task, inherit-once, hybrid-smart-task)")
-    parser.add_argument("--preset", choices=("flash-dynamic", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
+    parser.add_argument("--choice", help="Interactive choice ID (e.g. risk-hybrid-task, flash-dynamic-task, flash-dynamic-once, inherit-task, inherit-once, hybrid-smart-task)")
+    parser.add_argument("--preset", choices=("flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
     parser.add_argument("--scope", choices=("project", "task", "run"), default=None, help="Policy persistence scope (project, task, or run/once)")
     parser.add_argument("--default", default="inherit", help="Default reviewer model or model@effort")
     parser.add_argument("--reviewer", action="append", default=[], metavar="ROLE=MODEL")
@@ -1143,8 +1219,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             if str(host).strip().lower() == "antigravity":
                 result["dispatch_hint"] = (
-                    "When calling invoke_subagent, pass Model='flash' for every reviewer whose model in reviewer_models is gemini-3.8-flash-*, "
-                    "and omit Model (INHERIT_PARENT_BY_OMISSION) for reviewers set to inherit."
+                    "When calling invoke_subagent, pass Model='flash' for every reviewer whose model in reviewer_models contains 'flash', "
+                    "pass Model='pro' for every reviewer whose model contains 'pro', "
+                    "and omit Model (INHERIT_PARENT_BY_OMISSION) for inherit, argon, or carbon reviewers."
                 )
         else:
             policy, source = load_policy(repo, args.task)

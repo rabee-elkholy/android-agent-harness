@@ -71,7 +71,7 @@ def _configured_device_verification_mode() -> str:
     try:
         from _product import DEVICE_VERIFICATION_MODE
         mode = str(DEVICE_VERIFICATION_MODE or "").strip().lower()
-    except Exception:
+    except (ImportError, TypeError, ValueError, AttributeError):
         mode = "manual_only"
 
     if mode not in {
@@ -102,6 +102,56 @@ def _is_visual_compose(classification: dict) -> bool:
         return classification.get("severity") == "LOW" and "BUSINESS_LOGIC" not in (classification.get("surfaces") or [])
     reasons = compose_info.get("reasons") or []
     return any("VISUAL" in str(r).upper() for r in reasons)
+
+
+def _has_heavy_persistence(classification: dict, surfaces: set[str]) -> bool:
+    """True when Room schema or non-preference database/proto persistence is touched."""
+    if "ROOM_SCHEMA" in surfaces:
+        return True
+    if "PERSISTENCE" not in surfaces:
+        return False
+    details = classification.get("details") or {}
+    p_info = details.get("PERSISTENCE")
+    if not isinstance(p_info, dict):
+        return True
+    reasons = {str(r) for r in (p_info.get("reasons") or []) if r}
+    if not reasons:
+        return True
+    lightweight_reasons = {"PREFERENCES_PERSISTENCE", "PREFERENCES_PERSISTENCE_CONTEXT"}
+    return not (reasons <= lightweight_reasons)
+
+
+def _is_structured_coroutines_only(classification: dict) -> bool:
+    """True when COROUTINES was classified purely from structured suspend/Flow usage without dispatchers or blocking/unstructured primitives."""
+    details = classification.get("details") or {}
+    c_info = details.get("COROUTINES")
+    if not isinstance(c_info, dict):
+        return False
+    reasons = {str(r) for r in (c_info.get("reasons") or []) if r}
+    return "COROUTINE_STRUCTURED_ONLY" in reasons and "COROUTINE_DISPATCHER_OR_HAZARD" not in reasons
+
+
+def _is_isolated_private_logic_delta(classification: dict, surfaces: set[str]) -> bool:
+    """True when a single-file <=25-line edit touches only private helper implementation without contract/UI/schema surfaces."""
+    if int(classification.get("changed_files") or 0) != 1:
+        return False
+    changed_lines = int(classification.get("changed_lines") or 0)
+    if changed_lines <= 0 or changed_lines > 25:
+        return False
+    if bool(classification.get("has_delete_or_rename")):
+        return False
+    if not (surfaces <= {"BUSINESS_LOGIC", "COROUTINES", "TEST_ONLY", "DOCS"}):
+        return False
+    details = classification.get("details") or {}
+    b_info = details.get("BUSINESS_LOGIC")
+    if not isinstance(b_info, dict):
+        return False
+    b_reasons = {str(r) for r in (b_info.get("reasons") or []) if r}
+    if "ISOLATED_PRIVATE_EDIT" not in b_reasons:
+        return False
+    if len(b_info.get("files") or []) != 1:
+        return False
+    return True
 
 
 ANALYTICS_SYMBOL_RE = re.compile(
@@ -303,7 +353,7 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         tier_reason = "CRITICAL_SURFACE" if surfaces & (CRITICAL_SURFACES | {"NATIVE_CODE", "MANIFEST_PERMISSION"}) else "CRITICAL_SEVERITY"
         risk_tier = "T5_CRITICAL"
         risk_lane = "CRITICAL"
-    elif surfaces & {"ROOM_SCHEMA", "PERSISTENCE", "DEVICE_API"}:
+    elif ("DEVICE_API" in surfaces) or _has_heavy_persistence(classification, surfaces):
         tier_reason = "DATA_OR_DEVICE_SURFACE"
         risk_tier = "T4_DATA_DEVICE"
         risk_lane = "DATA"
@@ -346,6 +396,19 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         require_reviewers({"arch-regression-reviewer-agent"}, "CROSS_MODULE_CHANGE")
 
     is_conflict_task = str(task_kind or (plan or {}).get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
+    if (
+        not micro
+        and not is_conflict_task
+        and risk_tier in ("T1_LOW_RISK", "T2_FEATURE", "T3_SUBSYSTEM")
+        and "security-perf-reviewer-agent" in reviewers
+        and reviewer_reasons.get("security-perf-reviewer-agent") == {"COROUTINES"}
+        and _is_structured_coroutines_only(classification)
+        and "bug-test-reviewer-agent" in reviewers
+    ):
+        reviewers.discard("security-perf-reviewer-agent")
+        reviewer_reasons.pop("security-perf-reviewer-agent", None)
+        reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).add("STRUCTURED_COROUTINES_COVERED")
+
     if micro or is_conflict_task:
         reviewers.clear()
     elif (
@@ -355,13 +418,26 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         and arch_intent not in ("MIGRATION", "NEW_SUBSYSTEM")
         and changed_modules_count <= 1
         and "UNKNOWN" not in surfaces
-        and not (surfaces & (CRITICAL_SURFACES | {"MANIFEST_PERMISSION", "BUILD_CONFIG", "NATIVE_CODE", "DEVICE_API", "ROOM_SCHEMA", "PERSISTENCE"}))
+        and not (surfaces & (CRITICAL_SURFACES | {"MANIFEST_PERMISSION", "BUILD_CONFIG", "NATIVE_CODE", "DEVICE_API", "ROOM_SCHEMA"}))
+        and not _has_heavy_persistence(classification, surfaces)
         and "bug-test-reviewer-agent" in reviewers
         and "arch-regression-reviewer-agent" in reviewers
     ):
         reviewers.discard("arch-regression-reviewer-agent")
         merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
         reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"LEAN_PROFILE_CONSOLIDATED"})
+    elif (
+        risk_tier == "T2_FEATURE"
+        and planning_depth != "ARCHITECTURAL"
+        and arch_intent not in ("MIGRATION", "NEW_SUBSYSTEM")
+        and changed_modules_count <= 1
+        and "UNKNOWN" not in surfaces
+        and _is_isolated_private_logic_delta(classification, surfaces)
+        and reviewers == {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"}
+    ):
+        reviewers.discard("arch-regression-reviewer-agent")
+        merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
+        reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"ISOLATED_PRIVATE_DELTA_CONSOLIDATED"})
     if "UNKNOWN" in surfaces and not is_conflict_task:
         reviewers.clear()
         if unknown_resolved:

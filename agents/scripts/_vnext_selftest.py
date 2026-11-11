@@ -1791,8 +1791,9 @@ class LifecycleTests(RepoCase):
             self.assertIn("view_file", text)
             self.assertNotIn("write_to_file", text)
             self.assertNotIn("replace_file_content", text)
-            self.assertIn("run_command", text)
-            self.assertIn("restricted by the native hook", text)
+            self.assertNotIn("- run_command", text)
+            self.assertNotIn("- list_dir", text)
+            self.assertIn("Reviewer fast-execution contract:", text)
             self.assertNotIn("model:", text.lower())
 
     def test_P0_02_antigravity_custom_agents_uninstalled(self) -> None:

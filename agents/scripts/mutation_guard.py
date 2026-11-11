@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -381,7 +381,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return True
         if args in (["device", "status"], ["device", "ios-status"]):
             return True
-        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"]):
+        if args[:1] in (["version"], ["doctor"], ["explain"], ["update-info"], ["chat-steps"], ["commands"], ["policy"], ["delegate-plan"]):
             return True
         if args[:1] == ["report-issue"] and "--submit" not in args:
             return True
@@ -629,12 +629,15 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
         if rel_posix in external_writes:
             continue
 
+        plan_surfs = set(plan.get("expected_surfaces") or [])
+        skip_surface_drift = bool(plan_surfs - {"LOCALIZATION", "DOCS", "TEST_ONLY"}) and not rel_posix.endswith("AndroidManifest.xml")
         try:
             candidate_res = classify(
                 root,
                 task_changes=[{"path": rel_posix}],
                 candidate_paths=[rel_posix],
                 progress=False,
+                include_type_index=not skip_surface_drift,
             )
             surfaces = candidate_res.get("surfaces") or []
         except Exception:

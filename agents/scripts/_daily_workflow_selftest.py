@@ -7526,7 +7526,9 @@ class ReviewOrchestrationTests(unittest.TestCase):
         enf = detect(self.repo, ["antigravity"])
         self.assertEqual("RULE_ENFORCED", enf["mutation_boundary_by_host"].get("antigravity"))
         # Empty JSON is no longer sufficient evidence of installed interception.
+        from install_tool_adapters import sync_hooks_json
         shutil.copyfile(KIT / "agents/hooks.json", self.repo / ".agents/hooks.json")
+        sync_hooks_json(self.repo, sys.executable, dry_run=False)
         (self.repo / ".agents/scripts").mkdir(parents=True, exist_ok=True)
         shutil.copyfile(KIT / "agents/scripts/pre_tool_safety.py", self.repo / ".agents/scripts/pre_tool_safety.py")
         enf = detect(self.repo, ["antigravity"])

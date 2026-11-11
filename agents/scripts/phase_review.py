@@ -860,9 +860,21 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
             *val_lines,
             "",
-            "## 2. Review Package Reference",
-            f"`{package_path}`",
-            "- **Parallel Tool Batching (Fast Execution)**: Issue multiple `view_file` / `read_file` calls in parallel within a single turn (4-8 ranges/files at once) rather than one read per turn.",
+            "## 2. Review Package Reference & Strict 2-Turn Cap",
+            f"Canonical phase package path: `{package_path}`",
+            *(
+                [
+                    "- **ZERO-HOP FAST PATH (INLINED BELOW)**: The complete phase review package is embedded below. **Do NOT call `view_file` on `phase-review-package.md`**; emit `HARNESS_REVIEW_RESULT_V2` immediately (or after at most ONE batched parallel `view_file` turn if caller verification is needed).",
+                    "",
+                    "--- BEGIN INLINED PHASE REVIEW PACKAGE ---",
+                    content,
+                    "--- END INLINED PHASE REVIEW PACKAGE ---",
+                ]
+                if len(content.encode("utf-8")) <= 12288 and content.count("\n") <= 260
+                else [
+                    "- **Strict 2-Turn Cap & Parallel Tool Batching**: Read the phase package, issue at most ONE parallel `view_file` batch (4-8 ranges/files at once) if caller verification is needed, and emit `HARNESS_REVIEW_RESULT_V2` immediately on the next turn.",
+                ]
+            ),
             "- **Self-Contained Plan Context**: Never search for or read `plan.md` or `plan.json`; Section 1 above already contains the approved phase objective and any recorded `plan-notes`.",
             "",
             "## 3. Structured Result Reporting Protocol (HARNESS_REVIEW_RESULT_V2)",
@@ -1679,6 +1691,14 @@ def _main(argv: list[str] | None = None) -> int:
     complete_cmd.add_argument("--host")
     complete_cmd.add_argument("--response-file", help="Unchanged reviewer response for hosts without a trusted transcript source; on Claude Code the subagent transcript path (JSONL)")
 
+    complete_all_cmd = sub.add_parser("complete-all")
+    complete_all_cmd.add_argument("--repo", default=".")
+    complete_all_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
+    complete_all_cmd.add_argument("--phase-id", required=True)
+    complete_all_cmd.add_argument("--reviewer", action="append", default=[])
+    complete_all_cmd.add_argument("--execution-id", action="append", default=[])
+    complete_all_cmd.add_argument("--host")
+
     finalize_cmd = sub.add_parser("finalize")
     finalize_cmd.add_argument("--repo", default=".")
     finalize_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
@@ -1767,6 +1787,75 @@ def _main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError, HarnessError):
             pass
         print(json.dumps(results[0] if len(results) == 1 else {"completed": results}, indent=2))
+        return 0
+    elif args.subcommand == "complete-all":
+        tdir = task_dir(repo, args.task_id)
+        run_file = phase_run_file(tdir, args.phase_id)
+        if not run_file.is_file():
+            raise ValidationError(f"no active phase review run found for phase '{args.phase_id}'")
+        run_meta = read_json(run_file)
+        run_host = str(run_meta.get("review_host") or args.host or "").strip().lower()
+        explicit_revs = list(args.reviewer or [])
+        explicit_eids = list(args.execution_id or [])
+        if len(explicit_revs) != len(explicit_eids):
+            raise ValidationError(f"--reviewer count ({len(explicit_revs)}) must match --execution-id count ({len(explicit_eids)})")
+        explicit_map = dict(zip(explicit_revs, explicit_eids))
+
+        if has_trusted_review_source(run_host):
+            from antigravity_runtime import candidate_brain_roots
+            from reviewer_host import reviewer_context
+            for brain_root in candidate_brain_roots():
+                if not brain_root.is_dir():
+                    continue
+                try:
+                    recent_children = sorted(
+                        (d for d in brain_root.iterdir() if d.is_dir() and not d.is_symlink()),
+                        key=lambda d: d.stat().st_mtime_ns,
+                        reverse=True,
+                    )[:32]
+                except OSError:
+                    continue
+                for child_dir in recent_children:
+                    try:
+                        reviewer_context(repo, child_dir.name, bind=True)
+                    except (OSError, ValueError, KeyError, ValidationError):
+                        continue
+
+        ok, err_msg, ledger = load_phase_ledger(tdir, args.phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
+        if not ok or not ledger:
+            raise ValidationError(f"phase review ledger invalid: {err_msg}")
+        selected = list(run_meta.get("selected_reviewers") or list((ledger.get("reviewers") or {}).keys()))
+        completed_results = []
+        for r_role in selected:
+            r_entry = (ledger.get("reviewers") or {}).get(r_role) or {}
+            if r_entry.get("state") == REVIEW_COMPLETED:
+                continue
+            eid = explicit_map.get(r_role) or str(r_entry.get("execution_id") or "").strip()
+            if not eid:
+                continue
+            if has_trusted_review_source(run_host):
+                from record_review import wait_for_live_subagent_transcript
+                from review_sources import resolve_trusted_review_source
+                from reviewer_host import _steps
+                wait_for_live_subagent_transcript(run_host, eid)
+                t_path = resolve_trusted_review_source(run_host, eid)
+                if not t_path or not t_path.is_file():
+                    continue
+                m_steps = [row for row in _steps(t_path) if row.get("source") == "MODEL" and row.get("type") == "PLANNER_RESPONSE"]
+                last_step = m_steps[-1] if m_steps else {}
+                if not last_step.get("content") or last_step.get("tool_calls"):
+                    continue
+            res = complete_phase_review(repo, args.task_id, args.phase_id, r_role, eid, host=args.host or run_host)
+            completed_results.append(res)
+
+        ok2, _, ledger2 = load_phase_ledger(tdir, args.phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
+        revs2 = (ledger2 or {}).get("reviewers") or {}
+        if ok2 and selected and all(revs2.get(r, {}).get("state") == REVIEW_COMPLETED for r in selected):
+            final_res = finalize_phase_review(repo, args.task_id, args.phase_id)
+            print(json.dumps(final_res, indent=2))
+            return 0
+        waiting = [r for r in selected if revs2.get(r, {}).get("state") != REVIEW_COMPLETED]
+        print(json.dumps({"status": "PARTIAL", "completed": completed_results, "waiting": waiting}, indent=2))
         return 0
     elif args.subcommand == "finalize":
         tdir = task_dir(repo, args.task_id)

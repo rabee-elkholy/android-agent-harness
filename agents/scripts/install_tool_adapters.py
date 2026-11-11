@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _repo_files import ensure_local_git_privacy  # noqa: E402
-from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, CORE_ROUTED_REVIEWERS  # noqa: E402
+from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, CORE_ROUTED_REVIEWERS, CORE_UTILITY_AGENTS  # noqa: E402
 
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
@@ -111,6 +111,8 @@ EMPTY_DIR_CANDIDATES = (
     ".agents/agents/security-perf-reviewer-agent",
     ".agents/agents/arch-regression-reviewer-agent",
     ".agents/agents/spec-compliance-agent",
+    ".agents/agents/harness-scout-agent",
+    ".agents/agents/harness-worker-agent",
     ".agents/agents",
     ".amazonq/rules",
     ".amazonq",
@@ -414,11 +416,9 @@ def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
         f"{tools_block}\n"
         f"---\n\n"
         f"{prompt}\n"
-        "\nReviewer discovery: run_command is restricted by the native hook to "
-        "`python .agents/harness.py graph --find <symbol> --json`, "
-        "`graph --feature <name> --json`, and `task-context --file <path> --json` "
-        "or `task-context --symbol <name> --json`. Use these to expand a denied search. "
-        "Never run builds, tests, lifecycle commands, arbitrary shell, writes or reviewer orchestration.\n"
+        "\nReviewer fast-execution contract: Blast-radius topology and callers are pre-computed in your review brief/package. "
+        "Use at most ONE batched parallel `view_file` turn (4-8 files/ranges, max 2 hops) only when needed to verify a concrete claim, "
+        "then emit `HARNESS_REVIEW_RESULT_V2` immediately. Never run shell commands, builds, tests, writes, or sequential single-file reads.\n"
     )
 
 
@@ -459,7 +459,7 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
                 if src_scope != "default":
                     req_m = pol.get("overrides", {}).get(role, pol.get("default", "inherit"))
                     if req_m and req_m != "inherit":
-                        eff = "DEEP" if role in CRITICAL_HYBRID_REVIEWERS else "NORMAL"
+                        eff = "DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"
                         configured_model, _ = resolve_antigravity_model(req_m, role, eff)
         except Exception:
             configured_model = None
@@ -467,6 +467,18 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
             write_file(
                 dest,
                 antigravity_agent_markdown(data, model=configured_model),
+                dry_run=dry_run,
+                repo=repo,
+                merge_existing=False,
+            )
+        )
+    from delegation_policy import render_utility_agent_markdown
+    for u_role in CORE_UTILITY_AGENTS:
+        u_dest = repo / ".agents" / "agents" / u_role / "agent.md"
+        logs.append(
+            write_file(
+                u_dest,
+                render_utility_agent_markdown(u_role),
                 dry_run=dry_run,
                 repo=repo,
                 merge_existing=False,
@@ -525,7 +537,7 @@ def keep_set(selected: set[str]) -> set[str]:
         keep.update(TOOL_FILES[tool])
         keep.update(command_pack_rels(tool))
     if "antigravity" in selected:
-        for r in CORE_ROUTED_REVIEWERS:
+        for r in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
             keep.add(f".agents/agents/{r}/agent.md")
     return keep
 
@@ -573,7 +585,7 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
             logs.append(f"deleted {rel_s}")
     ag_agents_dir = repo / ".agents" / "agents"
     if "antigravity" not in selected:
-        for r in CORE_ROUTED_REVIEWERS:
+        for r in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
             path = ag_agents_dir / r / "agent.md"
             if not is_managed_file(path):
                 continue
@@ -587,7 +599,7 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
         for child in sorted(ag_agents_dir.iterdir()):
             if not child.is_dir():
                 continue
-            if "antigravity" in selected and child.name in CORE_ROUTED_REVIEWERS:
+            if "antigravity" in selected and child.name in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
                 continue
             path = child / "agent.md"
             if not is_managed_file(path):

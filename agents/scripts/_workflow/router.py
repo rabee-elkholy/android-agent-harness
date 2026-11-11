@@ -128,8 +128,6 @@ _FOLLOW_UP_ROTATION_CODES = frozenset({
 })
 _MID_TASK_ROTATION_CODES = frozenset({
     "BEGIN_NEXT_PHASE",
-    "PREPARE_VERIFICATION",
-    "RESUME_IMPLEMENTATION",
 })
 
 
@@ -293,6 +291,26 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             "on the untouched project, so the gate never counts them against this task."
         )
         action["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
+    if run_host == "antigravity" and not has_task_changes:
+        try:
+            from delegation_policy import evaluate_delegation_policy
+            bfe_existing = str((action.get("before_first_edit") or {}).get("command") or "")
+            adv = evaluate_delegation_policy(
+                repo,
+                task_id=task_id,
+                plan=plan,
+                router_action="IMPLEMENT_APPROVED_SCOPE",
+                before_first_edit_cmd=bfe_existing,
+            )
+            action["delegation_advisory"] = {
+                "strategy": adv.get("strategy"),
+                "recommended_subagent": adv.get("recommended_subagent"),
+                "worker_mode": adv.get("worker_mode"),
+                "target_files": adv.get("target_files"),
+                "reason": adv.get("reason"),
+            }
+        except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
+            pass
     return action
 
 

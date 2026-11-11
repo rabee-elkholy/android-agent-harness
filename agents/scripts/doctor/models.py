@@ -26,6 +26,7 @@ CORE_SCRIPTS = (
     "_vnext_common.py",
     "artifact_set.py",
     "change_classifier.py",
+    "delegation_policy.py",
     "delivery_manifest.py",
     "evidence_store.py",
     "final_verifier.py",

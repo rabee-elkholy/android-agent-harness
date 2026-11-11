@@ -44,6 +44,122 @@ DIAGNOSTIC_PROBE_PATTERN = re.compile(r"(?:\[HARNESS-PROBE\]|\bHARNESS_PROBE\b)"
 DEAD_CODE_WORKAROUND_PATTERN = re.compile(
     r"(?:\bif\s*\(\s*(?:true|false)\s*\)|\|\|\s*false\b|&&\s*true\b|\brun\s*\{\s*run\s*\{|\b(?:private\s+)?fun\s+(?:unusedHelper|_vmKeep|_signInKeep)\s*\()"
 )
+PENDING_INTENT_FACTORY_PATTERN = re.compile(
+    r"\bPendingIntent\s*\.\s*get(?:Activity|Activities|Service|Broadcast|ForegroundService)\s*\("
+)
+PENDING_INTENT_IMMUTABILITY_FLAG_RE = re.compile(
+    r"\b(?:FLAG_IMMUTABLE|FLAG_MUTABLE)\b"
+)
+SUSPEND_FUN_DECL_RE = re.compile(
+    r"\bsuspend\s+(?:(?:private|internal|public|protected|override|inline|operator|infix|tailrec|actual)\s+)*fun\b"
+)
+GENERIC_CATCH_DECL_RE = re.compile(
+    r"\bcatch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:kotlin\.|java\.lang\.)?(?:Exception|Throwable)\s*\)\s*\{"
+)
+
+
+def _strip_kotlin_comments_preserve_lines(text: str) -> str:
+    """Replace comments and string contents while preserving exact newline positions and braces outside strings/comments."""
+    pattern = r'("""[\s\S]*?"""|"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\'|//[^\r\n]*|/\*[\s\S]*?\*/)' 
+    return re.sub(
+        pattern.strip(),
+        lambda m: (
+            '""' + ("\n" * m.group(0).count("\n"))
+            if m.group(0).startswith(('"', "'"))
+            else ("\n" * m.group(0).count("\n"))
+        ),
+        text,
+    )
+
+
+def _extract_balanced_brace_body(clean_text: str, open_brace_index: int) -> tuple[str, int] | None:
+    """Given index right at '{', return (body_inside_braces, close_brace_index) or None if unbalanced."""
+    if open_brace_index < 0 or open_brace_index >= len(clean_text) or clean_text[open_brace_index] != "{":
+        return None
+    depth = 1
+    pos = open_brace_index + 1
+    n = len(clean_text)
+    while pos < n and depth > 0:
+        ch = clean_text[pos]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        pos += 1
+    if depth != 0:
+        return None
+    return clean_text[open_brace_index + 1:pos - 1], pos - 1
+
+
+def _find_suspend_cancellation_swallows(clean_text: str, modified_lines: set[int] | None) -> list[tuple[int, str]]:
+    """Detect catch(e: Exception|Throwable) inside suspend fun bodies that swallow CancellationException."""
+    findings: list[tuple[int, str]] = []
+    line_starts = [0]
+    for idx, ch in enumerate(clean_text):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+
+    def offset_to_line(offset: int) -> int:
+        lo, hi = 0, len(line_starts) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if line_starts[mid] <= offset:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return hi + 1
+
+    suspend_ranges: list[tuple[int, int]] = []
+    for m_sus in SUSPEND_FUN_DECL_RE.finditer(clean_text):
+        # Locate opening '{' of this suspend function header (before any top-level ';' or unbalanced brace)
+        pos = m_sus.end()
+        paren_depth = 0
+        open_brace = -1
+        while pos < len(clean_text):
+            ch = clean_text[pos]
+            if ch == "(":
+                paren_depth += 1
+            elif ch == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif paren_depth == 0 and ch == "{":
+                open_brace = pos
+                break
+            elif paren_depth == 0 and ch == "=":
+                # Single-expression suspend fun `suspend fun foo() = runCatching { ... }` or `try { ... } catch ...`
+                # Scan until next top-level declaration or end of expression block
+                break
+            pos += 1
+        if open_brace != -1:
+            extracted = _extract_balanced_brace_body(clean_text, open_brace)
+            if extracted is not None:
+                _, close_brace = extracted
+                suspend_ranges.append((open_brace, close_brace))
+
+    if not suspend_ranges:
+        return findings
+
+    for m_catch in GENERIC_CATCH_DECL_RE.finditer(clean_text):
+        catch_start = m_catch.start()
+        if not any(r_start <= catch_start <= r_end for r_start, r_end in suspend_ranges):
+            continue
+        catch_line = offset_to_line(catch_start)
+        open_brace = m_catch.end() - 1
+        extracted = _extract_balanced_brace_body(clean_text, open_brace)
+        if extracted is None:
+            continue
+        catch_body, close_brace = extracted
+        catch_end_line = offset_to_line(close_brace)
+        if modified_lines is not None:
+            if not any(ln in modified_lines for ln in range(catch_line, catch_end_line + 1)):
+                continue
+        caught_var = m_catch.group(1)
+        rethrows_cancellation = bool(
+            re.search(r"\bCancellationException\b|\bensureActive\s*\(|\byield\s*\(", catch_body)
+            or re.search(rf"\bthrow\s+{re.escape(caught_var)}\b", catch_body)
+        )
+        if not rethrows_cancellation:
+            findings.append((catch_line, caught_var))
+    return findings
 CLASS_ENTRY_PATTERN = re.compile(
     r"^(?:(?:public|internal|open)\s+)?class\s+\w+[^{]*:\s*(?:BaseComposeFragment|BaseFragment|Fragment|AppCompatActivity|ComponentActivity|FragmentActivity|DialogFragment|BottomSheetDialogFragment)\b"
 )
@@ -395,6 +511,41 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                 "msg": f"Dead-code edit workaround detected in production code: '{trimmed}'. Cleanly edit or delete the target code block instead of leaving tautological branches or dummy functions.",
             })
 
+        if not is_test:
+            for m_pi in PENDING_INTENT_FACTORY_PATTERN.finditer(line):
+                if _in_string_or_comment(line, m_pi.start()):
+                    continue
+                # Extract balanced call argument window across up to 10 lines
+                call_window_lines = [line[m_pi.start():]]
+                paren_balance = 0
+                found_close = False
+                for w_idx in range(idx - 1, min(len(lines), idx + 10)):
+                    seg = lines[w_idx][m_pi.start():] if w_idx == idx - 1 else lines[w_idx]
+                    if w_idx > idx - 1:
+                        call_window_lines.append(seg)
+                    for c_pos, ch in enumerate(seg):
+                        abs_pos = (m_pi.start() + c_pos) if w_idx == idx - 1 else c_pos
+                        if _in_string_or_comment(lines[w_idx], abs_pos):
+                            continue
+                        if ch == "(":
+                            paren_balance += 1
+                        elif ch == ")":
+                            paren_balance -= 1
+                            if paren_balance <= 0:
+                                found_close = True
+                                break
+                    if found_close:
+                        break
+                call_window = "\n".join(call_window_lines)
+                if found_close and not PENDING_INTENT_IMMUTABILITY_FLAG_RE.search(call_window):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": idx,
+                        "type": "PENDING_INTENT_MISSING_IMMUTABILITY",
+                        "msg": "PendingIntent created without explicit FLAG_IMMUTABLE or FLAG_MUTABLE (crashes on Android 12+ API 31+ and risks implicit Intent hijacking). Prefer PendingIntent.FLAG_IMMUTABLE.",
+                    })
+                    break
+
         if STATE_CLASS_PATTERN.search(trimmed) and (has_compose_imports or has_compose_function_in_diff):
             has_ann = "@Immutable" in trimmed or "@Stable" in trimmed
             if not has_ann:
@@ -503,6 +654,16 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                         "type": "MISSING_COMPOSE_PREVIEW",
                         "msg": f"'{file_path.name}' needs @Preview composable function{extra}",
                     })
+
+    if not is_test:
+        line_preserved_clean = _strip_kotlin_comments_preserve_lines(text)
+        for catch_line, caught_var in _find_suspend_cancellation_swallows(line_preserved_clean, modified_lines):
+            issues.append({
+                "file": str(file_path),
+                "line": catch_line,
+                "type": "SUSPEND_CANCELLATION_SWALLOWED",
+                "msg": f"Generic catch({caught_var}: Exception/Throwable) inside suspend function swallows structured concurrency cancellation. Add 'if ({caught_var} is CancellationException) throw {caught_var}' (or currentCoroutineContext().ensureActive()) before handling.",
+            })
 
     clean_fragment_text = re.sub(
         r'("""[\s\S]*?"""|"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\'|//[^\r\n]*|/\*[\s\S]*?\*/)',

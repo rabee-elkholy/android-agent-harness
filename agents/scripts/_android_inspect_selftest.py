@@ -231,5 +231,37 @@ class GradleOutputTests(unittest.TestCase):
         self.assertLess(len(summary), 15000)
 
 
+    def test_model_decision_rules_and_worktree_daemon_guard(self):
+        import shutil
+        from unittest import mock
+        from antigravity_contract import rule_errors
+        import run_gradle_task as runner
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shutil.copytree(KIT / "agents/rules", root / "rules")
+            self.assertEqual([], rule_errors(root))
+            md_rule = root / "rules/conflict-and-recovery.md"
+            orig = md_rule.read_text(encoding="utf-8")
+            md_rule.write_text(orig.replace("description:", "summary:"), encoding="utf-8")
+            errs = rule_errors(root)
+            self.assertTrue(any("conflict-and-recovery.md: missing description" in e for e in errs), errs)
+
+            # Normal checkout (.git directory) keeps daemon; linked worktree (.git file) injects --no-daemon
+            normal_repo = root / "normal_repo"
+            (normal_repo / ".git").mkdir(parents=True)
+            self.assertFalse(runner.is_linked_git_worktree(normal_repo))
+            self.assertEqual(["--console=plain", "test"], runner.with_plain_console(["test"], repo=normal_repo))
+
+            wt_repo = root / "worktree_repo"
+            wt_repo.mkdir(parents=True)
+            (wt_repo / ".git").write_text("gitdir: /path/to/main/.git/worktrees/worker-1\n", encoding="utf-8")
+            self.assertTrue(runner.is_linked_git_worktree(wt_repo))
+            self.assertEqual(["--console=plain", "--no-daemon", "test"], runner.with_plain_console(["test"], repo=wt_repo))
+            self.assertEqual(["--console=plain", "--daemon", "test"], runner.with_plain_console(["--daemon", "test"], repo=wt_repo))
+            with mock.patch.dict(os.environ, {"HARNESS_WORKTREE_KEEP_DAEMON": "1"}):
+                self.assertEqual(["--console=plain", "test"], runner.with_plain_console(["test"], repo=wt_repo))
+
+
 if __name__ == '__main__':
     unittest.main()

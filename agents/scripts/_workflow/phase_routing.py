@@ -487,7 +487,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
     except (OSError, ValueError, _engine.ValidationError):
         pass
     if not phase_changes:
-        return {
+        act_obj: dict[str, Any] = {
             "code": "IMPLEMENT_APPROVED_SCOPE",
             "kind": "MODEL_ACTION",
             "command": "",
@@ -496,6 +496,26 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
             "inputs": {"repo": ".", "task_id": task_id, "current_phase_id": phase_id},
             "expected": {},
         }
+        if run_host == "antigravity":
+            try:
+                from delegation_policy import evaluate_delegation_policy
+                adv = evaluate_delegation_policy(
+                    repo,
+                    task_id=task_id,
+                    plan=plan,
+                    router_action="IMPLEMENT_APPROVED_SCOPE",
+                    before_first_edit_cmd="",
+                )
+                act_obj["delegation_advisory"] = {
+                    "strategy": adv.get("strategy"),
+                    "recommended_subagent": adv.get("recommended_subagent"),
+                    "worker_mode": adv.get("worker_mode"),
+                    "target_files": adv.get("target_files"),
+                    "reason": adv.get("reason"),
+                }
+            except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
+                pass
+        return act_obj
 
     return {
         "code": "CHECKPOINT_PHASE",

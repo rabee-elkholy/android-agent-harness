@@ -2789,6 +2789,68 @@ class CommandEfficiencySelftest(unittest.TestCase):
         self.assertEqual(["workflow.py", "preflight_check.py"], [name for name, _ in calls])
         self.assertIn("NO_VERIFICATION_PROGRESS", text)
 
+    def test_verification_steps_executes_specialized_android_gates(self):
+        actions = [
+            {"code": "PREPARE_VERIFICATION"},
+            {"code": "RUN_PREFLIGHT"},
+            {"code": "RUN_CHECK_STRINGS"},
+            {"code": "RUN_FAST_KT_LINT"},
+            {"code": "RUN_ROOM_GUARD"},
+            {"code": "RUN_UNIT_TESTS"},
+            {"code": "BUILD_REVIEW_PACKAGE"},
+            {"code": "COMPLETE_TASK", "kind": "HARNESS_COMMAND"},
+        ]
+        code, calls, text = self._run_verification_steps(actions)
+        self.assertEqual(0, code, text)
+        self.assertEqual(
+            [
+                "workflow.py",
+                "preflight_check.py",
+                "check_strings.py",
+                "fast_kt_lint.py",
+                "room_guard.py",
+                "run_tests_gate.py",
+                "review_package.py",
+            ],
+            [script for script, _ in calls],
+        )
+        self.assertIn('"code": "COMPLETE_TASK"', text)
+
+    def test_pre_invocation_reminder_silences_reviewer_and_dedups_invocation_one(self):
+        import contextlib
+        import io
+        import pre_invocation_reminder
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            # 1. Reviewer subagent conversation must receive "{}" and never call _update_notice
+            buf_rev = io.StringIO()
+            with mock.patch.object(pre_invocation_reminder, "REPO", repo_dir),                  mock.patch.object(pre_invocation_reminder, "_is_reviewer_conversation", return_value=True),                  mock.patch.object(pre_invocation_reminder, "_update_notice", side_effect=AssertionError("must not check updates in reviewer")),                  mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 0, "conversationId": "rev-sub-1"}))),                  contextlib.redirect_stdout(buf_rev):
+                pre_invocation_reminder.main()
+            self.assertEqual({}, json.loads(buf_rev.getvalue()))
+
+            # 2. Parent conversation running 0-indexed invocation 0 then 1 only dumps initial notice once!
+            notice_calls = []
+            def fake_notice():
+                notice_calls.append(1)
+                return "NOTICE-ONCE"
+
+            with mock.patch.object(pre_invocation_reminder, "REPO", repo_dir),                  mock.patch.object(pre_invocation_reminder, "_is_reviewer_conversation", return_value=False),                  mock.patch.object(pre_invocation_reminder, "_current_task_state", return_value=("t-1", "IMPLEMENTING")),                  mock.patch.object(pre_invocation_reminder, "_update_notice", side_effect=fake_notice):
+                b0 = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 0, "conversationId": "parent-conv"}))),                      contextlib.redirect_stdout(b0):
+                    pre_invocation_reminder.main()
+                m0 = json.loads(b0.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertIn("NOTICE-ONCE", m0)
+
+                b1 = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1, "conversationId": "parent-conv"}))),                      contextlib.redirect_stdout(b1):
+                    pre_invocation_reminder.main()
+                m1 = json.loads(b1.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertNotIn("NOTICE-ONCE", m1)
+                self.assertIn("State unchanged", m1)
+                self.assertEqual(1, len(notice_calls))
+
     def test_new_public_commands_have_real_cli_parsers(self):
         import harness_cli
         from unittest import mock

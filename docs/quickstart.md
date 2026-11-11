@@ -22,7 +22,7 @@ Key configuration defaults for Google Antigravity:
 - **AI Host**: Select `Google Antigravity` (`antigravity`).
 - **Clean Install Only**: This architecture version supports deterministic clean installations.
 - **Reviewer Call Safety Cap**: Recommended clean-install value = `20` (acts as a safety ceiling, not a target).
-- **Installed Reviewer Subagents**: Four dedicated custom reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) are automatically generated under `.agents/agents/<reviewer>/agent.md`.
+- **Installed Custom Subagents**: Four dedicated specialist reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) plus two quota-saving `gemini-3.8-flash-medium` utility subagents (`harness-scout-agent`, `harness-worker-agent`) are automatically generated under `.agents/agents/<role>/agent.md`.
 - **Model & Reasoning**: Inherited by omission from the parent agent; no manual model or reasoning configuration required.
 
 ## Terminal installation (alternative)
@@ -45,12 +45,12 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan (evaluating Zero-Decision readiness, codebase reuse candidates, path grounding, and multi-phase module DAG ordering via `task plan-check`), and waits for explicit developer approval before any file modification.
 2. **Approval**: Approve the plan in chat (reply with an approval such as "approve", in any language). Single intake approval covers all phases in a multi-phase task without pauses.
-3. **Implementation**: The agent applies only approved changes. Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
+3. **Implementation & Risk-Gated Flash Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — delegating `T0–T3` non-sensitive multi-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-3.8-flash-medium`) while keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash
    python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity
    ```
-5. **Parallel Reviewers**: Routed specialist subagents run concurrently via Antigravity `invoke_subagent` following Review Protocol V2. Structured results are recorded via `review complete` and aggregated via `review finalize`.
+5. **Parallel Reviewers**: Routed specialist subagents run concurrently via Antigravity `invoke_subagent` following Review Protocol V2. Structured results are ingested and finalized in one turn via `review complete-all --task <id>` (or individually via `review complete` and `review finalize`).
 6. **Assemble & Device**: After reviews pass cleanly, the agent builds the debug APK (`assemble`) and deploys to a physical device (`device install-start`). Startup checks verify the installed APK and foreground app/user; an optional `--expect-resource-id` asserts a known visible element. The walkthrough remains required. See [verification hardening](verification-hardening.md).
 7. **Delivery**: When the lifecycle state is unclear, `python .agents/harness.py task status --repo . --task-id <id> --next` prints the authoritative next action. The agent never performs automatic git commits or pushes.
 8. **Self-Healing, Living Context Drift, PM Sync & Incident Consent**: If task state becomes stale after an edit, `python .agents/harness.py task heal --task-id <id> --prepare-fresh-run` restores the nearest valid checkpoint. Use `python .agents/harness.py context drift-report` to check `project-notes.md` and `developer-instructions.json` for stale file or module references after refactors. External PM MCP updates (`zoho-projects_mcp`, Jira, Linear, etc.) require showing a preview and recording `python .agents/harness.py pm authorize --proof-reference "<phrase>"`. Unexpected harness exceptions save organized Zero-PII reports under `.agents/state/incidents/` and ask via `ask_question` before submitting to GitHub.

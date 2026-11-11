@@ -237,6 +237,14 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
         content = agent_file.read_text(encoding="utf-8")
         from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
         from review_models import ANTIGRAVITY_MODEL_CHOICES, _antigravity_frontmatter_model
+        from policy_vocab import CORE_UTILITY_AGENTS
+        if role in CORE_UTILITY_AGENTS:
+            from delegation_policy import render_utility_agent_markdown
+            fm_model = _antigravity_frontmatter_model(repo, role)
+            if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
+                return False
+            u_rendered = render_utility_agent_markdown(role, model=fm_model)
+            return content in (u_rendered, with_managed_marker(u_rendered))
         src = (repo / ".agents" / "subagents" / f"{role}.json")
         if not src.is_file():
             src = (repo / "agents" / "subagents" / f"{role}.json")
@@ -395,6 +403,9 @@ def _candidate_adapter_paths(repo: Path) -> list[Path]:
     for path in (Path(__file__).resolve().parents[1] / "subagents").glob("*.json"):
         candidates.append(f".claude/agents/{path.stem}.md")
         candidates.append(f".agents/agents/{path.stem}/agent.md")
+    from policy_vocab import CORE_UTILITY_AGENTS
+    for u_role in CORE_UTILITY_AGENTS:
+        candidates.append(f".agents/agents/{u_role}/agent.md")
     result = [repo / rel for rel in sorted(set(candidates))]
     hooks = repo / ".githooks"
     if hooks.is_dir():

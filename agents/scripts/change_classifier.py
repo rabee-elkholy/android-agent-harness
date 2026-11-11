@@ -78,8 +78,9 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"querypurchases\w*|queryproductdetails\w*|restorepurchases\w*|verifypurchase\w*|"
             r"storekit|skpaymentqueue|skproductsrequest|appstore\.sync|transaction\.updates"
             r")\b"
-            r"|\b(?:class|interface|object|fun|struct|actor)\s+(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner)\b)\w*(?:billing|purchase|subscription)\w*"
-            r"|\b(?!purchase(?:date|history|label|title|card|item|badge|banner|click|clicked)\b)purchase[a-z0-9_]*\s*\(",
+            r"|\b(?:class|interface|object|struct|actor)\s+(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner|purchasedialog|purchasesheet|purchasebutton|purchaserow)\b)\w*(?:billing|purchase|subscription)\w*"
+            r"|\bfun(?:c)?\s+(?!(?:on_?|navigate_?to_?|open_?|show_?|dismiss_?|hide_?|render_?)\w*(?:billing|purchase|subscription)\w*(?:click|clicked|dialog|sheet|bottomsheet|screen|route|banner|badge|button|card|tooltip|preview)?\b)(?!\w*(?:purchasedate|purchasehistory|purchaselabel|purchasetitle|purchasecard|purchaseitem|purchasebadge|purchasebanner|purchaseclick|purchaseclicked|purchasebutton|purchasedialog|purchasesheet|purchaseroute|purchasescreen)\b)\w*(?:billing|purchase|subscription)\w*"
+            r"|\b(?!purchase(?:date|history|label|title|card|item|badge|banner|click|clicked|button|dialog|sheet|bottomsheet|screen|route|nav|navigation|row|tooltip|preview|icon|analytics|event)\b)purchase[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
         "BILLING_PATTERN",
@@ -95,8 +96,8 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r")\b"
             r"|(?<!\bis)(?<!\bhas)(?<!\bwas)\b(?:authentication|authorization)\b"
             r"|\b(?:class|interface|object|struct|actor)\s+\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*"
-            r"|\bfun(?:c)?\s+(?!(?:is|has|was|can|should)_?(?:login|logged_?in|signin|sign_in|signed_?in|logout|signout|auth))\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*(?<!navigation)(?<!screen)(?<!route)(?<!dialog)(?<!live)(?<!visible)(?<!visibility)(?<!enabled)\b"
-            r"|\b(?:authenticate|authorize|login|sign_?in|logout|sign_?out)[a-z0-9_]*\s*\(",
+            r"|\bfun(?:c)?\s+(?!(?:is|has|was|can|should)_?(?:login|logged_?in|signin|sign_in|signed_?in|logout|signout|auth))(?!navigate_?to_?(?:login|signin|sign_in|logout|signout|auth)\w*\b)(?!(?:on|open|show|dismiss|hide|render)_?(?:login|signin|sign_in|logout|signout)(?:click|clicked|dialog|sheet|bottomsheet|screen|route|banner|badge|button|card|tooltip|preview)?\b)\w*(?:authentication|authorization|login|signin|sign_in|logout|signout)\w*(?<!navigation)(?<!screen)(?<!route)(?<!dialog)(?<!sheet)(?<!bottomsheet)(?<!banner)(?<!badge)(?<!button)(?<!card)(?<!click)(?<!clicked)(?<!preview)(?<!tooltip)(?<!live)(?<!visible)(?<!visibility)(?<!enabled)\b"
+            r"|\b(?!(?:login|sign_?in|logout|sign_?out)(?:click|clicked|button|banner|badge|card|item|row|dialog|sheet|bottomsheet|screen|route|nav|navigation|label|title|subtitle|hint|icon|preview|tooltip|event|analytics)\b)(?:authenticate|authorize|login|sign_?in|logout|sign_?out)[a-z0-9_]*\s*\(",
             re.IGNORECASE,
         ),
         "AUTH_PATTERN",
@@ -117,14 +118,15 @@ PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
         re.compile(
             r"\b(?:access_?token|refresh_?token|health_?data|fusedlocation\w*|locationservices|locationrequest|lastknownlocation|lastlocation|access_(?:fine|coarse|background)_location|latitude|longitude|ksecclass\w*|cllocationmanager|hkhealthstore)\b"
             r"|androidx\.security\.crypto|android\.location\b"
-            r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)\b(?:password|biometric)(?:(?=Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b)_never_|\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Placeholder\b|Icon\b|FieldLabel\b))",
+            r"|(?<!\bis)(?<!\bhas)(?<!\bshow)(?<!\bhide)(?<!\btoggle)(?<!\bon)\b(?:password|biometric)(?:(?=Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Subtitle\b|HelperText\b|SupportingText\b|Placeholder\b|Icon\b|FieldLabel\b|Click\b|Clicked\b|Button\b|Dialog\b|Sheet\b|Banner\b|Card\b)_never_|\b(?!Visible\b|Visibility\b|Enabled\b|Error\b|Hint\b|Toggle\b|Label\b|Title\b|Subtitle\b|HelperText\b|SupportingText\b|Placeholder\b|Icon\b|FieldLabel\b|Click\b|Clicked\b|Button\b|Dialog\b|Sheet\b|Banner\b|Card\b))",
             re.IGNORECASE,
         ),
         "SENSITIVE_PATTERN",
     ),
     ("COROUTINES", re.compile(r"\b(suspend|CoroutineScope|Dispatchers\.|Flow<|StateFlow|SharedFlow|launch\s*\{|async\s*\{)"), "COROUTINE_PATTERN"),
     ("ROOM_SCHEMA", re.compile(r"@(Database|Entity|Embedded|Relation)\b|\bAutoMigration\b|\bMigration\s*\("), "ROOM_PATTERN"),
-    ("PERSISTENCE", re.compile(r"\b(?:datastore|preferencesdatastore|sqldelight|sqlite(?:database|openhelper)?|realm(?:configuration)?|swiftdata|coredata|nspersistentcontainer|nsmanagedobject\w*|userdefaults|nsuserdefaults|multiplatformsettings)\b", re.IGNORECASE), "PERSISTENCE_PATTERN"),
+    ("PERSISTENCE", re.compile(r"\b(?:datastore|preferencesdatastore|sharedpreferences|encryptedsharedpreferences|userdefaults|nsuserdefaults|multiplatformsettings)\b", re.IGNORECASE), "PREFERENCES_PERSISTENCE"),
+    ("PERSISTENCE", re.compile(r"\b(?:sqldelight|sqlite(?:database|openhelper)?|realm(?:configuration)?|swiftdata|coredata|nspersistentcontainer|nsmanagedobject\w*)\b", re.IGNORECASE), "DATABASE_OR_SCHEMA_PERSISTENCE"),
     ("NETWORK", re.compile(r"\b(?:retrofit|okhttp\w*|ktor|httpclient|websocket|urlsession\w*|nwpathmonitor|alamofire)\b|@(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP)\b", re.IGNORECASE), "NETWORK_PATTERN"),
     ("SECURITY", re.compile(r"\b(?:networksecurityconfig|certificatepinner|trustmanager|hostnameverifier|x509certificate)\b|androidx\.security|Class\.forName\s*\(\s*[\"']?(?:[^\"']*\.)?(?:billingclient|biometric|auth|crypto|security)", re.IGNORECASE), "SECURITY_PATTERN"),
     (
@@ -156,6 +158,55 @@ VIEW_UI_RE = re.compile(
     r":\s*(?:Base\w*)?(?:Fragment|DialogFragment|BottomSheetDialogFragment|AppCompatActivity|ComponentActivity|Activity|RecyclerView\.Adapter|ListAdapter)\b"
     r")"
 )
+
+COROUTINE_HAZARD_RE = re.compile(
+    r"\b(?:"
+    r"Dispatchers\.|withContext\b|GlobalScope\b|runBlocking\b|"
+    r"CoroutineScope\s*\(|SupervisorJob\s*\(|"
+    r"newSingleThreadContext\b|newFixedThreadPoolContext\b|asCoroutineDispatcher\b|"
+    r"Thread\.sleep\b|Mutex\s*\(|Semaphore\s*\(|Channel\s*(?:<|\()|"
+    r"produce\s*\{|actor\s*\{|callbackFlow\s*\{|channelFlow\s*\{"
+    r")"
+)
+
+COMPOSE_SCOPED_RE = re.compile(
+    r"@composable\b|androidx\.compose\b|org\.jetbrains\.compose\b|"
+    r"\b(?:Modifier|rememberSaveable|LaunchedEffect|DisposableEffect|SideEffect|"
+    r"LazyColumn|LazyRow|LazyVerticalGrid|Scaffold|MaterialTheme|"
+    r"collectAsStateWithLifecycle|collectAsState)\b",
+    re.IGNORECASE,
+)
+
+NON_PRIVATE_DECL_IN_DIFF_RE = re.compile(
+    r"^(?!private\b)(?:(?:public|internal|protected|open|abstract|final|sealed|data|value|enum|override|suspend|inline|operator|infix|tailrec|actual|expect)\s+)*(?:class|interface|object|fun|val|var|constructor)\s+[A-Za-z0-9_<]"
+)
+PRIVATE_SCOPE_RE = re.compile(
+    r"\bprivate\s+(?:(?:suspend|inline|operator|infix|tailrec)\s+)*(?:fun|val|var)\b"
+)
+
+
+def _is_isolated_private_kotlin_edit(diff_text: str, context_text: str) -> bool:
+    """True when a Kotlin/Java diff modifies only private helper declarations/bodies without touching non-private contracts."""
+    clean_diff = _strip_comments_only(diff_text)
+    changed_code_lines = []
+    for raw in clean_diff.splitlines():
+        if raw.startswith(("+++", "---")):
+            continue
+        if raw.startswith(("+", "-")):
+            stripped = raw[1:].strip()
+            if stripped and not stripped.startswith(("import ", "package ")):
+                changed_code_lines.append(stripped)
+    if not changed_code_lines:
+        return False
+    for line in changed_code_lines:
+        if NON_PRIVATE_DECL_IN_DIFF_RE.match(line):
+            return False
+    if context_text.strip():
+        return bool(PRIVATE_SCOPE_RE.search(context_text))
+    return all(
+        PRIVATE_SCOPE_RE.search(line) or not DECL_RE.search(line)
+        for line in changed_code_lines
+    ) and any(PRIVATE_SCOPE_RE.search(line) for line in changed_code_lines)
 
 BUSINESS_TRIGGERS_RE = re.compile(
     r"\b(?:suspend|CoroutineScope|Dispatchers\.|launch\s*\{|async\s*\{|withContext)\b|"
@@ -871,6 +922,7 @@ def classify(
     progress: bool = True,
     candidate_paths: list[str] | None = None,
     review_comparison: dict[str, tuple[str, str]] | None = None,
+    include_type_index: bool = True,
 ) -> dict:
     root = repo.resolve()
     found: dict[str, dict[str, set[str]]] = {}
@@ -958,7 +1010,11 @@ def classify(
     if changes and progress:
         sublog(f"Evaluating surface patterns across {len(changes)} changed file(s)...")
 
-    has_source_files = any(c.rel_posix.lower().endswith((".kt", ".java")) for c in changes)
+    from _modules import is_kmp_or_android_test_path as _is_test_src_path
+    has_source_files = bool(include_type_index) and any(
+        c.rel_posix.lower().endswith((".kt", ".java")) and not _is_test_src_path(c.rel_posix)
+        for c in changes
+    )
     type_index = _build_type_file_index(root) if has_source_files else {}
     room_types = _room_schema_types(root, type_index) if has_source_files else set()
     for changed in changes:
@@ -1022,16 +1078,25 @@ def classify(
             # res/raw holds arbitrary runtime data, like src/*/assets: only visual media is UI.
             if ("/res/raw/" not in f"/{lower}" and "/composeresources/files/" not in f"/{lower}") or suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
                 _add(found, "RESOURCE_UI", rel, "ANDROID_RESOURCE")
-        if suffix in (".kt", ".kts") and (
+        has_resolved_edit_scope = bool(diff_text.strip()) and (
+            bool(context_text.strip()) or bool(DECL_RE.search(_strip_comments_only(diff_text)))
+        )
+        scoped_ui_text = f"{diff_text}\n{context_text}"
+        file_has_compose = (
             "@composable" in full_text.lower()
             or "androidx.compose" in full_text.lower()
             or "org.jetbrains.compose" in full_text.lower()
+        )
+        if suffix in (".kt", ".kts") and file_has_compose and (
+            not has_resolved_edit_scope or bool(COMPOSE_SCOPED_RE.search(scoped_ui_text))
         ):
             if _is_visual_only_compose(diff_text):
                 _add(found, "COMPOSE_UI", rel, "COMPOSE_VISUAL_ONLY")
             else:
                 _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
-        if suffix in (".kt", ".java") and not test_path and VIEW_UI_RE.search(full_text):
+        if suffix in (".kt", ".java") and not test_path and VIEW_UI_RE.search(full_text) and (
+            not has_resolved_edit_scope or bool(VIEW_UI_RE.search(scoped_ui_text))
+        ):
             _add(found, "XML_UI", rel, "VIEW_UI_COMPONENT")
         if suffix in (".kt", ".java") and not test_path and re.search(r"\b(NavHost|NavController|findNavController|rememberNavController)\b|navGraphBuilder|popUpTo\(", diff_text):
             _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
@@ -1040,6 +1105,8 @@ def classify(
                 pass
             else:
                 _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
+                if _is_isolated_private_kotlin_edit(diff_text, context_text):
+                    _add(found, "BUSINESS_LOGIC", rel, "ISOLATED_PRIVATE_EDIT")
         if suffix in (".kt", ".java") and not test_path and room_types:
             try:
                 from room_guard import declared_type_names
@@ -1126,12 +1193,21 @@ def classify(
         for surface, pattern, reason in PATTERNS:
 
             if not test_path and not values_resource and not doc_prose:
+                matched_coroutine = False
                 if pattern.search(pattern_diff_text):
                     _add(found, surface, rel, reason)
+                    matched_coroutine = surface == "COROUTINES"
                 elif comparison is not None and surface in (CRITICAL_SURFACES | {"COROUTINES", "ROOM_SCHEMA", "DEVICE_API"}) and pattern.search(context_text):
                     _add(found, surface, rel, "REVIEWED_DELTA_STRUCTURAL_CONTEXT")
+                    matched_coroutine = surface == "COROUTINES"
                 elif context_text and pattern.search(context_text):
                     _add(found, surface, rel, f"{reason}_CONTEXT")
+                    matched_coroutine = surface == "COROUTINES"
+                if matched_coroutine:
+                    if COROUTINE_HAZARD_RE.search(f"{pattern_diff_text}\n{context_text}"):
+                        _add(found, "COROUTINES", rel, "COROUTINE_DISPATCHER_OR_HAZARD")
+                    else:
+                        _add(found, "COROUTINES", rel, "COROUTINE_STRUCTURED_ONLY")
 
         if suffix in (".kt", ".java") and not test_path:
             _propagate_sensitive_dependencies(root, rel, full_text, pattern_diff_text, found, type_index)

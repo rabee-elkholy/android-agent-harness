@@ -59,10 +59,18 @@ def run_steps(repo: Path, task_id: str, host: str | None = None) -> tuple[int, d
                 if host:
                     arguments.extend(["--host", host])
             elif plan.get("status") == "VERIFYING":
-                script = {"RUN_PREFLIGHT": "preflight_check.py", "RUN_UNIT_TESTS": "run_tests_gate.py",
-                          "BUILD_REVIEW_PACKAGE": "review_package.py"}.get(code, "")
+                script = {
+                    "RUN_PREFLIGHT": "preflight_check.py",
+                    "RUN_CHECK_STRINGS": "check_strings.py",
+                    "RUN_FAST_KT_LINT": "fast_kt_lint.py",
+                    "RUN_ROOM_GUARD": "room_guard.py",
+                    "RUN_UNIT_TESTS": "run_tests_gate.py",
+                    "BUILD_REVIEW_PACKAGE": "review_package.py",
+                }.get(code, "")
                 if script in {"preflight_check.py", "review_package.py"}:
                     arguments = ["--repo", str(repo), "--task-id", task_id]
+                elif script == "room_guard.py":
+                    arguments = ["--repo", str(repo)]
             if not script:
                 summary["next_action"] = _compact_for_host(action)
                 return 0, summary

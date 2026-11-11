@@ -180,6 +180,9 @@ def _find_family_for_scope(families: list[dict[str, Any]], target_scope: str) ->
     return fam
 
 
+_LIVE_FACTS_MEM_CACHE: dict[str, dict[str, Any]] = {}
+
+
 @measured_operation("architecture")
 def resolve_architecture_contract(
     repo: Path,
@@ -215,21 +218,27 @@ def resolve_architecture_contract(
     policy_path = repo / ".agents" / "project-context" / "architecture-policy.json"
     policy_before = policy_path.read_bytes() if policy_path.is_file() else None
     facts_file = repo / ".agents" / "project-context" / "project-facts.json"
-    facts_payload = {}
+    facts_payload: dict[str, Any] = {}
     if facts_file.is_file():
         try:
-            facts_payload = json.loads(facts_file.read_text(encoding="utf-8"))
-        except Exception:
+            loaded = json.loads(facts_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("schema_version") == 2 and isinstance(loaded.get("facts"), dict) and loaded.get("source_fingerprint_sha256"):
+                facts_payload = loaded
+        except (OSError, ValueError):
             facts_payload = {}
 
-    # Only compare a usable cache. Stable extraction already brackets its own
-    # source fingerprints; a missing cache needs no extra pre-extraction Git scan.
-    if not (isinstance(facts_payload, dict) and facts_payload.get("schema_version") == 2
-            and isinstance(facts_payload.get("facts"), dict)
-            and facts_payload.get("source_fingerprint_sha256")
-            and facts_payload["source_fingerprint_sha256"] == compute_source_fingerprint(repo)["source_fingerprint_sha256"]):
+    is_real_extractor = getattr(extract_consistent_project_context, "__module__", "") == "project_context"
+    repo_key = str(repo)
+    if not facts_payload and is_real_extractor and repo_key in _LIVE_FACTS_MEM_CACHE:
+        facts_payload = _LIVE_FACTS_MEM_CACHE[repo_key]
+
+    live_fp_sha = compute_source_fingerprint(repo)["source_fingerprint_sha256"] if facts_payload else ""
+    if not (facts_payload and facts_payload.get("source_fingerprint_sha256") == live_fp_sha):
         try:
-            facts_payload = extract_consistent_project_context(repo, in_memory_graph=True)
+            if is_real_extractor:
+                facts_payload = extract_consistent_project_context(repo, in_memory_graph=True, include_advisory=False)
+            else:
+                facts_payload = extract_consistent_project_context(repo, in_memory_graph=True)
         except ContextSourceChangedDuringExtraction:
             return {
                 "status": STATUS_STALE_CONTEXT, "mode": mode, "contract": None, "brief_markdown": None,
@@ -237,6 +246,10 @@ def resolve_architecture_contract(
                            "read-only planning. Do not retry until the concurrent source writer has stopped; "
                            "then rerun the same draft or revision. Persistent context and approval are unchanged.",
             }
+        if is_real_extractor and isinstance(facts_payload, dict) and facts_payload.get("source_fingerprint_sha256"):
+            if len(_LIVE_FACTS_MEM_CACHE) >= 8:
+                _LIVE_FACTS_MEM_CACHE.pop(next(iter(_LIVE_FACTS_MEM_CACHE)), None)
+            _LIVE_FACTS_MEM_CACHE[repo_key] = facts_payload
 
     facts = facts_payload.get("facts") or {}
     arch = facts.get("architecture") or {}

@@ -3,37 +3,20 @@
 
 Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 
-## Daily workflow
-
-- Graph-backed discovery: exact target -> `task-context`; feature/unknown/refactor -> `graph`; search never anchors discovery.
-- Do not inspect `.agents/scripts/**` during normal app work.
-- Clarify ambiguity and discuss requested edge cases in plain chat before planning. Approved plan required for mutations; approval covers stated phases.
-- Unified Chat & Question UI/UX (Language-Adaptive): Match the developer's active conversation language dynamically and use the canonical Markdown cards from `.agents/rules/harness-rules.md` (Plan Approval Card, Reviewer Dispatch Table `| Reviewer | Model | Status |`, Review Verdict Table `| Reviewer | Model | Verdict | Findings |`, 3-Section Mobile Walkthrough, Commit Card, and `ask_question` modals). On partial reviewer completion, output at most one short progress line (e.g. `1/3`). In any RTL language, start every line/bullet with a word in that language and wrap code symbols, file names, commands, and English terms in `` `backticks` ``.
-- After approval, execute phases autonomously. Follow-ups within active scope must execute immediately: never generate redundant plan artifacts or stall for nonexistent UI buttons (record in-scope refinements via `task plan-note` before `prepare-verification`).
-- Policy evaluates 6 risk tiers (`T0_TRIVIAL` to `T5_CRITICAL`) as runtime authority for gates, reviewers, and device.
-- Query `{{PY}} .agents/harness.py task status --task-id <id> --next` for canonical next actions.
-- Verification order: preflight -> tests -> routed reviews -> assemble/device -> Mobile Verification Walkthrough and sign-off -> final verification.
-- Never self-certify HIGH/CRITICAL reviews with `record_review.py --verdict PASS`. Adjudicate false positives via `validate-finding`. Never poll background work (Zero-Polling invariant).
-- Context notes are administrative: clarify ambiguity first, then translate into English before running `{{PY}} .agents/harness.py context note "<structured-english-note>"`. Always follow `.agents/project-context/project-notes.md`.
+- Graph-backed discovery (`task-context` / `graph`); search never anchors initial discovery. Never inspect `.agents/scripts/**` during normal app work.
+- Clarify ambiguity in chat before planning. Approved plan required for mutations; after approval, execute phases autonomously. Follow-ups within active scope execute immediately: never generate redundant plan artifacts or stall for nonexistent UI buttons (record refinements via `task plan-note`).
+- Match the developer's conversation language using the canonical cards from `.agents/rules/harness-rules.md` (including the 3-section **Mobile Verification Walkthrough**). In RTL languages, start every line/option with a word in that language and wrap symbols, paths, and English terms in `` `backticks` ``.
+- 6-tier policy (`T0_TRIVIAL` to `T5_CRITICAL`) governs gates, reviewers, and device checks. Never self-certify HIGH/CRITICAL reviews with `record_review.py --verdict PASS`. Never poll background work (Zero-Polling invariant). On Antigravity, delegate multi-file read sweeps to `harness-scout-agent` and `T0–T3` non-sensitive implementation/Gradle slices to a single `harness-worker-agent` (`delegate-plan --json`), reviewing `git diff` on return.
+- Clarify and translate durable rules into English before `{{PY}} .agents/harness.py context note "<english-note>"`; always follow `.agents/project-context/project-notes.md`.
 
 ## Canonical Command Catalog
 
 | Step | Command |
 |---|---|
-| Task context | `{{PY}} .agents/harness.py task-context --file <path> --json` |
-| Feature / find graph | `{{PY}} .agents/harness.py graph --feature <name> --json` |
-| Task status | `{{PY}} .agents/harness.py task status --task-id <id> --next` |
-| Context note | `{{PY}} .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) |
-| Preflight | `{{PY}} .agents/harness.py preflight` |
-| Unit tests | `{{PY}} .agents/harness.py test` |
-| Review evidence | `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` -> `review finalize --task <id>` |
-| Resume | `{{PY}} .agents/harness.py task resume --task-id <id>` |
-| Assemble | `{{PY}} .agents/harness.py assemble` |
-| Device | `{{PY}} .agents/harness.py device install-start` |
-| Verify | `{{PY}} .agents/harness.py verify --task-id <id>` |
+| Discovery | `{{PY}} .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` |
+| Status / Gates | `{{PY}} .agents/harness.py task status --task-id <id> --next` / `preflight` / `test` |
+| Reviews | `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` -> `review finalize --task <id>` |
+| Device / Verify | `{{PY}} .agents/harness.py assemble` -> `device install-start` -> `verify --task-id <id>` |
 
 Python: `{{PY}}`. Device: {{DEVICE_POLICY}} {{GIT_POLICY}}
-
-Exit 30/[ENV-FAILURE] is an environment blocker; never change app code to hide it. Never uninstall, purchase, publish, commit, push, or mutate tracker implicitly. Tracker policy: {{PM_TRIGGER}}. {{PM_LANG_NOTE}}
-
-For optional criteria, journeys, and metrics, follow the kernel and canonical router.
+Exit 30/[ENV-FAILURE] is an environment blocker. Never uninstall, purchase, publish, commit, push, or mutate tracker implicitly. Tracker policy: {{PM_TRIGGER}}. {{PM_LANG_NOTE}}

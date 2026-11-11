@@ -36,9 +36,9 @@ BRIDGE_SCHEMA_VERSION = 1
 FOLLOW_UP_STEPS_THRESHOLD = 120
 FOLLOW_UP_TOKENS_THRESHOLD = 80_000
 
-# Mid-task clean checkpoint thresholds (phase boundary / pre-verification)
-MID_TASK_STEPS_THRESHOLD = 220
-MID_TASK_TOKENS_THRESHOLD = 110_000
+# Mid-task clean phase boundary thresholds (never emitted during verification or fix loops)
+MID_TASK_STEPS_THRESHOLD = 280
+MID_TASK_TOKENS_THRESHOLD = 140_000
 
 DEFAULT_SNOOZE_STEPS = 120
 
@@ -204,8 +204,8 @@ def measure_conversation_health(repo: Path) -> dict[str, Any]:
         source = "env_override"
 
     if tokens <= 0:
-        # Conservative estimation when exact token counters are not exposed in the compact log
-        by_steps = steps * 680
+        # Calibrated estimation when exact token counters are not exposed in the compact log
+        by_steps = steps * 420
         by_bytes = transcript_bytes // 6 if transcript_bytes > 0 else 0
         tokens = max(by_steps, by_bytes)
 
@@ -280,24 +280,23 @@ def evaluate_rotation_advisory(
             "completed task's architecture contract, modified files, and a fresh Discovery Receipt with zero re-explanation."
         )
         instructions = (
-            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`. "
-            "Either ask via `ask_question` with options or add a short plain-language note at the end of your message telling the developer "
-            f"that this chat has grown large (~{steps} steps / ~{tokens:,} tokens) and if they want to save a context bridge for a new chat "
-            "(or snooze this reminder), they can just tell you and you will run it for them "
+            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`, "
+            "and NEVER emit repetitive 'Note:' bridge reminders before or between `run_command` tool calls. "
+            f"Mention context bridging AT MOST ONCE at final task delivery or inside the Commit/Delivery `ask_question` card (~{steps} steps / ~{tokens:,} tokens); "
+            "if the developer wants to save a context bridge or snooze this reminder, execute it for them "
             f"(`{save_cmd}` or `python .agents/harness.py task bridge --snooze`)."
         )
     else:
         save_cmd = f'python .agents/harness.py task bridge --save{tid_arg} --summary "<current progress & next step>"'
         reason = (
-            f"Active conversation has reached a high-context checkpoint (~{steps} steps, ~{tokens:,} est. context tokens). "
-            "At this clean phase/verification boundary, the developer can optionally rotate to a fresh chat without losing "
+            f"Active conversation has reached a high-context phase boundary (~{steps} steps, ~{tokens:,} est. context tokens). "
+            "If pausing for a developer question, the developer can optionally rotate to a fresh chat without losing "
             "task state, approval, or verification proof."
         )
         instructions = (
-            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`. "
-            "At this checkpoint, either ask via `ask_question` with options or add a short plain-language note telling the developer "
-            f"that the conversation is large (~{steps} steps / ~{tokens:,} tokens) and if they want to save a context bridge to continue "
-            "in a new chat (or snooze this reminder), they can just tell you and you will run it for them "
+            "Never show or ask the developer to run CLI commands (`python .agents/harness.py task bridge ...`) in chat or `ask_question`, "
+            "and NEVER emit repetitive 'Note:' bridge reminders before or between `run_command` tool calls. "
+            f"During autonomous multi-phase execution, continue directly without mentioning context bridge; offer it AT MOST ONCE only if pausing for a developer question (~{steps} steps / ~{tokens:,} tokens) "
             f"(`{save_cmd}` or `python .agents/harness.py task bridge --snooze`)."
         )
 
@@ -316,6 +315,42 @@ def evaluate_rotation_advisory(
         "reason": reason,
         "instructions": instructions,
     }
+
+
+def should_emit_cli_rotation_advisory(repo: Path, advisory: dict[str, Any]) -> bool:
+    """Auto-cooldown CLI emission of CONTEXT_ROTATION_RECOMMENDED once per DEFAULT_SNOOZE_STEPS."""
+    agents_dir = repo / ".agents"
+    if not agents_dir.is_dir():
+        return True
+    health = measure_conversation_health(repo)
+    conv_key = str(health.get("conversation_id") or "").strip() or "default"
+    cur_steps = int(advisory.get("conversation_steps") or health.get("steps") or 0)
+    cache_file = agents_dir / "cache" / "rotation-advisory-cooldown.json"
+    entries: dict[str, Any] = {}
+    if cache_file.is_file():
+        try:
+            raw = read_json(cache_file)
+            if isinstance(raw, dict):
+                entries = {str(k): v for k, v in list(raw.items())[-29:] if isinstance(v, dict)}
+        except (OSError, ValueError, ValidationError):
+            entries = {}
+    prev = entries.get(conv_key)
+    if isinstance(prev, dict):
+        last_steps = int(prev.get("last_emitted_steps") or 0)
+        next_steps = int(prev.get("next_emit_steps") or 0)
+        if cur_steps >= last_steps and cur_steps < next_steps:
+            return False
+    entries[conv_key] = {
+        "last_emitted_steps": cur_steps,
+        "next_emit_steps": max(cur_steps, 1) + DEFAULT_SNOOZE_STEPS,
+        "mode": str(advisory.get("mode") or ""),
+        "updated_at": utc_now(),
+    }
+    try:
+        atomic_write_json(cache_file, entries)
+    except OSError:
+        pass
+    return True
 
 
 def _resolve_target_task(repo: Path, explicit_task_id: str = "") -> tuple[str, dict[str, Any] | None]:

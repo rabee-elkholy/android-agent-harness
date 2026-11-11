@@ -583,7 +583,7 @@ def validate_advisory_knowledge(payload: dict[str, Any]) -> tuple[bool, str]:
     return True, "PASS"
 
 
-def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir: Path | None = None) -> dict:
+def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir: Path | None = None, include_advisory: bool = True) -> dict:
     """Deterministically extracts architectural facts from repo with zero PII and zero secrets."""
     repo = repo.resolve()
 
@@ -972,7 +972,7 @@ def extract_project_facts(repo: Path, *, in_memory_graph: bool = True, cache_dir
     fingerprint = project_context_fingerprint(normalized)
 
     sfp_info = compute_source_fingerprint(repo)
-    advisory = build_advisory_knowledge(repo, normalized, sfp_info["source_fingerprint_sha256"])
+    advisory = build_advisory_knowledge(repo, normalized, sfp_info["source_fingerprint_sha256"]) if include_advisory else None
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1453,13 +1453,14 @@ def extract_consistent_project_context(
     *,
     max_attempts: int = 2,
     in_memory_graph: bool = True,
+    include_advisory: bool = True,
 ) -> dict[str, Any]:
     """Extract facts from a stable source state, retrying once on concurrent edits."""
     root = repo.resolve()
     attempts = max(1, int(max_attempts))
     for _ in range(attempts):
         before = compute_source_fingerprint(root)
-        payload = extract_project_facts(root, in_memory_graph=in_memory_graph)
+        payload = extract_project_facts(root, in_memory_graph=in_memory_graph, include_advisory=include_advisory)
         extracted_fingerprint = str(payload.get("source_fingerprint_sha256") or "")
         if before["source_fingerprint_sha256"] == extracted_fingerprint:
             payload["source_fingerprint_version"] = before["source_fingerprint_version"]

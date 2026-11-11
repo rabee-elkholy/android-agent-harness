@@ -73,6 +73,7 @@ from policy_vocab import (
     ANTIGRAVITY_REVIEWER_TOOLS,
     ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS,
     CORE_ROUTED_REVIEWERS,
+    CORE_UTILITY_AGENTS,
     SUBAGENT_ORCHESTRATION_TOOLS,
 )
 
@@ -995,7 +996,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
     emit("allow", "Phase reviewer roster exactly matches the approved phase review plan.", tool=tool_name, reason_code="DISPATCH_PHASE_REVIEWERS_ALLOWED")
 
 
-def _handle_subagent(name: str, args: dict) -> None:
+def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "") -> None:
     try:
         plan = active_plan(REPO)
     except ValidationError:
@@ -1055,6 +1056,16 @@ def _handle_subagent(name: str, args: dict) -> None:
 
     if name == "invoke_subagent" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         raw_subs, _ = _normalize_subagent_items(args)
+        if raw_subs and any(
+            isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() in CORE_UTILITY_AGENTS
+            for s in raw_subs
+        ):
+            from delegation_policy import validate_utility_dispatch
+            ok_u, reason_u, code_u = validate_utility_dispatch(
+                REPO, plan, raw_subs, parent_conversation_id=parent_conversation_id,
+            )
+            emit("allow" if ok_u else "deny", reason_u, tool=name, reason_code=code_u)
+            return
         if raw_subs and all(
             isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
             for s in raw_subs
@@ -1156,6 +1167,17 @@ def _handle_subagent(name: str, args: dict) -> None:
                      tool=name, reason_code="PHASE_REVIEW_EXECUTION_ALREADY_STARTED")
                 return
 
+            norm_subs, _ = _normalize_subagent_items(args)
+            if name == "invoke_subagent" and norm_subs and any(
+                isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() in CORE_UTILITY_AGENTS
+                for s in norm_subs
+            ):
+                from delegation_policy import validate_utility_dispatch
+                ok_u, reason_u, code_u = validate_utility_dispatch(
+                    REPO, plan, norm_subs, parent_conversation_id=parent_conversation_id,
+                )
+                emit("allow" if ok_u else "deny", reason_u, tool=name, reason_code=code_u)
+                return
             raw_subs = args.get("Subagents") or args.get("subagents") or []
             if isinstance(raw_subs, list) and len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
@@ -1975,7 +1997,7 @@ def _handle_search(name: str, args: dict) -> None:
             emit("allow", "Search is allowed after initial discovery anchor.", tool=name, reason_code="SEARCH_ALLOWED")
             return
 
-    # 3. No discovery receipt yet: Check exact non-architectural file exception (D0)
+    # 3. No discovery receipt yet: Check exact file exceptions (D0)
     try:
         from discovery_router import _is_exact_non_architectural_file
         if target and _is_exact_non_architectural_file(target):
@@ -1983,6 +2005,15 @@ def _handle_search(name: str, args: dict) -> None:
             return
     except (OSError, ValueError, ImportError, ValidationError):
         pass
+
+    if name == "grep_search" and target:
+        try:
+            cand_file = Path(target) if Path(target).is_absolute() else (REPO / target)
+            if cand_file.is_file() and not _installed_engine_target(target, recursive=False):
+                emit("allow", "Single-file grep_search allowed on exact existing source file under D0.", tool=name, reason_code="SEARCH_ALLOWED")
+                return
+        except OSError:
+            pass
 
     # Deny initial code search without discovery anchor
     clean_q = query.strip()
@@ -2094,6 +2125,24 @@ def _installed_engine_target(raw: str, *, recursive: bool = False) -> bool:
         return False
 
 
+def _is_background_task_log_target(raw_target: str) -> bool:
+    norm = str(raw_target or "").strip().replace("\\", "/")
+    if not norm or not norm.lower().endswith(".log"):
+        return False
+    low = norm.lower()
+    if "/.system_generated/tasks/" in low or low.startswith(".system_generated/tasks/"):
+        return True
+    if re.search(r"(?:^|/)tasks/task-[0-9a-z_-]+\.log$", low):
+        try:
+            resolved = (Path(raw_target).expanduser().resolve() if Path(raw_target).expanduser().is_absolute() else (REPO / raw_target).resolve())
+            from antigravity_runtime import candidate_runtime_roots
+            if any(resolved == rt or rt in resolved.parents for rt in candidate_runtime_roots()):
+                return True
+        except OSError:
+            return False
+    return False
+
+
 def _deny_engine_read(tool: str, command: str = "") -> None:
     emit("deny", "HARNESS_IMPLEMENTATION_BOUNDARY: use documented commands and their diagnostics first. "
          "For an unexpected command failure, contract violation, Doctor issue or explicit developer request, "
@@ -2157,7 +2206,65 @@ def _main() -> None:
                     if receipt and check_discovery_freshness(REPO, receipt)[0] and is_path_in_discovery_scope(REPO, target, receipt) and not _installed_engine_target(target, recursive=True):
                         emit("allow", "Reviewer search is inside its graph discovery scope.", tool=name, reason_code="REVIEWER_DISCOVERY_SEARCH_ALLOWED")
                         return
-        if conversation and not reviewer:
+        utility_ctx = None
+        if not reviewer and (conversation or os.environ.get("HARNESS_UTILITY_AGENT")):
+            try:
+                from delegation_policy import (
+                    SCOUT_AGENT,
+                    WORKER_AGENT,
+                    scout_command_allowed,
+                    utility_subagent_context,
+                    worker_command_allowed,
+                )
+                utility_ctx = utility_subagent_context(REPO, conversation, bind=True)
+            except (ImportError, OSError, ValueError, KeyError, ValidationError):
+                utility_ctx = None
+
+        if utility_ctx is not None:
+            u_type = str(utility_ctx.get("agent_type") or "")
+            if u_type == SCOUT_AGENT:
+                if name == "run_command":
+                    cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
+                    cwd_p = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                    if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
+                        emit(
+                            "deny",
+                            "Scout subagent run_command permits only read-only graph, task-context, android-inspect, doctor, or git status/diff/log inspection.",
+                            tool=name,
+                            reason_code="SCOUT_READ_ONLY_BOUNDARY",
+                        )
+                        return
+                elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
+                    emit(
+                        "deny",
+                        f"`{SCOUT_AGENT}` is strictly read-only; mutations, subagent calls, and developer prompts are forbidden.",
+                        tool=name,
+                        reason_code="SCOUT_READ_ONLY_BOUNDARY",
+                    )
+                    return
+            elif u_type == WORKER_AGENT:
+                # Preserve parent's discovery receipt freshness inside worker child conversation
+                try:
+                    import discovery_receipt
+                    discovery_receipt.RECEIPT_NOT_BEFORE = 0.0
+                except (ImportError, AttributeError):
+                    pass
+                if name in SUBAGENT_TOOLS | {"ask_question"}:
+                    emit(
+                        "deny",
+                        f"`{WORKER_AGENT}` cannot invoke nested subagents or ask the developer directly; return blockers to the Lead Architect.",
+                        tool=name,
+                        reason_code="WORKER_NO_DELEGATION_OR_APPROVAL",
+                    )
+                    return
+                if name == "run_command":
+                    cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
+                    ok_w_cmd, reason_w_cmd = worker_command_allowed(cmd_str)
+                    if not ok_w_cmd:
+                        emit("deny", reason_w_cmd, tool=name, command=cmd_str, reason_code="WORKER_LIFECYCLE_COMMAND_FORBIDDEN")
+                        return
+
+        if conversation and not reviewer and utility_ctx is None:
             try:
                 from task_bridge import record_active_conversation_turn
                 record_active_conversation_turn(REPO, conversation)
@@ -2167,6 +2274,15 @@ def _main() -> None:
             target = str(args.get("AbsolutePath") or args.get("absolutePath") or args.get("SearchPath")
                          or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory")
                          or args.get("DirectoryPath") or args.get("directoryPath") or _target(args) or "")
+            if name in {"view_file", "read_file", "read"} and _is_background_task_log_target(target):
+                emit(
+                    "deny",
+                    "BACKGROUND_TASK_LOG_POLLING_FORBIDDEN: Never read in-progress background task logs (`.system_generated/tasks/*.log`). "
+                    "Yield your turn with ZERO tool calls and wait for the host completion notification.",
+                    tool=name,
+                    reason_code="BACKGROUND_TASK_LOG_POLLING_FORBIDDEN",
+                )
+                return
             if _installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
                 _deny_engine_read(name)
                 return
@@ -2201,6 +2317,9 @@ def _main() -> None:
                 emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
+            if allowed and utility_ctx is not None and str(utility_ctx.get("agent_type") or "") == "harness-worker-agent":
+                from delegation_policy import worker_write_allowed
+                allowed, reason, code = worker_write_allowed(REPO, targets, utility_ctx)
             if allowed and name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
                 _normalize_crlf_for_edit(REPO, targets, args)
             emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
@@ -2210,7 +2329,7 @@ def _main() -> None:
             _handle_command(command)
             return
         if name in SUBAGENT_TOOLS:
-            _handle_subagent(name, args)
+            _handle_subagent(name, args, parent_conversation_id=conversation)
             return
         if name in SEARCH_TOOLS:
             _handle_search(name, args)

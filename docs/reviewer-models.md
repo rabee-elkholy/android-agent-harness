@@ -6,18 +6,19 @@ or the requirement for independent review proof.
 
 | Host | Supported choices | Enforcement |
 |---|---|---|
-| **Google Antigravity** (Primary Runtime) | `inherit`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `model`/`Model` unless matching explicit tier is selected; native SQLite metadata verified |
+| **Google Antigravity** (Primary Runtime) | `inherit`, `risk-hybrid`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `carbon-dynamic`, `gemini-4-carbon-low`, `gemini-4-carbon-medium`, `gemini-4-carbon-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `model`/`Model` unless matching explicit tier is selected; native SQLite metadata verified |
 | Legacy / Compatibility Adapters (Claude Code, etc.) | `inherit` (`sonnet`, `opus`, `haiku` on Claude Code) | Host-managed or rule-enforced native Agent/Task model argument |
 
 ## Antigravity pre-review interactive choices (`SELECT_REVIEW_MODEL`)
 
 When a task or phase review on Antigravity reaches `DISPATCH_REVIEWERS` / `DISPATCH_PHASE_REVIEWERS` with no explicit model bound (`source == "default"`), the router emits `before_first_dispatch` (`code = "SELECT_REVIEW_MODEL"`) with 5 developer choices:
 
-1. `flash-dynamic-task` (`--default flash-dynamic --scope task`): Gemini 3.8 Flash with dynamic thinking (`high` for `security-perf-reviewer-agent`, `bug-test-reviewer-agent`, or `DEEP`/`MAX` effort; `medium` for standard reviewers) for the whole task.
-2. `flash-dynamic-once` (`--default flash-dynamic --scope run`): Gemini 3.8 Flash with dynamic thinking for this review run only (`review-models-run.json`).
+1. `flash-dynamic-task` (`--default flash-dynamic --scope task`): Gemini 3.8 Flash with calibrated thinking (`medium` for `NORMAL`-effort `T1–T3` reviews to prevent overthinking latency; `high` strictly on `DEEP`/`MAX` effort) for the whole task.
+2. `flash-dynamic-once` (`--default flash-dynamic --scope run`): Gemini 3.8 Flash with calibrated dynamic thinking for this review run only (`review-models-run.json`).
 3. `inherit-task` (`--default inherit --scope task`): Chat conversation model (`Inherit`) for the whole task.
 4. `inherit-once` (`--default inherit --scope run`): Chat conversation model (`Inherit`) for this review run only.
 5. `hybrid-smart-task` (`--default hybrid-smart --scope task`): Smart Hybrid — Flash Dynamic for standard reviewers (`arch-regression-reviewer-agent`, `spec-compliance-agent`) and Chat model (`Inherit`) for critical reviewers (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`) for the whole task.
+6. `risk-hybrid-task` (`--default risk-hybrid --scope task` / `--preset risk-hybrid`): **Risk-Adaptive Hybrid (Recommended for AI Ultra)** — runs all reviewers on fast `gemini-3.8-flash-medium` during standard `T1–T3` (`NORMAL` effort) reviews, and automatically escalates `DEEP`/`MAX` reviewers (`T4/T5` critical surfaces or Round 2+ defect fixes) to the main chat model (`Inherit`).
 
 The plan displays the current model setting and its source, and every router dispatch, wait, status, and completion output includes `reviewer_models` and formats each specialist as `<role> [<model>]` in both CLI output and chat updates. Approving the plan
 does not answer the model question. Keep an unanswered question pending when the
@@ -99,7 +100,15 @@ If the host rejects the resume message, `REVIEWER_RESUME_ENV_BLOCKED` preserves 
 error. After resolving it, repeating the same authorized resume command recovers
 the same execution without another reviewer call.
 
-Reviewer `run_command` is restricted by the native hook to bounded `graph` and
-`task-context` queries. It permits no shell chaining, builds, tests, lifecycle
-commands, application writes or reviewer orchestration. Discovery expansion
-changes read scope only; it never expands approved implementation scope.
+Generated Antigravity reviewer frontmatter (`.agents/agents/<role>/agent.md`) restricts
+tools to pure fast file/search reads (`view_file`, `grep_search`, `find_by_name`) and
+inlines compact canonical review packages (`<= 24 KB`) directly inside each reviewer brief
+with pre-verified deterministic gate summaries (`preflight`, `unit_tests`, `localization`, `room`).
+As defense-in-depth, if a host ever dispatches `run_command` from a bound reviewer session,
+the native hook restricts it to bounded read-only `graph` and `task-context` queries.
+
+## Hybrid Lead + Flash Utility Subagents & Quota Rotation (Google AI Ultra)
+
+- **Primary Chat Model**: `Gemini 4 Carbon (Medium)` (sweet-spot accuracy & lowest hallucination rate; avoid `Low` on multi-step engineering).
+- **Separate Quota Pool Rotation**: Switch the main Antigravity chat selector to `Claude Sonnet 5.5 (Thinking)` or `Claude Opus 5.5 (Thinking)` when `/usage` shows the Gemini weekly bar near `50%`. Both `.agents/agents/harness-scout-agent/agent.md` and `.agents/agents/harness-worker-agent/agent.md` remain pinned to `gemini-3.8-flash-medium` regardless of the main chat model.
+- **Risk-Gated Delegation**: Inspect `python .agents/harness.py delegate-plan --json` to verify whether the current task slice uses `DELEGATE_WORKER_SLICE`, `CAPTURE_RED_ONLY`, `TESTS_AND_GATES_ONLY`, or `TRIVIAL_INLINE_LEAD`.

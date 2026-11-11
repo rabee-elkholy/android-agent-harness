@@ -1114,6 +1114,16 @@ def main(argv: list[str] | None = None) -> int:
     complete_p.add_argument("--execution-id", action="append", required=True, help="Trusted execution transcript ID (repeatable, matched in order with --reviewer)")
     complete_p.add_argument("--host", default=None, help="Host environment")
 
+    complete_all_p = subparsers.add_parser(
+        "complete-all",
+        help="Auto-bind finished native reviewer transcripts, complete all ready reviewers, and finalize in one turn",
+    )
+    complete_all_p.add_argument("--repo", default=".")
+    complete_all_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
+    complete_all_p.add_argument("--reviewer", action="append", default=[], help="Optional explicit reviewer role(s)")
+    complete_all_p.add_argument("--execution-id", action="append", default=[], help="Optional explicit execution ID(s)")
+    complete_all_p.add_argument("--host", default=None, help="Host environment")
+
     finalize_p = subparsers.add_parser("finalize", help="Aggregate review evidence")
     finalize_p.add_argument("--repo", default=".")
     finalize_p.add_argument("--task", "--task-id", dest="task", required=True, help="Task ID")
@@ -1195,6 +1205,90 @@ def main(argv: list[str] | None = None) -> int:
                     _print_finalized_review_summary(finalize_review_execution(repo, args.task))
             except (ValidationError, OSError, ValueError, KeyError):
                 pass
+            return 0
+        elif args.subcommand == "complete-all":
+            directory = task_dir(repo, args.task)
+            current = read_json(directory / "current-run.json")
+            run_id = str(current["run_id"])
+            policy = read_json(Path(current["policy"]))
+            required_reviewers = list(policy.get("reviewers") or [])
+            run_host = str(current.get("review_host") or args.host or "").strip().lower()
+            explicit_revs = list(args.reviewer or [])
+            explicit_eids = list(args.execution_id or [])
+            if len(explicit_revs) != len(explicit_eids):
+                raise ValidationError(f"--reviewer count ({len(explicit_revs)}) must match --execution-id count ({len(explicit_eids)})")
+            explicit_map = dict(zip(explicit_revs, explicit_eids))
+
+            from review_sources import has_trusted_review_source
+            if has_trusted_review_source(run_host):
+                from antigravity_runtime import candidate_brain_roots
+                from reviewer_host import reviewer_context
+                for brain_root in candidate_brain_roots():
+                    if not brain_root.is_dir():
+                        continue
+                    try:
+                        recent_children = sorted(
+                            (d for d in brain_root.iterdir() if d.is_dir() and not d.is_symlink()),
+                            key=lambda d: d.stat().st_mtime_ns,
+                            reverse=True,
+                        )[:32]
+                    except OSError:
+                        continue
+                    for child_dir in recent_children:
+                        try:
+                            reviewer_context(repo, child_dir.name, bind=True)
+                        except (OSError, ValueError, KeyError, ValidationError):
+                            continue
+
+            l_path = ledger_file(directory, run_id)
+            ledger = load_ledger(directory, run_id) if l_path.is_file() else {"reviewers": {}}
+            revs_map = ledger.get("reviewers") or {}
+            pairs_to_complete: list[tuple[str, str]] = []
+            for r_role in required_reviewers:
+                r_info = revs_map.get(r_role) or {}
+                r_state = r_info.get("state")
+                if r_state in (REVIEW_COMPLETED, REVIEW_INGESTED):
+                    continue
+                eid = explicit_map.get(r_role) or str(r_info.get("execution_id") or "").strip()
+                if not eid:
+                    continue
+                if has_trusted_review_source(run_host):
+                    from record_review import wait_for_live_subagent_transcript
+                    wait_for_live_subagent_transcript(run_host, eid)
+                    from reviewer_host import _steps
+                    t_path = resolve_trusted_review_source(run_host, eid)
+                    if not t_path or not t_path.is_file():
+                        continue
+                    m_steps = [row for row in _steps(t_path) if row.get("source") == "MODEL" and row.get("type") == "PLANNER_RESPONSE"]
+                    last_step = m_steps[-1] if m_steps else {}
+                    if not last_step.get("content") or last_step.get("tool_calls"):
+                        continue
+                pairs_to_complete.append((r_role, eid))
+
+            model_map_all: dict[str, str] = {}
+            try:
+                from review_models import reviewer_model_map
+                model_map_all = reviewer_model_map(current, required_reviewers)
+            except (ImportError, OSError, ValueError, KeyError):
+                model_map_all = {}
+
+            for idx, (rev_name, exec_id) in enumerate(pairs_to_complete):
+                if idx == 0:
+                    res = complete_review(repo, args.task, rev_name, exec_id, host=args.host or run_host)
+                else:
+                    res = _complete_review_core(repo, args.task, rev_name, exec_id, host=args.host or run_host, _freshness_checked=True)
+                eff_model = model_map_all.get(rev_name, "inherit")
+                print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
+
+            st_after = get_review_execution_status(repo, args.task)
+            rev_states = st_after.get("reviewers") or {}
+            if required_reviewers and all(rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED) for r in required_reviewers):
+                final_res = finalize_review_execution(repo, args.task)
+                _print_finalized_review_summary(final_res)
+                return 0
+            done_cnt = sum(1 for r in required_reviewers if rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED))
+            waiting = [r for r in required_reviewers if rev_states.get(r, {}).get("state") not in (REVIEW_COMPLETED, REVIEW_INGESTED)]
+            print(f"REVIEW_PARTIAL_PROGRESS: {done_cnt}/{len(required_reviewers)} completed; waiting on: {', '.join(waiting)}")
             return 0
         elif args.subcommand == "finalize":
             res = finalize_review_execution(repo, args.task)

@@ -9,8 +9,14 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-MANAGED_RULES = {"harness-rules.md": "always_on", "compose-context.md": "glob",
-                 "kmp-context.md": "glob", "gradle-context.md": "glob"}
+MANAGED_RULES = {
+    "harness-rules.md": "always_on",
+    "compose-context.md": "glob",
+    "kmp-context.md": "glob",
+    "gradle-context.md": "glob",
+    "conflict-and-recovery.md": "model_decision",
+    "pm-and-context-bridge.md": "model_decision",
+}
 
 
 def rule_errors(agents_root: Path) -> list[str]:
