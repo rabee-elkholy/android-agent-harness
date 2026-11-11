@@ -781,6 +781,43 @@ def check_phase_safety_cap(plan: dict[str, Any], dispatch_count: int, reserve: d
     return True, ""
 
 
+def _verified_phase_checkpoint_gate_lines(repo: Path, tdir: Path, phase_id: str, metadata: dict) -> list[str]:
+    """Summarize deterministic gates already passed at `checkpoint-phase` so phase reviewers skip redundant linting."""
+    lines: list[str] = []
+    ckpt_f = phase_dir(tdir, phase_id) / "checkpoint.json"
+    passed: list[str] = []
+    if ckpt_f.is_file():
+        try:
+            ckpt = read_json(ckpt_f)
+            if ckpt.get("status") == "CHECKPOINT_PASS":
+                gates_map = ckpt.get("gates") if isinstance(ckpt.get("gates"), dict) else {}
+                for g_name, g_val in gates_map.items():
+                    if g_val == "PASS" or (isinstance(g_val, dict) and g_val.get("status") == "PASS"):
+                        passed.append(str(g_name))
+                if not passed:
+                    passed.append("phase_checkpoint")
+        except (OSError, ValueError, ValidationError):
+            pass
+    try:
+        from review_package import _verified_deterministic_gate_summary
+        ev_lines = _verified_deterministic_gate_summary(
+            repo,
+            str(metadata.get("delivery_snapshot_sha256") or ""),
+            str(metadata.get("phase_review_run_id") or ""),
+            str(metadata.get("task_change_set_sha256") or ""),
+        )
+        lines.extend(ev_lines)
+    except (ImportError, OSError, ValueError, ValidationError):
+        pass
+    if passed and not lines:
+        lines.append(
+            f"Verified `CHECKPOINT_PASS` for phase `{phase_id}` ({', '.join(f'`{g}`' for g in passed)}): "
+            "deterministic preflight/compile/unit-test checks already passed on this exact `phase_delta_sha256` — "
+            "do NOT spend turns re-linting imports/FQCNs line-by-line; focus strictly on behavioral logic, callers, concurrency, security, and architecture."
+        )
+    return lines
+
+
 def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff: str) -> dict:
     task_id, phase_id = metadata["task_id"], metadata["phase_id"]
     tdir = task_dir(repo, task_id)
@@ -791,6 +828,23 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
     package_path = rdir / "phase-review-package.md"
     # Derived fields are never embedded in the content whose digest they identify.
     metadata = {k: v for k, v in metadata.items() if k not in ("briefs", "package_path", "package_sha256")}
+    fh_obj = metadata.get("phase_file_hashes")
+    ps_obj = metadata.get("phase_path_states")
+    candidate_phase_paths = (
+        list(fh_obj.keys()) if isinstance(fh_obj, dict) and fh_obj
+        else list(ps_obj.keys()) if isinstance(ps_obj, dict)
+        else [str(x.get("path") or "") for x in ps_obj if isinstance(x, dict)] if isinstance(ps_obj, list)
+        else []
+    )
+    raw_phase_paths = sorted({
+        p for p in candidate_phase_paths
+        if p and not str(p).replace("\\", "/").lstrip("/").startswith(".agents/")
+    })
+    try:
+        from review_package import generate_review_topology
+        topology_section = generate_review_topology(repo, raw_phase_paths) if raw_phase_paths else ""
+    except (ImportError, OSError, ValueError, ValidationError):
+        topology_section = ""
     content_lines = [
         "# ANDROID_HARNESS_PHASE_REVIEW_PACKAGE_VNEXT",
         "",
@@ -807,6 +861,7 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
         "```diff",
         diff,
         "```",
+        *([ "", topology_section ] if topology_section else []),
     ]
     if metadata.get("plan_clarifications"):
         content_lines.append(metadata["plan_clarifications"])
@@ -829,9 +884,15 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
     metadata["package_path"] = str(package_path)
     metadata["package_sha256"] = pkg_sha
 
-    # Generate lean briefs
+    # Generate lean briefs with Zero-Hop parity (<=24 KB / 520 lines) and pre-verified checkpoint gate summary
     briefs: dict[str, str] = {}
-    from review_package import REVIEWER_ROLES, _scoped_finding_validation_lines
+    from review_package import (
+        MAX_INLINE_PACKAGE_BYTES,
+        MAX_INLINE_PACKAGE_LINES,
+        REVIEWER_ROLES,
+        _scoped_finding_validation_lines,
+    )
+    verified_gate_lines = _verified_phase_checkpoint_gate_lines(repo, tdir, phase_id, metadata)
     phase_note_lines: list[str] = []
     if metadata.get("plan_clarifications"):
         try:
@@ -859,20 +920,29 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             "- **Shared/Reused Screen Back & Navigation Audit**: When any touched screen, Fragment, Activity, Dialog, or route is reachable from multiple entry points/flows (e.g. wizard/onboarding vs edit/settings/home), verify that system back (`BackHandler` / `OnBackPressedCallback`), UI back/close actions, and exit navigation (`popBackStack`, `popUpTo`, `navigateUp`, `finish`) work for every caller without hardcoded single-flow destinations.",
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
             *val_lines,
+            *(
+                [
+                    "",
+                    "## 1b. Pre-Verified Deterministic Gates",
+                    *(f"- {gl}" for gl in verified_gate_lines),
+                ]
+                if verified_gate_lines
+                else []
+            ),
             "",
-            "## 2. Review Package Reference & Strict 2-Turn Cap",
+            "## 2. Review Package Reference & Strict 2-Turn Cap (Hard 12-Call Hook Cap)",
             f"Canonical phase package path: `{package_path}`",
             *(
                 [
-                    "- **ZERO-HOP FAST PATH (INLINED BELOW)**: The complete phase review package is embedded below. **Do NOT call `view_file` on `phase-review-package.md`**; emit `HARNESS_REVIEW_RESULT_V2` immediately (or after at most ONE batched parallel `view_file` turn if caller verification is needed).",
+                    "- **ZERO-HOP FAST PATH (INLINED BELOW)**: The complete phase review package (including pre-computed `GraphEngine` Blast-Radius Topology) is embedded below. **Do NOT call `view_file` on `phase-review-package.md`**; emit `HARNESS_REVIEW_RESULT_V2` immediately (or after at most ONE batched parallel `view_file` turn of 4-8 files/ranges if caller verification is needed; hard hook cap: 12 calls).",
                     "",
                     "--- BEGIN INLINED PHASE REVIEW PACKAGE ---",
                     content,
                     "--- END INLINED PHASE REVIEW PACKAGE ---",
                 ]
-                if len(content.encode("utf-8")) <= 12288 and content.count("\n") <= 260
+                if len(content.encode("utf-8")) <= MAX_INLINE_PACKAGE_BYTES and content.count("\n") <= MAX_INLINE_PACKAGE_LINES
                 else [
-                    "- **Strict 2-Turn Cap & Parallel Tool Batching**: Read the phase package, issue at most ONE parallel `view_file` batch (4-8 ranges/files at once) if caller verification is needed, and emit `HARNESS_REVIEW_RESULT_V2` immediately on the next turn.",
+                    "- **Strict 2-Turn Cap & Parallel Tool Batching (Hard 12-Call Hook Cap)**: Read `phase-review-package.md` (which includes pre-computed `GraphEngine` Blast-Radius Topology), issue at most ONE parallel `view_file` batch (4-8 ranges/files at once) if caller verification is needed, and emit `HARNESS_REVIEW_RESULT_V2` immediately on the next turn.",
                 ]
             ),
             "- **Self-Contained Plan Context**: Never search for or read `plan.md` or `plan.json`; Section 1 above already contains the approved phase objective and any recorded `plan-notes`.",

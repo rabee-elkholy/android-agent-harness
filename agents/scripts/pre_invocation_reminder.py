@@ -34,6 +34,16 @@ def _bridge_reminder() -> str:
         return ""
 
 
+def _post_subagent_directive(conversation_id: str) -> tuple[str, str]:
+    if not conversation_id:
+        return ("", "")
+    try:
+        from delegation_policy import pending_post_subagent_directive
+        return pending_post_subagent_directive(REPO, conversation_id)
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
+        return ("", "")
+
+
 def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
     """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents."""
     if not conversation_id:
@@ -85,7 +95,7 @@ def _compact_message() -> str:
     notes_rem = _project_notes_reminder()
     if not plan:
         bridge_rem = _bridge_reminder()
-        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` for discovery or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
+        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` (or `harness-scout-agent` on Flash for multi-file sweeps) for discovery, or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
@@ -200,6 +210,7 @@ def main() -> None:
         if conversation_id and _is_reviewer_conversation(REPO, conversation_id):
             print("{}")
             return
+        wave_key, wave_directive = _post_subagent_directive(conversation_id)
         # Antigravity is 0-indexed (0 is first call); 1-indexed hosts start at 1.
         # Avoid dumping the full initial reminder + update check twice when invocation 0 already ran.
         initial = type(invocation) is int and (
@@ -208,16 +219,21 @@ def main() -> None:
         )
         if initial:
             msg = f"{_message()} {_update_notice()}".strip()
+            if wave_directive:
+                msg = f"{msg} {wave_directive}"
             if conversation_id:
                 tid, st = _current_task_state()
-                _record_seen_state(conversation_id, f"{tid}:{st}")
+                state_key = f"{tid}:{st}:{wave_key}" if wave_key else f"{tid}:{st}"
+                _record_seen_state(conversation_id, state_key)
         elif conversation_id:
             tid, st = _current_task_state()
-            state_key = f"{tid}:{st}"
+            state_key = f"{tid}:{st}:{wave_key}" if wave_key else f"{tid}:{st}"
             if _has_seen_state(conversation_id, state_key):
                 msg = _unchanged_state_message(tid, st)
+                if wave_directive:
+                    msg = f"{msg} {wave_directive}"
             else:
-                msg = _compact_message()
+                msg = _compact_message() if not wave_directive else f"{_unchanged_state_message(tid, st)} {wave_directive}"
                 _record_seen_state(conversation_id, state_key)
         else:
             msg = _compact_message()

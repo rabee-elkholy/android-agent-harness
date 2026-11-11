@@ -1,4 +1,4 @@
-"""PostToolUse hook reconciler for invoke_subagent bindings and failures."""
+"""PostToolUse hook reconciler for invoke_subagent bindings, wave completion, and failures."""
 from __future__ import annotations
 
 import json
@@ -38,7 +38,7 @@ def _resolve_hook_repo(payload: dict) -> Path:
 
 
 def _bind_candidates_from_brain(repo: Path, payload: dict) -> None:
-    """Bind newly spawned reviewer executions when PostToolUse omits toolResult on stdin."""
+    """Bind newly spawned reviewer or utility executions when PostToolUse omits toolResult on stdin."""
     from reviewer_host import reviewer_context
 
     parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
@@ -95,11 +95,12 @@ def main() -> int:
 
         repo = _resolve_hook_repo(payload)
         call = payload.get("toolCall") or payload.get("tool_call") or {}
-        call_name = str(call.get("name") or payload.get("toolName") or "")
+        call_name = str(call.get("name") or payload.get("toolName") or "").strip()
+        call_name_low = call_name.lower()
         err = payload.get("error")
         if not err:
             # Host result shapes vary. IDs are merely candidates until the
-            # canonical child transcript matches a dispatched review brief.
+            # canonical child transcript matches a dispatched brief.
             from reviewer_host import reviewer_context
 
             output = json.dumps(
@@ -113,13 +114,15 @@ def main() -> int:
             matched_ids = set(re.findall(r'conversationId[\"\s:]+([A-Za-z0-9_-]{4,128})', output))
             for execution_id in matched_ids:
                 reviewer_context(repo, execution_id, bind=True)
-            if call_name in {"invoke_subagent", ""}:
+            if call_name_low in {"invoke_subagent", ""}:
                 try:
-                    from delegation_policy import bind_utility_from_post_tool
+                    from delegation_policy import bind_utility_from_post_tool, utility_subagent_context
+                    for execution_id in matched_ids:
+                        utility_subagent_context(repo, execution_id, bind=True)
                     bind_utility_from_post_tool(repo, payload)
                 except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
                     pass
-            if not matched_ids and call_name in {"invoke_subagent", ""}:
+            if not matched_ids and call_name_low in {"invoke_subagent", ""}:
                 _bind_candidates_from_brain(repo, payload)
             print(json.dumps({}))
             return 0
@@ -131,7 +134,7 @@ def main() -> int:
             except Exception:
                 args = {}
 
-        if call_name == "send_message":
+        if call_name_low == "send_message":
             from reviewer_host import mark_resume_failed
 
             recipient = str(args.get("Recipient") or args.get("recipient") or "")

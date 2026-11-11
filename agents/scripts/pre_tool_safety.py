@@ -656,7 +656,7 @@ def _handle_stop() -> None:
     emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop", reason_code="STOP_ALLOWED")
 
 
-def _handle_command(command: str) -> None:
+def _handle_command(command: str, *, conversation: str = '') -> None:
     # Bash (the Claude bridge) joins backslash-newline into one command, so pattern checks must see
     # the joined line. PowerShell and cmd have no such continuation: other hosts keep every line.
     if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude":
@@ -750,7 +750,30 @@ def _handle_command(command: str) -> None:
         if not sym_allowed:
             emit("deny", sym_reason, tool="run_command", command=command, reason_code=sym_code, task_id=active_tid)
             return
+        if conversation:
+            try:
+                from delegation_policy import mark_lead_edit_or_transition
+                mark_lead_edit_or_transition(REPO, conversation)
+            except (ImportError, OSError, ValueError):
+                pass
     allowed, reason = command_allowed(REPO, command)
+    if allowed and conversation and not is_sym_write:
+        try:
+            from delegation_policy import check_and_record_lead_post_subagent_read, check_post_reviewer_reread_guard
+            ok_pr, reason_pr, code_pr = check_post_reviewer_reread_guard(
+                REPO, conversation, tool_name="run_command", args={}, command=command,
+            )
+            if not ok_pr:
+                emit("deny", reason_pr, tool="run_command", command=command, reason_code=code_pr, task_id=active_tid)
+                return
+            ok_ps, reason_ps, code_ps = check_and_record_lead_post_subagent_read(
+                REPO, conversation, tool_name="run_command", args={}, command=command,
+            )
+            if not ok_ps:
+                emit("deny", reason_ps, tool="run_command", command=command, reason_code=code_ps, task_id=active_tid)
+                return
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
     if allowed and re.search(r"project_graph(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+graph\b", command, re.I):
         reason = f"project_graph executed: {reason}"
     elif allowed and re.search(r"task_context(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task-context\b", command, re.I):
@@ -1075,6 +1098,16 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
                 return
 
+    if name == "send_message" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
+        emit(
+            "deny",
+            "SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is reserved exclusively for router-authorized reviewer protocol retries. "
+            "If you are a subagent, output your final report directly as plain assistant text and end your turn.",
+            tool=name,
+            reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
+        )
+        return
+
     if name == "invoke_subagent" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         raw_subs, _ = _normalize_subagent_items(args)
         if raw_subs and any(
@@ -1093,6 +1126,16 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
         ):
             if len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
+                return
+            if (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file():
+                emit(
+                    "deny",
+                    "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' runs unpinned without Flash quota protection or Graph anchoring. "
+                    "Re-invoke immediately with TypeName='harness-scout-agent', Role='harness-scout-agent', Workspace='inherit' "
+                    "(split into 2-3 parallel `harness-scout-agent` entries in one call when investigating 3+ distinct subsystems).",
+                    tool=name,
+                    reason_code="USE_HARNESS_SCOUT_AGENT",
+                )
                 return
             emit("allow", "Read-only research subagent is allowed for bounded codebase exploration.", tool=name)
             return
@@ -1188,6 +1231,15 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                      tool=name, reason_code="PHASE_REVIEW_EXECUTION_ALREADY_STARTED")
                 return
 
+            if name == "send_message":
+                emit(
+                    "deny",
+                    f"SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is not permitted during IMPLEMENTING unless retrying phase review protocol (current router action: {act_code}). "
+                    "Subagents must emit their final report directly as plain assistant text and end their turn.",
+                    tool=name,
+                    reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
+                )
+                return
             norm_subs, _ = _normalize_subagent_items(args)
             if name == "invoke_subagent" and norm_subs and any(
                 isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() in CORE_UTILITY_AGENTS
@@ -1203,6 +1255,24 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             if isinstance(raw_subs, list) and len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
+            if name == "invoke_subagent" and norm_subs and any(
+                isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
+                for s in norm_subs
+            ) and (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file():
+                emit(
+                    "deny",
+                    "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' is blocked on Antigravity. "
+                    "Use TypeName='harness-scout-agent', Role='harness-scout-agent', Workspace='inherit' instead.",
+                    tool=name,
+                    reason_code="USE_HARNESS_SCOUT_AGENT",
+                )
+                return
+            if name == "invoke_subagent" and norm_subs:
+                try:
+                    from delegation_policy import record_specialist_dispatch
+                    record_specialist_dispatch(REPO, plan, norm_subs, parent_conversation_id=parent_conversation_id)
+                except (ImportError, OSError, ValueError, ValidationError):
+                    pass
             emit("allow", "On-demand specialist action is inside the approved implementation.", tool=name)
             return
         if status != "VERIFYING":
@@ -1901,7 +1971,26 @@ def _is_path_in_active_scope(repo: Path, target_path: str, plan: dict) -> bool:
     return False
 
 
-def _handle_list_dir(name: str, args: dict) -> None:
+def _enforce_lead_anti_reread(conversation: str, name: str, args: dict) -> bool:
+    """Return True if a denial was emitted due to post-subagent or post-reviewer anti-reread cap."""
+    if not conversation:
+        return False
+    try:
+        from delegation_policy import check_and_record_lead_post_subagent_read, check_post_reviewer_reread_guard
+        ok_pr, reason_pr, code_pr = check_post_reviewer_reread_guard(REPO, conversation, tool_name=name, args=args)
+        if not ok_pr:
+            emit("deny", reason_pr, tool=name, reason_code=code_pr)
+            return True
+        ok_ps, reason_ps, code_ps = check_and_record_lead_post_subagent_read(REPO, conversation, tool_name=name, args=args)
+        if not ok_ps:
+            emit("deny", reason_ps, tool=name, reason_code=code_ps)
+            return True
+    except (ImportError, OSError, ValueError, ValidationError):
+        return False
+    return False
+
+
+def _handle_list_dir(name: str, args: dict, *, conversation: str = "") -> None:
     plan: dict = {}
     try:
         plan = active_plan(REPO)
@@ -1915,6 +2004,8 @@ def _handle_list_dir(name: str, args: dict) -> None:
         return
 
     if status in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
+        if _enforce_lead_anti_reread(conversation, name, args):
+            return
         emit("allow", "Directory listing is allowed during active task lifecycle.", tool=name, reason_code="LIST_DIR_ALLOWED")
         return
 
@@ -1924,6 +2015,8 @@ def _handle_list_dir(name: str, args: dict) -> None:
         if receipt:
             fresh, _ = check_discovery_freshness(REPO, receipt)
             if fresh:
+                if _enforce_lead_anti_reread(conversation, name, args):
+                    return
                 emit("allow", "Directory listing is allowed after initial discovery anchor.", tool=name, reason_code="LIST_DIR_ALLOWED")
                 return
     except Exception:
@@ -1972,10 +2065,12 @@ def _handle_list_dir(name: str, args: dict) -> None:
         )
         return
 
+    if _enforce_lead_anti_reread(conversation, name, args):
+        return
     emit("allow", "Minimal repository orientation directory listing permitted.", tool=name, reason_code="LIST_DIR_ALLOWED")
 
 
-def _handle_search(name: str, args: dict) -> None:
+def _handle_search(name: str, args: dict, *, conversation: str = "") -> None:
     plan: dict = {}
     try:
         plan = active_plan(REPO)
@@ -1997,10 +2092,14 @@ def _handle_search(name: str, args: dict) -> None:
         return
 
     if status == "VERIFYING":
+        if _enforce_lead_anti_reread(conversation, name, args):
+            return
         emit("allow", "Search is allowed during verification.", tool=name, reason_code="VERIFIER_SEARCH_ALLOWED")
         return
 
     if status in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "READY_FOR_DELIVERY"):
+        if _enforce_lead_anti_reread(conversation, name, args):
+            return
         emit("allow", "Search is allowed during active task lifecycle.", tool=name, reason_code="SEARCH_ALLOWED")
         return
 
@@ -2015,6 +2114,8 @@ def _handle_search(name: str, args: dict) -> None:
     if receipt:
         fresh, _ = check_discovery_freshness(REPO, receipt)
         if fresh:
+            if _enforce_lead_anti_reread(conversation, name, args):
+                return
             emit("allow", "Search is allowed after initial discovery anchor.", tool=name, reason_code="SEARCH_ALLOWED")
             return
 
@@ -2022,6 +2123,8 @@ def _handle_search(name: str, args: dict) -> None:
     try:
         from discovery_router import _is_exact_non_architectural_file
         if target and _is_exact_non_architectural_file(target):
+            if _enforce_lead_anti_reread(conversation, name, args):
+                return
             emit("allow", "Exact non-architectural file search allowed under D0.", tool=name, reason_code="SEARCH_ALLOWED")
             return
     except (OSError, ValueError, ImportError, ValidationError):
@@ -2031,6 +2134,8 @@ def _handle_search(name: str, args: dict) -> None:
         try:
             cand_file = Path(target) if Path(target).is_absolute() else (REPO / target)
             if cand_file.is_file() and not _installed_engine_target(target, recursive=False):
+                if _enforce_lead_anti_reread(conversation, name, args):
+                    return
                 emit("allow", "Single-file grep_search allowed on exact existing source file under D0.", tool=name, reason_code="SEARCH_ALLOWED")
                 return
         except OSError:
@@ -2220,6 +2325,21 @@ def _main() -> None:
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
                     emit("deny", "Reviewer tools are limited to source reads and bounded discovery. Do NOT call send_message; output your final review response directly as plain assistant text and end your turn.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                     return
+                if reviewer.get("role"):
+                    from delegation_policy import check_and_record_subagent_step_budget
+                    r_run = reviewer.get("run") or {}
+                    r_run_id = str(r_run.get("run_id") or r_run.get("phase_review_run_id") or "")
+                    ok_rb, reason_rb, code_rb = check_and_record_subagent_step_budget(
+                        REPO,
+                        conversation,
+                        kind="REVIEWER",
+                        tool_name=name,
+                        run_id=r_run_id,
+                        role=str(reviewer.get("role") or ""),
+                    )
+                    if not ok_rb:
+                        emit("deny", reason_rb, tool=name, reason_code=code_rb)
+                        return
                 if name in SEARCH_TOOLS:
                     from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness, is_path_in_discovery_scope
                     receipt = load_latest_discovery_receipt(REPO)
@@ -2232,7 +2352,9 @@ def _main() -> None:
             try:
                 from delegation_policy import (
                     SCOUT_AGENT,
+                    SPECIALIST_AGENT,
                     WORKER_AGENT,
+                    check_and_record_subagent_step_budget,
                     scout_command_allowed,
                     utility_subagent_context,
                     worker_command_allowed,
@@ -2243,6 +2365,7 @@ def _main() -> None:
 
         if utility_ctx is not None:
             u_type = str(utility_ctx.get("agent_type") or "")
+            u_exec = str(utility_ctx.get("execution_id") or conversation or f"env-{u_type}")
             if u_type == SCOUT_AGENT:
                 if name == "run_command":
                     cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
@@ -2250,7 +2373,7 @@ def _main() -> None:
                     if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
                         emit(
                             "deny",
-                            "Scout subagent run_command permits only read-only graph, task-context, android-inspect, doctor, or git status/diff/log inspection.",
+                            "Scout subagent run_command permits only read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log inspection.",
                             tool=name,
                             reason_code="SCOUT_READ_ONLY_BOUNDARY",
                         )
@@ -2258,10 +2381,16 @@ def _main() -> None:
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
                     emit(
                         "deny",
-                        f"`{SCOUT_AGENT}` is strictly read-only; mutations, subagent calls, and developer prompts are forbidden.",
+                        f"`{SCOUT_AGENT}` is strictly read-only; mutations, subagent calls, `send_message`, and developer prompts are forbidden. Output your digest directly as plain assistant text.",
                         tool=name,
                         reason_code="SCOUT_READ_ONLY_BOUNDARY",
                     )
+                    return
+                ok_sb, reason_sb, code_sb = check_and_record_subagent_step_budget(
+                    REPO, u_exec, kind="SCOUT", tool_name=name, role=SCOUT_AGENT,
+                )
+                if not ok_sb:
+                    emit("deny", reason_sb, tool=name, reason_code=code_sb)
                     return
             elif u_type == WORKER_AGENT:
                 # Preserve parent's discovery receipt freshness inside worker child conversation
@@ -2273,7 +2402,7 @@ def _main() -> None:
                 if name in SUBAGENT_TOOLS | {"ask_question"}:
                     emit(
                         "deny",
-                        f"`{WORKER_AGENT}` cannot invoke nested subagents or ask the developer directly; return blockers to the Lead Architect.",
+                        f"`{WORKER_AGENT}` cannot invoke nested subagents, call `send_message`, or ask the developer directly; output your completion summary as plain assistant text.",
                         tool=name,
                         reason_code="WORKER_NO_DELEGATION_OR_APPROVAL",
                     )
@@ -2294,6 +2423,52 @@ def _main() -> None:
                         if not w_ok:
                             emit("deny", w_reason, tool=name, command=cmd_str, reason_code=w_code)
                             return
+                ok_wb, reason_wb, code_wb = check_and_record_subagent_step_budget(
+                    REPO, u_exec, kind="WORKER", tool_name=name, role=WORKER_AGENT,
+                )
+                if not ok_wb:
+                    emit("deny", reason_wb, tool=name, reason_code=code_wb)
+                    return
+            elif u_type == SPECIALIST_AGENT:
+                try:
+                    import discovery_receipt
+                    discovery_receipt.RECEIPT_NOT_BEFORE = 0.0
+                except (ImportError, AttributeError):
+                    pass
+                if name in SUBAGENT_TOOLS | {"ask_question"}:
+                    emit(
+                        "deny",
+                        f"Specialist subagent `{utility_ctx.get('role')}` cannot call `{name}`; output your final report directly as plain assistant text and end your turn.",
+                        tool=name,
+                        reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
+                    )
+                    return
+                if utility_ctx.get("read_only_specialist"):
+                    if name == "run_command":
+                        cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
+                        cwd_p = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                        if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
+                            emit(
+                                "deny",
+                                f"Specialist subagent `{utility_ctx.get('role')}` is read-only for repository code.",
+                                tool=name,
+                                reason_code="SPECIALIST_READ_ONLY_BOUNDARY",
+                            )
+                            return
+                    elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
+                        emit(
+                            "deny",
+                            f"Specialist subagent `{utility_ctx.get('role')}` is strictly read-only.",
+                            tool=name,
+                            reason_code="SPECIALIST_READ_ONLY_BOUNDARY",
+                        )
+                        return
+                ok_spb, reason_spb, code_spb = check_and_record_subagent_step_budget(
+                    REPO, u_exec, kind="SPECIALIST", tool_name=name, role=str(utility_ctx.get("role") or SPECIALIST_AGENT),
+                )
+                if not ok_spb:
+                    emit("deny", reason_spb, tool=name, reason_code=code_spb)
+                    return
 
         if conversation and not reviewer and utility_ctx is None:
             try:
@@ -2353,24 +2528,33 @@ def _main() -> None:
                 allowed, reason, code = worker_write_allowed(REPO, targets, utility_ctx)
             if allowed and name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
                 _normalize_crlf_for_edit(REPO, targets, args)
+            if allowed and conversation and not reviewer and utility_ctx is None:
+                try:
+                    from delegation_policy import mark_lead_edit_or_transition
+                    mark_lead_edit_or_transition(REPO, conversation)
+                except (ImportError, OSError, ValueError):
+                    pass
             emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
             return
+        lead_conv = conversation if (conversation and not reviewer and utility_ctx is None) else ""
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-            _handle_command(command)
+            _handle_command(command, conversation=lead_conv)
             return
         if name in SUBAGENT_TOOLS:
             _handle_subagent(name, args, parent_conversation_id=conversation)
             return
         if name in SEARCH_TOOLS:
-            _handle_search(name, args)
+            _handle_search(name, args, conversation=lead_conv)
             return
         if name == "list_dir":
-            _handle_list_dir(name, args)
+            _handle_list_dir(name, args, conversation=lead_conv)
             return
         # Known read-only tools (checked before loading external integration registry)
         if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
             if name in ("view_file", "read_file", "read"):
+                if lead_conv and _enforce_lead_anti_reread(lead_conv, name, args):
+                    return
                 _flag_out_of_scope_read(name, args)
             emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return

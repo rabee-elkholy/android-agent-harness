@@ -1457,5 +1457,458 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         review_models.assert_dispatch_ready(self.repo, read_json(tdir / "current-run.json"), sorted(pol["reviewers"]))
 
 
+
+    def test_6_project_wide_multi_wave_subagent_efficiency_and_anti_reread(self) -> None:
+        """Verify ALL subagents, ALL waves (1st, 2nd, Nth), ALL phases (p1..pN), and ALL anti-reread & step-budget guards."""
+        import delegation_policy as dp
+        import phase_review
+        import review_orchestrator
+        import review_package
+        import workflow
+        from _vnext_common import atomic_write_json, read_json, state_root
+
+        parent_cid = "lead-conv-v132"
+        parent_tx = self.brain_app_data / "brain" / parent_cid / ".system_generated" / "logs" / "transcript.jsonl"
+        parent_tx.parent.mkdir(parents=True, exist_ok=True)
+        parent_tx.write_text(
+            json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Study calories card across all users"}) + "\n",
+            encoding="utf-8",
+        )
+
+        def post_reconcile(payload: dict) -> dict:
+            env = dict(
+                os.environ,
+                HARNESS_REPO=str(self.repo),
+                HARNESS_HOST="antigravity",
+                ANTIGRAVITY_APP_DATA=str(self.brain_app_data),
+            )
+            proc = subprocess.run(
+                [sys.executable, str(self.repo / ".agents/scripts/post_tool_reconcile.py")],
+                cwd=str(self.repo),
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            return json.loads((proc.stdout or "{}").strip())
+
+        def pre_reminder(inv_num: int) -> dict:
+            env = dict(
+                os.environ,
+                HARNESS_REPO=str(self.repo),
+                HARNESS_HOST="antigravity",
+                ANTIGRAVITY_APP_DATA=str(self.brain_app_data),
+            )
+            proc = subprocess.run(
+                [sys.executable, str(self.repo / ".agents/scripts/pre_invocation_reminder.py")],
+                cwd=str(self.repo),
+                input=json.dumps({"invocationNum": inv_num, "conversationId": parent_cid}),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            return json.loads((proc.stdout or "{}").strip())
+
+        # 1. Built-in `TypeName="research"` / `"explore"` MUST be blocked on Antigravity (<=5 items -> USE_HARNESS_SCOUT_AGENT; >5 items -> batch limit)
+        res_research = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"Subagents": [{"TypeName": "research", "Role": "scout", "Prompt": "Inspect HomeViewModel"}]},
+            },
+        })
+        self.assertEqual("deny", res_research["decision"])
+        self.assertIn("USE_HARNESS_SCOUT_AGENT", res_research["reason"])
+
+        res_batch_6 = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"Subagents": [{"TypeName": "explore", "Role": f"s{i}", "Prompt": "Inspect"} for i in range(6)]},
+            },
+        })
+        self.assertEqual("deny", res_batch_6["decision"])
+        self.assertIn("exceeds the safety limit of 5", res_batch_6["reason"])
+
+        # 2. Clean `SUBAGENT_SEND_MESSAGE_FORBIDDEN` when `plan is None` (never crashes with Reviewer policy validation failed closed!)
+        res_send_idle = self._pre_tool({
+            "conversationId": "rogue-child-conv",
+            "toolCall": {"name": "send_message", "args": {"Recipient": parent_cid, "Message": "done"}},
+        })
+        self.assertEqual("deny", res_send_idle["decision"])
+        self.assertIn("SUBAGENT_SEND_MESSAGE_FORBIDDEN", res_send_idle["reason"])
+        self.assertNotIn("failed closed", res_send_idle["reason"])
+
+        # 3. Dispatch Scout Wave 1 (2 parallel `harness-scout-agent`s in one call) + verify per-scout 24-call budget + post-scout anti-reread!
+        big_kt = self.repo / "app/src/main/java/com/demo/PersonalDataActivity.kt"
+        big_kt.write_text(
+            "package com.demo\n\nclass PersonalDataActivity {\n"
+            + "".join(f"    fun step{i}(): Int = {i}\n" for i in range(420))
+            + "}\n",
+            encoding="utf-8",
+        )
+        self._git("add", "app/src/main/java/com/demo/PersonalDataActivity.kt")
+        self._git("commit", "-m", "feat: add large PersonalDataActivity fixture")
+
+        p_scout_a = "Inspect HomeViewModel and FoodScreen visibility conditions across user goals."
+        p_scout_b = "Inspect PersonalDataActivity onboarding steps and targetCalories calculation."
+        res_wave1 = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {
+                    "Subagents": [
+                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_a},
+                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_b},
+                    ]
+                },
+            },
+        })
+        self.assertEqual("allow", res_wave1["decision"], res_wave1)
+
+        # Spawn bound child transcripts for Scout A and Scout B
+        for idx, (cid_s, p_txt) in enumerate([("scout-w1-a", p_scout_a), ("scout-w1-b", p_scout_b)]):
+            tx_s = self.brain_app_data / "brain" / cid_s / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_s.parent.mkdir(parents=True, exist_ok=True)
+            tx_s.write_text(
+                json.dumps({
+                    "source": "SYSTEM_SDK",
+                    "type": "SYSTEM_MESSAGE",
+                    "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={p_txt}\n</SYSTEM_MESSAGE>",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            # Verify EACH scout gets its own independent 24-call step budget (`SCOUT_STEP_BUDGET_REACHED` on call #25!)
+            for call_n in range(dp.MAX_SCOUT_TOOL_CALLS):
+                r_step = self._pre_tool({
+                    "conversationId": cid_s,
+                    "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+                })
+                self.assertEqual("allow", r_step["decision"], f"Scout {idx} call {call_n + 1} should be allowed: {r_step}")
+            r_step_25 = self._pre_tool({
+                "conversationId": cid_s,
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+            })
+            self.assertEqual("deny", r_step_25["decision"])
+            self.assertIn("SCOUT_STEP_BUDGET_REACHED", r_step_25["reason"])
+
+        # Complete Wave 1 via PostToolUse reconciler
+        post_reconcile({
+            "conversationId": parent_cid,
+            "transcriptPath": str(parent_tx),
+            "toolCall": {"name": "invoke_subagent"},
+            "toolResult": {"subagents": [{"conversationId": "scout-w1-a"}, {"conversationId": "scout-w1-b"}]},
+        })
+
+        # PreInvocation must inject POST-SCOUT ANTI-REREAD directive into Lead Model!
+        rem_w1 = pre_reminder(2)
+        self.assertIn("POST-SCOUT ANTI-REREAD ACTIVE", json.dumps(rem_w1))
+
+        # Lead Model attempting a full-file / >220-line read on 424-line PersonalDataActivity.kt MUST be blocked immediately without burning a slot!
+        r_bloated = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "view_file",
+                "args": {"AbsolutePath": str(big_kt), "StartLine": 1, "EndLine": 300},
+            },
+        })
+        self.assertEqual("deny", r_bloated["decision"])
+        self.assertIn("POST_SUBAGENT_FULL_FILE_READ_BLOCKED", r_bloated["reason"])
+
+        # Lead Model gets exactly 3 surgical gap checks (including `graph` re-runs or `<=200`-line `view_file`), then #4 is DENIED!
+        for slot in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
+            r_gap = self._pre_tool({
+                "conversationId": parent_cid,
+                "toolCall": {
+                    "name": "view_file",
+                    "args": {"AbsolutePath": str(big_kt), "StartLine": 1 + slot * 20, "EndLine": 15 + slot * 20},
+                },
+            })
+            self.assertEqual("allow", r_gap["decision"], f"Surgical gap check {slot + 1} should pass: {r_gap}")
+
+        # 4th read OR redundant `harness.py graph` re-run on Lead Model -> DENIED by POST_SCOUT_REREAD_CAP_REACHED!
+        r_fourth_view = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+        })
+        self.assertEqual("deny", r_fourth_view["decision"])
+        self.assertIn("POST_SCOUT_REREAD_CAP_REACHED", r_fourth_view["reason"])
+
+        r_fourth_graph = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "python .agents/harness.py graph --feature food --json"}},
+        })
+        self.assertEqual("deny", r_fourth_graph["decision"])
+        self.assertIn("POST_SCOUT_REREAD_CAP_REACHED", r_fourth_graph["reason"])
+
+        # 4. SECOND Developer Message (`USER_INPUT` #2) -> Wave 1 expires automatically, AND Scout Wave 2 gets a fresh 3-read cap AND blocks on #4!
+        with parent_tx.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Now study MealPlan sync"}) + "\n")
+
+        # Direct read on new user turn works cleanly because Wave 1 expired!
+        r_new_turn_read = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "core/model/src/main/java/com/demo/model/MealPlan.kt")}},
+        })
+        self.assertEqual("allow", r_new_turn_read["decision"])
+
+        # Dispatch Scout Wave 2 ("مش اول وكيل فرعي بس" — verify 2nd scout wave enforces exact same post-scout cap!)
+        p_scout_w2 = "Inspect MealPlan and FoodViewModel sync pipeline."
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_w2},
+            },
+        })["decision"])
+        post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
+
+        for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
+            self.assertEqual("allow", self._pre_tool({
+                "conversationId": parent_cid,
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+            })["decision"])
+        r_w2_fourth = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+        })
+        self.assertEqual("deny", r_w2_fourth["decision"])
+        self.assertIn("POST_SCOUT_REREAD_CAP_REACHED", r_w2_fourth["reason"])
+
+        # 5. Multi-Phase Task (`p1` -> `p2` with `scoped_phase_review_enabled=True`):
+        #    Verify Worker Wave in `p1` AND Worker Wave in `p2` + Specialist + Phase Review GraphEngine/Zero-Hop + Reviewer 12-call cap!
+        self._draft_approve_begin(
+            task_id="t-multiphase-v132",
+            title="Multi-phase calories card visibility and settings update",
+            kind="FEATURE",
+            files=["app/src/main/java/com/demo/FoodViewModel.kt", "app/src/main/java/com/demo/FoodScreen.kt"],
+            surfaces=["COMPOSE_UI", "BUSINESS_LOGIC"],
+            phases=[
+                {
+                    "id": "p1",
+                    "name": "Update FoodViewModel",
+                    "description": "Expose alwaysVisible flag in FoodViewModel",
+                    "expected_files": ["app/src/main/java/com/demo/FoodViewModel.kt"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                    "scoped_phase_review_enabled": True,
+                },
+                {
+                    "id": "p2",
+                    "name": "Update FoodScreen",
+                    "description": "Render calories card in FoodScreen",
+                    "expected_files": ["app/src/main/java/com/demo/FoodScreen.kt"],
+                    "expected_surfaces": ["COMPOSE_UI"],
+                },
+            ],
+        )
+
+        # Built-in `research` must STILL be blocked during IMPLEMENTING!
+        res_impl_research = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "research", "Role": "r", "Prompt": "check"}]}},
+        })
+        self.assertEqual("deny", res_impl_research["decision"])
+        self.assertIn("USE_HARNESS_SCOUT_AGENT", res_impl_research["reason"])
+
+        # Dispatch Worker Wave 1 in Phase `p1`
+        w1_brief = (
+            "Update app/src/main/java/com/demo/FoodViewModel.kt to add fun isCaloriesAlwaysVisible(): Boolean = true "
+            "and run python .agents/harness.py compile."
+        )
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": w1_brief},
+            },
+        })["decision"])
+        (self.repo / "app/src/main/java/com/demo/FoodViewModel.kt").write_text(
+            "package com.demo\n\nclass FoodViewModel {\n    fun isCaloriesAlwaysVisible(): Boolean = true\n    fun loadPlan(): String = \"1800\"\n}\n",
+            encoding="utf-8",
+        )
+        post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
+
+        # `git diff` is ALWAYS free after worker completion!
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "run_command", "args": {"CommandLine": "git diff"}},
+        })["decision"])
+        # After 3 surgical reads in p1, 4th read is blocked by POST_WORKER_REREAD_CAP_REACHED!
+        for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
+            self.assertEqual("allow", self._pre_tool({
+                "conversationId": parent_cid,
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+            })["decision"])
+        r_w1_fourth = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+        })
+        self.assertEqual("deny", r_w1_fourth["decision"])
+        self.assertIn("POST_WORKER_REREAD_CAP_REACHED", r_w1_fourth["reason"])
+
+        # Advance `p1` via real `workflow.checkpoint_phase` -> build Phase Review package -> verify GraphEngine topology + Zero-Hop inlining + Pre-Verified Gates!
+        with unittest.mock.patch("_workflow.engine.check_phase_compile", return_value=(True, "PASS")), unittest.mock.patch("_workflow.engine.check_phase_tests", return_value=(True, "PASS")):
+            cp1 = workflow.checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id="t-multiphase-v132", phase_id="p1"))
+            self.assertEqual("CHECKPOINT_PASS", cp1["status"])
+
+        import review_models
+        review_models.set_policy(
+            self.repo,
+            review_models.resolve_preset_policy("inherit"),
+            task_id="t-multiphase-v132",
+            scope="project",
+            host="antigravity",
+            source="conversation",
+            proof_reference="inherit",
+        )
+        pkg_p1_path, meta_p1 = phase_review.build_phase_package(self.repo, "t-multiphase-v132", "p1", host="antigravity")
+        pkg_p1_text = pkg_p1_path.read_text(encoding="utf-8")
+        self.assertIn("## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY", pkg_p1_text)
+        first_p1_rev = meta_p1["selected_reviewers"][0]
+        brief_p1_text = Path(meta_p1["briefs"][first_p1_rev]).read_text(encoding="utf-8")
+        self.assertIn("ZERO-HOP FAST PATH (INLINED BELOW)", brief_p1_text)
+        self.assertIn("Pre-Verified Deterministic Gates", brief_p1_text)
+        self.assertIn("ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY", brief_p1_text)
+
+        # Dispatch Phase Reviewer & verify Reviewer 12-call hard step budget (`REVIEWER_STEP_BUDGET_REACHED`)!
+        phase_review.record_phase_dispatch_batch(self.repo, "t-multiphase-v132", "p1", meta_p1["selected_reviewers"], host="antigravity")
+        for idx_r, r_role in enumerate(meta_p1["selected_reviewers"]):
+            cid_rev = f"phase-rev-p1-{idx_r}"
+            b_txt = Path(meta_p1["briefs"][r_role]).read_text(encoding="utf-8")
+            self._spawn_fake_reviewer_transcript(
+                exec_id=cid_rev,
+                parent_id=parent_cid,
+                prompt_text=b_txt,
+                task_id="t-multiphase-v132",
+                run_id=meta_p1["phase_review_run_id"],
+                reviewer=r_role,
+                package_sha256=meta_p1["package_sha256"],
+                verdict="PASS",
+                configured_model="inherit",
+                observed_model="gemini-4-carbon-medium",
+            )
+            if idx_r == 0:
+                for step_i in range(dp.MAX_REVIEWER_TOOL_CALLS):
+                    r_ok = self._pre_tool({
+                        "conversationId": cid_rev,
+                        "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+                    })
+                    self.assertEqual("allow", r_ok["decision"], f"Reviewer step {step_i + 1} failed: {r_ok}")
+                r_cap = self._pre_tool({
+                    "conversationId": cid_rev,
+                    "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+                })
+                self.assertEqual("deny", r_cap["decision"])
+                self.assertIn("REVIEWER_STEP_BUDGET_REACHED", r_cap["reason"])
+
+        # Reconcile PostToolUse for phase reviewers (binds all phase reviewer transcripts just like real Antigravity)
+        post_reconcile({
+            "conversationId": parent_cid,
+            "transcriptPath": str(parent_tx),
+            "toolCall": {"name": "invoke_subagent"},
+            "toolResult": {"subagents": [{"conversationId": f"phase-rev-p1-{i}"} for i in range(len(meta_p1["selected_reviewers"]))]},
+        })
+        # While all phase reviewers have finished (`DONE` transcripts) and are bound, Lead Model reading code before `phase-review complete-all` is blocked!
+        r_pre_ingest = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+        })
+        self.assertEqual("deny", r_pre_ingest["decision"])
+        self.assertIn("POST_REVIEW_REREAD_BLOCKED", r_pre_ingest["reason"])
+
+        # Complete & finalize p1 phase review, then advance to Phase `p2`!
+        with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(self.brain_app_data)}):
+            for idx_r, r_role in enumerate(meta_p1["selected_reviewers"]):
+                phase_review.complete_phase_review(self.repo, "t-multiphase-v132", "p1", r_role, f"phase-rev-p1-{idx_r}", host="antigravity")
+        self.assertEqual("PASS", phase_review.finalize_phase_review(self.repo, "t-multiphase-v132", "p1")["verdict"])
+        workflow.begin_next_phase(argparse.Namespace(repo=str(self.repo), task_id="t-multiphase-v132"))
+
+        # In Phase `p2`: `p1`'s worker cap expired automatically! Dispatch On-Demand Specialist (`android-ui-expert-agent`) AND Worker Wave 2 (`p2`)!
+        ui_prompt = "Audit FoodScreen RTL padding and edge-to-edge WindowInsets."
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"Subagents": [{"TypeName": "android-ui-expert-agent", "Role": "android-ui-expert-agent", "Prompt": ui_prompt}]},
+            },
+        })["decision"])
+        # Bind specialist transcript and verify specialist is strictly read-only + `send_message` forbidden!
+        cid_ui = "spec-ui-p2"
+        tx_ui = self.brain_app_data / "brain" / cid_ui / ".system_generated" / "logs" / "transcript.jsonl"
+        tx_ui.parent.mkdir(parents=True, exist_ok=True)
+        tx_ui.write_text(
+            json.dumps({
+                "source": "SYSTEM_SDK",
+                "type": "SYSTEM_MESSAGE",
+                "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={ui_prompt}\n</SYSTEM_MESSAGE>",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual("deny", self._pre_tool({
+            "conversationId": cid_ui,
+            "toolCall": {"name": "write_to_file", "args": {"TargetFile": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt"), "CodeContent": "x"}},
+        })["decision"])
+        post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}, "toolResult": {"conversationId": cid_ui}})
+
+        for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
+            self.assertEqual("allow", self._pre_tool({
+                "conversationId": parent_cid,
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+            })["decision"])
+        r_spec_cap = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+        })
+        self.assertEqual("deny", r_spec_cap["decision"])
+        self.assertIn("POST_SPECIALIST_REREAD_CAP_REACHED", r_spec_cap["reason"])
+
+        # Now dispatch Worker Wave 2 in Phase `p2` -> verify `POST_WORKER_REREAD_CAP_REACHED` applies on `p2` too, AND unlocks if Lead edits a fix!
+        w2_brief = (
+            "Update app/src/main/java/com/demo/FoodScreen.kt to render always-visible calories card "
+            "and run python .agents/harness.py compile."
+        )
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": w2_brief},
+            },
+        })["decision"])
+        post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
+
+        for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
+            self.assertEqual("allow", self._pre_tool({
+                "conversationId": parent_cid,
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+            })["decision"])
+        r_w2_cap = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+        })
+        self.assertEqual("deny", r_w2_cap["decision"])
+        self.assertIn("POST_WORKER_REREAD_CAP_REACHED", r_w2_cap["reason"])
+
+        # Lead Architect decides to edit `FoodScreen.kt` directly -> unlocks subsequent reads cleanly!
+        r_lead_edit = self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "write_to_file",
+                "args": {
+                    "TargetFile": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt"),
+                    "CodeContent": "package com.demo\n\nclass FoodScreen {\n    fun renderCard(): String = \"calories_always_visible\"\n}\n",
+                },
+            },
+        })
+        self.assertEqual("allow", r_lead_edit["decision"], r_lead_edit)
+        self.assertEqual("allow", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
+        })["decision"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

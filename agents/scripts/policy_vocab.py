@@ -73,6 +73,11 @@ CORE_ROUTED_REVIEWERS = (
     "spec-compliance-agent",
 )
 
+ON_DEMAND_SPECIALIST_AGENTS = (
+    "qa-diagnostics-agent",
+    "android-ui-expert-agent",
+)
+
 ANTIGRAVITY_REVIEWER_TOOLS = (
     "view_file",
     "grep_search",
@@ -109,4 +114,3 @@ ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS = (
     "TypeName",
     "Workspace",
 )
-
