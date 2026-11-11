@@ -209,7 +209,7 @@ def _evaluate_plan_readiness(
     """Compute advisory architecture, grounding & specification readiness diagnostics for a plan."""
     risk_tier = str((policy or {}).get("risk_tier") or "T1_LOW")
     planning_depth = str(plan.get("planning_depth") or "BOUNDED").upper()
-    is_high_risk = risk_tier in {"T3_HIGH", "T4_SENSITIVE", "T5_CRITICAL"}
+    is_high_risk = risk_tier in {"T3_HIGH", "T3_SUBSYSTEM", "T4_DATA_DEVICE", "T4_SENSITIVE", "T5_CRITICAL"}
     is_architectural = planning_depth == "ARCHITECTURAL"
     has_approach = bool(str(plan.get("approach") or "").strip())
     has_risks = bool(plan.get("risks"))

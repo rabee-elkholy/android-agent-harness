@@ -1386,5 +1386,76 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertIn("Add token rotation worker", json.dumps(resumed_bridge))
 
 
+
+    def test_5_hybrid_model_and_new_modules_deep_integration(self) -> None:
+        """Verify seamless integration between Option 4 Hybrid Models (`Flash` Scout/Worker + `risk-hybrid`) and all 5 v1.3.1 modules."""
+        import delegation_policy as dp
+        import install_tool_adapters as ita
+        import review_models
+        import review_orchestrator
+        import review_package
+        import workflow
+        from _vnext_common import read_json, state_root
+
+        # 1. Verify Flash Scout & Worker native system prompts embed `symbol outline/read/replace-body`, `roborazzi`, and `health`
+        scout_md = dp.render_utility_agent_markdown(dp.SCOUT_AGENT)
+        worker_md = dp.render_utility_agent_markdown(dp.WORKER_AGENT)
+        self.assertIn("symbol outline", scout_md)
+        self.assertIn("symbol read", scout_md)
+        self.assertIn("symbol replace-body", worker_md)
+        self.assertIn("roborazzi verify", worker_md)
+        self.assertIn("gemini-3.8-flash-medium", scout_md)
+        self.assertIn("gemini-3.8-flash-medium", worker_md)
+
+        # 2. Verify T5_CRITICAL (`MANIFEST_PERMISSION`) locks production edits to Lead Architect while allowing Flash Worker on tests
+        self._draft_approve_begin(
+            task_id="t-perm-hybrid",
+            title="Add foreground service permission guard",
+            kind="FEATURE",
+            files=["app/src/main/java/com/demo/AuthManager.kt"],
+            surfaces=["MANIFEST_PERMISSION"],
+        )
+        act_perm = workflow.resolve_next_action(self.repo, "t-perm-hybrid", host="antigravity")
+        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", act_perm["delegation_advisory"]["strategy"])
+        self.assertEqual("TESTS_AND_GATES_ONLY", act_perm["delegation_advisory"]["worker_mode"])
+        workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-perm-hybrid", source="developer_terminal", proof_reference="done"))
+
+        # 3. Verify T5_CRITICAL + `risk-hybrid` task policy keeps `.agents/agents/*/agent.md` synchronized (`inherit`) even across adapter regeneration!
+        self._draft_approve_begin(
+            task_id="t-hybrid-sync",
+            title="Update AuthManager token check",
+            kind="FEATURE",
+            files=["app/src/main/java/com/demo/AuthManager.kt"],
+            surfaces=["AUTH", "SENSITIVE_DATA"],
+        )
+        (self.repo / "app/src/main/java/com/demo/AuthManager.kt").write_text(
+            "package com.demo\n\nclass AuthManager {\n    fun refreshToken(raw: String): Boolean = raw.length >= 20\n}\n",
+            encoding="utf-8",
+        )
+        cur = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="t-hybrid-sync", force=False, host="antigravity"))
+        pol = read_json(Path(cur["policy"]))
+        man = read_json(Path(cur["manifest"]))
+        for g in pol.get("gates") or []:
+            if g != "manifest":
+                self._record_gate(man["delivery_snapshot_sha256"], man["change_set_sha256"], cur["run_id"], g, "selftest")
+        review_package.build_package(self.repo, "t-hybrid-sync")
+        review_models.set_policy(
+            self.repo,
+            review_models.resolve_preset_policy("risk-hybrid"),
+            task_id="t-hybrid-sync",
+            scope="task",
+            host="antigravity",
+            source="conversation",
+            proof_reference="risk-hybrid-task",
+        )
+        tdir = state_root(self.repo) / "tasks/t-hybrid-sync"
+        cur = read_json(tdir / "current-run.json")
+        # Dispatch batch creates active review ledger and synchronizes agent frontmatter
+        review_orchestrator.record_dispatch_batch(self.repo, "t-hybrid-sync", sorted(pol["reviewers"]), host="antigravity")
+        # Regenerate Antigravity adapters while T5_CRITICAL active review is live -> must keep `inherit` (no stale Flash frontmatter)!
+        ita.generate_antigravity_agents(self.repo, dry_run=False)
+        review_models.assert_dispatch_ready(self.repo, read_json(tdir / "current-run.json"), sorted(pol["reviewers"]))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

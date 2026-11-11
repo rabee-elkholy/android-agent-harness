@@ -443,14 +443,17 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
             from reviewer_host import active_reviews
             from workflow import state_root
             from _vnext_common import read_json
+            found_active_run = False
             for run, _ in active_reviews(repo):
                 if run.get("review_host") == "antigravity":
                     sel = frozen_models(run).get(role, {})
-                    fm = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
-                    if fm and fm != "inherit":
-                        configured_model = fm
+                    if sel:
+                        found_active_run = True
+                        fm = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
+                        if fm and fm != "inherit":
+                            configured_model = fm
                         break
-            if configured_model is None:
+            if not found_active_run and configured_model is None:
                 active_f = state_root(repo) / "active-task.json"
                 active_tid = None
                 if active_f.is_file():
