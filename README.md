@@ -83,7 +83,7 @@ AI models write Kotlin and Compose code fast — keeping them aligned with a rea
 Open your Android or KMM/KMP project in **Google Antigravity** (or Claude Code) and paste this single bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.4/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.5/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 What happens automatically and non-destructively:
@@ -109,7 +109,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or run directly from a pinned shallow clone with **zero global packages**:
 
 ```bash
-git clone --depth 1 --branch v1.3.4 --single-branch \
+git clone --depth 1 --branch v1.3.5 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
