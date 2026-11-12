@@ -6,16 +6,16 @@ Controlled head-to-head evaluation of all **`18` standardized tasks** defined in
 
 ## 1. Executive Summary (`18` Standardized Tasks)
 
-| Metric | Arm A: Agent Alone (`Without Harness`) | Arm B: Agent + Harness (`v1.3.5`) | Visual Ratio & Practical Impact |
+| Metric | Arm A: Agent Alone (`Without Harness`) | Arm B: Agent + Harness (`v1.3.5`) | Measured Practical Impact |
 |---|---:|---:|---|
-| **Silent Production / Security / Schema Defects Escaped** | **`18 / 18` (`100%`)** | **`0 / 18` (`0%`)** | `██████████` **`100%` intercepted before commit** |
-| **Caught by `0`-Token Deterministic Python Gates (`< 0.2s`)** | `0 / 18` (`0%`) | **`14 / 18` (`77.8%`)** | `████████░░` Model-independent AST, XML, Room, Manifest, KMP & UI-tree gates |
-| **Caught via Epistemic `Review Protocol V2` (`FINDINGS -> R2`)** | `0 / 18` (`0%`) | **`4 / 18` (`22.2%`)** | `██░░░░░░░░` `#6` `di-module`, `#7` `deeplink-change`, `#8` `sensor-lifecycle`, `#9` `lazycolumn-keys` |
-| **Unauthorized `git commit && git push` Executed** | **`1 / 1` (Executed)** | **`0 / 1` (Denied)** | `██████████` `Human Git Authority` enforced at `PreToolUse` hook layer |
-| **Vacuous `0`-Test Suite Accepted on Legacy Repo (`DW-03`)** | **Accepted (`exit 0`)** | **Refused (`0 tests`)** | `██████████` Blocked shipping untested `ViewModel` code on `Ecommerce-Compose` |
-| **Cumulative Raw Discovery Tokens (`18` Tasks)** | **`112,097` tokens** | **`90,348` tokens** | `████████░░` **`-19.4%` raw payload bytes** prior to Scout subagent isolation |
-| **Cumulative Frontier Lead-Chat Discovery Context** | **`112,097` tokens** | **`~8,640` tokens** | `█░░░░░░░░░` **`-92.3%` Frontier Lead context** (`Scout` isolates raw AST JSON on Flash) |
-| **Plan Artifact Footprint (`PeopleInSpace` `v1.3.4 -> v1.3.5`)** | Unbound chat prose (`0` hash binding) | **`38,790 B -> 5,396 B`** | `█░░░░░░░░░` **`-86.09%` `plan.md` bytes** (`-99.7%` on `1,000+` file repos) |
+| **Silent Production / Security / Schema Defects Escaped** | **`18 / 18` (`100%`)** | **`0 / 18` (`0%`)** | **`100%` intercepted before commit** |
+| **Caught by `0`-Token Deterministic Python Gates (`< 0.2s`)** | `0 / 18` (`0%`) | **`14 / 18` (`77.8%`)** | Model-independent AST, XML, Room, Manifest, KMP & UI-tree gates |
+| **Caught via Epistemic `Review Protocol V2` (`FINDINGS -> R2`)** | `0 / 18` (`0%`) | **`4 / 18` (`22.2%`)** | `#6` `di-module`, `#7` `deeplink-change`, `#8` `sensor-lifecycle`, `#9` `lazycolumn-keys` |
+| **Unauthorized `git commit && git push` Executed** | **`1 / 1` (Executed)** | **`0 / 1` (Denied)** | `Human Git Authority` enforced at `PreToolUse` hook layer |
+| **Vacuous `0`-Test Suite Accepted on Legacy Repo (`DW-03`)** | **Accepted (`exit 0`)** | **Refused (`0 tests`)** | Blocked shipping untested `ViewModel` code on `Ecommerce-Compose` |
+| **Cumulative Raw Discovery Tokens (`18` Tasks)** | **`112,097` tokens** | **`90,348` tokens** | **`-19.4%` raw payload bytes** prior to Scout subagent isolation |
+| **Cumulative Frontier Lead-Chat Discovery Context** | **`112,097` tokens** | **`~8,640` tokens** | **`-92.3%` Frontier Lead context** (`Scout` isolates raw AST JSON on Flash) |
+| **Plan Artifact Footprint (`PeopleInSpace` `v1.3.4 -> v1.3.5`)** | Unbound chat prose (`0` hash binding) | **`38,790 B -> 5,396 B`** | **`-86.09%` `plan.md` bytes** (`-99.7%` on `1,000+` file repos) |
 
 ## 2. Defect Interception Breakdown by Defense Layer
 
