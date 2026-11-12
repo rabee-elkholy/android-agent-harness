@@ -145,7 +145,7 @@ def git_merge_in_progress(repo: Path) -> dict[str, str | list[str]]:
             ["git", "rev-parse", "--verify", "-q", ref_name],
             cwd=str(root),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
         )
         sha = (proc.stdout or "").strip() if proc.returncode == 0 else ""
@@ -581,7 +581,7 @@ def _external_inputs(repo: Path) -> list[dict[str, str | int | bool]]:
 @lru_cache(maxsize=1)
 def _toolchain_versions() -> dict[str, str]:
     try:
-        java_proc = subprocess.run(["java", "-version"], capture_output=True, text=True, check=False)
+        java_proc = subprocess.run(["java", "-version"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         # JVM option notices ("Picked up JAVA_TOOL_OPTIONS: ...") carry environment noise such as
         # proxy ports; the version line is the toolchain identity.
         java_lines = [
@@ -592,7 +592,7 @@ def _toolchain_versions() -> dict[str, str]:
     except OSError:
         java_version = "unavailable"
     try:
-        git_proc = subprocess.run(["git", "--version"], capture_output=True, text=True, check=False)
+        git_proc = subprocess.run(["git", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         git_version = (git_proc.stdout or git_proc.stderr or "unavailable").strip()[:200]
     except OSError:
         git_version = "unavailable"
@@ -1205,7 +1205,7 @@ def build_task_manifest(
                     ["git", "diff", "--name-status", task_base_head, current_head],
                     cwd=str(repo),
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                     check=False,
                 )
                 if proc.returncode == 0:

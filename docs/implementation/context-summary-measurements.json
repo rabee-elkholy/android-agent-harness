@@ -4,41 +4,28 @@
   "samples": [
     {
       "sample": 1,
-      "targets": 8,
+      "targets": 6,
       "bytes": {
-        "expanded": 281016,
-        "summary": 214242
+        "expanded": 110017,
+        "summary": 99277
       },
-      "reduction_percent": 23.76,
+      "reduction_percent": 9.76,
       "presentation_median_ms": {
-        "expanded": 6.88,
-        "summary": 5.89
+        "expanded": 2.17,
+        "summary": 2.14
       }
     },
     {
       "sample": 2,
-      "targets": 8,
+      "targets": 6,
       "bytes": {
-        "expanded": 264661,
-        "summary": 200598
+        "expanded": 142937,
+        "summary": 128289
       },
-      "reduction_percent": 24.21,
+      "reduction_percent": 10.25,
       "presentation_median_ms": {
-        "expanded": 6.3,
-        "summary": 5.32
-      }
-    },
-    {
-      "sample": 3,
-      "targets": 4,
-      "bytes": {
-        "expanded": 143800,
-        "summary": 112994
-      },
-      "reduction_percent": 21.42,
-      "presentation_median_ms": {
-        "expanded": 3.49,
-        "summary": 3.06
+        "expanded": 2.86,
+        "summary": 2.77
       }
     }
   ]

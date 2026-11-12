@@ -86,8 +86,8 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
         if ctx.get("role"):
             return True
         if ctx.get("unverified_reviewer"):
-            from antigravity_runtime import resolve_transcript
-            tp = resolve_transcript(conversation_id)
+            from antigravity_runtime import prefer_full_transcript, resolve_transcript
+            tp = prefer_full_transcript(resolve_transcript(conversation_id))
             if tp is not None and tp.is_file():
                 head = tp.read_text(encoding="utf-8", errors="replace")[:4096]
                 if "MESSAGE_PRIORITY_HIGH" in head and '"USER_EXPLICIT"' not in head:
@@ -106,6 +106,8 @@ def _message() -> str:
 
 
 def _compact_message() -> str:
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     try:
         from mutation_guard import active_plan
         plan = active_plan(REPO)
@@ -219,7 +221,7 @@ def _update_notice() -> str:
 
 def main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
         payload = json.loads(raw) if raw.strip() else {}
         invocation = payload.get("invocationNum") if isinstance(payload, dict) else None
         conversation_id = str(

@@ -257,23 +257,43 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 pass
         restored.append(rel_installed)
 
-    # Re-render Antigravity agent markdown wrappers when present so subagent JSON updates propagate
+    # Re-render Antigravity agent markdown wrappers when present so subagent updates propagate
+    # while preserving role-specific tool allowlists for utility and specialist subagents.
     if (root / ".agents" / "agents").is_dir():
         try:
+            from delegation_policy import render_utility_agent_markdown
             from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
+            from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS
             from review_models import _antigravity_frontmatter_model
             for agent_md in sorted((root / ".agents" / "agents").glob("*/agent.md")):
                 role = agent_md.parent.name
-                src_json = root / ".agents" / "subagents" / f"{role}.json"
-                if src_json.is_file():
-                    data = json.loads(src_json.read_text(encoding="utf-8"))
-                    fm_model = _antigravity_frontmatter_model(root, role)
-                    rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model)).encode("utf-8")
-                    if agent_md.read_bytes() != rendered:
-                        atomic_write_bytes(agent_md, rendered)
-                        rel_agent = agent_md.relative_to(root).as_posix()
-                        if rel_agent not in restored:
-                            restored.append(rel_agent)
+                rendered: bytes | None = None
+                if role in CORE_UTILITY_AGENTS:
+                    rendered = with_managed_marker(render_utility_agent_markdown(role)).encode("utf-8")
+                elif role in ON_DEMAND_SPECIALIST_AGENTS:
+                    src_json = root / ".agents" / "subagents" / f"{role}.json"
+                    if src_json.is_file():
+                        sp_data = json.loads(src_json.read_text(encoding="utf-8"))
+                        sp_name = json.dumps(role, ensure_ascii=False)
+                        sp_desc = json.dumps(str(sp_data.get("description") or role).strip(), ensure_ascii=False)
+                        sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
+                        sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+                        sp_md = (
+                            f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
+                            f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+                        )
+                        rendered = with_managed_marker(sp_md).encode("utf-8")
+                else:
+                    src_json = root / ".agents" / "subagents" / f"{role}.json"
+                    if src_json.is_file():
+                        data = json.loads(src_json.read_text(encoding="utf-8"))
+                        fm_model = _antigravity_frontmatter_model(root, role)
+                        rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model)).encode("utf-8")
+                if rendered is not None and agent_md.read_bytes() != rendered:
+                    atomic_write_bytes(agent_md, rendered)
+                    rel_agent = agent_md.relative_to(root).as_posix()
+                    if rel_agent not in restored:
+                        restored.append(rel_agent)
         except (OSError, ValueError, ImportError, ValidationError):
             pass
 

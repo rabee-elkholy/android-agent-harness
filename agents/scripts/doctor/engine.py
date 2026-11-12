@@ -135,7 +135,7 @@ class HarnessDoctor:
         java_cmd, java_source = self._effective_java()
         if java_cmd:
             try:
-                proc = subprocess.run([java_cmd, "-version"], capture_output=True, text=True, timeout=5)
+                proc = subprocess.run([java_cmd, "-version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
                 out = (proc.stderr or proc.stdout).strip()
                 match = re.search(r'version "(\d+)(?:\.(\d+))?', out)
                 if match:
@@ -210,7 +210,7 @@ class HarnessDoctor:
         try:
             proc = subprocess.run(
                 ["git", "rev-parse", "--git-path", "info/exclude"], cwd=str(self.repo),
-                capture_output=True, text=True, check=False, timeout=5.0,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=5.0,
             )
             raw = (proc.stdout or "").strip()
             git_exclude = Path(raw) if Path(raw).is_absolute() else (self.repo / raw).resolve()
@@ -267,7 +267,7 @@ class HarnessDoctor:
                 ["git", "status", "--porcelain"],
                 cwd=str(self.repo),
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=5.0,
             )
             if proc.returncode == 0:
@@ -1160,7 +1160,7 @@ class HarnessDoctor:
 
         self.log(category, "ADB Executable", "PASS", f"adb available at {adb_path}")
         try:
-            proc = subprocess.run([adb_path, "devices"], capture_output=True, text=True, timeout=5.0)
+            proc = subprocess.run([adb_path, "devices"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5.0)
             if proc.returncode != 0:
                 detail = (proc.stderr or proc.stdout or "").strip()
                 suffix = f": {detail}" if detail else ""
@@ -1197,7 +1197,7 @@ class HarnessDoctor:
             try:
                 ans = json.loads(answers_file.read_text(encoding="utf-8"))
                 tools = ans.get("tools") or []
-                is_ag = bool("antigravity" in tools)
+                is_ag = bool("antigravity" in tools or ("gemini" in tools and (self.repo / ".agents" / "agents").is_dir()))
             except (OSError, ValueError):
                 pass
 
@@ -1438,7 +1438,7 @@ class HarnessDoctor:
                     fm_model = fm.get("model")
                     if fm_model is not None:
                         from review_models import ANTIGRAVITY_MODEL_CHOICES
-                        if str(fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(fm_model) in ("inherit", "flash-dynamic", "hybrid-smart"):
+                        if str(fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(fm_model) in ("inherit", "flash-dynamic", "hybrid-smart", "risk-hybrid", "flash-argon-hybrid"):
                             agent_errors.append(f"{role}: invalid frontmatter model ({fm_model})")
                     r_tools = set(fm.get("tools") or [])
                     if r_tools != approved_tools:
@@ -1463,6 +1463,13 @@ class HarnessDoctor:
                     u_fm = _parse_frontmatter(u_txt)
                     if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
                         agent_errors.append(f"{u_role}: invalid frontmatter")
+                    allowed_u_models = (
+                        {u_spec["model"], "gemini-4-argon-low"}
+                        if u_role == "harness-worker-agent"
+                        else {u_spec["model"]}
+                    )
+                    if str(u_fm.get("model") or "") not in allowed_u_models:
+                        agent_errors.append(f"{u_role}: unexpected model ({u_fm.get('model')})")
                     if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
                         agent_errors.append(f"{u_role}: tools mismatch")
                     if u_spec["fingerprint"] not in u_txt:
@@ -1497,6 +1504,8 @@ class HarnessDoctor:
 
         # 8. File Watcher Storm Protection (Android build / cache exclusions)
         self._check_watcher_exclusions(cat, is_ag=is_ag)
+        # 9. Antigravity Runtime Hazard Guards (#198819 Remote Mode, #198689 language_server.log bloat, #199301 Windows stdio MCP)
+        self._check_antigravity_runtime_hazards(cat, is_ag=is_ag)
 
     def _check_watcher_exclusions(self, category: str, *, is_ag: bool) -> None:
         if self.is_raw_kit or not is_ag:
@@ -1559,6 +1568,76 @@ class HarnessDoctor:
                 "File Watcher Exclusions",
                 "PASS",
                 ".vscode/settings.json uses custom JSONC syntax; skipped automatic files.watcherExclude parse.",
+            )
+
+    def _check_antigravity_runtime_hazards(self, category: str, *, is_ag: bool) -> None:
+        try:
+            from antigravity_runtime import (
+                detect_antigravity_remote_mode,
+                inspect_language_server_logs,
+                inspect_windows_stdio_mcp_risk,
+                remote_subagents_explicitly_allowed,
+            )
+        except ImportError:
+            return
+
+        # 9a. language_server.log WatchVersionControlState bloat (#198689) & Remote Mode quota leak (#198819)
+        log_report = inspect_language_server_logs()
+        bloated = list(log_report.get("bloated_logs") or [])
+        is_remote, rem_signals = detect_antigravity_remote_mode()
+        rem_override = remote_subagents_explicitly_allowed()
+
+        if bloated:
+            first = bloated[0]
+            spin_note = f" (WatchVersionControlState spin loop: {first['vcs_hits_in_tail']} hits in tail)" if first.get("vcs_spin_loop") else ""
+            self.log(
+                category,
+                "Antigravity Log & Remote Guard",
+                "WARN",
+                f"Bloated language_server.log detected: {first['path']} ({first['size_mb']} MB){spin_note} (#198689).",
+                [
+                    "Close Antigravity and truncate language_server.log to reclaim disk space immediately.",
+                    "Upgrade Antigravity IDE / Language Server from v2.29.0 to v2.31.0+.",
+                ],
+            )
+        elif is_remote and not rem_override:
+            self.log(
+                category,
+                "Antigravity Log & Remote Guard",
+                "WARN",
+                f"Antigravity Remote Mode active ({', '.join(rem_signals)}): invoke_subagent ignores Model='flash' on Argon parent sessions (#198819).",
+                [
+                    "Run subagent delegation in Local Mode, keep main chat on Carbon/Claude, or set HARNESS_ALLOW_REMOTE_SUBAGENTS=1 if intentional.",
+                ],
+            )
+        else:
+            checked_cnt = len(log_report.get("checked_paths") or [])
+            self.log(
+                category,
+                "Antigravity Log & Remote Guard",
+                "PASS",
+                f"Local mode verified (no #198819 Remote Argon quota leak); {checked_cnt} language_server.log path(s) checked with zero #198689 bloat.",
+            )
+
+        # 9b. Windows high-churn stdio MCP pipe-handle collision (#199301 / #198417)
+        mcp_risk = inspect_windows_stdio_mcp_risk(self.repo)
+        if mcp_risk.get("at_risk"):
+            servers = ", ".join(mcp_risk.get("stdio_servers") or [])
+            self.log(
+                category,
+                "Windows MCP Transport Guard",
+                "WARN",
+                f"Multiple stdio MCP servers configured on Windows ({servers}) — risks language_server.exe AcceptEx exit code 2 (#199301).",
+                [
+                    "Migrate high-churn MCP servers on Windows from stdio pipes to localhost HTTP/SSE endpoints.",
+                ],
+            )
+        elif mcp_risk.get("applicable"):
+            self.log(
+                category,
+                "Windows MCP Transport Guard",
+                "PASS",
+                "Windows MCP transport check healthy (<2 stdio pipe MCP servers configured).",
             )
 
     def check_update_journal(self) -> None:

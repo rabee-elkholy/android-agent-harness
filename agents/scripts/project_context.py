@@ -1360,6 +1360,44 @@ def load_code_relevant_project_notes(
     return filter_code_relevant_notes_dict(base, include_pm=include_pm, max_chars=max_chars)
 
 
+def normalize_instruction_scope(raw_scope: Any) -> dict[str, str]:
+    """Normalize dict or string shorthand instruction scope (`"global"`, `"MODULE::app"`, etc.) to `{"kind", "value"}`."""
+    if isinstance(raw_scope, dict):
+        return {
+            "kind": str(raw_scope.get("kind") or "GLOBAL").upper(),
+            "value": str(raw_scope.get("value") or "*").strip(),
+        }
+    if isinstance(raw_scope, str):
+        s = raw_scope.strip()
+        if not s or s.upper() in {"GLOBAL", "*", "ALL"}:
+            return {"kind": "GLOBAL", "value": "*"}
+        if ":" in s and not s.startswith(":"):
+            prefix, _, rest = s.partition(":")
+            if prefix.strip().upper() in {"GLOBAL", "MODULE", "PACKAGE", "PATH", "SOURCE_SET"}:
+                return {"kind": prefix.strip().upper(), "value": rest.strip() or "*"}
+        if s.startswith(":"):
+            return {"kind": "MODULE", "value": s}
+        return {"kind": "PATH", "value": s}
+    return {"kind": "GLOBAL", "value": "*"}
+
+
+def normalize_instruction_record(item: dict[str, Any]) -> dict[str, Any]:
+    """Normalize status, scope, and deterministic fallback sha256 on CLI- or hand-authored instructions."""
+    scope = normalize_instruction_scope(item.get("scope"))
+    raw_status = item.get("status")
+    if raw_status:
+        status = str(raw_status).strip().upper()
+    elif item.get("active") is False:
+        status = "REVOKED"
+    else:
+        status = "ACTIVE"
+    sha = str(item.get("sha256") or item.get("proof_reference_sha256") or "").strip()
+    if not sha:
+        canonical = f"{item.get('id', '')}|{item.get('text', '')}|{json.dumps(scope, sort_keys=True)}"
+        sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {**item, "scope": scope, "status": status, "sha256": sha}
+
+
 def load_developer_instructions_cached(repo: Path, *, active_only: bool = False) -> list[dict[str, Any]]:
     """Load `.agents/project-context/developer-instructions.json` with content-digest caching."""
     inst_file = repo / ".agents" / "project-context" / "developer-instructions.json"
@@ -1375,7 +1413,7 @@ def load_developer_instructions_cached(repo: Path, *, active_only: bool = False)
         try:
             data = json.loads(raw_bytes.decode("utf-8"))
             raw_list = data.get("instructions") if isinstance(data, dict) else None
-            cached = [dict(item) for item in raw_list if isinstance(item, dict)] if isinstance(raw_list, list) else []
+            cached = [normalize_instruction_record(item) for item in raw_list if isinstance(item, dict)] if isinstance(raw_list, list) else []
         except (UnicodeDecodeError, ValueError, TypeError):
             cached = []
         if len(_DEV_INST_MEM_CACHE) >= 32:
@@ -1645,7 +1683,7 @@ def compute_source_fingerprint(repo: Path) -> dict:
             ["git", "rev-parse", "HEAD"],
             cwd=str(root),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
         )
         if head_proc.returncode == 0:
@@ -1661,7 +1699,7 @@ def compute_source_fingerprint(repo: Path) -> dict:
             ["git", "status", "--porcelain=v1", "-uall"],
             cwd=str(root),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
         )
         if proc.returncode == 0:

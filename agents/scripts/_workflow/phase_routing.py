@@ -330,8 +330,14 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         exec_profile["reviewers"][role].update(selection)
                 for role, r_info in exec_profile["reviewers"].items():
                     r_info["effective_model"] = effective_reviewer_model(r_info)
+                from review_models import antigravity_dispatch_model_hint
                 dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
                 dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
+                ag_phase_hint = (
+                    antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched))
+                    if str(phase_host).strip().lower() == "antigravity"
+                    else ""
+                )
                 prompts = _engine._reviewer_prompts(exec_profile, sorted(not_dispatched))
                 exec_profile["reviewer_models"] = dispatch_models
                 if any(r.get("model_policy") == "DEVELOPER_SELECTED_NATIVE" for r in exec_profile["reviewers"].values()):
@@ -359,7 +365,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     "blocking": True,
                     "phase_id": phase_id,
                     "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{_engine._prompt_hint(prompts)}"),
+                               f"Launch the phase reviewers with their exact briefs, then record the dispatch receipt: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{ag_phase_hint}{_engine._prompt_hint(prompts)}"),
                     **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                     "reviewers": sorted(not_dispatched),
                     "reviewer_models": dispatch_models,

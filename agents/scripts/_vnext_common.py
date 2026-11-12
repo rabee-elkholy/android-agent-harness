@@ -34,12 +34,41 @@ class ValidationError(HarnessError):
     """Raised when an artifact or path violates a declared contract."""
 
 
+def sanitize_surrogates(text: str) -> str:
+    r"""Replace lone UTF-16 surrogates (e.g. Windows cp1252 0x81->\udc81) so UTF-8 encode never crashes."""
+    if not isinstance(text, str) or not text:
+        return text
+    try:
+        text.encode("utf-8")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def read_utf8_stdin() -> str:
+    """Read stdin bytes directly as UTF-8 on Windows instead of cp1252 surrogateescape."""
+    import sys
+    buf = getattr(sys.stdin, "buffer", None)
+    if buf is not None:
+        try:
+            raw_bytes = buf.read()
+            if isinstance(raw_bytes, (bytes, bytearray)):
+                return bytes(raw_bytes).decode("utf-8", errors="replace")
+        except (OSError, ValueError, TypeError):
+            pass
+    return sanitize_surrogates(sys.stdin.read())
+
+
 def configure_utf8_output() -> None:
     """CLI output uses UTF-8 even when Windows pipes default to a legacy codepage."""
     import sys
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
 
 
 def utc_now() -> str:
@@ -184,7 +213,7 @@ def repository_identity(repo: Path) -> dict[str, str]:
         try:
             proc = subprocess.run(
                 ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
-                cwd=str(root), capture_output=True, text=True, check=False,
+                cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             branch = proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else "DETACHED"
         except OSError as exc:

@@ -2503,10 +2503,15 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         q = next(q for q in qs if q.get("id") == "review_model_policy")
         self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
 
-    def test_REASON_INSTALL_002_questions_payload_still_contains_review_call_budget(self):
+    def test_REASON_INSTALL_002_questions_payload_streamlines_budget_and_merges_i10_into_i22(self):
         from wizard import questions
         qs = questions.questions_payload(self.repo, "en")
-        self.assertTrue(any(q.get("id") == "review_call_budget" for q in qs))
+        self.assertFalse(any(q.get("id") == "review_call_budget" for q in qs))
+        self.assertFalse(any(q.get("id") == "i10" for q in qs))
+        i14 = next(q for q in qs if q.get("id") == "i14")
+        self.assertIn("claude", [opt["id"] for opt in i14["options"]])
+        i22 = next(q for q in qs if q.get("id") == "i22")
+        self.assertEqual(["manual_only", "manual_auto", "disabled"], [opt["id"] for opt in i22["options"]])
 
     def test_REASON_INSTALL_003_normalized_answers_contain_no_allow_model_escalation(self):
         from wizard import questions

@@ -41,7 +41,7 @@ def emit(decision: str, reason: str) -> None:
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
         payload_in = json.loads(raw) if raw.strip() else {}
         tool_name = str(payload_in.get("tool_name") or payload_in.get("toolName") or "")
         tool_input = payload_in.get("tool_input") or payload_in.get("toolInput") or {}

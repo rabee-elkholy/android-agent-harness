@@ -70,6 +70,7 @@ def join_continuations(command: str) -> str:
 
 
 from policy_vocab import (
+    ON_DEMAND_SPECIALIST_AGENTS,
     ANTIGRAVITY_REVIEWER_TOOLS,
     ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS,
     CORE_ROUTED_REVIEWERS,
@@ -895,6 +896,21 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                 reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
             )
             return
+        if allowed_native_model == "flash":
+            from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
+            rem_active, rem_signals = detect_antigravity_remote_mode()
+            if rem_active and not remote_subagents_explicitly_allowed():
+                emit(
+                    "deny",
+                    (
+                        f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_signals)}). "
+                        f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores Model='flash' in Remote Mode on Argon sessions and drains 3x Argon quota. "
+                        "Run reviews in Local Mode, switch reviewer policy to 'inherit' on a Carbon/Claude session, or set HARNESS_ALLOW_REMOTE_SUBAGENTS=1."
+                    ),
+                    tool=tool_name,
+                    reason_code="REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD",
+                )
+                return
         if allowed_native_model and item.get("Model") != allowed_native_model:
             emit(
                 "deny",
@@ -1098,6 +1114,11 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 emit("allow", "Explicit reviewer resume decision recorded for this execution.", tool=name, reason_code="REVIEWER_RESUME_ALLOWED")
                 return
 
+    if name == "define_subagent":
+        ok_def, reason_def, code_def = _validate_define_subagent(args, name)
+        emit("allow" if ok_def else "deny", reason_def, tool=name, reason_code=code_def)
+        return
+
     if name == "send_message" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         emit(
             "deny",
@@ -1127,7 +1148,8 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             if len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
-            if (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file():
+            from delegation_policy import is_utility_agent_unloaded_in_session
+            if (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file() and not is_utility_agent_unloaded_in_session(REPO, parent_conversation_id, "harness-scout-agent"):
                 emit(
                     "deny",
                     "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' runs unpinned without Flash quota protection or Graph anchoring. "
@@ -1255,10 +1277,11 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             if isinstance(raw_subs, list) and len(raw_subs) > 5:
                 emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
+            from delegation_policy import is_utility_agent_unloaded_in_session as _is_unloaded_u
             if name == "invoke_subagent" and norm_subs and any(
                 isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
                 for s in norm_subs
-            ) and (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file():
+            ) and (REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file() and not _is_unloaded_u(REPO, parent_conversation_id, "harness-scout-agent"):
                 emit(
                     "deny",
                     "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' is blocked on Antigravity. "
@@ -1444,6 +1467,21 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
                 )
                 return
+            if allowed_native_model == "flash":
+                from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
+                rem_active, rem_signals = detect_antigravity_remote_mode()
+                if rem_active and not remote_subagents_explicitly_allowed():
+                    emit(
+                        "deny",
+                        (
+                            f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_signals)}). "
+                            f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores Model='flash' in Remote Mode on Argon sessions and drains 3x Argon quota. "
+                            "Run reviews in Local Mode, switch reviewer policy to 'inherit' on a Carbon/Claude session, or set HARNESS_ALLOW_REMOTE_SUBAGENTS=1."
+                        ),
+                        tool=name,
+                        reason_code="REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD",
+                    )
+                    return
             if allowed_native_model and item.get("Model") != allowed_native_model:
                 emit(
                     "deny",
@@ -2279,7 +2317,42 @@ def _deny_engine_read(tool: str, command: str = "") -> None:
          tool=tool, command=command, reason_code="HARNESS_IMPLEMENTATION_BOUNDARY")
 
 
+def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, str]:
+    sub_name = str(args.get("Name") or args.get("name") or "").strip()
+    allowed_all = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
+    if sub_name not in allowed_all:
+        return (
+            False,
+            f"Unsupported custom subagent definition '{sub_name}'. Only harness-governed subagents {sorted(allowed_all)} may be registered.",
+            "UNSUPPORTED_SUBAGENT_DEFINITION",
+        )
+    if bool(args.get("EnableSubagentTools") or args.get("enableSubagentTools")):
+        return (False, "Nested subagent delegation (`EnableSubagentTools=True`) is forbidden.", "SUBAGENT_NESTING_FORBIDDEN")
+    if sub_name != "harness-worker-agent" and bool(args.get("EnableWriteTools") or args.get("enableWriteTools")):
+        return (False, f"Subagent `{sub_name}` is strictly read-only (`EnableWriteTools` must be False).", "READ_ONLY_SUBAGENT_WRITE_FORBIDDEN")
+    sys_prompt = str(args.get("SystemPrompt") or args.get("systemPrompt") or args.get("system_prompt") or "")
+    json_spec = (REPO / ".agents" / "subagents" / f"{sub_name}.json")
+    if not json_spec.is_file():
+        json_spec = REPO / "agents" / "subagents" / f"{sub_name}.json"
+    if json_spec.is_file():
+        try:
+            spec_data = read_json(json_spec)
+            expected_prompt = str(spec_data.get("system_prompt") or "")
+            m_fp = re.search(r"(HARNESS_[A-Z0-9_]+_FINGERPRINT=[^\s]+|REVIEWER_FINGERPRINT=[^\s]+)", expected_prompt)
+            if m_fp and "FINGERPRINT=" in sys_prompt and m_fp.group(1) not in sys_prompt:
+                return (
+                    False,
+                    f"Subagent `{sub_name}` SystemPrompt is missing required fingerprint `{m_fp.group(1)}` from `.agents/subagents/{sub_name}.json`.",
+                    "SUBAGENT_FINGERPRINT_MISMATCH",
+                )
+        except (OSError, ValueError, ValidationError):
+            pass
+    return (True, f"Harness subagent `{sub_name}` definition verified.", "DEFINE_SUBAGENT_ALLOWED")
+
+
 def main() -> None:
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     # The installed native adapter identifies this hook process. Its current
     # host takes precedence over the project's preferred host and stale callers.
     previous = os.environ.get("HARNESS_HOST")
@@ -2295,7 +2368,7 @@ def main() -> None:
 
 def _main() -> None:
     try:
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
         if len(raw.encode("utf-8", errors="replace")) > MAX_STDIN_BYTES:
             emit("deny", "Hook payload exceeds the 5 MiB safety limit.")
             return
@@ -2399,7 +2472,7 @@ def _main() -> None:
                     discovery_receipt.RECEIPT_NOT_BEFORE = 0.0
                 except (ImportError, AttributeError):
                     pass
-                if name in SUBAGENT_TOOLS | {"ask_question"}:
+                if name in (SUBAGENT_TOOLS - {"manage_task"}) | {"ask_question"}:
                     emit(
                         "deny",
                         f"`{WORKER_AGENT}` cannot invoke nested subagents, call `send_message`, or ask the developer directly; output your completion summary as plain assistant text.",

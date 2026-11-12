@@ -86,6 +86,7 @@ _DATA_SOURCE_BYPASS_IMPORT_RE = re.compile(
     r"(?m)^[ \t]*import[ \t]+("
     r"androidx\.room\.Dao|"
     r"android\.database\.sqlite\.SQLiteDatabase|"
+    r"retrofit2\.Retrofit|"
     r"retrofit2\.http\.[A-Za-z0-9_.*]+|"
     r"okhttp3\.OkHttpClient|"
     r"app\.cash\.sqldelight\.db\.SqlDriver|"
@@ -103,25 +104,39 @@ def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
     from _modules import strip_gradle_comments_preserving_strings
 
     lower_stem = stem.lower()
-    if any(
+    base_stem = re.sub(r"_?impl$", "", lower_stem)
+    _NON_UI_SUFFIXES = (
+        "viewmodel",
+        "screenmodel",
+        "component",
+        "presenter",
+        "store",
+        "repository",
+        "dao",
+        "database",
+        "module",
+        "test",
+        "tests",
+        "spec",
+        "factory",
+        "worker",
+        "service",
+        "graph",
+        "container",
+    )
+    _UI_SURFACE_SUFFIXES = (
+        "screen",
+        "activity",
+        "fragment",
+        "dialog",
+        "sheet",
+        "page",
+    )
+    if base_stem.endswith(_NON_UI_SUFFIXES) or lower_stem.startswith("test"):
+        return None
+    if not lower_stem.endswith(_UI_SURFACE_SUFFIXES) and any(
         tok in lower_stem
-        for tok in (
-            "viewmodel",
-            "screenmodel",
-            "component",
-            "presenter",
-            "store",
-            "repository",
-            "dao",
-            "database",
-            "module",
-            "test",
-            "factory",
-            "worker",
-            "service",
-            "graph",
-            "container",
-        )
+        for tok in ("viewmodel", "screenmodel", "presenter", "repository", "database", "dao")
     ):
         return None
     clean_txt = strip_gradle_comments_preserving_strings(txt)
@@ -337,8 +352,8 @@ def check_architecture_drift(
         or source_dims.get("state_stream")
         or target_dims.get("state_holder_base")
         or target_dims.get("state_stream")
-        or target_dims.get("ui_toolkit") == "compose"
-        or source_dims.get("ui_toolkit") in ("compose", "xml")
+        or target_dims.get("ui_toolkit") in ("compose", "xml", "mixed")
+        or source_dims.get("ui_toolkit") in ("compose", "xml", "mixed")
     )
     if has_layered_state_holder and mode in ("PRESERVE", "REFACTOR", "NEW"):
         from _modules import is_kmp_or_android_test_path

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="sq-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1324"/>
+      <stop offset="50%" stop-color="#09101E"/>
+      <stop offset="100%" stop-color="#050912"/>
+    </linearGradient>
+    <linearGradient id="rim-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3DDC84" stop-opacity="0.55"/>
+      <stop offset="50%" stop-color="#1E293B" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0.55"/>
+    </linearGradient>
+    <linearGradient id="left-em" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#3DDC84"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="right-sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <clipPath id="left-half">
+      <rect x="0" y="0" width="128" height="256"/>
+    </clipPath>
+    <clipPath id="right-half">
+      <rect x="128" y="0" width="128" height="256"/>
+    </clipPath>
+  </defs>
+
+  <rect x="10" y="10" width="236" height="236" rx="52" fill="url(#sq-bg)" stroke="url(#rim-grad)" stroke-width="2.5"/>
+
+  <!-- Outer Hexagonal Governance Loop Arrows -->
+  <path d="M52 84 L120 44" fill="none" stroke="#3DDC84" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="124,41 112,41 118,51" fill="#3DDC84"/>
+  <path d="M136 44 L204 84" fill="none" stroke="#38BDF8" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="208,87 202,76 196,86" fill="#38BDF8"/>
+  <path d="M208 102 L208 158" fill="none" stroke="#38BDF8" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="208,165 202,155 214,155" fill="#38BDF8"/>
+  <path d="M204 174 L136 214" fill="none" stroke="#38BDF8" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="131,217 143,217 137,207" fill="#38BDF8"/>
+  <path d="M120 214 L52 174" fill="none" stroke="#3DDC84" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="48,171 54,182 60,172" fill="#3DDC84"/>
+  <path d="M48 158 L48 102" fill="none" stroke="#3DDC84" stroke-width="4.5" stroke-linecap="round"/>
+  <polygon points="48,95 42,105 54,105" fill="#3DDC84"/>
+
+  <!-- Inner Cryptographic Shield (Split Emerald / Sky) -->
+  <path d="M128 58 L188 86 L188 138 C188 174 128 198 128 198 C128 198 68 174 68 138 L68 86 Z" fill="#0D182C"/>
+  <path d="M128 58 L188 86 L188 138 C188 174 128 198 128 198 C128 198 68 174 68 138 L68 86 Z" fill="none" stroke="url(#left-em)" stroke-width="4.5" stroke-linejoin="round" clip-path="url(#left-half)"/>
+  <path d="M128 58 L188 86 L188 138 C188 174 128 198 128 198 C128 198 68 174 68 138 L68 86 Z" fill="none" stroke="url(#right-sky)" stroke-width="4.5" stroke-linejoin="round" clip-path="url(#right-half)"/>
+
+  <!-- Android Robot Head & Body (Split Emerald Left / Sky Right) -->
+  <g clip-path="url(#left-half)">
+    <line x1="106" y1="92" x2="95" y2="75" stroke="#3DDC84" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M90 120 C90 98 107 84 128 84 C149 84 166 98 166 120 Z" fill="url(#left-em)"/>
+    <path d="M90 126 L166 126 L166 154 C166 169 128 182 128 182 C128 182 90 169 90 154 Z" fill="url(#left-em)"/>
+    <circle cx="111" cy="105" r="4.5" fill="#09101E"/>
+  </g>
+  <g clip-path="url(#right-half)">
+    <line x1="150" y1="92" x2="161" y2="75" stroke="#38BDF8" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M90 120 C90 98 107 84 128 84 C149 84 166 98 166 120 Z" fill="url(#right-sky)"/>
+    <path d="M90 126 L166 126 L166 154 C166 169 128 182 128 182 C128 182 90 169 90 154 Z" fill="url(#right-sky)"/>
+    <circle cx="145" cy="105" r="4.5" fill="#09101E"/>
+  </g>
+
+  <!-- AST Graph Circuit Nodes Carved Through Shield -->
+  <path d="M92 172 L114 150 L128 150" fill="none" stroke="#09101E" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M92 172 L114 150 L128 150" fill="none" stroke="#3DDC84" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="150" r="6.5" fill="#09101E" stroke="#3DDC84" stroke-width="3"/>
+  <path d="M144 162 L160 146 L196 146" fill="none" stroke="#09101E" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M144 162 L160 146 L196 146" fill="none" stroke="#38BDF8" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="196" cy="146" r="5" fill="#38BDF8"/>
+  <circle cx="60" cy="130" r="5" fill="#3DDC84"/>
+  <line x1="60" y1="130" x2="78" y2="130" stroke="#3DDC84" stroke-width="2.8"/>
+</svg>

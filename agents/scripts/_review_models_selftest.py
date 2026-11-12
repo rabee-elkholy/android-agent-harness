@@ -589,7 +589,7 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
         choice_ids = [c["id"] for c in prompt["choices"]]
         self.assertEqual(
-            ["flash-dynamic-task", "flash-dynamic-once", "inherit-task", "inherit-once", "hybrid-smart-task", "risk-hybrid-task"],
+            ["flash-argon-project", "flash-argon-task", "risk-hybrid-project", "flash-dynamic-task", "inherit-task"],
             choice_ids,
         )
 
@@ -848,6 +848,154 @@ class ReviewerModelsTests(unittest.TestCase):
 
 
 
+
+    def test_flash_argon_hybrid_adaptive_complexity_bands_and_mixed_dispatch_guard(self):
+        from install_tool_adapters import generate_antigravity_agents
+        from phase_review import phase_run_file
+        import shutil
+
+        shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents", dirs_exist_ok=True)
+        generate_antigravity_agents(self.repo, dry_run=False)
+        conv = "arch-regression-reviewer-agent"
+        roster = [conv, ROLE, SECURITY]
+
+        # Set project-wide flash-argon-project choice (argon@hybrid shorthand also normalizes cleanly)
+        self.assertEqual("flash-argon-hybrid", models.normalize_model_token("argon@hybrid"))
+        rec = models.set_policy(
+            self.repo,
+            models.choice_to_policy("flash-argon-project")[0],
+            task_id=None,
+            host="antigravity",
+            source="conversation",
+            proof_reference="Enable adaptive Flash + Argon Low hybrid project-wide",
+            scope="project",
+        )
+        self.assertEqual("flash-argon-hybrid", rec["policy"]["default"])
+
+        # Band 1: SIMPLE single-module UI/ViewModel feature -> 100% Pure Flash Medium (0 Argon calls!)
+        simple_plan = {
+            "task_id": "t-simple",
+            "status": "VERIFYING",
+            "task_kind": "FEATURE",
+            "planning_depth": "BOUNDED",
+            "expected_modules": [":app"],
+            "expected_files": [
+                "app/src/main/java/com/example/CatalogScreen.kt",
+                "app/src/main/java/com/example/CatalogViewModel.kt",
+                "app/src/test/java/com/example/CatalogViewModelTest.kt",
+            ],
+            "expected_surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"],
+        }
+        simple_pol = {
+            "risk_tier": "T2_FEATURE",
+            "severity": "MEDIUM",
+            "surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"],
+            "changed_lines": 42,
+        }
+        self.assertEqual("SIMPLE", models.compute_task_complexity_tier(self.repo, "t-simple", policy_data=simple_pol, plan=simple_plan))
+        frozen_simple = models.freeze_models(
+            self.repo, "t-simple", "antigravity", roster, run_id="run-s1",
+            policy_data=simple_pol, plan=simple_plan,
+        )
+        self.assertEqual("SIMPLE", frozen_simple["complexity_tier"])
+        for r in roster:
+            self.assertEqual("gemini-3.8-flash-medium", frozen_simple["reviewers"][r]["resolved_model"], r)
+            self.assertEqual("medium", frozen_simple["reviewers"][r]["thinking_level"], r)
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_simple})
+
+        # Band 2a: COMPLEX (COROUTINES + NETWORK, >90 lines) -> Argon Low for bug/security-perf, Flash Medium for NORMAL arch-regression!
+        complex_plan = {
+            "task_id": "t-complex",
+            "status": "VERIFYING",
+            "task_kind": "FEATURE",
+            "planning_depth": "BOUNDED",
+            "expected_modules": [":app", ":core:network"],
+            "expected_files": [
+                "app/src/main/java/com/example/SyncRepository.kt",
+                "core/network/src/main/java/com/example/SyncApi.kt",
+            ],
+            "expected_surfaces": ["COROUTINES", "NETWORK"],
+        }
+        complex_pol = {
+            "risk_tier": "T3_SUBSYSTEM",
+            "severity": "HIGH",
+            "surfaces": ["COROUTINES", "NETWORK"],
+            "changed_lines": 120,
+        }
+        self.assertEqual("COMPLEX", models.compute_task_complexity_tier(self.repo, "t-complex", policy_data=complex_pol, plan=complex_plan))
+        frozen_complex = models.freeze_models(
+            self.repo, "t-complex", "antigravity", roster, run_id="run-c1",
+            policy_data=complex_pol, plan=complex_plan,
+        )
+        self.assertEqual("COMPLEX", frozen_complex["complexity_tier"])
+        self.assertEqual("gemini-4-argon-low", frozen_complex["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("low", frozen_complex["reviewers"][ROLE]["thinking_level"])
+        self.assertEqual("gemini-4-argon-low", frozen_complex["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual("gemini-3.8-flash-medium", frozen_complex["reviewers"][conv]["resolved_model"])
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_complex})
+        hint = models.antigravity_dispatch_model_hint(frozen_complex, roster)
+        self.assertIn("pass Model='flash' for [arch-regression-reviewer-agent]", hint)
+        self.assertIn("omit Model for [bug-test-reviewer-agent, security-perf-reviewer-agent]", hint)
+
+        # Band 2b: COMPLEX with ROOM_SCHEMA -> arch-regression has DEEP effort so it ALSO steps up to Argon Low!
+        room_pol = {
+            "risk_tier": "T4_DATA_DEVICE",
+            "severity": "HIGH",
+            "surfaces": ["ROOM_SCHEMA", "BUSINESS_LOGIC"],
+            "changed_lines": 65,
+        }
+        frozen_room = models.freeze_models(
+            self.repo, "t-room", "antigravity", roster, run_id="run-c2",
+            policy_data=room_pol, plan=complex_plan,
+        )
+        for r in roster:
+            self.assertEqual("gemini-4-argon-low", frozen_room["reviewers"][r]["resolved_model"], r)
+
+        # Band 3: CRITICAL (AUTH + BILLING, T5_CRITICAL) -> Strict hard ceiling at Argon Low (`gemini-4-argon-low`) for ALL reviewers!
+        crit_pol = {
+            "risk_tier": "T5_CRITICAL",
+            "severity": "CRITICAL",
+            "surfaces": ["AUTH", "BILLING"],
+            "changed_lines": 50,
+            "review_round": 3,
+        }
+        self.assertEqual("CRITICAL", models.compute_task_complexity_tier(self.repo, "t-crit", policy_data=crit_pol, plan=simple_plan))
+        frozen_crit = models.freeze_models(
+            self.repo, "t-crit", "antigravity", roster, run_id="run-crit",
+            policy_data=crit_pol, plan=simple_plan,
+        )
+        for r in roster:
+            self.assertEqual("gemini-4-argon-low", frozen_crit["reviewers"][r]["resolved_model"], r)
+            self.assertEqual("low", frozen_crit["reviewers"][r]["thinking_level"], r)
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_crit})
+
+        # Verify mixed Flash + Argon Low wave in PreToolUse hook on phase review!
+        fixture, task, p_roster, _ = self.phase_fixture()
+        p_plan = read_json(task_dir(fixture.repo, task) / "plan.json")
+        p_plan["task_kind"] = "BUG"
+        p_plan["expected_modules"] = [":app", ":core"]
+        atomic_write_json(task_dir(fixture.repo, task) / "plan.json", p_plan)
+        models.set_policy(
+            fixture.repo,
+            models.resolve_preset_policy("flash-argon-hybrid"),
+            task_id=task,
+            host="antigravity",
+            source="conversation",
+            proof_reference="Adaptive Flash + Argon Low",
+        )
+        p_run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
+        p_briefs = {r: Path(p_run["briefs"][r]).read_text(encoding="utf-8") for r in p_roster}
+        mixed_subs = []
+        for r in p_roster:
+            rm = p_run["review_models"]["reviewers"][r]["resolved_model"]
+            entry = {"TypeName": r, "Role": r, "Prompt": p_briefs[r]}
+            if "flash" in rm:
+                entry["Model"] = "flash"
+            mixed_subs.append(entry)
+        _, ok_mixed = fixture._run_pre_tool_safety({"toolName": "invoke_subagent", "toolArgs": {"Subagents": mixed_subs}})
+        self.assertEqual("allow", ok_mixed.get("decision"), ok_mixed)
+
+
 class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
     """Edge-case regression tests for CRIT-1, CRIT-3, and CRIT-5."""
 
@@ -995,7 +1143,6 @@ class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         ledger = read_json(phase_ledger_file(task_dir(inner_fixture.repo, task), "p1"))
         self.assertEqual("reviewer-123", ledger["reviewers"][role]["execution_id"])
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,7 +52,7 @@ def python_ok(cmd: str) -> tuple[bool, str]:
         proc = subprocess.run(
             [cmd, "--version"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=15,
             check=False,
         )
@@ -444,7 +444,7 @@ def discover_locales(repo: Path, locale_dirs: list[Path] | None = None) -> list[
 
 def discover_di_framework(text: str) -> str:
     lower = text.casefold()
-    if "org.koin" in lower or "koin-android" in lower or "startkoin" in lower or "koin-compose" in lower:
+    if re.search(r"\bkoin\b", lower) or "startkoin" in lower:
         return "koin"
     if "dagger.hilt" in lower or "@hiltviewmodel" in lower or "hilt-android" in lower or "@hiltandroidapp" in lower or "hilt" in lower:
         return "hilt"
@@ -658,7 +658,8 @@ def discover_build_types(repo: Path, paths: list[Path] | None = None) -> list[st
         if not block:
             continue
         for match in re.finditer(r'create\s*\(\s*["\']([^"\']+)["\']', block):
-            names.append(match.group(1))
+            if match.group(1).lower() not in {"debug", "release"}:
+                names.append(match.group(1))
         for match in re.finditer(r"(?m)^\s{2,}([a-z][a-zA-Z0-9_]*)\s*\{", block):
             candidate = match.group(1)
             if candidate.lower() not in _BUILD_TYPE_KEYWORDS | {"debug", "release"}:
@@ -864,7 +865,7 @@ def auto_from_facts(facts: dict) -> dict:
         "zoho_mcp": "enable" if facts.get("zoho_config") else "skip",
         "chat_language": "mirror",
         "zoho_language": "en_titles_ar_comments",
-        "pm_provider": DEFAULT_PM_PROVIDER,
+        "pm_provider": ("zoho_sprints" if facts.get("zoho_config") else DEFAULT_PM_PROVIDER),
         "device_verification": "manual_only",
         "preferred_new_code_family": None,
     }

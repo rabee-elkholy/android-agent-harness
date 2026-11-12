@@ -47,7 +47,7 @@ def open_components(text: str) -> dict[tuple[str, str], bool]:
 
 
 def _head_text(repo: Path, rel: str) -> str:
-    proc = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True, text=True, check=False)
+    proc = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return proc.stdout if proc.returncode == 0 else ""
 
 

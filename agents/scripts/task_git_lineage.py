@@ -66,7 +66,7 @@ def _is_disjoint_sibling_commit_chain(
         ["git", "rev-list", "--merges", f"{ancestor_head}..{target_head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if merges_proc.returncode != 0 or merges_proc.stdout.strip():
@@ -79,7 +79,7 @@ def _is_disjoint_sibling_commit_chain(
         ["git", "rev-list", f"{ancestor_head}..{target_head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if revs_proc.returncode != 0:
@@ -145,7 +145,7 @@ def _matches_recorded_merge(repo: Path, head: str, parent: str, baseline: dict) 
         return False
     proc = subprocess.run(
         ["git", "rev-list", "--parents", "-n", "1", head],
-        cwd=str(repo), capture_output=True, text=True, check=False,
+        cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     return proc.returncode == 0 and proc.stdout.split() == [head, parent, incoming]
 
@@ -230,7 +230,7 @@ def validate_checkpoint_receipt(
         ["git", "rev-list", "--count", f"{parent_head}..{head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if proc_cnt.returncode != 0:
@@ -243,7 +243,7 @@ def validate_checkpoint_receipt(
         ["git", "rev-list", "--merges", f"{parent_head}..{head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if proc_merges.returncode != 0 or proc_merges.stdout.strip():
@@ -396,7 +396,7 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
     parent_head = accepted if accepted in valid_heads else base_head
 
     def _git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
+        return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
 
     if _git("merge-base", "--is-ancestor", parent_head, current_head).returncode != 0:
         return None
@@ -546,7 +546,7 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         ["git", "status", "--porcelain"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if proc_status.returncode == 0:
@@ -607,13 +607,13 @@ def create_pending_handoff(repo: Path, task_id: str) -> dict[str, Any]:
 
     # Lightweight deterministic safety check before returning DEVELOPER_WIP_COMMIT_REQUIRED
     try:
-        from fast_kt_lint import lint_file
+        from _workflow.engine import new_kotlin_lint_issues
         kt_issues = []
         for c in curr_changes:
             rel_p = c.get("path", "") if isinstance(c, dict) else str(c or "")
             p = repo / rel_p
             if p.suffix == ".kt" and p.is_file():
-                kt_issues.extend(lint_file(p))
+                kt_issues.extend(new_kotlin_lint_issues(repo, task_id, p, task_base_head))
         if kt_issues:
             raise ValidationError(f"handoff Kotlin lint failed: {len(kt_issues)} issue(s) detected")
     except ValidationError:
@@ -725,7 +725,7 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         ["git", "rev-list", "--merges", f"{parent_head}..{current_head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if merges_proc.returncode == 0 and merges_proc.stdout.strip():
@@ -736,7 +736,7 @@ def reconcile_handoff(repo: Path, task_id: str) -> dict[str, Any]:
         ["git", "rev-list", "--count", f"{parent_head}..{current_head}"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if count_proc.returncode != 0:

@@ -514,7 +514,7 @@ def submit_incident_to_github(
                 "--limit", "1",
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=timeout_seconds,
             check=False,
         )
@@ -544,7 +544,7 @@ def submit_incident_to_github(
                 "--body", body,
             ],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=timeout_seconds,
             check=False,
         )

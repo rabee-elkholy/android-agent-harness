@@ -697,6 +697,137 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
                     "msg": f"Fragment ViewBinding memory leak: '{var_name}' is declared but not set to null in onDestroyView(). Set '{var_name} = null' in onDestroyView() to prevent retaining the View hierarchy.",
                 })
 
+    issues.extend(
+        _lint_a2ui_kotlin_traps(
+            file_path,
+            text,
+            _strip_kotlin_comments_preserve_lines(text),
+            lines,
+            modified_lines,
+            is_test=is_test,
+            is_common_main=is_common_main,
+        )
+    )
+    return issues
+
+A2UI_IMPORT_OR_SYMBOL_RE = re.compile(
+    r"\b(?:androidx\.a2ui|androidx\.compose\.material3\.a2ui|A2uiMessageProcessor|A2uiSurface|BasicCatalog|processInput)\b"
+)
+A2UI_PROCESS_INPUT_CALL_RE = re.compile(r"\bprocessInput\s*\(")
+A2UI_OUTBOUND_EVENTS_RE = re.compile(r"\boutboundEvents\b")
+A2UI_BASIC_CATALOG_URI_V1 = "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+A2UI_CATALOG_DECL_RE = re.compile(
+    r'\bCatalog\s*\(\s*(?:id\s*=\s*|catalogId\s*=\s*)?"([^"]*)"'
+)
+A2UI_CREATE_SURFACE_CATALOG_KT_RE = re.compile(
+    r'\bcreateSurface\b[\s\S]{0,240}?\bcatalogId\s*=\s*"([^"]*)"'
+)
+A2UI_CREATE_SURFACE_CATALOG_JSON_RE = re.compile(
+    r'"createSurface"\s*:\s*\{[\s\S]{0,300}?"catalogId"\s*:\s*"([^"]*)"'
+)
+
+
+def _lint_a2ui_kotlin_traps(
+    file_path: Path,
+    text: str,
+    clean_text: str,
+    lines: list[str],
+    modified_lines: set[int] | None,
+    *,
+    is_test: bool,
+    is_common_main: bool,
+) -> list[dict]:
+    """Detect the 3 real-world Jetpack Compose A2UI 1.0 traps (+ KMP commonMain Android-only AAR leak)."""
+    issues: list[dict] = []
+    if is_test or not A2UI_IMPORT_OR_SYMBOL_RE.search(text):
+        return issues
+
+    def _line_in_scope(ln: int) -> bool:
+        return modified_lines is None or ln in modified_lines
+
+    # KMP commonMain guard: official androidx.a2ui / material3-a2ui artifacts are Android-only AARs
+    if is_common_main:
+        for idx, line in enumerate(lines, 1):
+            if _line_in_scope(idx) and re.search(r"^\s*import\s+androidx\.(?:a2ui|compose\.material3\.a2ui)\b", line):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "A2UI_ANDROID_ONLY_IN_COMMON_MAIN",
+                    "msg": (
+                        "Official 'androidx.a2ui' / 'material3-a2ui' publishes Android-only AARs without klib/iOS targets. "
+                        "Keep agent logic in commonMain and move A2UI Compose rendering to androidMain (or use a KMP bridge)."
+                    ),
+                })
+                break
+
+    # Trap 1: Silent White Box — `processInput(...)` swallows `A2uiException` into `outboundEvents`
+    has_process_input = False
+    process_input_line = 1
+    for idx, clean_line in enumerate(clean_text.splitlines(), 1):
+        if A2UI_PROCESS_INPUT_CALL_RE.search(clean_line) and _line_in_scope(idx):
+            has_process_input = True
+            process_input_line = idx
+            break
+    if has_process_input and ("androidx.a2ui" in text or "A2uiMessageProcessor" in text):
+        combined_scope_text = text
+        try:
+            for sib in file_path.parent.glob("*.kt"):
+                if sib != file_path and sib.is_file():
+                    combined_scope_text += "\n" + sib.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+        if not A2UI_OUTBOUND_EVENTS_RE.search(combined_scope_text):
+            issues.append({
+                "file": str(file_path),
+                "line": process_input_line,
+                "type": "A2UI_UNCOLLECTED_OUTBOUND_EVENTS",
+                "msg": (
+                    "A2UI silent white-screen hazard: 'processInput(...)' swallows A2uiException and emits errors "
+                    "only on 'outboundEvents'. Collect or expose 'processor.outboundEvents' so malformed agent JSON "
+                    "is handled visibly instead of rendering a blank white box."
+                ),
+            })
+
+    # Trap 3: Literal `catalogId` mismatch — `createSurface.catalogId` must match registered Catalog ID verbatim
+    registered_ids: set[str] = {m.group(1) for m in A2UI_CATALOG_DECL_RE.finditer(text) if m.group(1)}
+    if re.search(r"\bBasicCatalog\b", text):
+        registered_ids.add(A2UI_BASIC_CATALOG_URI_V1)
+    try:
+        for sib in file_path.parent.glob("*.kt"):
+            if sib != file_path and sib.is_file():
+                sib_txt = sib.read_text(encoding="utf-8", errors="replace")
+                registered_ids.update(m.group(1) for m in A2UI_CATALOG_DECL_RE.finditer(sib_txt) if m.group(1))
+                if re.search(r"\bBasicCatalog\b", sib_txt):
+                    registered_ids.add(A2UI_BASIC_CATALOG_URI_V1)
+    except OSError:
+        pass
+
+    surface_matches = list(A2UI_CREATE_SURFACE_CATALOG_KT_RE.finditer(text)) + list(
+        A2UI_CREATE_SURFACE_CATALOG_JSON_RE.finditer(text)
+    )
+    for m_surf in surface_matches:
+        surf_cid = m_surf.group(1)
+        line_no = text.count("\n", 0, m_surf.start()) + 1
+        if not _line_in_scope(line_no):
+            continue
+        if not surf_cid or surf_cid != surf_cid.strip():
+            issues.append({
+                "file": str(file_path),
+                "line": line_no,
+                "type": "A2UI_CATALOG_ID_MISMATCH",
+                "msg": f"A2UI createSurface has blank or whitespace-padded catalogId '{surf_cid}'; surface will silently fail to render.",
+            })
+        elif registered_ids and surf_cid not in registered_ids:
+            issues.append({
+                "file": str(file_path),
+                "line": line_no,
+                "type": "A2UI_CATALOG_ID_MISMATCH",
+                "msg": (
+                    f"A2UI silent blank-surface hazard: createSurface catalogId '{surf_cid}' does not match "
+                    f"registered catalog ID(s) {sorted(registered_ids)} verbatim (A2UI drops mismatched surfaces without throwing)."
+                ),
+            })
+
     return issues
 
 
@@ -881,20 +1012,87 @@ def lint_java_file(file_path: Path, modified_lines: set[int] | None = None) -> l
     return issues
 
 
-def lint_build_script(file_path: Path) -> list[dict[str, Any]]:
-    issues = []
+_STABLE_COMPOSE_BOM_RE = re.compile(
+    r'(?:compose-bom|composeBom)\s*[:=]\s*"?(?:androidx\.compose:compose-bom:)?(202[3-5]\.[0-9]{2}\.[0-9]{2}|2026\.0[1-8]\.[0-9]{2})"?',
+    re.IGNORECASE,
+)
+_OLD_COMPOSE_VER_RE = re.compile(
+    r'(?:compose(?:Ui|Runtime|Foundation)?|androidx\.compose\.[a-z0-9_.]+)\s*[:=]\s*"?(1\.(?:[0-9]|1[0-2])\.[0-9]+(?:-[a-z0-9.]+)?)"?',
+    re.IGNORECASE,
+)
+_OLD_MATERIAL3_VER_RE = re.compile(
+    r'(?:material3|androidx\.compose\.material3:material3)\s*[:=]\s*"?(1\.[0-4]\.[0-9]+(?:-[a-z0-9.]+)?)"?',
+    re.IGNORECASE,
+)
+_ALPHA_COMPOSE_OVERRIDE_RE = re.compile(r"1\.(?:1[3-9]|[2-9][0-9])\.[0-9]+|1\.5\.0-alpha2[89]|1\.[5-9]\.[0-9]+")
+
+
+def lint_build_script(file_path: Path) -> list[dict]:
+    issues: list[dict] = []
     try:
         txt = file_path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    except OSError:
         return issues
-    for idx, line in enumerate(txt.splitlines(), start=1):
-        if (".delete()" in line or "delete(" in line) and any(p in line for p in ("src/", "res/", "layout", "values")):
+    lines = txt.splitlines()
+    is_toml = file_path.name.endswith(".toml")
+    if not is_toml:
+        for idx, line in enumerate(lines, start=1):
+            if (".delete()" in line or "delete(" in line) and any(p in line for p in ("src/", "res/", "layout", "values")):
+                issues.append({
+                    "file": str(file_path),
+                    "line": idx,
+                    "type": "UNAUTHORIZED_BUILD_SCRIPT_MUTATION",
+                    "msg": f"Unauthorized file deletion in Gradle build script at line {idx}: '{line.strip()}'. Do not use Gradle tasks to delete project assets or bypass verification.",
+                })
+
+    # Trap 2: `material3-a2ui:1.0.0-alpha*` POM conflict with stable Compose BOM (<=1.12.x / Material3 <=1.4.x)
+    a2ui_m3_line = next(
+        (idx for idx, line in enumerate(lines, start=1) if "material3-a2ui" in line and not line.lstrip().startswith(("#", "//"))),
+        0,
+    )
+    if a2ui_m3_line:
+        combined_versions_text = txt
+        toml_cand = REPO / "gradle" / "libs.versions.toml"
+        if toml_cand != file_path and toml_cand.is_file():
+            try:
+                combined_versions_text += "\n" + toml_cand.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+        has_old_bom_or_compose = bool(
+            _STABLE_COMPOSE_BOM_RE.search(combined_versions_text)
+            or _OLD_COMPOSE_VER_RE.search(combined_versions_text)
+            or _OLD_MATERIAL3_VER_RE.search(combined_versions_text)
+        )
+        has_alpha_alignment = bool(_ALPHA_COMPOSE_OVERRIDE_RE.search(txt))
+        if has_old_bom_or_compose and not has_alpha_alignment:
             issues.append({
                 "file": str(file_path),
-                "line": idx,
-                "type": "UNAUTHORIZED_BUILD_SCRIPT_MUTATION",
-                "msg": f"Unauthorized file deletion in Gradle build script at line {idx}: '{line.strip()}'. Do not use Gradle tasks to delete project assets or bypass verification.",
+                "line": a2ui_m3_line,
+                "type": "A2UI_COMPOSE_BOM_CONFLICT",
+                "msg": (
+                    "A2UI Compose BOM conflict: 'material3-a2ui:1.0.0-alpha*' requires androidx.compose 1.13.0-alpha03+ "
+                    "and strictly constrains material3 to [1.5.0-alpha28], which fails resolution against stable Compose BOM (<=1.12.x). "
+                    "Pin compatible Compose 1.13.0-alpha / Material3 1.5.0-alpha versions or isolate A2UI in a dedicated module."
+                ),
             })
+
+    # KMP commonMain build-script guard for Android-only `androidx.a2ui` / `material3-a2ui`
+    if not is_toml and ("commonMain" in txt) and ("androidx.a2ui" in txt or "material3-a2ui" in txt):
+        for m_cm in re.finditer(r"commonMain\s*(?:\.dependencies)?\s*\{", txt):
+            extracted = _extract_balanced_brace_body(txt, m_cm.end() - 1)
+            if extracted and ("androidx.a2ui" in extracted[0] or "material3-a2ui" in extracted[0]):
+                cm_line = txt.count("\n", 0, m_cm.start()) + 1
+                issues.append({
+                    "file": str(file_path),
+                    "line": cm_line,
+                    "type": "A2UI_ANDROID_ONLY_IN_COMMON_MAIN",
+                    "msg": (
+                        "Official 'androidx.a2ui' / 'material3-a2ui' artifacts are Android-only AARs and cannot resolve in KMP commonMain. "
+                        "Move them to androidMain.dependencies."
+                    ),
+                })
+                break
+
     return issues
 
 
@@ -978,7 +1176,11 @@ def main() -> int:
                 if b_file.is_file() and p.is_file():
                     swift_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
 
-    build_files = [p for p in changed if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts")]
+    build_files = [
+        p for p in changed
+        if p.name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "libs.versions.toml")
+        or p.name.endswith(".versions.toml")
+    ]
 
     if not target_files and not build_files and not java_files and not swift_files:
         git_head_proc = subprocess.run(

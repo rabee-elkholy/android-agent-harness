@@ -77,7 +77,7 @@ def main():
             sys.exit(1)
         raw_log = log_path.read_text(encoding="utf-8", errors="replace")
     else:
-        raw_log = sys.stdin.read()
+        raw_log = __import__('_vnext_common').read_utf8_stdin()
 
     errors = parse_compiler_errors(raw_log)
     print(format_errors(errors))

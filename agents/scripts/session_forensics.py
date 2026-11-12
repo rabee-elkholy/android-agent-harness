@@ -131,8 +131,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         return {"available": False, "conversation_id": ""}
     tp: Path | None = None
     try:
-        from antigravity_runtime import resolve_transcript
-        cand = resolve_transcript(conversation_id)
+        from antigravity_runtime import prefer_full_transcript, resolve_transcript
+        cand = prefer_full_transcript(resolve_transcript(conversation_id))
         if isinstance(cand, Path) and cand.is_file():
             tp = cand
     except (ImportError, OSError, ValueError):

@@ -459,7 +459,7 @@ def ensure_local_git_privacy(target_repo: Path | None = None, *, clean_strays: b
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--git-path", "info/exclude"],
-            cwd=str(repo), capture_output=True, text=True, check=False,
+            cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         raw_path = (proc.stdout or "").strip()
         exclude_path = Path(raw_path)

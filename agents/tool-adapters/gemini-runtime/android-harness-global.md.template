@@ -19,7 +19,7 @@ MANDATORY:
 10. Exact Reviewer Dispatch Procedure (Antigravity):
 1. Use the returned next_action inputs; query status --next only when they are missing.
 2. If code == DISPATCH_REVIEWERS:
-   - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the returned choices (including `risk-hybrid-task`, `flash-dynamic-task`, `inherit-task`, `hybrid-smart-task`) and execute its `command_template` before dispatch;
+   - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the returned choices (including `flash-argon-project`, `flash-argon-task`, `risk-hybrid-project`, `flash-dynamic-task`, `inherit-task`) and execute its `command_template` before dispatch;
    - use every reviewer in the returned `reviewers` list (never a partial subset);
    - invoke all required reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer);
    - for each reviewer:

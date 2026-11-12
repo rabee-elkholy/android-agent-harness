@@ -1125,7 +1125,11 @@ def classify(
             _add(found, "NAVIGATION", rel, "NAVIGATION_CALL")
         if suffix in (".kt", ".java") and not test_path:
             if is_ui_only_kotlin(diff_text, context_text, full_text, rel):
-                pass
+                if not any(rel in found.get(s, {}).get("files", ()) for s in ("COMPOSE_UI", "XML_UI", "NAVIGATION")):
+                    if file_has_compose:
+                        _add(found, "COMPOSE_UI", rel, "COMPOSE_PATTERN")
+                    else:
+                        _add(found, "XML_UI", rel, "VIEW_UI_COMPONENT")
             else:
                 _add(found, "BUSINESS_LOGIC", rel, "SOURCE_CHANGE")
                 if _is_isolated_private_kotlin_edit(diff_text, context_text):

@@ -367,7 +367,7 @@ def _load_replacement_text(args: argparse.Namespace) -> str:
             raise ValidationError(f"Replacement file not found: {rf}")
         raw = rf.read_text(encoding="utf-8")
     elif getattr(args, "stdin", False):
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
     elif getattr(args, "body", None) is not None:
         raw = str(args.body)
     else:

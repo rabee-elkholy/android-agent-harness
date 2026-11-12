@@ -36,7 +36,13 @@ from _vnext_common import (  # noqa: E402
     task_dir,
     utc_now,
 )
-from antigravity_runtime import resolve_transcript  # noqa: E402
+from antigravity_runtime import (  # noqa: E402
+    ACCEPTED_SYSTEM_SOURCES,
+    detect_antigravity_remote_mode,
+    prefer_full_transcript,
+    remote_subagents_explicitly_allowed,
+    resolve_transcript,
+)
 from evidence_store import StateLock  # noqa: E402
 from policy_vocab import (  # noqa: E402
     ANTIGRAVITY_SCOUT_TOOLS,
@@ -50,6 +56,7 @@ SCOUT_AGENT = "harness-scout-agent"
 WORKER_AGENT = "harness-worker-agent"
 SPECIALIST_AGENT = "specialist-subagent"
 DEFAULT_UTILITY_FLASH_MODEL = "gemini-3.8-flash-medium"
+ADAPTIVE_WORKER_ARGON_MODEL = "gemini-4-argon-low"
 
 # Hard per-subagent step caps (applied independently to EVERY 1st, 2nd, Nth subagent instance)
 MAX_SCOUT_TOOL_CALLS = 24
@@ -107,8 +114,9 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "1. **Turn 1 Graph Anchor & Project Context**: Anchor discovery first using `python .agents/harness.py graph --feature <name> --json` "
             "or `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) before broad search. "
             "Honor any `project_notes` and `developer_instructions` returned in that JSON (and read `.agents/project-context/{architecture,conventions,persistence,ui}.md` only when relevant — never read raw `project-facts.json`).\n"
-            "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file` or `grep_search` calls IN PARALLEL in a single turn — "
-            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-line sequential reads. "
+            "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file`/`read_file` or `grep_search` calls IN PARALLEL in a single turn — "
+            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (if `grep_search`/`run_command` are unavailable, "
+            "read `.agents/project-context/architecture.md` first and batch `6-8` large `350-500`-line `view_file`/`read_file` ranges per turn). "
             "On large `.kt`/`.java`/`.swift` files (>350 lines), run `python .agents/harness.py symbol outline --file <path>` and "
             "`python .agents/harness.py symbol read --file <path> --symbol <Class.method>` (or batch exact line ranges in parallel). "
             "Finish within <=4 batched turns (hard hook cap: 24 total tool calls).\n"
@@ -151,11 +159,14 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "3. **Surgical AST Edits & Verification**: On large `.kt`/`.java`/`.swift` files (>350 lines), prefer "
             "`python .agents/harness.py symbol outline --file <path>` and `symbol read --file <path> --symbol <Class.method>` followed by "
             "`python .agents/harness.py symbol replace-body` (or `insert-after`) so brace balance is verified before disk write. "
-            "Before finishing, run `python .agents/harness.py compile` and/or `python .agents/harness.py test` "
-            "(plus `roborazzi verify` or `health report` when requested in your brief) and fix any regressions you introduced.\n"
-            "4. **No Lifecycle Commands or `send_message`**: NEVER run task lifecycle or authority commands (`task draft`, `task approve`, "
+            "While iterating on a new or modified unit test class, run `python .agents/harness.py test --tests <FullyQualifiedOrSimpleTestClass>` "
+            "for fast (~10s) single-class feedback and inspect the `cause:` line printed at the bottom of the output (never scrape `.html` reports). "
+            "Once your targeted test class passes, run the full `python .agents/harness.py compile` and `python .agents/harness.py test` gate "
+            "(plus `roborazzi verify` or `health report` when requested in your brief).\n"
+            "4. **No Lifecycle Commands, Scope Traps, or `send_message`**: NEVER run task lifecycle or authority commands (`task draft`, `task approve`, "
             "`task revise`, `task cancel`, `task prepare-verification`, `task deliver`, `phase-review`, `review`), NEVER run git commit/reset/checkout, "
-            "NEVER prompt the developer directly, and **NEVER call `send_message`**. If blocked by a genuine spec ambiguity or scope denial, stop cleanly and report the exact blocker.\n"
+            "NEVER prompt the developer directly, and **NEVER call `send_message`**. If `[SCOPE-HINT]` reports a failing legacy regression test outside `expected_files` "
+            "whose old assertion conflicts with the new spec (or if blocked by a genuine spec ambiguity), STOP IMMEDIATELY without retrying full builds and report the exact file and assertion to the Lead Architect.\n"
             "5. **Self-Contained Completion Digest (<1,200 tokens)** with sections `CHANGED_FILES` (with line ranges), `VERIFICATION_RUNS`, and "
             "`NOTES_FOR_ARCHITECT` as plain assistant text so the Lead Architect only needs a single `git diff` check.\n"
         ),
@@ -186,6 +197,93 @@ def render_utility_agent_markdown(role: str, *, model: str | None = None) -> str
     )
 
 
+def resolve_utility_worker_model(
+    repo: Path,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+    *,
+    worker_mode: str = "FULL_SLICE",
+) -> tuple[str, str]:
+    """Resolve the active model and complexity tier for `harness-worker-agent`.
+
+    Under `flash-argon-hybrid`, `FULL_SLICE` execution on `COMPLEX` tasks upgrades the worker
+    to `gemini-4-argon-low` while keeping `SIMPLE` slices and test-only gates on `gemini-3.8-flash-medium`.
+    """
+    if plan is None and not task_id:
+        try:
+            from mutation_guard import active_plan
+            plan = active_plan(repo)
+        except Exception:
+            plan = None
+    tid = str(task_id or (plan or {}).get("task_id") or "").strip() or None
+    status = str((plan or {}).get("status") or "").strip().upper()
+    if plan is None and tid:
+        p_file = task_dir(repo, tid) / "plan.json"
+        if p_file.is_file():
+            try:
+                plan = read_json(p_file)
+                status = str((plan or {}).get("status") or "").strip().upper()
+            except (OSError, ValueError, ValidationError):
+                plan = None
+    try:
+        from review_models import compute_task_complexity_tier, load_policy
+        pol, _ = load_policy(repo, tid)
+        default_choice = str((pol or {}).get("default") or "inherit").strip().lower()
+        complexity_tier = compute_task_complexity_tier(repo, tid, plan=plan) if (tid or plan) else "SIMPLE"
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, ValidationError):
+        default_choice = "inherit"
+        complexity_tier = "SIMPLE"
+
+    if (
+        default_choice == "flash-argon-hybrid"
+        and status == "IMPLEMENTING"
+        and str(worker_mode or "FULL_SLICE").upper() == "FULL_SLICE"
+        and complexity_tier == "COMPLEX"
+    ):
+        return ADAPTIVE_WORKER_ARGON_MODEL, complexity_tier
+    return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
+
+
+def sync_utility_worker_model(repo: Path, target_model: str) -> bool:
+    """Synchronize `.agents/agents/harness-worker-agent/agent.md` to `target_model` and update ownership hash."""
+    dest = repo / ".agents" / "agents" / WORKER_AGENT / "agent.md"
+    if not dest.parent.is_dir():
+        return False
+    try:
+        from install_tool_adapters import with_managed_marker
+        from _vnext_common import canonical_sha256, sha256_file
+    except ImportError:
+        return False
+    rendered_bytes = with_managed_marker(render_utility_agent_markdown(WORKER_AGENT, model=target_model)).encode("utf-8")
+    try:
+        current_bytes = dest.read_bytes() if dest.is_file() else None
+    except OSError:
+        current_bytes = None
+    if current_bytes == rendered_bytes:
+        return False
+    dest.write_bytes(rendered_bytes)
+    ownership_file = repo / ".harness-setup" / "ownership-v1.json"
+    if ownership_file.is_file():
+        try:
+            manifest = read_json(ownership_file)
+            entries = manifest.get("entries")
+            rel = f".agents/agents/{WORKER_AGENT}/agent.md"
+            if isinstance(entries, list):
+                changed = False
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("path") == rel:
+                        entry["post_install_sha256"] = sha256_file(dest)
+                        changed = True
+                if changed:
+                    manifest["ownership_sha256"] = canonical_sha256(
+                        {k: v for k, v in manifest.items() if k != "ownership_sha256"}
+                    )
+                    atomic_write_json(ownership_file, manifest)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, ValidationError):
+            pass
+    return True
+
+
 def is_test_file(raw_path: str) -> bool:
     norm = str(raw_path or "").replace("\\", "/").strip().lstrip("./")
     if not norm:
@@ -205,6 +303,115 @@ def _ledger_path(repo: Path) -> Path:
 
 def _step_budgets_path(repo: Path) -> Path:
     return state_root(repo) / "cache" / "subagent-step-budgets.json"
+
+
+def _unloaded_agents_path(repo: Path) -> Path:
+    return state_root(repo) / "cache" / "unloaded-utility-agents.json"
+
+
+def record_unloaded_utility_agent(repo: Path, conversation_id: str, agent_name: str) -> None:
+    cid = str(conversation_id or "").strip()
+    role = str(agent_name or "").strip()
+    if not cid or not role:
+        return
+    path = _unloaded_agents_path(repo)
+    try:
+        with StateLock(state_root(repo)):
+            data = read_json(path) if path.is_file() else {"sessions": {}}
+            if not isinstance(data, dict):
+                data = {"sessions": {}}
+            sessions = data.setdefault("sessions", {})
+            cur = set(sessions.get(cid) or [])
+            cur.add(role)
+            sessions[cid] = sorted(cur)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(path, data)
+    except (OSError, ValidationError):
+        pass
+
+
+def is_utility_agent_unloaded_in_session(repo: Path, conversation_id: str, agent_name: str) -> bool:
+    cid = str(conversation_id or "").strip()
+    role = str(agent_name or "").strip()
+    if not cid or not role:
+        return False
+    path = _unloaded_agents_path(repo)
+    if not path.is_file():
+        return False
+    try:
+        data = read_json(path)
+        return role in ((data.get("sessions") or {}).get(cid) or [])
+    except (OSError, ValueError, KeyError, ValidationError):
+        return False
+
+
+def discover_impacted_existing_tests(repo: Path, expected_files: list[str] | set[str]) -> list[dict[str, Any]]:
+    """Find existing tracked unit/regression test files outside `expected_files` that reference planned production classes."""
+    import subprocess
+    norm_expected = {_normalize_repo_rel(repo, f) for f in (expected_files or []) if str(f or "").strip()}
+    prod_stems = sorted({
+        Path(p).stem
+        for p in norm_expected
+        if p.endswith((".kt", ".java")) and not is_test_file(p) and len(Path(p).stem) >= 4
+    })
+    if not prod_stems or not (repo / ".git").exists():
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "ls-files"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    candidates = [
+        line.strip().replace("\\", "/")
+        for line in proc.stdout.splitlines()
+        if line.strip() and line.strip().replace("\\", "/") not in norm_expected and is_test_file(line.strip())
+    ]
+    if not candidates:
+        return []
+    # Also collect non-private top-level / extension fun & class symbols from planned production files
+    extra_symbols: set[str] = set(prod_stems)
+    sym_decl_re = re.compile(
+        r"^\s*(?:(?:public|internal|open|abstract|data|sealed|inline|suspend|actual|expect)\s+)*"
+        r"(?:class|interface|object|fun)\s+(?:[A-Za-z0-9_<>,.?*\s]+\.)?([A-Za-z_][A-Za-z0-9_]*)\b",
+        re.M,
+    )
+    for rel_p in sorted(norm_expected)[:20]:
+        if not rel_p.endswith((".kt", ".java")) or is_test_file(rel_p):
+            continue
+        fp = repo / rel_p
+        if fp.is_file():
+            try:
+                src_txt = fp.read_text(encoding="utf-8", errors="replace")
+                for m_sym in sym_decl_re.finditer(src_txt):
+                    sname = m_sym.group(1)
+                    if len(sname) >= 5 and sname not in {"invoke", "apply", "build", "create", "equals", "toString", "hashCode"}:
+                        extra_symbols.add(sname)
+            except OSError:
+                pass
+
+    impacted: list[dict[str, Any]] = []
+    word_patterns = {sym: re.compile(rf"\b{re.escape(sym)}\b") for sym in sorted(extra_symbols)[:40]}
+    stem_set = set(prod_stems)
+    for rel in candidates[:250]:
+        fpath = repo / rel
+        if not fpath.is_file():
+            continue
+        test_stem = fpath.stem
+        companion_hits = [st for st in stem_set if test_stem in {f"{st}Test", f"{st}Tests", f"{st}Spec"}]
+        try:
+            if fpath.stat().st_size > 512 * 1024:
+                continue
+            ftxt = fpath.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        matched = list(dict.fromkeys(companion_hits + [sym for sym, pat in word_patterns.items() if pat.search(ftxt)]))
+        if matched:
+            impacted.append({"test_file": rel, "referenced_symbols": matched[:8]})
+    return impacted[:12]
 
 
 def _load_utility_ledger(repo: Path) -> dict[str, Any]:
@@ -243,7 +450,7 @@ def _count_parent_user_turns(parent_conversation_id: str) -> int:
     cid = str(parent_conversation_id or "").strip()
     if not cid or cid == "claude-session":
         return 0
-    tx = resolve_transcript(cid)
+    tx = prefer_full_transcript(resolve_transcript(cid))
     if tx is None or not tx.is_file():
         return 0
     try:
@@ -270,7 +477,7 @@ def _child_transcript_completed(execution_id: str) -> bool:
     cid = str(execution_id or "").strip()
     if not cid:
         return False
-    tx = resolve_transcript(cid)
+    tx = prefer_full_transcript(resolve_transcript(cid))
     if tx is None or not tx.is_file():
         return False
     try:
@@ -415,14 +622,15 @@ def record_specialist_dispatch(
 
 def _transcript_head_and_dispatch(transcript: Path) -> tuple[bool, str, str]:
     """Return (has_user_explicit_input, sender_parent_id, prompt_sha256) from bounded transcript head."""
-    if not transcript.is_file() or transcript.stat().st_size > 32 * 1024 * 1024:
+    read_path = prefer_full_transcript(transcript) or transcript
+    if not read_path.is_file() or read_path.stat().st_size > 32 * 1024 * 1024:
         return False, "", ""
     has_user = False
     sender_id = ""
     prompt_hash = ""
     seen = 0
     try:
-        with transcript.open("r", encoding="utf-8", errors="replace") as fh:
+        with read_path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if not line.strip():
                     continue
@@ -435,10 +643,10 @@ def _transcript_head_and_dispatch(transcript: Path) -> tuple[bool, str, str]:
                     break
                 if not isinstance(row, dict):
                     continue
-                if row.get("source") == "USER_EXPLICIT" and row.get("type") == "USER_INPUT":
+                if row.get("source") == "USER_EXPLICIT" and row.get("type") == "USER_INPUT" and not prompt_hash:
                     has_user = True
                     break
-                if row.get("source") == "SYSTEM_SDK" and row.get("type") == "SYSTEM_MESSAGE" and not prompt_hash:
+                if row.get("source") in ACCEPTED_SYSTEM_SOURCES and row.get("type") == "SYSTEM_MESSAGE" and not prompt_hash:
                     content = str(row.get("content") or "")
                     m = re.search(
                         r"sender=([A-Za-z0-9_-]+)\s+priority=MESSAGE_PRIORITY_HIGH\s+content=([\s\S]+?)\n</SYSTEM_MESSAGE>",
@@ -1233,7 +1441,29 @@ def evaluate_delegation_policy(
             ctx_summary["relevant_views"] = list(ctx_summary.get("relevant_views") or [])
         return ctx_summary
 
+    is_remote_mode, remote_signals = detect_antigravity_remote_mode()
+    block_remote_subagents = is_remote_mode and not remote_subagents_explicitly_allowed()
+
     if not plan:
+        if block_remote_subagents:
+            return {
+                "status": "PRE_PLAN_DISCOVERY",
+                "strategy": "INLINE_LEAD_REMOTE_QUOTA_GUARD",
+                "recommended_subagent": None,
+                "scout_allowed": False,
+                "parallel_scout_cap": 0,
+                "worker_allowed": False,
+                "worker_mode": "NONE",
+                "remote_mode_detected": True,
+                "remote_mode_signals": remote_signals,
+                "reason": (
+                    f"REMOTE MODE QUOTA GUARD (#198819 — {', '.join(remote_signals)}): Antigravity Remote Mode ignores "
+                    "Model='flash' on `invoke_subagent` and drains 3x Gemini 4 Argon weekly quota. Run bounded `graph` / `task-context` "
+                    "directly on the Lead session, switch to Local Mode, or set `HARNESS_ALLOW_REMOTE_SUBAGENTS=1` if main chat is not on Argon."
+                ),
+                "project_context": _project_context_handoff(None, set()),
+                "quota_strategy": quota_guide,
+            }
         return {
             "status": "PRE_PLAN_DISCOVERY",
             "strategy": "DELEGATE_SCOUT_FIRST",
@@ -1242,6 +1472,7 @@ def evaluate_delegation_policy(
             "parallel_scout_cap": 3,
             "worker_allowed": False,
             "worker_mode": "NONE",
+            "remote_mode_detected": is_remote_mode,
             "reason": (
                 "No active implementation task yet. Delegate multi-file exploration and graph/task-context "
                 f"anchoring to 1-3 parallel `{SCOUT_AGENT}` subagents (`{DEFAULT_UTILITY_FLASH_MODEL}` — split 3+ subsystems across 2-3 scouts), "
@@ -1255,7 +1486,8 @@ def evaluate_delegation_policy(
     status = str(plan.get("status") or "").upper()
     kind = str(plan.get("task_kind") or plan.get("kind") or "FEATURE").upper()
     surfaces = set(plan.get("expected_surfaces") or [])
-    ctx_handoff = _project_context_handoff(plan, surfaces)
+    ctx_handoff = dict(_project_context_handoff(plan, surfaces))
+    ctx_handoff["impacted_existing_tests"] = list(plan.get("impacted_existing_tests") or discover_impacted_existing_tests(repo, plan.get("expected_files") or []))
     policy = _resolve_active_policy(repo, tid, plan) if tid else {}
     risk_tier = str(policy.get("risk_tier") or plan.get("risk_tier") or "T1_LOW").upper()
 
@@ -1318,40 +1550,48 @@ def evaluate_delegation_policy(
         }
 
     if kind in CONFLICT_KINDS:
+        w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+        sync_utility_worker_model(repo, w_model)
         return {
             "status": status,
             "task_id": tid,
             "phase_id": phase_id,
             "risk_tier": risk_tier,
+            "complexity_tier": c_tier,
             "router_action": act_code,
             "strategy": "CONFLICT_LEAD_CORE_WORKER_VERIFY",
             "recommended_subagent": WORKER_AGENT,
             "worker_allowed": True,
             "worker_mode": "TESTS_AND_GATES_ONLY",
+            "worker_model": w_model,
             "target_files": [f for f in target_files if is_test_file(f)],
             "reason": (
                 "Merge/conflict resolution stays with the Lead Architect (semantic choices may require `ask_question`). "
-                f"`{WORKER_AGENT}` may run post-resolution compile/unit-test verification gates."
+                f"`{WORKER_AGENT}` (`{w_model}`) may run post-resolution compile/unit-test verification gates."
             ),
             "project_context": ctx_handoff,
             "quota_strategy": quota_guide,
         }
 
     if act_code == "CAPTURE_RED_EVIDENCE":
+        w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="CAPTURE_RED_ONLY")
+        sync_utility_worker_model(repo, w_model)
         return {
             "status": status,
             "task_id": tid,
             "phase_id": phase_id,
             "risk_tier": risk_tier,
+            "complexity_tier": c_tier,
             "router_action": act_code,
             "before_first_edit": before_first_edit_cmd,
             "strategy": "DELEGATE_RED_REPRODUCTION_TO_WORKER",
             "recommended_subagent": WORKER_AGENT,
             "worker_allowed": True,
             "worker_mode": "CAPTURE_RED_ONLY",
+            "worker_model": w_model,
             "target_files": [f for f in target_files if is_test_file(f)],
             "reason": (
-                f"BUG task requires executable RED reproduction first. `{WORKER_AGENT}` may author only failing reproduction "
+                f"BUG task requires executable RED reproduction first. `{WORKER_AGENT}` (`{w_model}`) may author only failing reproduction "
                 "test(s) and run `python .agents/harness.py test --capture-red` before any production file is edited."
             ),
             "project_context": ctx_handoff,
@@ -1360,59 +1600,101 @@ def evaluate_delegation_policy(
 
     sensitive_active = sorted(surfaces & SENSITIVE_SURFACES)
     if sensitive_active or risk_tier in HIGH_SENSITIVITY_TIERS:
+        w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+        sync_utility_worker_model(repo, w_model)
         return {
             "status": status,
             "task_id": tid,
             "phase_id": phase_id,
             "risk_tier": risk_tier,
+            "complexity_tier": c_tier,
             "sensitive_surfaces": sensitive_active,
             "before_first_edit": before_first_edit_cmd,
             "strategy": "SENSITIVE_LEAD_CORE_WORKER_TESTS",
             "recommended_subagent": WORKER_AGENT,
             "worker_allowed": True,
             "worker_mode": "TESTS_AND_GATES_ONLY",
+            "worker_model": w_model,
             "target_files": [f for f in target_files if is_test_file(f)],
             "lead_owned_files": [f for f in target_files if not is_test_file(f)],
             "reason": (
                 f"High-sensitivity task ({risk_tier}; surfaces={sensitive_active or ['CRITICAL']}): Lead Architect "
                 "writes core production files directly, then delegates unit-test authoring and Gradle compile/test loops "
-                f"to `{WORKER_AGENT}` (`TESTS_AND_GATES_ONLY`)."
+                f"to `{WORKER_AGENT}` (`TESTS_AND_GATES_ONLY` on `{w_model}`)."
             ),
             "project_context": ctx_handoff,
             "quota_strategy": quota_guide,
         }
 
     if risk_tier == "T0_TRIVIAL" and len(target_files) <= 1:
+        sync_utility_worker_model(repo, DEFAULT_UTILITY_FLASH_MODEL)
         return {
             "status": status,
             "task_id": tid,
             "phase_id": phase_id,
             "risk_tier": risk_tier,
+            "complexity_tier": "SIMPLE",
             "before_first_edit": before_first_edit_cmd,
             "strategy": "TRIVIAL_INLINE_LEAD",
             "recommended_subagent": None,
             "worker_allowed": True,
             "worker_mode": "FULL_SLICE",
+            "worker_model": DEFAULT_UTILITY_FLASH_MODEL,
             "target_files": target_files,
             "reason": "Single-file T0_TRIVIAL edit: edit inline directly on the lead session to skip subagent round-trip latency.",
             "project_context": ctx_handoff,
             "quota_strategy": quota_guide,
         }
 
+    if block_remote_subagents:
+        sync_utility_worker_model(repo, DEFAULT_UTILITY_FLASH_MODEL)
+        return {
+            "status": status,
+            "task_id": tid,
+            "phase_id": phase_id,
+            "risk_tier": risk_tier,
+            "before_first_edit": before_first_edit_cmd,
+            "strategy": "INLINE_LEAD_REMOTE_QUOTA_GUARD",
+            "recommended_subagent": None,
+            "worker_allowed": False,
+            "worker_mode": "NONE",
+            "remote_mode_detected": True,
+            "remote_mode_signals": remote_signals,
+            "target_files": target_files,
+            "reason": (
+                f"REMOTE MODE QUOTA GUARD (#198819 — {', '.join(remote_signals)}): `{WORKER_AGENT}` delegation is paused in Remote Mode "
+                "because Antigravity ignores `Model='flash'` and bills subagent tokens to Gemini 4 Argon weekly quota. "
+                "Implement approved files directly on the Lead session, switch to Local Mode, or set `HARNESS_ALLOW_REMOTE_SUBAGENTS=1`."
+            ),
+            "project_context": ctx_handoff,
+            "quota_strategy": quota_guide,
+        }
+
+    w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="FULL_SLICE")
+    sync_utility_worker_model(repo, w_model)
+    quota_guide = dict(quota_guide, subagent_workhorse_model=w_model)
+    model_call_hint = (
+        f" (configured on `{w_model}` — omit `Model` in `invoke_subagent` so `agent.md` frontmatter applies)"
+        if w_model == ADAPTIVE_WORKER_ARGON_MODEL
+        else f" (configured on `{w_model}`)"
+    )
     return {
         "status": status,
         "task_id": tid,
         "phase_id": phase_id,
         "risk_tier": risk_tier,
+        "complexity_tier": c_tier,
         "before_first_edit": before_first_edit_cmd,
         "strategy": "DELEGATE_WORKER_SLICE",
         "recommended_subagent": WORKER_AGENT,
         "worker_allowed": True,
         "worker_mode": "FULL_SLICE",
+        "worker_model": w_model,
+        "worker_invoke_model_arg": None if w_model == ADAPTIVE_WORKER_ARGON_MODEL else "flash",
         "target_files": target_files,
         "reason": (
-            f"Delegate this {risk_tier} slice ({len(target_files)} planned file(s)) in a single `{WORKER_AGENT}` call "
-            "with a Decision-Complete Brief (exact file paths, signatures, local patterns, and `compile`/`test` gate), "
+            f"Delegate this {risk_tier} ({c_tier}) slice ({len(target_files)} planned file(s)) in a single `{WORKER_AGENT}` call"
+            f"{model_call_hint} with a Decision-Complete Brief (exact file paths, signatures, local patterns, and `compile`/`test` gate), "
             "then run `git diff` once and advance directly without re-reading source files."
         ),
         "project_context": ctx_handoff,
@@ -1445,6 +1727,16 @@ def validate_utility_dispatch(
         if isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() == SCOUT_AGENT
     ]
 
+    is_remote_m, rem_sigs = detect_antigravity_remote_mode()
+    if is_remote_m and not remote_subagents_explicitly_allowed():
+        return (
+            False,
+            f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_sigs)}). "
+            "`invoke_subagent` ignores `Model='flash'` in Remote Mode when the parent chat uses Gemini 4 Argon and drains 3x Argon weekly quota. "
+            "Switch to Local Mode, use Carbon/Claude on the main chat, or set `HARNESS_ALLOW_REMOTE_SUBAGENTS=1` to override.",
+            "REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD",
+        )
+
     # Never mix utility subagents with reviewer/specialist or unpinned built-in research/explore subagents
     other_types = [t for t in types_in_call if t not in CORE_UTILITY_AGENTS]
     if other_types:
@@ -1455,8 +1747,9 @@ def validate_utility_dispatch(
             "MIXED_SUBAGENT_BATCH",
         )
 
-    # Guard against silent frontier quota leak: utility agents must never be overridden to `pro`
-    for item in (*worker_items, *scout_items):
+    # Guard against silent frontier quota leak: `harness-scout-agent` is strictly Flash-only;
+    # `harness-worker-agent` is Flash-only unless adaptive `flash-argon-hybrid` upgraded it to `gemini-4-argon-low` on a COMPLEX slice.
+    for item in scout_items:
         raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
         if raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
             return (
@@ -1465,6 +1758,25 @@ def validate_utility_dispatch(
                 f"remove Model='{raw_model}' (or pass Model='flash').",
                 "UTILITY_MODEL_QUOTA_GUARD",
             )
+    if worker_items:
+        expected_w_model, _ = resolve_utility_worker_model(repo, plan=plan, worker_mode="FULL_SLICE")
+        for item in worker_items:
+            raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
+            if expected_w_model == ADAPTIVE_WORKER_ARGON_MODEL:
+                if raw_model and raw_model not in {ADAPTIVE_WORKER_ARGON_MODEL, "argon-low", "argon@low"}:
+                    return (
+                        False,
+                        f"Adaptive `{WORKER_AGENT}` is configured for `{ADAPTIVE_WORKER_ARGON_MODEL}` on this COMPLEX slice; "
+                        f"omit `Model` in `invoke_subagent` (do not pass Model='{raw_model}').",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
+            elif raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
+                return (
+                    False,
+                    f"Utility subagent '{item.get('TypeName') or item.get('typeName')}' is pinned to Flash for quota protection; "
+                    f"remove Model='{raw_model}' (or pass Model='flash').",
+                    "UTILITY_MODEL_QUOTA_GUARD",
+                )
 
     if len(scout_items) > 3:
         return (False, f"`{SCOUT_AGENT}` batch size {len(scout_items)} exceeds the 3-scout parallel cap.", "SCOUT_BATCH_CAP")

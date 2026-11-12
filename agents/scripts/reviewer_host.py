@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from _vnext_common import ValidationError, atomic_write_json, read_json, redact_text, state_root, task_dir, utc_now
-from antigravity_runtime import resolve_transcript
+from antigravity_runtime import ACCEPTED_SYSTEM_SOURCES, prefer_full_transcript, resolve_transcript
 from evidence_store import StateLock
 
 
@@ -85,10 +85,11 @@ def active_reviews(repo: Path):
 
 
 def _head_steps(path: Path, limit: int = 8) -> list[dict]:
-    if path.stat().st_size > 32 * 1024 * 1024:
+    read_path = prefer_full_transcript(path) or path
+    if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
     rows: list[dict] = []
-    with path.open("r", encoding="utf-8") as fh:
+    with read_path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             if not line.strip():
                 continue
@@ -108,9 +109,10 @@ def _head_steps(path: Path, limit: int = 8) -> list[dict]:
 
 def _steps(path: Path) -> list[dict]:
     # Transcript content is inspected only at its canonical trusted host location.
-    if path.stat().st_size > 32 * 1024 * 1024:
+    read_path = prefer_full_transcript(path) or path
+    if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
-    raw = path.read_text(encoding="utf-8")
+    raw = read_path.read_text(encoding="utf-8", errors="replace")
     rows = []
     lines = raw.splitlines()
     for index, line in enumerate(lines):
@@ -148,10 +150,11 @@ def identity_messages(path: Path):
     No persistent identity cache: replacement/truncation is observed on every
     call. Full result and cancellation validation still use complete transcripts.
     """
-    if path.stat().st_size > 32 * 1024 * 1024:
+    read_path = prefer_full_transcript(path) or path
+    if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
     count = 0
-    with path.open("r", encoding="utf-8") as handle:
+    with read_path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if not line.strip():
                 continue
@@ -163,7 +166,7 @@ def identity_messages(path: Path):
                 raise ValidationError("invalid reviewer host transcript")
             if not isinstance(row, dict):
                 raise ValidationError("invalid reviewer host transcript")
-            if row.get("source") == "SYSTEM_SDK" and row.get("type") == "SYSTEM_MESSAGE":
+            if row.get("source") in ACCEPTED_SYSTEM_SOURCES and row.get("type") == "SYSTEM_MESSAGE":
                 yield str(row.get("content") or "")
                 count += 1
                 if count >= 8:
@@ -173,8 +176,11 @@ def identity_messages(path: Path):
 def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> dict | None:
     transcript = resolve_transcript(execution_id)
     head = _head_steps(transcript, limit=8) if transcript is not None else []
-    if any(r.get("source") == "USER_EXPLICIT" and r.get("type") == "USER_INPUT" for r in head):
-        return None
+    for _r in head:
+        if _r.get("source") in ACCEPTED_SYSTEM_SOURCES and _r.get("type") == "SYSTEM_MESSAGE" and "MESSAGE_PRIORITY_HIGH" in str(_r.get("content") or ""):
+            break
+        if _r.get("source") == "USER_EXPLICIT" and _r.get("type") == "USER_INPUT":
+            return None
     pending_review = False
     candidates = []
     from review_execution import pointer_matches
@@ -249,7 +255,7 @@ def cancellation(entry: dict, *, _parent_steps_cache: dict[str, list[dict]] | No
     latest = None
     for row in parent_rows:
         content = str(row.get("content") or "")
-        if row.get("source") != "SYSTEM_SDK" or row.get("type") != "SYSTEM_MESSAGE":
+        if row.get("source") not in ACCEPTED_SYSTEM_SOURCES or row.get("type") != "SYSTEM_MESSAGE":
             continue
         if f'Subagent "{execution_id}" has been explicitly canceled by the user' in content and 'sender=system ' in content:
             stamp = re.search(r"timestamp=([^\s]+)", content)

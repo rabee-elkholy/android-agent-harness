@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" width="1200" height="430">
+  <defs>
+    <linearGradient id="ebg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070B14"/>
+      <stop offset="50%" stop-color="#0D1526"/>
+      <stop offset="100%" stop-color="#060911"/>
+    </linearGradient>
+    <linearGradient id="ecard" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#131D31"/>
+      <stop offset="100%" stop-color="#0C1322"/>
+    </linearGradient>
+    <linearGradient id="egrn" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#3DDC84"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="430" rx="18" fill="url(#ebg)" stroke="#1E293B" stroke-width="1.5"/>
+
+  <text x="36" y="42" fill="#38BDF8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="800" letter-spacing="1.4">ENGINE LATENCY &amp; PAYLOAD COMPACTION · PURE PYTHON 3.10–3.14 STDLIB RUNTIME</text>
+  <text x="36" y="69" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="22" font-weight="800">v1.3.5 Measured Speedups &amp; Context Diet</text>
+  <rect x="950" y="34" width="214" height="32" rx="16" fill="#0C223B" stroke="#38BDF8" stroke-width="1.2"/>
+  <text x="1057" y="55" text-anchor="middle" fill="#38BDF8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="800">SUB-15ms GRAPH &amp; ROUTER</text>
+
+  <g transform="translate(32, 92)">
+    <rect width="556" height="306" rx="14" fill="url(#ecard)" stroke="#1E293B" stroke-width="1.5"/>
+    <text x="24" y="34" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="700">Payload &amp; Artifact Byte Reduction</text>
+    <text x="24" y="54" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">Before vs. After compaction across real Android &amp; KMP repositories</text>
+
+    <text x="24" y="88" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600">plan.md (1,000+ File Repo): 1.84 MB -&gt; 5.6 KB</text>
+    <text x="532" y="88" text-anchor="end" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="800">-99.7%</text>
+    <rect x="24" y="96" width="508" height="16" rx="4" fill="#1E293B"/>
+    <rect x="24" y="96" width="506" height="16" rx="4" fill="url(#egrn)"/>
+
+    <text x="24" y="138" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600">Reviewer Project-Notes Block (PM HTML Stripped): 15.4 KB -&gt; 341 B</text>
+    <text x="532" y="138" text-anchor="end" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="800">-97.8%</text>
+    <rect x="24" y="146" width="508" height="16" rx="4" fill="#1E293B"/>
+    <rect x="24" y="146" width="497" height="16" rx="4" fill="url(#egrn)"/>
+
+    <text x="24" y="188" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600">task-context XML/Gradle FILE_FALLBACK: 40.4 KB -&gt; 4.7 KB</text>
+    <text x="532" y="188" text-anchor="end" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="800">-88.4%</text>
+    <rect x="24" y="196" width="508" height="16" rx="4" fill="#1E293B"/>
+    <rect x="24" y="196" width="449" height="16" rx="4" fill="url(#egrn)"/>
+
+    <text x="24" y="238" fill="#E2E8F0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600">PeopleInSpace KMP plan.md (204 Files): 38.8 KB -&gt; 5.4 KB</text>
+    <text x="532" y="238" text-anchor="end" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12" font-weight="800">-86.1%</text>
+    <rect x="24" y="246" width="508" height="16" rx="4" fill="#1E293B"/>
+    <rect x="24" y="246" width="437" height="16" rx="4" fill="url(#egrn)"/>
+
+    <text x="24" y="287" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11">Plus -49.8% incremental compaction on repeated task-context since-digest queries</text>
+  </g>
+
+  <g transform="translate(612, 92)">
+    <rect width="556" height="306" rx="14" fill="url(#ecard)" stroke="#1E293B" stroke-width="1.5"/>
+    <text x="24" y="34" fill="#F8FAFC" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="700">Runtime Dispatch &amp; Worker Loop Speedups</text>
+    <text x="24" y="54" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12">cProfile-verified engine paths + Gradle unit-test iteration improvements</text>
+
+    <rect x="24" y="74" width="246" height="98" rx="10" fill="#0A1322" stroke="#1E293B" stroke-width="1.2"/>
+    <text x="40" y="98" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="700">WORKER TEST ITERATION LOOP</text>
+    <text x="40" y="130" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="24" font-weight="800">9.5x Faster</text>
+    <text x="40" y="153" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11">32.4 min -&gt; 3.4 min (--tests + cached)</text>
+
+    <rect x="286" y="74" width="246" height="98" rx="10" fill="#0A1322" stroke="#1E293B" stroke-width="1.2"/>
+    <text x="302" y="98" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="700">IN-PROCESS CLI DISPATCH</text>
+    <text x="302" y="130" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="24" font-weight="800">8.02x Faster</text>
+    <text x="302" y="153" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11">145.1 ms -&gt; 18.1 ms read-only router</text>
+
+    <rect x="24" y="188" width="246" height="98" rx="10" fill="#0A1322" stroke="#1E293B" stroke-width="1.2"/>
+    <text x="40" y="212" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="700">WARM PLAN REVISION (REVISE)</text>
+    <text x="40" y="244" fill="#38BDF8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="24" font-weight="800">5.15x Faster</text>
+    <text x="40" y="267" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11">564.0 ms -&gt; 109.4 ms (facts cache)</text>
+
+    <rect x="286" y="188" width="246" height="98" rx="10" fill="#0A1322" stroke="#1E293B" stroke-width="1.2"/>
+    <text x="302" y="212" fill="#94A3B8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" font-weight="700">KMP CAPTURE-RED MODULES</text>
+    <text x="302" y="244" fill="#3DDC84" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="24" font-weight="800">1 / 9 Run</text>
+    <text x="302" y="267" fill="#CBD5E1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11">Skips 8 unaffected consumer modules</text>
+  </g>
+</svg>

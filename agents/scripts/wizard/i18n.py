@@ -12,7 +12,7 @@ try:
 except ImportError:  # pragma: no cover - kit layout always ships pm_policy
     PM_PROVIDER_IDS = ("zoho_sprints", "github_projects", "jira_mcp", "linear_mcp", "none")
 
-DEFAULT_PM_PROVIDER = "zoho_sprints"
+DEFAULT_PM_PROVIDER = "none"
 SKIP_DIRS = {
     ".git",
     "build",
@@ -174,16 +174,17 @@ T = {
             "guide is printed after install). Mutations stay locked behind an explicit "
             "trigger phrase for every tracker."
         ),
-        "i20_zoho_sprints": "Zoho Sprints — external MCP integration (Recommended, current default)",
+        "i20_zoho_sprints": "Zoho Sprints — external MCP integration",
         "i20_github_projects": "GitHub Projects & Issues — via the gh CLI",
         "i20_jira_mcp": "Jira — official upstream MCP server (registration guide)",
         "i20_linear_mcp": "Linear — official upstream MCP server (registration guide)",
-        "i20_none": "None — local-only delivery, no tracker",
+        "i20_none": "None — local-only delivery, no external tracker (Recommended)",
         "i22": (
             "Device Verification Mode: How should the harness verify the app on the connected device after building? "
             "Manual smoke test installs and launches the app on the phone, presenting simple steps for your sign-off."
         ),
-        "i22_manual": "Interactive Manual Smoke Test — App is launched on device; you follow simple steps and confirm (Recommended)",
+        "i22_manual": "Interactive Manual Smoke Test (Ask before APK install) — confirms before installing, then shows walkthrough (Recommended)",
+        "i22_manual_auto": "Auto-Install Manual Smoke Test — installs & launches APK automatically when ready, then shows walkthrough",
         "i22_off": "No device verification — assemble only (I test manually outside the harness)",
         "review_call_budget": (
             "Maximum reviewer calls shared by all phases and final review of one task before developer intervention?"

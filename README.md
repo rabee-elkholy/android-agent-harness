@@ -59,6 +59,12 @@ Instead of relying on fragile prompt instructions that decay as chat context gro
 
 AI models write Kotlin and Compose code fast — keeping them aligned with a real, evolving multi-module Android codebase over dozens of turns is the hard part.
 
+<p align="center">
+  <a href="https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/ab-comparison-v1.3.5.md">
+    <img src="https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/readme-why-harness-chart.svg" alt="18-Task Head-to-Head Benchmark: Agent Alone vs Android Agent Harness v1.3.5" width="100%" />
+  </a>
+</p>
+
 | Failure Mode in Vanilla AI Sessions | Deterministic Guarantee with Android Agent Harness |
 |---|---|
 | **Stale verification**: Agent reports "all tests pass" from a run before its last edit. | Every test, review, APK, and device check is bound to `delivery_snapshot_sha256`. Any later edit marks proof stale and blocks delivery. |
@@ -180,19 +186,19 @@ Android Agent Harness is engineered primary-first for **Google Antigravity** wit
   - `security-perf-reviewer-agent` — Auth/Billing/Crypto safety, exported components, `PendingIntent` mutability, main-thread I/O & ANR hazards, Compose stability, and FGS/sensor leaks.
   - `spec-compliance-agent` — Requirement-by-requirement verification against the approved plan when routed.
 - **`Zero-Hop` Inlined Briefs & Single-Turn Batch Completion**: Canonical review packages (`<= 24 KB` / `520` lines), pre-computed `GraphEngine` blast-radius topologies, and already-passed deterministic gate summaries (`preflight`, `compile`, `unit_tests`) are embedded directly inside `brief-<role>.md` (and `phase-brief-<role>.md`). Once parallel reviewers finish, `python .agents/harness.py review complete-all --task <id>` ingests all verdicts in a single turn.
-- **Flexible Reviewer Models & Reviewer Call Safety Cap**: Supports default parent inheritance, interactive presets (`risk-hybrid`, `flash-dynamic`, `carbon-dynamic`), or explicit Antigravity/Claude model pins, guarded by a configurable **Reviewer Call Safety Cap** (default: `20`, per-reviewer tool budget: `12` calls). See [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
+- **Complexity-Adaptive `Flash + Argon Low` Hybrid (`flash-argon-hybrid`) & Reviewer Call Safety Cap**: Automatically runs simple single-module tasks on **100% Pure `gemini-3.8-flash-medium`**, splits complex multi-module/coroutine/Room/bug tasks across **`gemini-4-argon-low`** (logic/security-perf & Worker) + **`gemini-3.8-flash-medium`** (Scout & structural boundary review), and caps `T5` critical security reviews strictly at **`gemini-4-argon-low`** — alongside `risk-hybrid`, `flash-dynamic`, `carbon-dynamic`, or `inherit`, guarded by a **Reviewer Call Safety Cap** (default: `20`, per-reviewer tool budget: `12` calls). See [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
 
 ---
 
 ## Hybrid Flash Orchestration & Frontier Quota Protection
 
-Large Android repositories can drain weekly frontier quotas (`Gemini 4 Carbon` / `Argon` / `Claude 5.5`) if the primary model performs every multi-file search, boilerplate edit, and Gradle test loop itself. Version `1.3.2` enforces **project-wide multi-wave subagent governance**:
+Large Android repositories can drain weekly frontier quotas (`Gemini 4 Carbon` / `Argon` / `Claude 5.5`) if the primary model performs every multi-file search, boilerplate edit, and Gradle test loop itself. Version `1.3.5` enforces **project-wide multi-wave subagent governance**:
 
 | Layer / Role | Pinned / Recommended Model | Responsibility & Enforced Guardrails |
 |---|---|---|
 | **Lead Architect** (Main Chat) | `Gemini 4 Carbon (Medium)` / `Argon` ⇄ rotate to `Claude Sonnet/Opus 5.5` at `~50%` weekly bar | Architectural reasoning, interactive `ask_question` alignment, `T4/T5` sensitive production code (`AUTH`, `BILLING`, `SECURITY`, `CRYPTO`), semantic conflict resolution, and final `git diff` inspection. |
 | **`harness-scout-agent`** (`1–3` parallel) | `gemini-3.8-flash-medium` | Read-only `graph` / `task-context` anchoring and parallel `view_file` sweeps returning `<1,500`-token `file:line` digests. Hard hook cap: **`24` tool calls/instance**, max **`2` waves/turn**. Unpinned built-in `research`/`explore` subagents are blocked (`USE_HARNESS_SCOUT_AGENT`). |
-| **`harness-worker-agent`** (Single active) | `gemini-3.8-flash-medium` | Executes decision-complete slices via `delegate-plan --json` (`FULL_SLICE` on `T0–T3`, `CAPTURE_RED_ONLY` on `BUG` pre-RED, `TESTS_AND_GATES_ONLY` on `T4/T5` & `CONFLICT`). Hard hook cap: **`32` read/search calls**; edits and `compile`/`test` gates uncapped. |
+| **`harness-worker-agent`** (Single active) | `gemini-3.8-flash-medium` (auto-upgrades to `gemini-4-argon-low` on `COMPLEX` slices under `flash-argon-hybrid`) | Executes decision-complete slices via `delegate-plan --json` (`FULL_SLICE` on `T0–T3`, `CAPTURE_RED_ONLY` on `BUG` pre-RED, `TESTS_AND_GATES_ONLY` on `T4/T5` & `CONFLICT`). Hard hook cap: **`32` read/search calls**; edits and `compile`/`test` gates uncapped. |
 | **Post-Wave Anti-Reread Guard** | Native `PreToolUse` + `PostToolUse` | Blocks bloated `>220`-line reads on `>350`-line files after subagent waves and caps Lead post-wave checks at **`<=3` surgical reads** (`0` redundant re-reads after `APPROVE` reviews). |
 
 ---
@@ -213,7 +219,7 @@ Verification scales strictly with the **classified final diff** — never slowin
 ### Native Android & Kotlin Multiplatform (`KMM / KMP`) Safeguards
 - **Multiplatform Source-Set Purity**: Indexes `commonMain`, `androidMain`, `iosMain`, `:composeApp`, `:shared`, and iOS `.swift` symbols; blocks accidental `android.*` / JVM-only API leaks in `commonMain`; and validates `expect` / `actual` declaration pairing.
 - **Mixed Legacy & Modern Codebases**: Resolves local architecture profiles per directory/module (`Java + XML + MVP` alongside `Kotlin + XML + MVVM` and `Kotlin + Compose + MVI`) without forcing unapproved rewrites.
-- **Android 15 / 16 & Platform Readiness**: Zero-token static checks in `fast_kt_lint.py` catch missing `PendingIntent` immutability flags, swallowed `CancellationException` in `suspend` functions, hardcoded UI strings, UI-to-DAO layer bypasses, and exported Manifest components missing permissions.
+- **Android 15 / 16 & Platform Readiness**: Zero-token static checks in `fast_kt_lint.py` catch missing `PendingIntent` immutability flags, swallowed `CancellationException` in `suspend` functions, Jetpack Compose `A2UI 1.0` traps (uncollected `outboundEvents` white-box errors, `material3-a2ui` vs stable Compose BOM conflicts, and `catalogId` mismatches), hardcoded UI strings, UI-to-DAO layer bypasses, and exported Manifest components missing permissions.
 
 ---
 
@@ -293,22 +299,27 @@ python .agents/harness.py symbol replace-body \
 
 All runtime operations execute in pure Python 3.10–3.14 standard library with content-addressed `blake2b` caching and in-process CLI dispatch:
 
-| Benchmark / Measurement | Baseline (`v1.3.1` / Unoptimized) | Current (`v1.3.2`) | Measured Gain |
-|---|---:|---:|---:|
-| Read-only `harness.py` CLI dispatch (in-process fast path) | `145.1 ms` | **`18.1 ms`** | **8.02x faster** |
-| Warm `workflow.py revise` on 19-module / 760-file repo | `564.0 ms` | **`109.4 ms`** | **5.15x faster** |
-| `task-context` XML/Gradle `FILE_FALLBACK` JSON payload | `40,394 B` | **`4,694 B`** | **-88.38% bytes** |
-| `harness.py graph --module :app --format json` payload | `16,689 B` | **`2,130 B`** | **-87.24% bytes** |
-| Non-PM code reviewer `project-notes.md` block (with Zoho HTML) | `15,408 B` | **`341 B`** | **-97.79% bytes** |
-| Repeated `task-context --since <digest>` (`UNCHANGED` mode) | `22,568 B` | **`11,233 B`** | **-50.23% bytes** |
-| Warm `resolve_task_contexts` batch (`mixed` / `kmp` / `+500` files) | `14.59 ms` | **`14.14 ms` / `14.46 ms` / `47.39 ms`** | **`1` facts read/batch** |
-| Warm `resolve_next_action` router (`1` doc / `500` docs) | `8.77 ms` / `14.64 ms` | **`8.74 ms` / `14.46 ms`** | **Sub-15 ms deterministic** |
-| Always-loaded instruction budget (`harness-rules` + `AGENTS` + `GEMINI`) | `36,000` char ceiling | **`24,372` chars (`67.7%`)** | **`11,628` chars headroom** |
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/main/docs/assets/benchmark-ab-overview.svg" alt="Controlled 18-Task A/B Defect Interception & Token Compaction" width="100%" />
+</p>
 
-Full methodology, reproducible scripts, and historical client certification reports (`Automattic/pocket-casts-android` frozen runs) are published in:
-- [v1.3.2 Engine, Project-Context & Subagent Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/v1.3.2-engine-and-context-benchmarks.md)
+| Benchmark / Measurement | Baseline (`Without Harness` / `v1.3.4`) | Current (`v1.3.5`) | Measured Gain |
+|---|---:|---:|---:|
+| Controlled `18`-Task A/B Defect Survival (`Ecommerce-Compose` + `PeopleInSpace`) | `18 / 18` escaped (`100%`) | **`0 / 18` escaped (`18/18` caught & delivered)** | **`100%` defect interception** |
+| Frontier Lead-Chat Discovery Context (`18` A/B Tasks via `harness-scout-agent`) | `112,097` est. tokens | **`~8,640` est. tokens** | **`-92.3%` Lead context** |
+| `plan.md` / `draft --json` payload (`PeopleInSpace` `204` files / `1,000+` file repos) | `38,790 B` / `1.84 MB` | **`5,396 B` / `~5.6 KB`** | **`-86.1%` to `-99.7%` bytes** |
+| Worker `IMPLEMENTING` unit-test iteration (`--tests <Class>` + cached Gradle) | `2x` full `--no-build-cache` pass | **Single module pass + JUnit `cause:` line** | **`2x–10x` faster** |
+| Read-only `harness.py` CLI dispatch (in-process fast path) | `145.1 ms` | **`18.1 ms`** | **8.02x faster** |
+| `task-context` XML/Gradle `FILE_FALLBACK` / Non-PM `project-notes` block | `40,394 B` / `15,408 B` | **`4,694 B` / `341 B`** | **`-88.38%` / `-97.79%` bytes** |
+| Repeated `task-context --since <digest>` (`UNCHANGED` mode) | `22,774 B` | **`11,439 B`** | **`-49.77%` bytes** |
+| Warm `resolve_task_contexts` batch (`mixed` / `kmp` / `+500` files) | `14.80 ms` | **`14.75 ms` / `14.98 ms` / `45.69 ms`** | **`1` facts read/batch** |
+| Warm `resolve_next_action` router (`1` doc / `500` docs) | `8.64 ms` / `13.10 ms` | **`8.57 ms` / `13.07 ms`** | **Sub-14 ms deterministic** |
+
+Full methodology, controlled A/B tables, and dual-repository verification reports (`mustafaunlu/Ecommerce-Compose` & `joreilly/PeopleInSpace`) are published in:
+- [Controlled 18-Task A/B Comparison (`Without Harness` vs `With Harness v1.3.5`)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/ab-comparison-v1.3.5.md)
+- [v1.3.5 Engine, Project-Context & Subagent Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/v1.3.5-engine-and-context-benchmarks.md)
+- [End-to-End & Daily Workflow Benchmark Status](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/benchmark-status.md)
 - [Context Summary Compaction Measurements (JSON)](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/implementation/context-summary-measurements.json)
-- [End-to-End Client Benchmark Status](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/benchmark-status.md)
 
 ---
 
@@ -316,7 +327,7 @@ Full methodology, reproducible scripts, and historical client certification repo
 
 | AI Coding Host | Installed Adapters & Assets | Scope & Mutation Enforcement | Review Protocol | Final Snapshot Verifier |
 |---|---|---|---|---|
-| **Google Antigravity** *(Primary Target)* | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, `.agents/agents/*/agent.md` (4 V2 reviewers + 2 Flash utility subagents), rules, skills | **`HARD_ENFORCED`** (`PreToolUse` & `PostToolUse` native hooks) | Trusted transcript `HARNESS_REVIEW_RESULT_V2` | **Yes** (SHA-256 bound) |
+| **Google Antigravity** *(Primary Target)* | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, `.agents/agents/*/agent.md` (8 pre-installed subagents: 4 V2 reviewers, 2 specialists, Scout & Worker), rules, skills | **`HARD_ENFORCED`** (`PreToolUse` & `PostToolUse` native hooks) | Trusted transcript `HARNESS_REVIEW_RESULT_V2` | **Yes** (SHA-256 bound) |
 | **Claude Code** | `CLAUDE.md`, `AGENTS.md`, `.claude/settings.json` hooks, `.claude/agents/` subagents | Hook + Rule enforced | Native subagent transcript verification | **Yes** (SHA-256 bound) |
 | **Cursor / Codex / Windsurf / Copilot / `AGENTS.md` Hosts** | `AGENTS.md` + host rule adapters (`.cursor/rules`, `CODEX.md`, `.windsurf/rules`, `.github/copilot-instructions.md`) | **`RULE_ENFORCED`** + downstream CLI gates | Structured response ingestion | **Yes** (SHA-256 bound) |
 
@@ -366,7 +377,7 @@ agents/
 └── workflows/             # Multi-phase, phone-e2e, Android inspection & PM tracker playbooks
 ```
 
-- **Cross-Platform CI Matrix**: Validated on **Ubuntu 24.04**, **Windows Server 2025**, and **macOS 15** across **Python 3.10–3.14**, including `37` deterministic selftest suites (`python harness_cli.py selftest`), wheel packaging lifecycle tests, release checksum verification (`263` tracked files), and adversarial hook/security tests.
+- **Cross-Platform CI Matrix**: Validated on **Ubuntu 24.04**, **Windows Server 2025**, and **macOS 15** across **Python 3.10–3.14**, including `36` deterministic selftest suites (`59` parallel processes) (`python harness_cli.py selftest`), wheel packaging lifecycle tests, release checksum verification (`265` tracked files), and adversarial hook/security tests.
 - **Contributing**: Runtime code uses **Python standard library only** (`0` third-party runtime dependencies) and preserves all approval, nonce, and snapshot-binding invariants. See [CONTRIBUTING.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/CONTRIBUTING.md) and [SECURITY.md](https://github.com/rabee-elkholy/android-agent-harness/blob/main/SECURITY.md).
 
 ---
@@ -417,7 +428,7 @@ Run <code>python .agents/harness.py doctor</code> to diagnose any drift across 1
 - [Architecture Reference](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/architecture.md) · [Workflow Guide](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows.md) · [Efficient Task Context](https://github.com/rabee-elkholy/android-agent-harness/blob/main/agents/workflows/efficient-context.md)
 - [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md) · [Verification Value & Metrics](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/verification-value.md) · [PM MCP Integrations](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/workflows/pm-integrations.md)
 - [Compatibility Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/compatibility-matrix.md) · [AI Tool Support](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) · [Cross-Host Continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md)
-- [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md) · [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md) · [v1.3.2 Engine & Context Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/v1.3.2-engine-and-context-benchmarks.md)
+- [Threat Model](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/threat-model.md) · [Restore & Recovery](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/restore.md) · [v1.3.5 A/B & Engine Benchmarks](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/benchmark/ab-comparison-v1.3.5.md)
 
 ---
 

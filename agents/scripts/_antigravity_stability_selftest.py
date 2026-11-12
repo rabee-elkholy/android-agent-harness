@@ -2466,6 +2466,86 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
             # Parent-inherited escalation requires no fabricated SQLite model metadata
             rm.validate_model_evidence({"review_host": "antigravity", "review_models": frozen_rh_t5}, r, None)
 
+        # 3. Complexity-Adaptive `flash-argon-hybrid` Worker & Doctor sync:
+        import delegation_policy as dp
+        from doctor.engine import HarnessDoctor
+        from lifecycle import _antigravity_agent_matches_policy
+        from _vnext_common import atomic_write_json, task_dir
+
+        rm.set_policy(
+            self.repo,
+            rm.resolve_preset_policy("flash-argon-hybrid"),
+            task_id=None,
+            host="antigravity",
+            source="conversation",
+            proof_reference="Use flash-argon-hybrid project-wide",
+        )
+        # 3a. SIMPLE task -> Worker stays on gemini-3.8-flash-medium
+        s_plan = {
+            "task_id": "w-simple",
+            "status": "IMPLEMENTING",
+            "task_kind": "FEATURE",
+            "risk_tier": "T2_FEATURE",
+            "expected_modules": [":app"],
+            "expected_surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"],
+            "expected_files": [
+                "app/src/main/kotlin/com/example/SimpleCard.kt",
+                "app/src/test/kotlin/com/example/SimpleCardTest.kt",
+            ],
+        }
+        atomic_write_json(task_dir(self.repo, "w-simple") / "plan.json", s_plan)
+        dec_simple = dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
+        self.assertEqual("SIMPLE", dec_simple["complexity_tier"])
+        self.assertEqual("gemini-3.8-flash-medium", dec_simple["worker_model"])
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+
+        # 3b. COMPLEX multi-module slice -> Worker upgrades to gemini-4-argon-low, Scout stays Flash, Doctor & lifecycle pass!
+        c_plan = {
+            "task_id": "w-complex",
+            "status": "IMPLEMENTING",
+            "task_kind": "FEATURE",
+            "risk_tier": "T3_SUBSYSTEM",
+            "expected_modules": [":app", ":core:data"],
+            "expected_surfaces": ["COROUTINES", "NETWORK"],
+            "expected_files": [
+                "app/src/main/kotlin/com/example/SyncViewModel.kt",
+                "core/data/src/main/kotlin/com/example/SyncRepo.kt",
+            ],
+        }
+        atomic_write_json(task_dir(self.repo, "w-complex") / "plan.json", c_plan)
+        dec_complex = dp.evaluate_delegation_policy(self.repo, task_id="w-complex", plan=c_plan, router_action="IMPLEMENT_TASK")
+        self.assertEqual("COMPLEX", dec_complex["complexity_tier"])
+        self.assertEqual("gemini-4-argon-low", dec_complex["worker_model"])
+        self.assertIsNone(dec_complex["worker_invoke_model_arg"])
+        self.assertIn('model: "gemini-4-argon-low"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-worker-agent/agent.md"))
+        doc_c = HarnessDoctor(self.repo, run_selftest=False)
+        doc_c.check_antigravity_installation()
+        rev_chk = next(r for r in doc_c.results if r.name == "Custom Reviewer Agents")
+        self.assertEqual("PASS", rev_chk.status, rev_chk.message)
+
+        # Validate utility dispatch allows omitted Model on Argon Low Worker, blocks Model='pro', and blocks Model='pro' on Scout
+        ok_w, msg_w, _ = dp.validate_utility_dispatch(
+            self.repo,
+            c_plan,
+            [{"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit",
+              "Prompt": "Implement SyncViewModel.kt and SyncRepo.kt following exact CoroutineDispatcher injection and run compile + test."}],
+        )
+        self.assertTrue(ok_w, msg_w)
+        bad_w, _, code_w = dp.validate_utility_dispatch(
+            self.repo,
+            c_plan,
+            [{"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Model": "pro",
+              "Prompt": "Implement SyncViewModel.kt and SyncRepo.kt following exact CoroutineDispatcher injection and run compile + test."}],
+        )
+        self.assertFalse(bad_w)
+        self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_w)
+
+        # Switching back to SIMPLE restores harness-worker-agent/agent.md to gemini-3.8-flash-medium
+        dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+
     def test_rev_upg_3_4_5_6_inlined_package_pure_tools_turn_cap_and_gate_evidence(self):
         import argparse
         import workflow
@@ -2697,6 +2777,285 @@ class ContextBridgeAndHookPolishSelftest(unittest.TestCase):
         })
         self.assertEqual("deny", res_dir_grep["decision"])
         self.assertEqual("DISCOVERY_ANCHOR_REQUIRED", res_dir_grep.get("reason_code"))
+
+
+
+class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
+    """Regression locks for v1.3.5 live Fitness_Android / Antigravity findings."""
+
+    def test_v135_remote_mode_log_bloat_windows_mcp_and_a2ui_compose_lint_guards(self):
+        import tempfile
+        from unittest import mock
+        import delegation_policy as dp
+        import fast_kt_lint as fkl
+        from doctor.engine import HarnessDoctor
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name).resolve()
+        (self.repo / ".agents").mkdir(parents=True, exist_ok=True)
+
+        # A) Remote Mode (#198819) blocks silent Flash->Argon quota leak in Scout & Worker unless explicitly overridden
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_REMOTE_AGENT": "1"}, clear=False):
+            os.environ.pop("HARNESS_ALLOW_REMOTE_SUBAGENTS", None)
+            pre_dec = dp.evaluate_delegation_policy(self.repo, plan=None)
+            self.assertEqual("INLINE_LEAD_REMOTE_QUOTA_GUARD", pre_dec["strategy"])
+            self.assertFalse(pre_dec["scout_allowed"])
+            ok_rem, _, code_rem = dp.validate_utility_dispatch(
+                self.repo,
+                None,
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Inspect HomeViewModel callers and graph"}],
+            )
+            self.assertFalse(ok_rem)
+            self.assertEqual("REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD", code_rem)
+
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_REMOTE_AGENT": "1", "HARNESS_ALLOW_REMOTE_SUBAGENTS": "1"}, clear=False):
+            ok_ovr, msg_ovr, _ = dp.validate_utility_dispatch(
+                self.repo,
+                None,
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Inspect HomeViewModel callers and graph"}],
+            )
+            self.assertTrue(ok_ovr, msg_ovr)
+
+        # B) Doctor detects WatchVersionControlState spin-loop in language_server.log (#198689) & Windows stdio MCPs (#199301)
+        log_dir = self.repo / "ag_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / "language_server.log").write_text(
+            ("2026/11/12 01:10:00 WatchVersionControlState vcs watcher error: <nil>\n" * 30),
+            encoding="utf-8",
+        )
+        (self.repo / ".agents" / "mcp.json").write_text(
+            json.dumps({
+                "mcpServers": {
+                    "zoho": {"command": "node", "args": ["zoho-mcp.js"]},
+                    "sqlite": {"command": "npx", "args": ["-y", "mcp-sqlite"]},
+                }
+            }),
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_LOG_DIR": str(log_dir), "HARNESS_SIMULATE_WINDOWS_MCP": "1"}, clear=False):
+            doc_h = HarnessDoctor(self.repo, run_selftest=False)
+            doc_h.check_antigravity_installation()
+            log_chk = next(r for r in doc_h.results if r.name == "Antigravity Log & Remote Guard")
+            mcp_chk = next(r for r in doc_h.results if r.name == "Windows MCP Transport Guard")
+            self.assertEqual("WARN", log_chk.status, log_chk.message)
+            self.assertIn("WatchVersionControlState", log_chk.message)
+            self.assertEqual("WARN", mcp_chk.status, mcp_chk.message)
+            self.assertIn("#199301", mcp_chk.message)
+
+        # C) Jetpack Compose A2UI 1.0 static lint traps in fast_kt_lint.py
+        a2ui_dir = self.repo / "app/src/main/java/com/example/agentui"
+        a2ui_dir.mkdir(parents=True, exist_ok=True)
+        bad_vm = a2ui_dir / "CoachA2uiViewModel.kt"
+        bad_vm.write_text(
+            'package com.example.agentui\n'
+            'import androidx.a2ui.model.A2uiMessageProcessor\n'
+            'import androidx.a2ui.model.processor.processInput\n'
+            'import androidx.compose.material3.a2ui.BasicCatalog\n'
+            'class CoachA2uiViewModel(private val processor: A2uiMessageProcessor) {\n'
+            '    val catalog = BasicCatalog\n'
+            '    fun onAgentChunk(chunk: String) {\n'
+            '        val initJson = """{"version":"1.0","createSurface":{"surfaceId":"s1","catalogId":"wrong-id"}}"""\n'
+            '        processInput(processor, chunk)\n'
+            '    }\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        vm_issues = fkl.lint_file(bad_vm, modified_lines=None)
+        vm_types = {i["type"] for i in vm_issues}
+        self.assertIn("A2UI_UNCOLLECTED_OUTBOUND_EVENTS", vm_types, vm_issues)
+        self.assertIn("A2UI_CATALOG_ID_MISMATCH", vm_types, vm_issues)
+
+        # Fix both traps -> 0 A2UI issues!
+        bad_vm.write_text(
+            'package com.example.agentui\n'
+            'import androidx.a2ui.model.A2uiMessageProcessor\n'
+            'import androidx.a2ui.model.processor.processInput\n'
+            'import androidx.compose.material3.a2ui.BasicCatalog\n'
+            'class CoachA2uiViewModel(private val processor: A2uiMessageProcessor) {\n'
+            '    val catalog = BasicCatalog\n'
+            '    val events = processor.outboundEvents\n'
+            '    fun onAgentChunk(chunk: String) {\n'
+            '        val initJson = """{"version":"1.0","createSurface":{"surfaceId":"s1","catalogId":"https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"}}"""\n'
+            '        processInput(processor, chunk)\n'
+            '    }\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        clean_vm_types = {i["type"] for i in fkl.lint_file(bad_vm, modified_lines=None)}
+        self.assertNotIn("A2UI_UNCOLLECTED_OUTBOUND_EVENTS", clean_vm_types)
+        self.assertNotIn("A2UI_CATALOG_ID_MISMATCH", clean_vm_types)
+
+        # Build script BOM conflict + KMP commonMain Android-only AAR guard
+        bad_gradle = self.repo / "feature_agent_build.gradle.kts"
+        bad_gradle.write_text(
+            'kotlin {\n'
+            '    sourceSets {\n'
+            '        commonMain.dependencies {\n'
+            '            implementation(platform("androidx.compose:compose-bom:2026.05.00"))\n'
+            '            implementation("androidx.compose.material3:material3-a2ui:1.0.0-alpha02")\n'
+            '        }\n'
+            '    }\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        gradle_types = {i["type"] for i in fkl.lint_build_script(bad_gradle)}
+        self.assertIn("A2UI_COMPOSE_BOM_CONFLICT", gradle_types)
+        self.assertIn("A2UI_ANDROID_ONLY_IN_COMMON_MAIN", gradle_types)
+
+    def test_v135_system_source_and_transcript_full_upgrade(self):
+        from antigravity_runtime import prefer_full_transcript
+        from delegation_policy import _transcript_head_and_dispatch, _prompt_sha256
+        from reviewer_host import identity_messages, _steps
+
+        with tempfile.TemporaryDirectory(prefix="v135_tx_") as td:
+            logs = Path(td) / ".system_generated" / "logs"
+            logs.mkdir(parents=True)
+            long_brief = "Worker brief line\n" * 400
+            full_sys = f"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-11T17:18:00Z sender=lead-123 priority=MESSAGE_PRIORITY_HIGH content={long_brief}\n</SYSTEM_MESSAGE>"
+            trunc_tx = logs / "transcript.jsonl"
+            full_tx = logs / "transcript_full.jsonl"
+            trunc_tx.write_text(
+                json.dumps({"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "content": full_sys[:500] + "\n</SYSTEM_MESSAGE>", "truncated_fields": ["content"]}) + "\n"
+                + json.dumps({"step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "nudge"}) + "\n"
+                + json.dumps({"step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "short", "truncated_fields": ["content"]}) + "\n",
+                encoding="utf-8",
+            )
+            full_tx.write_text(
+                json.dumps({"step_index": 0, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "content": full_sys}) + "\n"
+                + json.dumps({"step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "nudge"}) + "\n"
+                + json.dumps({"step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "UNTRUNCATED_VERDICT"}) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(full_tx, prefer_full_transcript(trunc_tx))
+            has_user, sender, phash = _transcript_head_and_dispatch(trunc_tx)
+            self.assertFalse(has_user)
+            self.assertEqual("lead-123", sender)
+            self.assertEqual(_prompt_sha256(long_brief), phash)
+            msgs = list(identity_messages(trunc_tx))
+            self.assertEqual(1, len(msgs))
+            self.assertIn(long_brief, msgs[0])
+            steps = _steps(trunc_tx)
+            self.assertEqual("UNTRUNCATED_VERDICT", steps[-1]["content"])
+
+    def test_v135_fast_tests_filter_and_compact_plan_md(self):
+        import run_tests_gate
+        from plan_document import _compact_display_payload
+
+        bloated = {
+            "base_delivery_snapshot_sha256": "a" * 64,
+            "base_file_identities": [{"path": f"f{i}.kt", "content_identity": "x"} for i in range(200)],
+        }
+        compacted = _compact_display_payload(bloated)
+        self.assertEqual(1, len(compacted["base_file_identities"]))
+        self.assertIn("200 baseline entries", compacted["base_file_identities"][0])
+        self.assertEqual(200, len(bloated["base_file_identities"]))
+
+        cause = run_tests_gate._compact_failure_cause(
+            "io.mockk.MockKException: Failed matching\n\tat com.app.HomeTest.myCase(HomeTest.kt:94)"
+        )
+        self.assertIn("MockKException", cause)
+        self.assertIn("HomeTest.kt:94", cause)
+
+
+    def test_v135_live_dual_app_kmp_and_android_fixes(self):
+        from unittest.mock import patch
+        import _product
+        import _repo_files
+        import run_tests_gate
+        from _graph_core import parse_gradle_modules
+        from project_context import normalize_instruction_record, normalize_instruction_scope
+
+        # 1) String shorthand scope & hand-authored instruction record normalization
+        self.assertEqual({"kind": "GLOBAL", "value": "*"}, normalize_instruction_scope("global"))
+        self.assertEqual({"kind": "MODULE", "value": ":common"}, normalize_instruction_scope(":common"))
+        rec = normalize_instruction_record({"id": "k1", "scope": "global", "text": "Use Koin", "active": True})
+        self.assertEqual("ACTIVE", rec["status"])
+        self.assertEqual(64, len(rec["sha256"]))
+        self.assertEqual("REVOKED", normalize_instruction_record({"id": "k2", "active": False})["status"])
+
+        # 2) Kebab-case Gradle TYPESAFE_PROJECT_ACCESSORS + root allprojects non-broadening + test-only consumer pruning
+        with tempfile.TemporaryDirectory(prefix="v135_kmp_gate_") as td:
+            repo = Path(td)
+            (repo / "settings.gradle.kts").write_text(
+                'enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")\n'
+                'include(":app", ":common", ":compose-desktop", ":ios-export")\n',
+                encoding="utf-8",
+            )
+            (repo / "build.gradle.kts").write_text(
+                'allprojects { configurations.all { resolutionStrategy {} } }\n',
+                encoding="utf-8",
+            )
+            for mod, body in (
+                ("app", 'plugins { id("com.android.application") }\ndependencies { implementation(projects.common) }'),
+                ("common", 'plugins { kotlin("multiplatform"); id("com.android.kotlin.multiplatform.library") }'),
+                ("compose-desktop", 'plugins { kotlin("jvm") }\ndependencies { implementation(projects.common) }'),
+                ("ios-export", 'plugins { kotlin("multiplatform") }\nkotlin { iosArm64(); iosSimulatorArm64() }\ndependencies { api(projects.common) }'),
+            ):
+                (repo / mod).mkdir(parents=True)
+                (repo / mod / "build.gradle.kts").write_text(body + "\n", encoding="utf-8")
+
+            # Also verify camelCase accessor pointing to `:compose-desktop` resolves without unresolved_dependencies!
+            (repo / "app/build.gradle.kts").write_text(
+                'plugins { id("com.android.application") }\ndependencies { implementation(projects.common); implementation(projects.composeDesktop) }\n',
+                encoding="utf-8",
+            )
+            nodes, edges = parse_gradle_modules(repo)
+            self.assertFalse(any(n.metadata.get("unresolved_dependencies") for n in nodes.values()))
+            self.assertTrue(any(e.source == ":app" and e.target == ":compose-desktop" for e in edges))
+
+            # Test-only edit in :common runs ONLY :common:testAndroidHostTest (does NOT expand to :app or :compose-desktop!)
+            test_only_path = repo / "common/src/commonTest/kotlin/dev/CommonTest.kt"
+            with patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), \
+                 patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"), \
+                 patch.object(_repo_files, "changed_paths", return_value=[test_only_path]):
+                self.assertEqual([":common:testAndroidHostTest"], run_tests_gate.resolve_target_tasks(repo, None))
+
+            # Production edit in :common expands to :app and :compose-desktop (and skips Apple-only :ios-export on non-macOS)
+            prod_path = repo / "common/src/commonMain/kotlin/dev/Common.kt"
+            with patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True), \
+                 patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"), \
+                 patch.object(_repo_files, "changed_paths", return_value=[prod_path]):
+                resolved = run_tests_gate.resolve_target_tasks(repo, None)
+                self.assertIn(":common:testAndroidHostTest", resolved)
+                self.assertIn(":app:testDebugUnitTest", resolved)
+                self.assertIn(":compose-desktop:test", resolved)
+                if sys.platform != "darwin":
+                    self.assertNotIn(":ios-export:allTests", resolved)
+
+            # 3) Non-Gradle Xcode SwiftUI directory in KMP repo does not invent fake Gradle module in resolve_phase_modules
+            from _workflow.engine import resolve_phase_modules
+            (repo / "PeopleInSpaceSwiftUI/PeopleInSpaceSwiftUI").mkdir(parents=True)
+            (repo / "PeopleInSpaceSwiftUI/PeopleInSpaceSwiftUI/ContentView.swift").write_text("struct ContentView {}\n", encoding="utf-8")
+            swift_mods = resolve_phase_modules(repo, {"expected_files": ["PeopleInSpaceSwiftUI/PeopleInSpaceSwiftUI/ContentView.swift"]})
+            self.assertEqual([], swift_mods)
+
+            # 4) UI screens containing Dao/Store/Service in their feature name still trigger UI_TO_DATA_SOURCE_BYPASS
+            from architecture_drift import _detect_ui_data_source_bypass
+            self.assertIsNotNone(
+                _detect_ui_data_source_bypass(
+                    "CartDirectDaoScreen",
+                    "import androidx.compose.runtime.Composable\nimport androidx.room.Dao\n@Composable fun CartDirectDaoScreen() {}",
+                )
+            )
+            self.assertIsNotNone(
+                _detect_ui_data_source_bypass(
+                    "ProductStoreScreen",
+                    "import androidx.compose.runtime.Composable\nimport retrofit2.Retrofit\n@Composable fun ProductStoreScreen() {}",
+                )
+            )
+            self.assertIsNone(
+                _detect_ui_data_source_bypass(
+                    "CartDao",
+                    "import androidx.room.Dao\n@Dao interface CartDao",
+                )
+            )
+            self.assertIsNone(
+                _detect_ui_data_source_bypass(
+                    "ProductRepositoryImpl",
+                    "import androidx.room.Dao\nclass ProductRepositoryImpl",
+                )
+            )
 
 
 if __name__ == "__main__":

@@ -372,12 +372,23 @@ def render_plan_document(
         "Everything below is covered by the plan hash.",
         "",
         "```json",
-        json.dumps(redact(plan_payload(plan)), ensure_ascii=False, sort_keys=True, indent=2),
+        json.dumps(_compact_display_payload(redact(plan_payload(plan))), ensure_ascii=False, sort_keys=True, indent=2),
         "```",
         "</details>",
         "",
     ]
     return "\n".join(lines)
+
+
+def _compact_display_payload(payload: dict) -> dict:
+    out = dict(payload)
+    for field in ("base_file_identities", "base_change_identities"):
+        items = out.get(field)
+        if isinstance(items, list) and len(items) > 25:
+            out[field] = [
+                f"<{len(items)} baseline entries bound by base_delivery_snapshot_sha256={str(out.get('base_delivery_snapshot_sha256') or '')[:16]}...; full array persisted in plan.json>"
+            ]
+    return out
 
 
 def write_plan_document(repo: Path, task_directory: Path, plan: dict, *, policy: dict | None = None, previous: dict | None = None) -> Path:

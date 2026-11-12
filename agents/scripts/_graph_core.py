@@ -1028,9 +1028,11 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
                             if target_mod != mod:
                                 edges.append(GraphEdge(source=mod, target=target_mod, kind=EdgeKind.DEPENDS_ON.value))
 
+                    norm_modules = {re.sub(r"[-_]", "", fm.lower()): fm for fm in found_modules}
                     for m in GRADLE_TYPE_SAFE_DEP_PATTERN.finditer(text):
                         raw_target = m.group(1).strip().replace(".", ":")
-                        target_mod = f":{raw_target}"
+                        candidate = f":{raw_target}"
+                        target_mod = candidate if candidate in found_modules else norm_modules.get(re.sub(r"[-_]", "", candidate.lower()), candidate)
                         if target_mod in found_modules:
                             resolved_spans.append(m.span())
                             if target_mod != mod:
@@ -2015,7 +2017,7 @@ def render_dot_to_image(dot_content: str, output_path: Path, img_format: str = "
             [dot_bin, f"-T{img_format}", "-o", str(output_path)],
             input=dot_content,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
         )
         if res.returncode == 0:

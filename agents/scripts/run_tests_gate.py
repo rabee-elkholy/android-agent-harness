@@ -360,20 +360,31 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
     default_module = default_task.rsplit(":", 1)[0] or ":app"
     task_suffix = default_task.split(":")[-1]
     selected = set()
+    prod_selected = set()
     broad = False
     for path in changed:
         rel = path.relative_to(repo).as_posix()
         if "/src/" in rel:
             prefix = rel.split("/src/", 1)[0]
             mapped = {name for name, node in nodes.items() if node.file_path and Path(node.file_path).parent.as_posix() == prefix}
-            selected.update(mapped or {":" + prefix.replace("/", ":") if prefix else default_module})
+            mod_targets = mapped or {":" + prefix.replace("/", ":") if prefix else default_module}
+            selected.update(mod_targets)
+            if not re.search(r"/src/[^/]*test[^/]*/", rel, re.I):
+                prod_selected.update(mod_targets)
         if (path.suffix in {".gradle", ".kts", ".toml", ".properties"} and "/src/" not in rel) or path.name in {"gradlew", "gradlew.bat"}:
             broad = True
-    # Dynamic/custom build logic cannot justify excluding a declared consumer.
+    # Dynamic/custom build logic cannot justify excluding a declared consumer,
+    # whereas root repository/resolutionStrategy-only allprojects blocks do not alter module edges.
     for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"):
         path = repo / name
-        if path.is_file() and re.search(r"projectDir|includeBuild|apply\s*(?:\(|\s).*from|subprojects|allprojects", path.read_text(encoding="utf-8", errors="replace")):
-            broad = True
+        if path.is_file():
+            root_txt = path.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"projectDir|includeBuild|apply\s*(?:\(|\s).*from", root_txt):
+                broad = True
+            elif re.search(r"\b(?:subprojects|allprojects)\b", root_txt) and re.search(
+                r"\bproject\s*\(|\bprojects\.|\bdependencies\s*\{", root_txt
+            ):
+                broad = True
     broad = broad or (repo / "buildSrc").is_dir() or (repo / "build-logic").is_dir()
     broad = broad or any(node.metadata.get("unresolved_dependencies") for node in nodes.values())
     if known and selected - known:
@@ -382,7 +393,7 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
         selected = known | declared if known or declared else selected
         selected.add(default_module)
     else:
-        pending = list(selected)
+        pending = list(prod_selected)
         consumers: dict[str, set[str]] = {}
         for edge in edges:
             consumers.setdefault(edge.target, set()).add(edge.source)
@@ -391,7 +402,8 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
                 if consumer not in selected:
                     selected.add(consumer)
                     pending.append(consumer)
-    from wizard.discovery import _catalog_plugin_ids
+    from wizard.discovery import _catalog_plugin_ids, _resolve_catalog_aliases
+    from _modules import detect_kmp_build_script
     catalog_ids = _catalog_plugin_ids(repo)
     tasks = set()
     for module in selected:
@@ -402,6 +414,22 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
         build = (repo / node.file_path).read_text(encoding="utf-8", errors="replace") if node and node.file_path else ""
         if _asset_pack_without_test_plugin(build, catalog_ids):
             continue
+        if sys.platform != "darwin" and build:
+            resolved_b = _resolve_catalog_aliases(build, catalog_ids)
+            ki = detect_kmp_build_script(build, resolved_b)
+            mod_rel_chk = module.lstrip(":").replace(":", "/")
+            mod_dir_chk = repo / mod_rel_chk if mod_rel_chk else repo
+            if (
+                ki["has_kmp_plugin"]
+                and ki["has_ios_target"]
+                and not ki["has_android_target"]
+                and not ki["has_jvm_target"]
+                and not ki["has_agp_kmp_library"]
+                and not (mod_dir_chk / "src" / "androidMain").is_dir()
+                and not (mod_dir_chk / "src" / "jvmMain").is_dir()
+                and not re.search(r"\b(?:wasmJs|js|mingwX64|linuxX64|linuxArm64)\s*(?:\(|\{)", resolved_b)
+            ):
+                continue
         suffix = _kmp_or_module_test_suffix(repo, module, build, catalog_ids, task_suffix)
         tasks.add(f"{module}:{suffix}")
         if sys.platform == "darwin" and build:
@@ -581,15 +609,145 @@ def _predating_lines(task_start_ignored: list | None) -> list[tuple[str, bool]]:
     return lines
 
 
+_SAFE_TEST_FILTER_RE = re.compile(r"^[A-Za-z0-9_.*$#-]{1,256}$")
+
+
+def _collect_xml_failure_causes(repo: Path, task: str | list[str]) -> dict[str, str]:
+    causes: dict[str, str] = {}
+    for report in report_paths(repo, task):
+        try:
+            root = ET.fromstring(report.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        for case in root.iter("testcase"):
+            cls_name = str(case.get("classname") or "").strip()
+            meth_name = str(case.get("name") or "").strip()
+            if not cls_name or not meth_name:
+                continue
+            f_el = case.find("failure")
+            if f_el is None:
+                f_el = case.find("error")
+            if f_el is None:
+                continue
+            combined = f"{f_el.get('message') or f_el.get('type') or ''}\n{f_el.text or ''}"
+            cause_str = _compact_failure_cause(combined)
+            if cause_str:
+                causes[f"{cls_name}#{meth_name}"] = cause_str
+    return causes
+
+
+def _compact_failure_cause(raw_msg: str) -> str:
+    if not raw_msg:
+        return ""
+    cleaned_lines = [ln.strip() for ln in str(raw_msg).splitlines() if ln.strip()]
+    if not cleaned_lines:
+        return ""
+    head = cleaned_lines[0]
+    loc = ""
+    for ln in cleaned_lines[1:12]:
+        m = re.search(r"\(([A-Za-z0-9_$]+\.(?:kt|java):\d+)\)", ln)
+        if m:
+            loc = m.group(1)
+            break
+    summary = f"{head} [{loc}]" if loc and loc not in head else head
+    return summary[:220]
+
+
+def _filter_tasks_for_test_patterns(repo: Path, tasks: list[str], patterns: list[str]) -> list[str]:
+    if not patterns or len(tasks) <= 1:
+        return tasks
+    matched_tasks: list[str] = []
+    stems = []
+    for pat in patterns:
+        core = pat.replace("#", ".").strip("*.")
+        if not core:
+            continue
+        parts = [p for p in core.split(".") if p]
+        for candidate in reversed(parts):
+            if candidate[:1].isupper() or candidate.endswith(("Test", "Tests", "Spec")):
+                stems.append(candidate.partition("$")[0])
+                break
+    matched_paths: list[str] = []
+    for stem in stems:
+        src = _test_source(repo, stem)
+        if src:
+            matched_paths.append(src.replace("\\", "/"))
+    if not matched_paths:
+        return tasks[:1]
+    for task in tasks:
+        t_parts = [p for p in task.strip().split(":") if p]
+        if len(t_parts) >= 2:
+            mod_prefix = "/".join(t_parts[:-1]) + "/"
+            if any(mp.startswith(mod_prefix) for mp in matched_paths):
+                matched_tasks.append(task)
+    return matched_tasks or tasks[:1]
+
+
+def _scope_hint_lines(repo: Path, plan: dict, new_regressions: list[str]) -> list[tuple[str, bool]]:
+    if not plan or not new_regressions or str(plan.get("status") or "") != "IMPLEMENTING":
+        return []
+    expected_raw = list(plan.get("expected_files") or [])
+    if not expected_raw:
+        return []
+    expected_norm = {str(p).replace("\\", "/").strip("/") for p in expected_raw if p}
+    try:
+        from change_decision import additional_files
+        expected_norm |= {str(p).replace("\\", "/").strip("/") for p in additional_files(plan) if p}
+    except (ImportError, OSError, ValueError, KeyError, ValidationError):
+        _ignored = True
+    from plan_authority import planned_test_classes
+    owned_classes = planned_test_classes(expected_norm)
+    tracked_cache: set[str] | None = None
+    hints: list[tuple[str, bool]] = []
+    seen_files: set[str] = set()
+    for test_id in new_regressions[:15]:
+        simple = str(test_id).partition("#")[0].rpartition(".")[2].partition("$")[0]
+        if not simple or simple in owned_classes:
+            continue
+        src = _test_source(repo, simple)
+        if not src:
+            continue
+        src_norm = src.replace("\\", "/").strip("/")
+        if src_norm in expected_norm or src_norm in seen_files:
+            continue
+        if tracked_cache is None:
+            from plan_authority import _tracked_paths
+            tracked_cache = _tracked_paths(repo, [src_norm])
+        else:
+            from plan_authority import _tracked_paths
+            tracked_cache |= _tracked_paths(repo, [src_norm])
+        if src_norm in tracked_cache:
+            seen_files.add(src_norm)
+            hints.append((
+                f"[SCOPE-HINT] Existing regression test '{src_norm}' is outside expected_files. "
+                "If this task intentionally changed its asserted behavior, stop retrying and have the Lead Architect expand plan scope to update it.",
+                True,
+            ))
+    return hints
+
+
 def verdict_lines(
-    ok: bool, detail: str, code: int, new_regressions: list, task_start_ignored: list | None = None
+    ok: bool,
+    detail: str,
+    code: int,
+    new_regressions: list,
+    task_start_ignored: list | None = None,
+    failure_causes: dict[str, str] | None = None,
+    extra_hints: list[tuple[str, bool]] | None = None,
 ) -> list[tuple[str, bool]]:
     """The gate's closing lines as (text, is_error)."""
     if new_regressions:
         lines = [(f"[FAIL] NEW_REGRESSION: {len(new_regressions)} test(s) failed that are absent from the baseline:", True)]
-        lines += [(f"  - {item}", True) for item in new_regressions[:30]]
+        causes = failure_causes or {}
+        for item in new_regressions[:30]:
+            lines.append((f"  - {item}", True))
+            cause = causes.get(str(item), "")
+            if cause:
+                lines.append((f"      cause: {cause}", True))
         if len(new_regressions) > 30:
             lines.append((f"  ... and {len(new_regressions) - 30} more", True))
+        if extra_hints:
+            lines.extend(extra_hints)
         return lines + _predating_lines(task_start_ignored)
     if not ok:
         return [(f"[FAIL] Unit-test gate blocked: {detail}", True)]
@@ -888,9 +1046,25 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--proof-reference", default="", help="The developer's confirmation (with --record-unrelated)")
     parser.add_argument("--rerun-tests", action="store_true", help="Explicitly rerun selected Gradle tasks when fresh exact-case evidence is needed")
+    parser.add_argument(
+        "--tests", action="append", default=[], metavar="PATTERN",
+        help="Fast iteration filter: run only matching test class/method pattern(s) during IMPLEMENTING (does not record full-suite delivery evidence)",
+    )
+    parser.add_argument(
+        "--diagnose-flaky", action="store_true",
+        help="Force a second --rerun-tasks --no-build-cache diagnostic retry even during IMPLEMENTING",
+    )
     args = parser.parse_args(argv)
     if args.record_unrelated and not args.proof_reference.strip():
         live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
+        return 1
+    test_filters = [str(p or "").strip() for p in (args.tests or []) if str(p or "").strip()]
+    for pat in test_filters:
+        if not _SAFE_TEST_FILTER_RE.fullmatch(pat) or pat.startswith("-"):
+            live_print(f"[FAIL] Invalid --tests filter pattern: {pat!r}", err=True)
+            return 1
+    if test_filters and (args.capture_red or args.record_start or args.record_unrelated):
+        live_print("[FAIL] --tests cannot be combined with --capture-red, --record-start, or --record-unrelated.", err=True)
         return 1
 
     from mutation_guard import active_plan
@@ -898,9 +1072,14 @@ def main(argv=None) -> int:
         coverage_plan = active_plan(REPO) or {}
     except Exception:
         coverage_plan = {}
-    capture_cases = "verification_contract" in coverage_plan
+    capture_cases = "verification_contract" in coverage_plan and not test_filters
     extra_gradle = ["--rerun-tasks"] if args.rerun_tests else []
     tasks = resolve_target_tasks(REPO, args.task)
+    if test_filters:
+        if args.task is None:
+            tasks = _filter_tasks_for_test_patterns(REPO, tasks, test_filters)
+        for pat in test_filters:
+            extra_gradle.extend(["--tests", pat.replace("#", ".")])
     task: str | list[str] = tasks[0] if len(tasks) == 1 else tasks
     task_label = " ".join(tasks)
     live_print(f"[*] Unit-test gate: {task_label}")
@@ -1097,26 +1276,44 @@ def main(argv=None) -> int:
         task_start=task_start,
         capture_cases=capture_cases,
     )
-    if data.get('new_regressions') and code != 0 and outcome.get('test_failure_only'):
+    should_diagnose_flaky = (
+        not test_filters
+        and (str(coverage_plan.get("status") or "") != "IMPLEMENTING" or bool(args.diagnose_flaky))
+    )
+    if should_diagnose_flaky and data.get('new_regressions') and code != 0 and outcome.get('test_failure_only'):
         ok, detail, data = diagnose_new_failures(
             REPO, tasks, detail, data, identity, baseline, task_start, head)
         live_print(('[ENV-FAILURE] ' if data.get('status') == 'ENV' else '[FAIL] ') + detail, err=True)
-    if identity and not data.get('attempts') and execution_identity(REPO) != identity:
+    if identity and not test_filters and not data.get('attempts') and execution_identity(REPO) != identity:
         ok, detail = False, 'Test execution inputs changed during the run; rerun verification'
         data = {**data, 'status': 'FAIL', 'exit_code': 1}
+    failure_causes = _collect_xml_failure_causes(REPO, task)
+    for item in failed:
+        t_key = str(item.get("test_name") or "")
+        if t_key and t_key not in failure_causes and item.get("message"):
+            failure_causes[t_key] = _compact_failure_cause(str(item.get("message") or ""))
+    scope_hints = _scope_hint_lines(REPO, coverage_plan, data.get("new_regressions") or [])
     for text, is_error in verdict_lines(
-        ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored")
+        ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored"),
+        failure_causes=failure_causes, extra_hints=scope_hints,
     ):
         live_print(text, err=is_error)
 
-    write_gate_result("unit_tests", {
-        "schema_version": 2,
-        "producer": "run_tests_gate",
-        "git_sha": head,
-        "detail": detail,
-        **data,
-    })
-    if ok and not diagnostic_mode:
+    if test_filters:
+        if ok:
+            live_print(
+                "[FAST-ITERATION] Scoped --tests filter passed. Run full `python .agents/harness.py test` "
+                "(without --tests) before checkpoint-phase or prepare-verification to record delivery gate evidence."
+            )
+    else:
+        write_gate_result("unit_tests", {
+            "schema_version": 2,
+            "producer": "run_tests_gate",
+            "git_sha": head,
+            "detail": detail,
+            **data,
+        })
+    if ok and diagnostic_mode and not test_filters:
         try:
             from change_classifier import classify as _cls_ui
             from roborazzi_gate import auto_collect_after_unit_tests

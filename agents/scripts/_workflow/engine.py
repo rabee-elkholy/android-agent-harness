@@ -563,11 +563,15 @@ def _applicable_developer_instructions_for_task(
                 pass
 
     applicable: list[dict[str, Any]] = []
-    for inst in raw_instructions:
-        if inst.get("status") and inst.get("status") != "ACTIVE":
+    from project_context import normalize_instruction_record, normalize_instruction_scope
+    for raw_inst in raw_instructions:
+        if not isinstance(raw_inst, dict):
+            continue
+        inst = normalize_instruction_record(raw_inst)
+        if inst.get("status") != "ACTIVE":
             continue
 
-        scope = inst.get("scope") or {}
+        scope = inst["scope"]
         kind = str(scope.get("kind") or "GLOBAL").upper()
         val = str(scope.get("value") or "").strip()
         matches_scope = False
@@ -1524,19 +1528,18 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             f"To reconcile, update the plan using:\n{remediation_cmd}\nand obtain developer approval."
         )
     if plan.get("developer_instructions"):
-        inst_file = repo / ".agents" / "project-context" / "developer-instructions.json"
-        active_insts = {}
-        if inst_file.is_file():
-            try:
-                data = json.loads(inst_file.read_text(encoding="utf-8"))
-                active_insts = {i["id"]: i for i in data.get("instructions", []) if i.get("status") == "ACTIVE"}
-            except (OSError, ValueError, ValidationError):
-                pass
+        from project_context import load_developer_instructions_cached, normalize_instruction_record
+        active_insts = {
+            i["id"]: i
+            for i in load_developer_instructions_cached(repo, active_only=True)
+            if isinstance(i, dict) and i.get("id")
+        }
         for pinned in plan["developer_instructions"]:
-            pid = pinned.get("id")
+            norm_pinned = normalize_instruction_record(pinned) if isinstance(pinned, dict) else pinned
+            pid = norm_pinned.get("id")
             cur = active_insts.get(pid)
-            cur_sha = (cur.get("sha256") or cur.get("proof_reference_sha256", "")) if cur else None
-            pinned_sha = pinned.get("sha256") or pinned.get("proof_reference_sha256", "")
+            cur_sha = cur.get("sha256") if cur else None
+            pinned_sha = norm_pinned.get("sha256")
             if not cur or cur_sha != pinned_sha:
                 raise ValidationError(
                     f"APPROVED_INSTRUCTION_DRIFT: pinned developer instruction '{pid}' was modified or revoked since plan approval. "
@@ -2342,10 +2345,15 @@ def resolve_phase_modules(repo: Path, manifest: dict) -> list[str]:
         elif "/" in p:
             parts = [x for x in p.split("/") if x]
             if len(parts) >= 2:
-                if parts[0] in ("feature", "core", "lib", "module") and len(parts) > 2:
-                    found.add(f":{parts[0]}:{parts[1]}")
-                else:
-                    found.add(f":{parts[0]}")
+                cand_mod = (
+                    f":{parts[0]}:{parts[1]}"
+                    if parts[0] in ("feature", "core", "lib", "module") and len(parts) > 2
+                    else f":{parts[0]}"
+                )
+                has_settings = (repo / "settings.gradle.kts").is_file() or (repo / "settings.gradle").is_file()
+                cand_dir = repo / cand_mod.lstrip(":").replace(":", "/")
+                if not has_settings or (cand_dir / "build.gradle.kts").is_file() or (cand_dir / "build.gradle").is_file():
+                    found.add(cand_mod)
     return sorted(found)
 
 
@@ -2592,11 +2600,21 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
             for c in (phase_changes or [])
         ]
         module_paths = [p for p in module_paths if p.startswith(module_dir + "/src/")]
+        def _is_non_code_resource_or_schema(rel_p: str) -> bool:
+            lp = rel_p.lower()
+            if lp.endswith((".kt", ".java", ".kts", ".swift")):
+                return False
+            return (
+                "/res/" in lp
+                or "/composeresources/" in lp
+                or lp.endswith((".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql", ".proto"))
+            )
+
         if (
             module_dir
             and module_paths
-            and all("/res/" in p for p in module_paths)
-            and not any(d.is_dir() and d.name.lower().startswith("test") for d in (module_src.iterdir() if module_src.is_dir() else []))
+            and all(_is_non_code_resource_or_schema(p) for p in module_paths)
+            and not any(d.is_dir() and "test" in d.name.lower() for d in (module_src.iterdir() if module_src.is_dir() else []))
         ):
             aggregated_evidence["modules"][m] = {"status": "SKIPPED_NO_TEST_SOURCES", "executed": 0}
             continue
@@ -4451,6 +4469,10 @@ def main(argv: list[str] | None = None) -> int:
             # approval question itself (no Cancel option, no files).
             lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
             result = {**result, "approval_material": "\n".join(lines)}
+            for _bf in ("base_file_identities", "base_change_identities"):
+                _items = result.get(_bf)
+                if isinstance(_items, list) and len(_items) > 50:
+                    result[_bf] = [f"<{len(_items)} entries stored in plan.json>"]
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         if args.action == "merge" and not args.apply:

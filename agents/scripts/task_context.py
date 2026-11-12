@@ -279,7 +279,8 @@ def _instruction_matches_node(
 ) -> bool:
     if inst.get("status") != "ACTIVE":
         return False
-    scope = inst.get("scope") or {}
+    from project_context import normalize_instruction_scope
+    scope = normalize_instruction_scope(inst.get("scope"))
     kind = str(scope.get("kind") or "GLOBAL").upper()
     val = str(scope.get("value") or "").strip()
 
@@ -371,8 +372,9 @@ def _detect_instruction_conflict(instructions: list[dict[str, Any]]) -> str | No
             if i1.get("conflict_with") == i2.get("id") or i2.get("conflict_with") == i1.get("id"):
                 return f"Explicitly conflicting instructions '{i1.get('id')}' and '{i2.get('id')}'."
 
-            s1 = i1.get("scope") or {}
-            s2 = i2.get("scope") or {}
+            from project_context import normalize_instruction_scope
+            s1 = normalize_instruction_scope(i1.get("scope"))
+            s2 = normalize_instruction_scope(i2.get("scope"))
             if s1.get("kind") == s2.get("kind") and s1.get("value") == s2.get("value"):
                 t1 = i1.get("text", "").lower()
                 t2 = i2.get("text", "").lower()

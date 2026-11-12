@@ -44,6 +44,14 @@ import shutil
 import stat
 import subprocess
 import sys
+
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            pass
 import tempfile
 import time
 import urllib.request
@@ -1252,7 +1260,7 @@ def _selftest_env() -> dict[str, str]:
 
 def _git_output(kit: Path, *argv: str) -> str:
     try:
-        proc = subprocess.run(["git", *argv], cwd=str(kit), capture_output=True, text=True, check=False)
+        proc = subprocess.run(["git", *argv], cwd=str(kit), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     except OSError:
         return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""
@@ -1290,7 +1298,7 @@ def working_tree_id(kit: Path) -> str:
             if proc.returncode != 0:
                 return ""
         try:
-            proc = subprocess.run(["git", "write-tree"], cwd=str(kit), env=env, capture_output=True, text=True, check=False, timeout=120)
+            proc = subprocess.run(["git", "write-tree"], cwd=str(kit), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=120)
         except (OSError, subprocess.TimeoutExpired):
             return ""
     return proc.stdout.strip() if proc.returncode == 0 else ""

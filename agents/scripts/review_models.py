@@ -30,6 +30,7 @@ from policy_vocab import CORE_ROUTED_REVIEWERS
 CLAUDE_MODEL_CHOICES = ("inherit", "sonnet", "opus", "haiku")
 ANTIGRAVITY_MODEL_CHOICES = (
     "inherit",
+    "flash-argon-hybrid",
     "risk-hybrid",
     "flash-dynamic",
     "gemini-3.8-flash",
@@ -65,36 +66,72 @@ CRITICAL_HYBRID_REVIEWERS = (
 )
 
 ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
+    "flash-argon-project": {
+        "id": "flash-argon-project",
+        "index": 1,
+        "scope": "project",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "تثبيت الهجين التكيفي الذكي للمشروع كله (flash-argon-project) — موصى به: Flash للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج دون تكرار السؤال",
+        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid for entire project (Recommended — Pure Flash on simple; Argon Low + Flash on complex; capped strictly at Argon Low on critical; stop asking each task)",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
+    "flash-argon-task": {
+        "id": "flash-argon-task",
+        "index": 2,
+        "scope": "task",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "الهجين التكيفي الذكي لهذه المهمة (flash-argon-task) — Flash للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
+        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid (Pure Flash on simple; Argon Low + Flash on complex; capped strictly at Argon Low on critical) — for this task",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
+    "risk-hybrid-project": {
+        "id": "risk-hybrid-project",
+        "index": 3,
+        "scope": "project",
+        "preset": "risk-hybrid",
+        "label_ar": "تثبيت الهجين مع موديل المحادثة للمشروع (risk-hybrid-project) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Chat Hybrid for entire project (Flash Medium on T1-T3; Chat model on DEEP/MAX T4-T5; stop asking each task)",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
     "flash-dynamic-task": {
         "id": "flash-dynamic-task",
-        "index": 1,
+        "index": 4,
         "scope": "task",
         "preset": "flash-dynamic",
-        "label_ar": "النظام السريع للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز مع تصعيد التفكير عند الحاجة",
+        "label_ar": "النظام السريع للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز بـ Flash فقط مع تصعيد التفكير عند الحاجة",
         "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — for this task",
-        "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
-    },
-    "flash-dynamic-once": {
-        "id": "flash-dynamic-once",
-        "index": 2,
-        "scope": "run",
-        "preset": "flash-dynamic",
-        "label_ar": "النظام السريع لهذه المرة فقط (flash-dynamic-once)",
-        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — this review only",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "inherit-task": {
         "id": "inherit-task",
-        "index": 3,
+        "index": 5,
         "scope": "task",
         "preset": "inherit",
         "label_ar": "نفس موديل المحادثة للمهمة (inherit-task) — استخدام الموديل الأساسي لكل المراجعين",
         "label_en": "Current chat model (Inherit) — for this task",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
+    "risk-hybrid-task": {
+        "id": "risk-hybrid-task",
+        "index": 6,
+        "scope": "task",
+        "preset": "risk-hybrid",
+        "label_ar": "الهجين حسب الخطورة للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard T1-T3; Chat model automatically on DEEP/MAX T4-T5) — for this task",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
+    "flash-dynamic-once": {
+        "id": "flash-dynamic-once",
+        "index": 7,
+        "scope": "run",
+        "preset": "flash-dynamic",
+        "label_ar": "النظام السريع لهذه المرة فقط (flash-dynamic-once)",
+        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — this review only",
+        "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
+    },
     "inherit-once": {
         "id": "inherit-once",
-        "index": 4,
+        "index": 8,
         "scope": "run",
         "preset": "inherit",
         "label_ar": "نفس موديل المحادثة لهذه المرة فقط (inherit-once)",
@@ -103,7 +140,7 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
     },
     "hybrid-smart-task": {
         "id": "hybrid-smart-task",
-        "index": 5,
+        "index": 9,
         "scope": "task",
         "preset": "hybrid-smart",
         "label_ar": "النظام الهجين الذكي للمهمة (hybrid-smart-task) — سريع للفحص العادي وموديل المحادثة للحرج",
@@ -114,9 +151,18 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
+    "flash-argon-once": {
+        "id": "flash-argon-once",
+        "index": 10,
+        "scope": "run",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "الهجين التكيفي الذكي (Flash + Argon Low) لهذه المرة فقط (flash-argon-once)",
+        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid — this review only",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
     "hybrid-smart-once": {
         "id": "hybrid-smart-once",
-        "index": 6,
+        "index": 11,
         "scope": "run",
         "preset": "hybrid-smart",
         "label_ar": "النظام الهجين الذكي لهذه المرة فقط (hybrid-smart-once)",
@@ -127,18 +173,9 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
-    "risk-hybrid-task": {
-        "id": "risk-hybrid-task",
-        "index": 7,
-        "scope": "task",
-        "preset": "risk-hybrid",
-        "label_ar": "الهجين التكيفي حسب الخطورة للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard T1-T3; Chat model automatically on DEEP/MAX T4-T5) — for this task",
-        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
-    },
     "risk-hybrid-once": {
         "id": "risk-hybrid-once",
-        "index": 8,
+        "index": 12,
         "scope": "run",
         "preset": "risk-hybrid",
         "label_ar": "الهجين التكيفي حسب الخطورة لهذه المرة فقط (risk-hybrid-once)",
@@ -148,6 +185,10 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
 }
 
 _SHORTHAND_MAP = {
+    "argon@hybrid": "flash-argon-hybrid",
+    "flash@argon": "flash-argon-hybrid",
+    "argon-flash-hybrid": "flash-argon-hybrid",
+    "flash-argon": "flash-argon-hybrid",
     "risk@hybrid": "risk-hybrid",
     "hybrid@risk": "risk-hybrid",
     "flash@dynamic": "flash-dynamic",
@@ -221,6 +262,8 @@ def resolve_interactive_choice(choice: str) -> tuple[dict, str]:
 
 def resolve_preset_policy(preset: str) -> dict:
     norm = str(preset or "").strip().lower()
+    if norm in ("flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "argon-hybrid"):
+        return {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}}
     if norm in ("flash-dynamic", "flash"):
         return {"schema_version": 1, "default": "flash-dynamic", "overrides": {}}
     if norm == "inherit":
@@ -233,20 +276,45 @@ def resolve_preset_policy(preset: str) -> dict:
             "default": "flash-dynamic",
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         }
-    raise ValidationError(f"unknown reviewer model preset '{preset}'; use flash-dynamic, risk-hybrid, inherit, or hybrid-smart")
+    raise ValidationError(
+        f"unknown reviewer model preset '{preset}'; use flash-argon-hybrid, flash-dynamic, risk-hybrid, inherit, or hybrid-smart"
+    )
 
 
-def resolve_antigravity_model(requested: str, role: str, effort_intent: str = "NORMAL") -> tuple[str, str]:
+def resolve_antigravity_model(
+    requested: str,
+    role: str,
+    effort_intent: str = "NORMAL",
+    *,
+    complexity_tier: str = "SIMPLE",
+) -> tuple[str, str]:
     """Resolve an Antigravity model choice and dynamic thinking level for a specific reviewer role.
 
     Standard NORMAL-effort reviews run on medium thinking (preventing 10-minute Flash High
     overthinking loops); high thinking or parent escalation activates strictly on DEEP/MAX effort.
+    For `flash-argon-hybrid`, resolution adapts deterministically across 3 complexity bands
+    with a strict hard ceiling of `gemini-4-argon-low` (never escalating to `argon-medium`/`high`):
+      - SIMPLE   -> 100% `gemini-3.8-flash-medium` (zero Argon quota burn on simple features/UI)
+      - COMPLEX  -> `gemini-4-argon-low` for logic/security-perf (`CRITICAL_HYBRID_REVIEWERS`) and any
+                    `DEEP`-effort specialist; `gemini-3.8-flash-medium` for NORMAL structural reviewers
+      - CRITICAL -> `gemini-4-argon-low` across all routed specialists (Lead writes core production code)
     """
     req = str(normalize_model_token(requested) or "inherit")
     intent = str(effort_intent or "NORMAL").upper()
+    tier = str(complexity_tier or "SIMPLE").strip().upper()
+    if tier not in ("SIMPLE", "COMPLEX", "CRITICAL"):
+        tier = "SIMPLE"
     is_deep = intent in ("DEEP", "MAX")
     if req == "inherit":
         return "inherit", "inherit"
+    if req == "flash-argon-hybrid":
+        if tier == "CRITICAL" or intent == "MAX":
+            return "gemini-4-argon-low", "low"
+        if tier == "COMPLEX" or intent == "DEEP":
+            if role in CRITICAL_HYBRID_REVIEWERS or intent == "DEEP":
+                return "gemini-4-argon-low", "low"
+            return "gemini-3.8-flash-medium", "medium"
+        return "gemini-3.8-flash-medium", "medium"
     if req == "risk-hybrid":
         return ("inherit", "inherit") if is_deep else ("gemini-3.8-flash-medium", "medium")
     if req in ("flash-dynamic", "gemini-3.8-flash", "flash"):
@@ -315,8 +383,8 @@ def host_capability(host: str) -> dict:
                     "label_ar": item["label_ar"],
                     "label_en": item["label_en"],
                 }
-                for item in ANTIGRAVITY_INTERACTIVE_CHOICES.values()
-                if item["index"] in (1, 2, 3, 4, 5, 7)
+                for item in sorted(ANTIGRAVITY_INTERACTIVE_CHOICES.values(), key=lambda x: int(x["index"]))
+                if item["index"] in (1, 2, 3, 4, 5)
             ],
             "argument_name": None,
             "agent_frontmatter_field": "model",
@@ -508,6 +576,142 @@ def _compute_efforts_by_role(
     return efforts
 
 
+_CRITICAL_COMPLEXITY_SURFACES = frozenset({"AUTH", "BILLING", "SECURITY", "CRYPTO", "SENSITIVE_DATA"})
+_COMPLEX_TECHNICAL_SURFACES = frozenset({
+    "COROUTINES",
+    "NETWORK",
+    "ROOM_SCHEMA",
+    "DATABASE",
+    "PUBLIC_API",
+    "DEVICE_API",
+    "NATIVE_CODE",
+    "BUILD_CONFIG",
+    "MANIFEST_PERMISSIONS",
+    "MANIFEST_PERMISSION",
+})
+
+
+def _is_test_path(raw_path: str) -> bool:
+    norm = str(raw_path or "").replace("\\", "/").strip().lstrip("./").lower()
+    if not norm:
+        return False
+    if any(seg in norm for seg in ("/src/test/", "/src/androidtest/", "/src/commontest/", "/src/jvmtest/", "/src/iostest/")):
+        return True
+    if norm.startswith(("src/test/", "src/androidtest/", "src/commontest/")):
+        return True
+    stem = Path(norm).stem
+    return stem.endswith(("test", "tests", "spec", "fake", "mock")) and ("test" in norm or "spec" in norm)
+
+
+def compute_task_complexity_tier(
+    repo: Path,
+    task_id: str | None,
+    policy_data: dict | None = None,
+    plan: dict | None = None,
+) -> str:
+    """Classify a task or active review slice into SIMPLE, COMPLEX, or CRITICAL for adaptive model routing."""
+    cls_doc: dict[str, Any] = {}
+    if task_id:
+        try:
+            tdir = task_dir(repo, task_id)
+            if plan is None and (tdir / "plan.json").is_file():
+                plan = read_json(tdir / "plan.json")
+            if policy_data is None:
+                crun = tdir / "current-run.json"
+                if crun.is_file():
+                    pol_p = Path(str(read_json(crun).get("policy") or ""))
+                    if pol_p.is_file():
+                        policy_data = read_json(pol_p)
+                elif (tdir / "policy.json").is_file():
+                    policy_data = read_json(tdir / "policy.json")
+                elif (tdir / "phase-state.json").is_file():
+                    cur_phase = str(read_json(tdir / "phase-state.json").get("current_phase_id") or "").strip()
+                    ckpt_f = tdir / "phases" / cur_phase / "checkpoint.json"
+                    if cur_phase and ckpt_f.is_file():
+                        ckpt = read_json(ckpt_f)
+                        reserve = ckpt.get("final_review_reserve") or {}
+                        ckpt_surfaces = ckpt.get("surfaces") or reserve.get("surfaces") or []
+                        if ckpt_surfaces:
+                            policy_data = {
+                                "surfaces": ckpt_surfaces,
+                                "severity": "CRITICAL" if (set(ckpt_surfaces) & _CRITICAL_COMPLEXITY_SURFACES) else "MEDIUM",
+                            }
+            if (tdir / "classification.json").is_file():
+                raw_cls = read_json(tdir / "classification.json")
+                if isinstance(raw_cls, dict):
+                    cls_doc = raw_cls
+        except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
+            pass
+
+    pol = policy_data if isinstance(policy_data, dict) else {}
+    pl = plan if isinstance(plan, dict) else {}
+
+    phases = pl.get("phases") if isinstance(pl.get("phases"), list) else []
+    active_idx = int(pl.get("active_phase_index") or 0)
+    phase_surfaces: list[str] = []
+    phase_files: list[str] = []
+    if phases and 0 <= active_idx < len(phases) and isinstance(phases[active_idx], dict):
+        phase_surfaces = list(phases[active_idx].get("surfaces") or [])
+        phase_files = list(phases[active_idx].get("expected_files") or [])
+
+    raw_surfaces = pol.get("surfaces") or cls_doc.get("surfaces") or phase_surfaces or pl.get("expected_surfaces") or []
+    surfaces_set = {str(s).strip().upper() for s in raw_surfaces if str(s).strip()}
+
+    severity = str(pol.get("severity") or cls_doc.get("severity") or "").strip().upper()
+    risk_tier = str(pol.get("risk_tier") or pl.get("risk_tier") or "").strip().upper()
+    round_number = int(pol.get("review_round") or ((int(pl.get("review_rounds") or 0)) + 1))
+    task_kind = str(pl.get("task_kind") or pl.get("kind") or "FEATURE").strip().upper()
+    planning_depth = str(pol.get("planning_depth") or pl.get("planning_depth") or "BOUNDED").strip().upper()
+
+    raw_mods = pol.get("changed_modules") or pl.get("changed_modules") or pl.get("expected_modules") or []
+    modules_count = len(raw_mods) if isinstance(raw_mods, list) and raw_mods else 1
+
+    candidate_files: list[str] = []
+    if isinstance(cls_doc.get("task_changes"), list) and cls_doc["task_changes"]:
+        for item in cls_doc["task_changes"]:
+            p = item.get("path") if isinstance(item, dict) else item
+            if p:
+                candidate_files.append(str(p))
+    elif phase_files:
+        candidate_files = [str(p) for p in phase_files if p]
+    elif isinstance(pl.get("expected_files"), list):
+        candidate_files = [str(p) for p in pl["expected_files"] if p]
+
+    if candidate_files:
+        non_test_file_count = sum(1 for p in candidate_files if not _is_test_path(p))
+    else:
+        non_test_file_count = int(pol.get("changed_files") or cls_doc.get("changed_files") or 0)
+
+    changed_lines = int(pol.get("changed_lines") or cls_doc.get("changed_lines") or 0)
+
+    # Band 3: CRITICAL
+    if (
+        severity == "CRITICAL"
+        or risk_tier in {"T4_SENSITIVE", "T5_CRITICAL"}
+        or bool(surfaces_set & _CRITICAL_COMPLEXITY_SURFACES)
+        or round_number >= 3
+    ):
+        return "CRITICAL"
+
+    # Band 2: COMPLEX
+    if (
+        round_number == 2
+        or task_kind == "BUG"
+        or planning_depth == "ARCHITECTURAL"
+        or len(phases) >= 2
+        or modules_count >= 2
+        or risk_tier in {"T3_SUBSYSTEM", "T4_DATA_DEVICE"}
+        or non_test_file_count >= 4
+        or changed_lines > 90
+        or bool(surfaces_set & _COMPLEX_TECHNICAL_SURFACES)
+        or ("NAVIGATION" in surfaces_set and non_test_file_count >= 2)
+    ):
+        return "COMPLEX"
+
+    # Band 1: SIMPLE
+    return "SIMPLE"
+
+
 def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None = None) -> list[str]:
     """Synchronize resolved Antigravity reviewer models into .agents/agents/<role>/agent.md frontmatter."""
     agents_base = repo / ".agents" / "agents"
@@ -598,7 +802,8 @@ def freeze_models(
 ) -> dict:
     policy, source = load_policy(repo, task_id, run_id=run_id, consume_next_run=bool(run_id))
     efforts = _compute_efforts_by_role(repo, task_id, reviewers, policy_data=policy_data, plan=plan)
-    frozen = _resolve_policy(policy, source, host, reviewers, efforts_by_role=efforts)
+    complexity_tier = compute_task_complexity_tier(repo, task_id, policy_data=policy_data, plan=plan)
+    frozen = _resolve_policy(policy, source, host, reviewers, efforts_by_role=efforts, complexity_tier=complexity_tier)
     if str(host).strip().lower() == "antigravity":
         sync_antigravity_agent_models(repo, frozen.get("reviewers") or {})
     return frozen
@@ -611,20 +816,34 @@ def _resolve_policy(
     reviewers: list[str],
     *,
     efforts_by_role: dict[str, str] | None = None,
+    complexity_tier: str = "SIMPLE",
 ) -> dict:
     host_norm = str(host).strip().lower()
     policy = validate_for_host(policy, host_norm)
     efforts = efforts_by_role or {}
+    tier_norm = str(complexity_tier or "SIMPLE").strip().upper()
+    if tier_norm not in ("SIMPLE", "COMPLEX", "CRITICAL"):
+        tier_norm = "SIMPLE"
+    uses_adaptive_argon = (
+        policy.get("default") == "flash-argon-hybrid"
+        or "flash-argon-hybrid" in (policy.get("overrides") or {}).values()
+    )
     selections = {}
     for role in reviewers:
         if role not in CORE_ROUTED_REVIEWERS:
             raise ValidationError(f"unknown reviewer role '{role}'")
         requested = policy["overrides"].get(role, policy["default"])
         if host_norm == "antigravity" and requested != "inherit":
-            effort_intent = efforts.get(role) or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
-            resolved_model, thinking_level = resolve_antigravity_model(requested, role, effort_intent)
+            default_intent = "NORMAL" if requested == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
+            effort_intent = efforts.get(role) or default_intent
+            resolved_model, thinking_level = resolve_antigravity_model(
+                requested,
+                role,
+                effort_intent,
+                complexity_tier=tier_norm,
+            )
             inherited_escalation = resolved_model == "inherit"
-            selections[role] = {
+            sel_entry = {
                 "requested_model": requested,
                 "resolved_model": resolved_model,
                 "thinking_level": thinking_level,
@@ -636,6 +855,9 @@ def _resolve_policy(
                 "actual_model": None,
                 "actual_model_status": "UNOBSERVED",
             }
+            if requested == "flash-argon-hybrid":
+                sel_entry["complexity_tier"] = tier_norm
+            selections[role] = sel_entry
         else:
             selections[role] = {
                 "requested_model": requested,
@@ -648,6 +870,8 @@ def _resolve_policy(
     frozen = {"schema_version": 1, "host": host_norm, "source": source, "policy": policy, "reviewers": selections}
     if host_norm == "antigravity":
         frozen["selection_required"] = source == "default"
+        if uses_adaptive_argon:
+            frozen["complexity_tier"] = tier_norm
     frozen["sha256"] = canonical_sha256(frozen)
     return frozen
 
@@ -657,16 +881,18 @@ def transfer_models(run: dict, host: str, reviewers: list[str], *, plan: dict | 
     frozen_models(run)
     old = run.get("review_models") or {}
     old_efforts = {
-        role: str(sel.get("reasoning_intent") or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"))
+        role: str(sel.get("reasoning_intent") or ("NORMAL" if sel.get("requested_model") == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")))
         for role, sel in (old.get("reviewers") or {}).items()
         if isinstance(sel, dict)
     }
+    old_tier = str(old.get("complexity_tier") or "SIMPLE")
     return _resolve_policy(
         old.get("policy") or default_policy(),
         old.get("source") or "default",
         host,
         reviewers,
         efforts_by_role=old_efforts,
+        complexity_tier=old_tier,
     )
 
 
@@ -691,8 +917,10 @@ def frozen_models(run: dict) -> dict:
         if selection.get("native_arguments") != expected_args:
             raise ValidationError("invalid frozen native model arguments")
         if host_norm == "antigravity" and requested != "inherit":
-            intent = str(selection.get("reasoning_intent") or ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"))
-            exp_resolved, exp_thinking = resolve_antigravity_model(requested, role, intent)
+            default_intent = "NORMAL" if requested == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
+            intent = str(selection.get("reasoning_intent") or default_intent)
+            sel_tier = str(selection.get("complexity_tier") or frozen.get("complexity_tier") or "SIMPLE")
+            exp_resolved, exp_thinking = resolve_antigravity_model(requested, role, intent, complexity_tier=sel_tier)
             if selection.get("resolved_model") != exp_resolved or selection.get("thinking_level") != exp_thinking:
                 raise ValidationError("invalid frozen Antigravity resolved model or thinking level")
     return reviewers
@@ -829,7 +1057,7 @@ def effective_reviewer_model(selection: dict | None) -> str:
     actual = str(selection.get("actual_model") or "").strip()
     if resolved and resolved != "inherit":
         return resolved
-    if requested not in ("inherit", "risk-hybrid"):
+    if requested not in ("inherit", "risk-hybrid", "flash-argon-hybrid"):
         return actual or requested
     if actual:
         return f"inherit ({actual})"
@@ -855,6 +1083,22 @@ def format_reviewers_with_models(run_or_profile: dict | None, reviewers: list[st
     return ", ".join(f"{role} [{mapping.get(role, 'inherit')}]" for role in reviewers)
 
 
+def antigravity_dispatch_model_hint(run_or_profile: dict | None, reviewers: list[str]) -> str:
+    """Return an explicit per-reviewer `Model` parameter hint for Antigravity `invoke_subagent` calls."""
+    mapping = reviewer_model_map(run_or_profile, reviewers)
+    flash_roles = [r for r in reviewers if "flash" in str(mapping.get(r) or "")]
+    pro_roles = [r for r in reviewers if "pro" in str(mapping.get(r) or "")]
+    omit_roles = [r for r in reviewers if r not in flash_roles and r not in pro_roles]
+    parts: list[str] = []
+    if flash_roles:
+        parts.append(f"pass Model='flash' for [{', '.join(flash_roles)}]")
+    if pro_roles:
+        parts.append(f"pass Model='pro' for [{', '.join(pro_roles)}]")
+    if omit_roles:
+        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter/inherit)")
+    return (" In invoke_subagent: " + "; ".join(parts) + ".") if parts else ""
+
+
 def model_choice_summary(repo: Path, task_id: str) -> str:
     policy, source = load_policy(repo, task_id)
     overrides = ", ".join(f"{r}={m}" for r, m in sorted(policy["overrides"].items()))
@@ -874,6 +1118,16 @@ def build_antigravity_model_prompt(
 ) -> dict:
     """Build the 5-option developer prompt shown before the first review in a task/run on Antigravity."""
     efforts = efforts_by_role or _compute_efforts_by_role(repo, task_id, reviewers)
+    complexity_tier = compute_task_complexity_tier(repo, task_id)
+    flash_argon_preview = {
+        role: resolve_antigravity_model(
+            "flash-argon-hybrid",
+            role,
+            efforts.get(role, "NORMAL"),
+            complexity_tier=complexity_tier,
+        )[0]
+        for role in reviewers
+    }
     flash_preview = {
         role: resolve_antigravity_model("flash-dynamic", role, efforts.get(role, "NORMAL"))[0]
         for role in reviewers
@@ -892,12 +1146,11 @@ def build_antigravity_model_prompt(
         for role in reviewers
     }
     for key in (
+        "flash-argon-project",
+        "flash-argon-task",
+        "risk-hybrid-project",
         "flash-dynamic-task",
-        "flash-dynamic-once",
         "inherit-task",
-        "inherit-once",
-        "hybrid-smart-task",
-        "risk-hybrid-task",
     ):
         item = ANTIGRAVITY_INTERACTIVE_CHOICES[key]
         options.append({
@@ -916,9 +1169,11 @@ def build_antigravity_model_prompt(
         "task_id": task_id,
         "run_id": run_id,
         "phase_id": phase_id,
+        "complexity_tier": complexity_tier,
         "reviewers": list(reviewers),
         "question_ar": "اختر موديل ومستوى تفكير المراجعين قبل بدء المراجعة:",
         "question_en": "Choose the reviewer model and thinking level before launching reviewers:",
+        "flash_argon_resolution": flash_argon_preview,
         "flash_dynamic_resolution": flash_preview,
         "hybrid_smart_resolution": hybrid_preview,
         "risk_hybrid_resolution": risk_hybrid_preview,
@@ -1149,8 +1404,22 @@ def set_policy(
 
         if str(host).strip().lower() == "antigravity":
             efforts = _compute_efforts_by_role(repo, task_id, list(CORE_ROUTED_REVIEWERS))
-            resolved_all = _resolve_policy(policy, resolved_scope, host, list(CORE_ROUTED_REVIEWERS), efforts_by_role=efforts)
+            complexity_tier = compute_task_complexity_tier(repo, task_id)
+            resolved_all = _resolve_policy(
+                policy,
+                resolved_scope,
+                host,
+                list(CORE_ROUTED_REVIEWERS),
+                efforts_by_role=efforts,
+                complexity_tier=complexity_tier,
+            )
             sync_antigravity_agent_models(repo, resolved_all.get("reviewers") or {})
+            try:
+                from delegation_policy import resolve_utility_worker_model, sync_utility_worker_model
+                w_model, _ = resolve_utility_worker_model(repo, task_id=task_id)
+                sync_utility_worker_model(repo, w_model)
+            except (ImportError, OSError, ValueError, RuntimeError, ValidationError):
+                pass
 
         if task_id:
             refreshed = _refresh_undispatched_runs(repo, task_id, host)
@@ -1169,8 +1438,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", "--task-id", dest="task")
     parser.add_argument("--host")
-    parser.add_argument("--choice", help="Interactive choice ID (e.g. risk-hybrid-task, flash-dynamic-task, flash-dynamic-once, inherit-task, inherit-once, hybrid-smart-task)")
-    parser.add_argument("--preset", choices=("flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
+    parser.add_argument("--choice", help="Interactive choice ID (e.g. flash-argon-project, flash-argon-task, risk-hybrid-project, flash-dynamic-task, inherit-task)")
+    parser.add_argument("--preset", choices=("flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
     parser.add_argument("--scope", choices=("project", "task", "run"), default=None, help="Policy persistence scope (project, task, or run/once)")
     parser.add_argument("--default", default="inherit", help="Default reviewer model or model@effort")
     parser.add_argument("--reviewer", action="append", default=[], metavar="ROLE=MODEL")

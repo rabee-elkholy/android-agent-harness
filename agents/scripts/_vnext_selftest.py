@@ -3580,15 +3580,14 @@ class CleanInstallV2SpecificationTests(RepoCase):
         self.assertIsNotNone(q)
         self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
 
-    def test_SETUP_V2_005_questions_payload_contains_review_call_budget(self) -> None:
-        """REASON-INSTALL-002: questions payload still contains review_call_budget"""
+    def test_SETUP_V2_005_questions_payload_omits_interactive_budget_and_merges_i22(self) -> None:
+        """Interactive wizard omits review_call_budget (auto-default 20) and merges i10 into i22."""
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
-        q = next((q for q in qs if q["id"] == "review_call_budget"), None)
-        self.assertIsNotNone(q)
-        self.assertEqual(5, q["station"])
-        option_ids = [opt["id"] for opt in q["options"]]
-        self.assertEqual(["20", "12", "30", "custom"], option_ids)
+        self.assertIsNone(next((q for q in qs if q["id"] == "review_call_budget"), None))
+        self.assertIsNone(next((q for q in qs if q["id"] == "i10"), None))
+        i22 = next(q for q in qs if q["id"] == "i22")
+        self.assertEqual(["manual_only", "manual_auto", "disabled"], [opt["id"] for opt in i22["options"]])
 
     def test_SETUP_V2_006_normalized_answers_contain_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
@@ -3600,10 +3599,10 @@ class CleanInstallV2SpecificationTests(RepoCase):
 
     def test_SETUP_V2_007_review_call_budget_default_is_20(self) -> None:
         import wizard.questions as wq
-        qs = wq.questions_payload(self.repo, "en")
-        q = next(q for q in qs if q["id"] == "review_call_budget")
-        self.assertEqual("20", q["options"][0]["id"])
-        self.assertTrue(q["options"][0].get("recommended"))
+        facts = {"repo": str(self.repo), "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res = wq.normalize({"i0": "yes", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity"}, facts)
+        self.assertEqual(20, res["model_call_budget"])
+        self.assertEqual("none", res["pm_provider"])
 
     # -------------------------------------------------------------
     # 51. Schema Tests
@@ -4253,22 +4252,23 @@ class CleanInstallV2SpecificationTests(RepoCase):
         qs_text = (KIT / "docs" / "quickstart.md").read_text(encoding="utf-8")
         self.assertNotIn("--kit .", qs_text)
 
-    def test_QUESTION_META_001_review_call_budget_conditional_metadata(self) -> None:
+    def test_QUESTION_META_001_i22_manual_auto_sets_install_confirm_allow(self) -> None:
         import wizard.questions as wq
-        qs = wq.questions_payload(self.repo, "en")
-        q = next(q for q in qs if q["id"] == "review_call_budget")
-        self.assertIn("conditional_text_input", q)
-        meta = q["conditional_text_input"]
-        self.assertEqual("custom", meta.get("when_option"))
-        self.assertEqual("review_call_budget_text", meta.get("answer_key"))
-        self.assertTrue(meta.get("required"))
+        facts = {"repo": str(self.repo), "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
+        res_auto = wq.normalize({"i0": "yes", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i22": "manual_auto"}, facts)
+        self.assertEqual("manual_only", res_auto["device_verification"])
+        self.assertEqual("allow", res_auto["install_confirm"])
+        res_conf = wq.normalize({"i0": "yes", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i22": "manual_only"}, facts)
+        self.assertEqual("confirm", res_conf["install_confirm"])
 
-    def test_QUESTION_META_002_custom_answer_key_is_review_call_budget_text(self) -> None:
+    def test_QUESTION_META_002_i20_recommends_zoho_only_when_zoho_config_detected(self) -> None:
         import wizard.questions as wq
-        qs = wq.questions_payload(self.repo, "en")
-        q = next(q for q in qs if q["id"] == "review_call_budget")
-        meta = q.get("conditional_text_input") or {}
-        self.assertEqual("review_call_budget_text", meta.get("answer_key"))
+        qs_plain = wq.questions_payload(self.repo, "en", {"repo": str(self.repo), "zoho_config": False})
+        i20_plain = next(q for q in qs_plain if q["id"] == "i20")
+        self.assertEqual("none", i20_plain["options"][0]["id"])
+        qs_zoho = wq.questions_payload(self.repo, "en", {"repo": str(self.repo), "zoho_config": True})
+        i20_zoho = next(q for q in qs_zoho if q["id"] == "i20")
+        self.assertEqual("zoho_sprints", i20_zoho["options"][0]["id"])
 
     def test_CLASSIFIER_BASE_FRAGMENT_001_detects_custom_base_fragment_and_view_binding(self) -> None:
         from change_classifier import classify

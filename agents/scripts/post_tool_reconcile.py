@@ -83,8 +83,10 @@ def _bind_candidates_from_brain(repo: Path, payload: dict) -> None:
 
 
 def main() -> int:
+    from _vnext_common import configure_utf8_output
+    configure_utf8_output()
     try:
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
         if not raw.strip():
             print(json.dumps({}))
             return 0
@@ -154,6 +156,17 @@ def main() -> int:
             top_r = args.get("TypeName") or args.get("typeName") or args.get("Role") or args.get("role")
             if top_r:
                 roles.append(str(top_r).strip())
+
+        err_text = str(err or "").lower()
+        if call_name_low == "invoke_subagent" and ("not found" in err_text or "not allowed to be invoked" in err_text):
+            try:
+                from delegation_policy import CORE_UTILITY_AGENTS, record_unloaded_utility_agent
+                parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+                for r in roles:
+                    if r in CORE_UTILITY_AGENTS:
+                        record_unloaded_utility_agent(repo, parent_cid, r)
+            except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                logger_noop = None
 
         st_root = state_root(repo)
         active_task_file = st_root / "active-task.json"

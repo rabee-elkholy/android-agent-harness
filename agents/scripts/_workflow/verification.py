@@ -295,9 +295,14 @@ def review_action(context: VerificationContext) -> dict | None:
                             }
 
                     prompts = _engine._reviewer_prompts(exec_profile, sorted(not_dispatched))
-                    from review_models import format_reviewers_with_models, reviewer_model_map
+                    from review_models import antigravity_dispatch_model_hint, format_reviewers_with_models, reviewer_model_map
                     dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
                     dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
+                    ag_model_hint = (
+                        antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched))
+                        if str(review_host).strip().lower() == "antigravity"
+                        else ""
+                    )
                     before_first_dispatch = None
                     if (
                         str(review_host).strip().lower() == "antigravity"
@@ -318,7 +323,7 @@ def review_action(context: VerificationContext) -> dict | None:
                         "command": "",
                         "blocking": True,
                         "reason": ("Record the developer's separate reviewer-model choice before launching reviewers." if before_first_dispatch else
-                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{_engine._prompt_hint(prompts)}"),
+                                   f"Dispatch independent reviewer subagents: {', '.join(sorted(not_dispatched))} (models: {dispatch_with_models}). Launch all {len(not_dispatched)} reviewers in parallel in this turn (one invoke_subagent tool call per reviewer; never a partial subset).{ag_model_hint}{_engine._prompt_hint(prompts)}"),
                         **({"before_first_dispatch": before_first_dispatch} if before_first_dispatch else {}),
                         "reviewers": sorted(not_dispatched),
                         "reviewer_models": dispatch_models,

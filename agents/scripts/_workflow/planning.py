@@ -230,6 +230,15 @@ def _evaluate_plan_readiness(
             )
 
     phase_dag_warnings = _check_phase_module_dag(repo, plan.get("phases")) if repo is not None else []
+    impacted_tests: list[dict[str, Any]] = []
+    if repo is not None:
+        try:
+            from delegation_policy import discover_impacted_existing_tests
+            impacted_tests = discover_impacted_existing_tests(repo, plan.get("expected_files") or [])
+        except Exception:
+            impacted_tests = []
+        if impacted_tests:
+            plan["impacted_existing_tests"] = impacted_tests
 
     advisories: list[str] = []
     if (is_high_risk or is_architectural) and not has_approach:
@@ -267,6 +276,7 @@ def _evaluate_plan_readiness(
         "has_discovery_provenance": has_discovery_provenance,
         "has_verification_contract": has_verification_contract,
         "reuse_candidates_count": reuse_count,
+        "impacted_existing_tests": impacted_tests,
         "path_grounding_warnings": path_grounding_warnings,
         "phase_dag_warnings": phase_dag_warnings,
         "advisories": advisories,

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _repo_files import ensure_local_git_privacy  # noqa: E402
-from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, CORE_ROUTED_REVIEWERS, CORE_UTILITY_AGENTS  # noqa: E402
+from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, ANTIGRAVITY_SCOUT_TOOLS, CORE_ROUTED_REVIEWERS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS  # noqa: E402
 
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
@@ -37,6 +37,7 @@ SKIP_SUBAGENTS = {
     "code-review-guard-agent",
     "review-prompt",
     "re-review-prompt",
+    *CORE_UTILITY_AGENTS,
 }
 
 DEVICE_TEXT = {
@@ -111,6 +112,8 @@ EMPTY_DIR_CANDIDATES = (
     ".agents/agents/security-perf-reviewer-agent",
     ".agents/agents/arch-regression-reviewer-agent",
     ".agents/agents/spec-compliance-agent",
+    ".agents/agents/qa-diagnostics-agent",
+    ".agents/agents/android-ui-expert-agent",
     ".agents/agents/harness-scout-agent",
     ".agents/agents/harness-worker-agent",
     ".agents/agents",
@@ -475,13 +478,32 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
                 merge_existing=False,
             )
         )
-    from delegation_policy import render_utility_agent_markdown
+    for sp_role in ON_DEMAND_SPECIALIST_AGENTS:
+        sp_json = src / f"{sp_role}.json"
+        if sp_json.is_file():
+            sp_data = json.loads(sp_json.read_text(encoding="utf-8"))
+            sp_name = json.dumps(sp_role, ensure_ascii=False)
+            sp_desc = json.dumps(str(sp_data.get("description") or sp_role).strip(), ensure_ascii=False)
+            sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
+            sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+            sp_md = (
+                f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
+                f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+            )
+            logs.append(write_file(repo / ".agents" / "agents" / sp_role / "agent.md", sp_md, dry_run=dry_run, repo=repo, merge_existing=False))
+    from delegation_policy import WORKER_AGENT, render_utility_agent_markdown, resolve_utility_worker_model
     for u_role in CORE_UTILITY_AGENTS:
         u_dest = repo / ".agents" / "agents" / u_role / "agent.md"
+        u_model = None
+        if u_role == WORKER_AGENT:
+            try:
+                u_model, _ = resolve_utility_worker_model(repo)
+            except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+                u_model = None
         logs.append(
             write_file(
                 u_dest,
-                render_utility_agent_markdown(u_role),
+                render_utility_agent_markdown(u_role, model=u_model),
                 dry_run=dry_run,
                 repo=repo,
                 merge_existing=False,
@@ -539,8 +561,8 @@ def keep_set(selected: set[str]) -> set[str]:
     for tool in selected:
         keep.update(TOOL_FILES[tool])
         keep.update(command_pack_rels(tool))
-    if "antigravity" in selected:
-        for r in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
+    if {"antigravity", "gemini"} & set(selected):
+        for r in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
             keep.add(f".agents/agents/{r}/agent.md")
     return keep
 
@@ -587,8 +609,8 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
             path.unlink()
             logs.append(f"deleted {rel_s}")
     ag_agents_dir = repo / ".agents" / "agents"
-    if "antigravity" not in selected:
-        for r in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
+    if not ({"antigravity", "gemini"} & set(selected)):
+        for r in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
             path = ag_agents_dir / r / "agent.md"
             if not is_managed_file(path):
                 continue
@@ -602,7 +624,7 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
         for child in sorted(ag_agents_dir.iterdir()):
             if not child.is_dir():
                 continue
-            if "antigravity" in selected and child.name in (*CORE_ROUTED_REVIEWERS, *CORE_UTILITY_AGENTS):
+            if ({"antigravity", "gemini"} & set(selected)) and child.name in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
                 continue
             path = child / "agent.md"
             if not is_managed_file(path):
@@ -802,7 +824,7 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
         ["git", "config", "--get", "core.hooksPath"],
         cwd=str(repo),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=False,
     )
     if proc.returncode == 0 and proc.stdout.strip() in (".githooks", ".githooks/") and not remaining_files:
@@ -960,7 +982,7 @@ def install(args: argparse.Namespace) -> list[str]:
             logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
     if "claude" in selected and not args.skip_claude_agents:
         logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
-    if "antigravity" in selected:
+    if {"antigravity", "gemini"} & set(selected):
         logs.extend(generate_antigravity_agents(repo, dry_run=args.dry_run))
     logs.extend(cleanup_legacy_git_gate(repo, dry_run=args.dry_run))
     if getattr(args, "cc_hooks", False) and "claude" in selected:

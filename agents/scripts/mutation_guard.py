@@ -977,7 +977,7 @@ def _is_read_only_logcat_filter(stage: str) -> bool:
         return False
     for token in tokens[1:]:
         low = token.lower()
-        if low.startswith(("--pre", "--hostname-bin", "--file", "-outvariable", "-ov", "-path", "-literalpath", "-inputobject", "/f:", "/g:")):
+        if low.startswith(("--pre", "--hostname-bin", "--file", "-outvariable", "-ov", "-path", "-literalpath", "-inputobject", "-filterscript", "-process", "-begin", "-end", "/f:", "/g:")) or "{" in stage or "}" in stage:
             return False
         if exe in {"grep", "rg"} and (low == "-f" or (low.startswith("-") and not low.startswith("--") and "f" in low[1:])):
             return False
@@ -1012,7 +1012,8 @@ def _strip_adb_logcat_pipes(command: str, repo: Path | str = ".") -> str | None:
         if first_op is None or SHELL_LAUNDERING.search(first_op) or re.search(r"[;&\n(){}]", first_op):
             return None
         entry_name, entry_args = _entry(first_stage, repo)
-        if entry_name != "adb" or not is_read_only_adb(entry_args):
+        is_allowed_pipe_source = (entry_name == "adb" and is_read_only_adb(entry_args)) or entry_name == "powershell-read"
+        if not is_allowed_pipe_source:
             return None
         stages = [seg[start + 1:end].strip() for start, end in zip(cuts, cuts[1:] + [len(seg)])]
         if not stages or not all(_is_read_only_logcat_filter(stage) for stage in stages):

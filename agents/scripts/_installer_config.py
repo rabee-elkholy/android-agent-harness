@@ -162,7 +162,7 @@ def configure_adapters_and_mcp(repo: Path, answers: dict) -> None:
             command.append("--cc-hooks")
         if "copilot" in tools_arg.split(","):
             command.append("--copilot-hooks")
-        proc = subprocess.run(command, cwd=str(repo), capture_output=True, text=True, check=False)
+        proc = subprocess.run(command, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout or "adapter generation failed").strip())
 

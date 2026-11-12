@@ -456,7 +456,7 @@ def _git_exclude_path(repo: Path) -> Path:
 def subprocess_git(repo: Path, *args: str) -> str:
     import subprocess
 
-    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
+    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     if proc.returncode != 0:
         raise ValidationError((proc.stderr or proc.stdout or "git failed").strip())
     return (proc.stdout or "").strip()
@@ -465,7 +465,7 @@ def subprocess_git(repo: Path, *args: str) -> str:
 def _git_config_value(repo: Path, key: str) -> str | None:
     import subprocess
 
-    proc = subprocess.run(["git", "config", "--get", key], cwd=str(repo), capture_output=True, text=True, check=False)
+    proc = subprocess.run(["git", "config", "--get", key], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return (proc.stdout or "").strip() if proc.returncode == 0 else None
 
 
@@ -473,7 +473,7 @@ def _restore_git_config(repo: Path, key: str, value: str | None) -> None:
     import subprocess
 
     args = ["git", "config", "--unset-all", key] if value is None else ["git", "config", key, value]
-    proc = subprocess.run(args, cwd=str(repo), capture_output=True, text=True, check=False)
+    proc = subprocess.run(args, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     if value is not None and proc.returncode != 0:
         raise ValidationError((proc.stderr or proc.stdout or f"failed restoring git config {key}").strip())
 

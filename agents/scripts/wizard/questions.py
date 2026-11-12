@@ -54,10 +54,12 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         },
     ]
     tool_opts = [
-        {
-            "id": "antigravity",
-            "label": f"{labels['antigravity']} (Recommended)",
-        }
+        {"id": "antigravity", "label": f"{labels['antigravity']} (Recommended)"},
+        {"id": "claude", "label": labels["claude"]},
+        {"id": "cursor", "label": labels["cursor"]},
+        {"id": "codex", "label": labels["codex"]},
+        {"id": "gemini", "label": labels["gemini"]},
+        {"id": "all", "label": labels["all"]},
     ]
     qs.append(
         {
@@ -124,7 +126,10 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             {"id": f"build_type:{name}", "label": f"{name} build type"}
             for name in build_types
         )
-        flavor_opts.append({"id": "default", "label": t(lang, "i19_default")})
+        default_lbl = t(lang, "i19_default")
+        if not flavors and "(recommended)" not in default_lbl.casefold():
+            default_lbl = f"{default_lbl} (Recommended)"
+        flavor_opts.append({"id": "default", "label": default_lbl})
         flavor_opts.append({"id": "other", "label": t(lang, "i19_other")})
         qs.append(
             {
@@ -425,6 +430,20 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         )
 
     # --- Station 3: Project Management & Task Tracker ---
+    found_zoho = bool(d.get("zoho_config"))
+    ordered_pm_ids = (
+        list(PM_PROVIDER_IDS)
+        if found_zoho
+        else (["none"] + [pid for pid in PM_PROVIDER_IDS if pid != "none"])
+    )
+    pm_opts = []
+    for pid in ordered_pm_ids:
+        lbl = t(lang, f"i20_{pid}")
+        if found_zoho and pid == "zoho_sprints":
+            lbl = "Zoho Sprints — external MCP integration (Recommended)"
+        elif found_zoho and pid == "none":
+            lbl = lbl.replace(" (Recommended)", "")
+        pm_opts.append({"id": pid, "label": lbl})
     qs.append(
         {
             "id": "i20",
@@ -433,7 +452,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "required": True,
             "allow_multiple": False,
             "prompt": t(lang, "i20"),
-            "options": [{"id": pid, "label": t(lang, f"i20_{pid}")} for pid in PM_PROVIDER_IDS],
+            "options": pm_opts,
         }
     )
     qs.append(
@@ -484,7 +503,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         }
     )
 
-    # --- Station 4: Device Testing & Verification ---
+    # --- Station 4: Device Testing & Verification (merged APK install confirmation) ---
     qs.append(
         {
             "id": "i22",
@@ -495,6 +514,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             "prompt": t(lang, "i22"),
             "options": [
                 {"id": "manual_only", "label": t(lang, "i22_manual")},
+                {"id": "manual_auto", "label": t(lang, "i22_manual_auto")},
                 {"id": "disabled", "label": t(lang, "i22_off")},
             ],
         }
@@ -515,57 +535,9 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
             ],
         }
     )
-    qs.append(
-        {
-            "id": "i10",
-            "station": 4,
-            "station_title": "Device Testing & Verification",
-            "depends_on": {"id": "i22", "not_equals": "disabled"},
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "i10"),
-            "options": [
-                {"id": "confirm", "label": t(lang, "i10_conf")},
-                {"id": "allow", "label": t(lang, "i10_allow")},
-            ],
-        }
-    )
 
-    # --- Station 5: Reviewer Call Safety Cap ---
-    qs.append(
-        {
-            "id": "review_call_budget",
-            "station": 5,
-            "station_title": "Reviewer Call Safety Cap",
-            "required": True,
-            "allow_multiple": False,
-            "prompt": t(lang, "review_call_budget"),
-            "options": [
-                {
-                    "id": "20",
-                    "label": t(lang, "review_call_budget_20"),
-                },
-                {
-                    "id": "12",
-                    "label": t(lang, "review_call_budget_12"),
-                },
-                {
-                    "id": "30",
-                    "label": t(lang, "review_call_budget_30"),
-                },
-                {
-                    "id": "custom",
-                    "label": t(lang, "review_call_budget_custom"),
-                },
-            ],
-            "conditional_text_input": {
-                "when_option": "custom",
-                "answer_key": "review_call_budget_text",
-                "prompt": "Enter maximum reviewer calls (whole number 12–100).",
-                "required": True,
-            },
-        }
-    )
+    # --- Station 5: Host Reviewer Models (Claude Code) ---
+    # Reviewer Call Safety Cap: review_call_budget defaults automatically to 20 in normalize() (configurable via answers.json).
     qs.append({
         "id": "review_model_policy", "station": 5, "station_title": "Reviewer Models",
         "required": False, "allow_multiple": False,
@@ -636,7 +608,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
         "i16": prev.get("zoho_mcp"),
         "i18": prev.get("zoho_language"),
         "i20": prev.get("pm_provider"),
-        "i22": prev.get("device_verification"),
+        "i22": ("manual_auto" if prev.get("device_verification") == "manual_only" and prev.get("install_confirm") == "allow" else prev.get("device_verification")),
         "review_call_budget": prev_budget_choice,
         "review_model_policy": ("custom" if (prev.get("review_model_policy") or {}).get("overrides") else (prev.get("review_model_policy") or {}).get("default")),
         "i19": prev.get("flavor") or "default",
@@ -852,9 +824,8 @@ def normalize(raw: dict, facts: dict) -> dict:
         if zoho_lang not in {"en_titles_ar_comments", "all_en", "all_ar"}:
             zoho_lang = "en_titles_ar_comments"
 
-    device_verif = raw.get("i22") or auto.get("device_verification", "manual_only")
-    if device_verif not in {"manual_only", "disabled"}:
-        device_verif = "manual_only"
+    raw_i22 = str(raw.get("i22") or auto.get("device_verification", "manual_only")).strip()
+    device_verif = "disabled" if raw_i22 == "disabled" else "manual_only"
     if device_verif == "disabled":
         device = "allow"
         install_confirm = "confirm"
@@ -864,7 +835,14 @@ def normalize(raw: dict, facts: dict) -> dict:
             device = "allow"
         if device not in {"allow", "physical-only", "emulator-only"}:
             raise SystemExit("Device policy must be allow, physical-only, or emulator-only.")
-        install_confirm = raw.get("i10") or auto["install_confirm"]
+        if "i10" in raw:
+            install_confirm = raw["i10"]
+        elif raw_i22 == "manual_auto":
+            install_confirm = "allow"
+        elif raw_i22 in {"manual_only", "manual_confirm"} and "i22" in raw:
+            install_confirm = "confirm"
+        else:
+            install_confirm = auto["install_confirm"]
 
     git_policy = "never"
     chat_lang = raw.get("i17") or auto.get("chat_language") or "mirror"
@@ -1005,7 +983,7 @@ def normalize(raw: dict, facts: dict) -> dict:
         "pm_provider": pm_provider,
         "tools": tools,
         "git_gate": "no",
-        "device_verification": raw.get("i22") or auto.get("device_verification", "manual_only"),
+        "device_verification": device_verif,
         "model_call_budget": model_call_budget,
         "unit_test_scope": "changed_modules",
         "plan_scope": "files_required",

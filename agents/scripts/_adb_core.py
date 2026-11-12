@@ -596,7 +596,7 @@ def discover_diff_targets(repo: Path) -> dict:
             ["git", "status", "--porcelain"],
             cwd=str(repo),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             check=False,
         )
         for line in (proc.stdout or "").splitlines():

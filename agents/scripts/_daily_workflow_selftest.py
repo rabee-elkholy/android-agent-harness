@@ -4038,15 +4038,21 @@ class ReviewerPrecisionTests(unittest.TestCase):
 
         for sf in subagent_files:
             data = json.loads(sf.read_text(encoding="utf-8"))
-            self.assertFalse(data.get("enable_write_tools", True), f"{sf.name} must not have write tools enabled")
             self.assertFalse(data.get("enable_subagent_tools", True), f"{sf.name} must not have subagent tools enabled")
             prompt = data.get("system_prompt", "")
             self.assertIn("untrusted evidence", prompt.lower(), f"{sf.name} must have untrusted evidence boundary")
             self.assertNotIn("guarantee zero regressions across the entire app", prompt.lower(), f"{sf.name} must not claim impossible global zero-regression guarantee")
-            if sf.name in ("android-ui-expert-agent.json", "qa-diagnostics-agent.json"):
-                self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
+            if sf.name == "harness-worker-agent.json":
+                self.assertTrue(data.get("enable_write_tools", False), "harness-worker-agent.json must enable write tools")
+                self.assertIn("harness_worker_fingerprint=flash-scoped-worker-v1", prompt.lower())
             else:
-                self.assertIn("harness_review_result_v2", prompt.lower(), f"{sf.name} must require V2 contract")
+                self.assertFalse(data.get("enable_write_tools", True), f"{sf.name} must not have write tools enabled")
+                if sf.name == "harness-scout-agent.json":
+                    self.assertIn("harness_scout_fingerprint=flash-architectural-scout-v1", prompt.lower())
+                elif sf.name in ("android-ui-expert-agent.json", "qa-diagnostics-agent.json"):
+                    self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
+                else:
+                    self.assertIn("harness_review_result_v2", prompt.lower(), f"{sf.name} must require V2 contract")
 
     def test_review_package_untrusted_evidence_warning(self):
         """Review package generation and briefs must inject the UNTRUSTED_EVIDENCE_WARNING."""
@@ -8167,12 +8173,25 @@ class DocumentationConsistencyTests(unittest.TestCase):
         self.assertEqual(["Install"] + [f"T{i}" for i in range(1, 11)], list(statuses))
         self.assertTrue(set(statuses.values()) <= {"PASSED", "FAILED", "INCOMPLETE", "ENV_BLOCKED", "PENDING"}, statuses)
         scope = status_doc.split("## Next Certification Scope", 1)[1].strip().rstrip(".")
-        self.assertEqual([k for k, v in statuses.items() if v != "PASSED"], [item.strip() for item in scope.split(",")])
+        expected_remaining = [k for k, v in statuses.items() if v != "PASSED"]
+        parsed_scope = [] if scope.lower() in {"", "none"} else [item.strip() for item in scope.split(",") if item.strip()]
+        self.assertEqual(expected_remaining, parsed_scope)
         evidence = status_doc.split("## Evidence for passed scenarios", 1)[1].split("## Next Certification Scope", 1)[0]
         cited = re.findall(r"- \*\*(Install|T\d+)\*\*", evidence)
         self.assertEqual(sorted(k for k, v in statuses.items() if v == "PASSED"), sorted(cited))
-        for retired in ("certification-plan.md", "certification-progress.md", "round5-findings-log.md", "round5-plan.md"):
+        for retired in (
+            "certification-plan.md",
+            "certification-progress.md",
+            "round5-findings-log.md",
+            "round5-plan.md",
+            "certification-report-v1.1.2.md",
+            "certification-report-2609344.md",
+            "v1.3.2-engine-and-context-benchmarks.md",
+            "evidence",
+        ):
             self.assertFalse((bench / retired).exists(), retired)
+        self.assertTrue((bench / "ab-comparison-v1.3.5.md").is_file())
+        self.assertTrue((bench / "v1.3.5-engine-and-context-benchmarks.md").is_file())
 
     def test_E2_E3_ci_claims_match_the_workflow(self) -> None:
         # The matrix claimed the complete suite on every Python and OS; CI runs it on Linux/3.12 only

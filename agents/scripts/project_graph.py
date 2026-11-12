@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             from task_context import _instruction_matches_node, _source_set
             graph_nodes = list(graph_to_render.nodes.values())
             for inst in active_insts:
-                scope = inst.get("scope") or {}
+                scope = inst.get("scope") if isinstance(inst.get("scope"), dict) else {"kind": "GLOBAL", "value": "*"}
                 s_kind = str(scope.get("kind") or "GLOBAL").upper()
                 s_val = str(scope.get("value") or "").strip()
                 if s_kind == "GLOBAL" or s_val in ("", "*") or any(

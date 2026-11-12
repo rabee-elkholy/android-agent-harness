@@ -173,8 +173,8 @@ def measure_conversation_health(repo: Path) -> dict[str, Any]:
 
     if conv_id and re.fullmatch(r"[0-9a-fA-F-]{20,64}", conv_id):
         try:
-            from antigravity_runtime import resolve_transcript
-            transcript = resolve_transcript(conv_id)
+            from antigravity_runtime import prefer_full_transcript, resolve_transcript
+            transcript = prefer_full_transcript(resolve_transcript(conv_id))
             if isinstance(transcript, Path) and transcript.is_file():
                 t_metrics = _inspect_transcript_tail(transcript)
                 transcript_bytes = t_metrics["bytes"]

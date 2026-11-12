@@ -240,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(view_issue(args.number, args.repo), indent=2))
         return 0
     if args.command == "comment":
-        body = args.body if args.body else sys.stdin.read()
+        body = args.body if args.body else __import__('_vnext_common').read_utf8_stdin()
         add_comment(args.number, body, args.repo)
         print(f"Comment posted on #{args.number}.")
         return 0

@@ -203,11 +203,11 @@ def validate_raw_answers(payload: Any) -> list[str]:
         if val not in ("mirror", "en", "ar"):
             errors.append("i17 (chat_language) must be 'mirror', 'en', or 'ar'")
 
-    # Validate i22 (Device verification)
+    # Validate i22 (Device verification — merged with APK install confirmation)
     if "i22" in payload:
         val = payload["i22"]
-        if val not in ("manual_only", "disabled"):
-            errors.append("i22 (device_verification) must be 'manual_only' or 'disabled'")
+        if val not in ("manual_only", "manual_confirm", "manual_auto", "disabled"):
+            errors.append("i22 (device_verification) must be 'manual_only', 'manual_confirm', 'manual_auto', or 'disabled'")
 
     # Check for string length / safety
     for key, value in payload.items():

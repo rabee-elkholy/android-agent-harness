@@ -40,7 +40,7 @@ def emit(decision: str, reason: str) -> None:
 
 def main() -> int:
     try:
-        raw = sys.stdin.read()
+        raw = __import__('_vnext_common').read_utf8_stdin()
         payload = json.loads(raw) if raw.strip() else {}
     except Exception:
         emit("deny", "android-harness bridge received unreadable hook input. Retry the tool.")
