@@ -2903,6 +2903,80 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
         self.assertIn("A2UI_COMPOSE_BOM_CONFLICT", gradle_types)
         self.assertIn("A2UI_ANDROID_ONLY_IN_COMMON_MAIN", gradle_types)
 
+        # D) Nov 12, 2026 Antigravity Platform Guards (#199713 Zombie Subagents, #199748 agy -p ToS, #199769 limit:0 429, #198333 Flash 503)
+        import subprocess as _sp
+        from antigravity_runtime import classify_antigravity_quota_or_capacity_error
+        import session_forensics as sf_mod
+
+        hook_py = Path(__file__).resolve().parents[2] / "agents/scripts/pre_tool_safety.py"
+        hook_env = {**os.environ, "HARNESS_REPO": str(self.repo), "HARNESS_HOOK_STATE": str(self.repo / ".agents/state/audit_log.jsonl")}
+
+        def _run_hook(tool_name: str, tool_args: dict) -> dict:
+            res = _sp.run(
+                [sys.executable, str(hook_py)],
+                input=json.dumps({"toolName": tool_name, "toolArgs": tool_args}),
+                text=True,
+                capture_output=True,
+                env=hook_env,
+                check=True,
+            )
+            return json.loads(res.stdout.strip().splitlines()[-1])
+
+        # D1. #199713: manage_subagents(Action="kill_all") is ALWAYS allowed even in IDLE/post-task state, whereas Action="list" is denied!
+        reap_out = _run_hook("manage_subagents", {"Action": "kill_all"})
+        self.assertEqual("allow", reap_out["decision"], reap_out)
+        self.assertIn("ZOMBIE_SUBAGENT_REAP_ALLOWED", reap_out["reason"])
+        list_out = _run_hook("manage_subagents", {"Action": "list"})
+        self.assertEqual("deny", list_out["decision"], list_out)
+
+        # D2. #199713: schedule (>=180s and schedules:*) is blocked to stop 255.3m reactive wakeup quota drain!
+        sched_out = _run_hook("schedule", {"DurationSeconds": 15318})
+        self.assertEqual("deny", sched_out["decision"], sched_out)
+        self.assertIn("ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD", sched_out["reason"])
+        sched_mcp_out = _run_hook("schedules:create_one_off", {"when": "in 4 hours"})
+        self.assertEqual("deny", sched_mcp_out["decision"], sched_mcp_out)
+
+        # D3. #199748/#199756: Unattended `agy -p` loops & UI keystroke injection are blocked to protect Ultra accounts from 403 bans!
+        agy_out = _run_hook("run_command", {"CommandLine": 'for f in *.kt; do agy -p "audit $f"; done'})
+        self.assertEqual("deny", agy_out["decision"], agy_out)
+        self.assertIn("403 PERMISSION_DENIED", agy_out["reason"])
+
+        # D4. #199713 Doctor detects schedule tool injection & 255.3m zombie reactive wakeup transcript spikes!
+        bad_agent_dir = self.repo / ".agents/agents/harness-scout-agent"
+        bad_agent_dir.mkdir(parents=True, exist_ok=True)
+        (bad_agent_dir / "agent.md").write_text("---\nname: harness-scout-agent\ntools:\n  - view_file\n  - schedule\n---\n", encoding="utf-8")
+        fake_brain = self.repo / "fake_brain"
+        z_logs = fake_brain / "sub_zombie_1" / ".system_generated" / "logs"
+        z_logs.mkdir(parents=True, exist_ok=True)
+        (z_logs / "transcript.jsonl").write_text(
+            json.dumps({"timestamp": "2026-11-12T01:00:00Z", "content": "HARNESS_SCOUT_FINGERPRINT=flash-architectural-scout-v1"}) + "\n"
+            + json.dumps({"timestamp": "2026-11-12T05:15:18Z", "content": "Reactive wakeup burn"}) + "\n",
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_BRAIN_ROOT": str(fake_brain)}, clear=False):
+            doc_z = HarnessDoctor(self.repo, run_selftest=False)
+            doc_z.check_antigravity_installation()
+            z_chk = next(r for r in doc_z.results if r.name == "Zombie Subagent & Schedule Guard")
+            self.assertEqual("WARN", z_chk.status, z_chk.message)
+            self.assertIn("#199713", z_chk.message)
+
+        # D5. #199769/#199770 Zero-Quota 429 & #198333 Flash 503 classifier + session forensics
+        hz_429 = classify_antigravity_quota_or_capacity_error(
+            "HTTP 429 RESOURCE_EXHAUSTED on antigravity-preview-09-2026 gemini-4-argon: limit: 0 requests per day / 0 input tokens per minute"
+        )
+        self.assertIsNotNone(hz_429)
+        self.assertEqual("MANAGED_AGENT_ZERO_QUOTA_429", hz_429["code"])
+        hz_503 = classify_antigravity_quota_or_capacity_error(
+            "HTTP 503 Service Unavailable: gemini-3.8-flash-medium capacity overloaded, retrying in 16s"
+        )
+        self.assertIsNotNone(hz_503)
+        self.assertEqual("FLASH_503_CAPACITY_BACKOFF", hz_503["code"])
+
+        diag_rep = sf_mod.diagnose_session(self.repo)
+        diag_codes = {f["code"] for f in diag_rep["findings"]}
+        self.assertIn("ZOMBIE_SUBAGENT_REACTIVE_WAKEUP", diag_codes)
+        self.assertIn("AGY_HEADLESS_LOOP_TOS_ATTEMPT", diag_codes)
+
     def test_v135_system_source_and_transcript_full_upgrade(self):
         from antigravity_runtime import prefer_full_transcript
         from delegation_policy import _transcript_head_and_dispatch, _prompt_sha256

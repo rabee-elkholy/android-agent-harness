@@ -204,16 +204,27 @@ def review_action(context: VerificationContext) -> dict | None:
                 env_blocked = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_ENV_BLOCKED]
                 if env_blocked:
                     r = env_blocked[0]
-                    return {
+                    last_err = str(rev_states.get(r, {}).get("last_error") or "")
+                    hazard = None
+                    try:
+                        from antigravity_runtime import classify_antigravity_quota_or_capacity_error
+                        hazard = classify_antigravity_quota_or_capacity_error(last_err)
+                    except ImportError:
+                        hazard = None
+                    reason_msg = f"Reviewer '{r}' is blocked by environment: {last_err}."
+                    out_payload = {
                         "code": "REVIEW_ENV_BLOCKED",
                         "kind": "HOST_ACTION",
                         "command": "",
                         "blocking": True,
                         "reviewer": r,
-                        "reason": f"Reviewer '{r}' is blocked by environment: {rev_states.get(r, {}).get('last_error')}.",
+                        "reason": f"{reason_msg} [{hazard['code']} {hazard['issue']}] {hazard['remedy']}" if hazard else reason_msg,
                         "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
                         "expected": {},
                     }
+                    if hazard:
+                        out_payload["platform_hazard_code"] = hazard["code"]
+                    return out_payload
 
                 retry_required = [r for r in required_reviewers if rev_states.get(r, {}).get("state") == REVIEW_PROTOCOL_RETRY_REQUIRED]
                 if retry_required:

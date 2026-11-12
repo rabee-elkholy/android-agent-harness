@@ -145,6 +145,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     peak_tokens = 0
     peak_step = 0
     malformed_calls = 0
+    http_503_retries = 0
+    zero_quota_429_hits = 0
     tool_counts: Counter[str] = Counter()
 
     try:
@@ -153,6 +155,10 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             low = ln.lower()
             if "malformed function call" in low or "function call is empty" in low:
                 malformed_calls += 1
+            if "503" in low and ("unavailable" in low or "retry" in low or "backoff" in low or "overloaded" in low):
+                http_503_retries += 1
+            if ("429" in low or "resource_exhausted" in low) and ("limit: 0" in low or "0 requests per day" in low or "0 input tokens per minute" in low):
+                zero_quota_429_hits += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -189,6 +195,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "peak_context_tokens": peak_tokens,
         "peak_token_step": peak_step,
         "malformed_tool_calls": malformed_calls,
+        "http_503_retries": http_503_retries,
+        "zero_quota_429_hits": zero_quota_429_hits,
         "top_tools": dict(tool_counts.most_common(8)),
     }
 
@@ -270,6 +278,34 @@ def diagnose_session(
             "severity": "MEDIUM",
             "evidence": f"Task '{plan.get('task_id')}' required {plan.get('review_rounds')} review rounds (blocked: {plan.get('blocked_reviewers') or []}).",
             "remedy": "Use `risk-hybrid` preset so Round 2+ critical re-reviews escalate to the main frontier model automatically.",
+        })
+    if denials.get("ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD", 0) >= 1:
+        findings.append({
+            "code": "ZOMBIE_SUBAGENT_REACTIVE_WAKEUP",
+            "severity": "HIGH",
+            "evidence": f"{denials['ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD']} schedule wakeup call(s) intercepted (#199713).",
+            "remedy": "Call `manage_subagents({'Action': 'kill_all'})` after every completed subagent wave or task to reap idle sessions.",
+        })
+    if denials.get("AGY_HEADLESS_LOOP_TOS_GUARD", 0) >= 1:
+        findings.append({
+            "code": "AGY_HEADLESS_LOOP_TOS_ATTEMPT",
+            "severity": "HIGH",
+            "evidence": f"{denials['AGY_HEADLESS_LOOP_TOS_GUARD']} unattended `agy -p` / UI-injection command(s) blocked (#199748/#199756).",
+            "remedy": "Never run unattended `agy -p` loops (triggers automated 403 account ban); prepare local folders and invoke via an interactive Skill.",
+        })
+    if transcript.get("zero_quota_429_hits", 0) > 0:
+        findings.append({
+            "code": "MANAGED_AGENT_ZERO_QUOTA_429",
+            "severity": "HIGH",
+            "evidence": f"{transcript['zero_quota_429_hits']} zero-quota HTTP 429 (`limit: 0`) error(s) on Argon/Carbon (#199769/#199770).",
+            "remedy": "Switch reviewer/subagent routing to 100% Pure Flash (`flash-project`) when running on Free/Pro Managed Agent tiers.",
+        })
+    if transcript.get("http_503_retries", 0) > 0:
+        findings.append({
+            "code": "FLASH_503_CAPACITY_BACKOFF",
+            "severity": "MEDIUM",
+            "evidence": f"{transcript['http_503_retries']} silent Gemini 3.8 Flash HTTP 503 capacity retry event(s) detected (#198333).",
+            "remedy": "Batch 4-8 `view_file` reads in a single turn to avoid multiplying 4s-24s per-turn 503 backoff delays.",
         })
     if not findings:
         findings.append({

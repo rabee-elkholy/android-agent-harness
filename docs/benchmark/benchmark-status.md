@@ -2,9 +2,14 @@
 
 Single source of truth for end-to-end client certification and daily developer workflow verification on **Android Agent Harness `v1.3.5`**. Earlier historical round logs live in Git history rather than active benchmark docs.
 
-<p align="center">
-  <img src="../assets/benchmark-certification-matrix.svg" alt="v1.3.5 End-to-End Certification & 24-Scenario Subsystem Coverage Matrix" width="100%" />
-</p>
+## Release Certification Summary (`v1.3.5`)
+
+| Verification Suite | Scope Executed | Result | Pass Rate |
+|---|---|---|---:|
+| **Core End-to-End Certification (`Install + T1..T10`)** | Installation collision safety, EN/AR string parity, Room `1->2` Hilt migration, KMP `--capture-red` TDD, Manifest security, `Human Git Authority`, 2-phase `revise` & `--reopen`, `change-decision` | **`11 / 11` PASSED** | **`100%`** |
+| **Daily Developer Workflows (`DW-01..DW-24`)** | Live `v1.3.4 -> v1.3.5` upgrade, zero-test legacy guard, merge conflict, AST `symbol` surgery (`Kotlin` + `SwiftUI`), dirty worktree guard, `task switch`/`bridge`, KMP purity, Maestro/Roborazzi/SARIF/PM/self-heal | **`24 / 24` PASSED** | **`100%`** |
+| **Controlled `18`-Task A/B Defect Suite** | Seeded production/security/schema/UI traps across `Ecommerce-Compose` & `PeopleInSpace` ([ab-comparison-v1.3.5.md](ab-comparison-v1.3.5.md) · [results-v1.3.5.md](results-v1.3.5.md)) | **`18 / 18` CAUGHT & DELIVERED** | **`100%`** |
+| **Automated Selftest & Release Validator** | `python harness_cli.py selftest` (`36` suites / `59` parallel processes) + `validate_release.py` + `HarnessDoctor` (`40/40` checks) | **`36 / 36` PASSED** | **`100%`** |
 
 ## Benchmark Environment & Methodology
 
@@ -59,16 +64,16 @@ Beyond `Install` and `T1..T10`, all **`24` daily engineering workflows and subsy
 |---|---|---|---|---|---:|---|
 | `DW-01` | `Ecommerce-Compose & PeopleInSpace` | Install + Collision Guard + Doctor | No hooks, no subagents, no graph, no `.agents/skills` collision protection | Ecommerce (Hilt + Room v1, `40/40 PASS`) & PeopleInSpace (Koin + 9-mod KMP + Debug default fix + offline `ENV-FAILURE` guard, `40/40 PASS`) | `5.50s` | **PASSED** |
 | `DW-02` | `PeopleInSpace` | Live Update `v1.3.4 -> v1.3.5` + Plan Compaction + Impacted Tests | Manual prompt files drift; zero impacted-test detection | Preserved custom notes & instructions, installed 8 subagent `.md` files, shrunk `plan.md` `38,790 B -> 5,396 B` (`-86.09%`), auto-detected `UiStateFlowsTest.kt` | `4.71s` | **PASSED** |
-| `DW-03` | `Ecommerce-Compose` | Zero-Tests Legacy Repo Guard + New Hilt ViewModel Feature | `:app:testDebugUnitTest` exits 0 with 0 tests (`BUILD SUCCESSFUL`); feature ships with zero test coverage | Refused vacuous 0-test Gradle run (`zero tests were executed`), enforced `CartViewModelTest.kt` + 2 V2 reviewers -> `DELIVERED` | `4.01s` | **PASSED** |
-| `DW-04` | `Ecommerce-Compose` | Auth & Network Security Hardening | Cleartext `http://` fallback URL ships unflagged | Blocked `INSECURE_CLEARTEXT_TRAFFIC`, routed with 2 V2 reviewers -> `DELIVERED` | `3.75s` | **PASSED** |
+| `DW-03` | `Ecommerce-Compose` | Zero-Tests Legacy Repo Guard + New Hilt ViewModel Feature | `:app:testDebugUnitTest` exits 0 with 0 tests (`BUILD SUCCESSFUL`); feature ships with zero test coverage | Refused vacuous 0-test Gradle run (`zero tests were executed`), enforced `CartViewModelTest.kt` + V2 specialist review -> `DELIVERED` | `4.01s` | **PASSED** |
+| `DW-04` | `Ecommerce-Compose` | Auth & Network Security Hardening | Cleartext `http://` fallback URL ships unflagged | Blocked `INSECURE_CLEARTEXT_TRAFFIC`, routed with V2 specialist review -> `DELIVERED` | `3.75s` | **PASSED** |
 | `DW-05 (Cert-T3 + N11)` | `Ecommerce-Compose` | Split-File Hilt + Room Schema Migration (`1->2`) + `--override-reviews` | `IllegalStateException: Room cannot verify the data integrity` crash on app upgrade | Caught unbumped `UserCartEntity`, verified split `AppDatabase` v2 + Hilt `DatabaseModule` `addMigrations(MIGRATION_1_2)`, passed `--override-reviews` (`N11`) -> `DELIVERED` | `4.66s` | **PASSED** |
 | `DW-06` | `Ecommerce-Compose` | Real Git Branch Merge Conflict (`kind=CONFLICT`) | Risk of leftover `<<<<<<<` markers or accidental `git checkout --ours` data loss | Destructive git flags blocked; conflict markers verified clean; 0-reviewer fast verification -> `DELIVERED` | `2.20s` | **PASSED** |
 | `DW-07 (Cert-T4)` | `PeopleInSpace` | BUG Task Mandatory `CAPTURE_RED_ONLY` -> `--tests` Fast Filter -> `GREEN` | Agent edits production code without reproducing bug; runs all 9 modules' tests repeatedly | Blocked pre-RED production edit, recorded `red-evidence.json`, ran `:common:testAndroidHostTest --tests UiStateFlowsTest` -> `DELIVERED` | `5.11s` | **PASSED** |
 | `DW-08 (Cert-T8 + T9 + N12/N13/N14)` | `PeopleInSpace` | 2-Phase KMP + Compose Feature + Mid-`p2` `revise` + Post-Ready `--reopen` | Large cross-module diff dumped in one unreviewed pass; post-ready tweaks bypass tests | `p1` reviewed & preserved across `p2` `revise`, `compose-inspector` auto-planned, reopened from `READY_FOR_DELIVERY` (`T9`) -> `DELIVERED` | `9.95s` | **PASSED** |
 | `DW-09 (Cert-T10 + Change-Decision)` | `PeopleInSpace` | Out-of-Scope Write & Plan-Overwrite Guard + Mid-Verification `change-decision` | Agent silently mutates `libs.versions.toml` or discards developer's manual tweak | Denied out-of-scope write & plan overwrite (`revise` hint); accepted developer edit via `change-decision` -> `DELIVERED` | `5.96s` | **PASSED** |
 | `DW-10` | `PeopleInSpace` | AST `symbol` Outline/Guard (`Kotlin` + `Swift`) & `T0_TRIVIAL` Docs Fast-Path | Agent reads entire multi-hundred-line Kotlin/Swift files; docs edits trigger wasteful review loops | Outlined `ContentView.swift` & `PeopleInSpaceRepository.kt`, blocked IDLE AST mutation, delivered `T0_TRIVIAL` docs with 0 reviewers | `2.63s` | **PASSED** |
-| `DW-11` | `Ecommerce-Compose` | Pre-Existing Dirty Worktree Ownership Guard (`preexisting_dirty`) | Agent overwrites or stages developer's uncommitted `ProfileScreen.kt` WIP into unrelated commit | Recorded `ProfileScreen.kt` in `preexisting_dirty`, denied agent writes to it, delivered `HomeScreen.kt` cleanly while preserving developer WIP intact | `3.98s` | **PASSED** |
 | `DW-12` | `PeopleInSpace` | Disjoint Multi-Task Switching (`task switch`) + Context Rotation (`task bridge`) | Parallel tasks collide on shared files; new chat loses architectural state and re-reads entire repo | 2 concurrent disjoint tasks (`:wearApp` & `:app`) isolated + `task bridge` transferred state & discovery receipt to fresh chat in 1 command | `1.89s` | **PASSED** |
+| `DW-11` | `Ecommerce-Compose` | Pre-Existing Dirty Worktree Ownership Guard (`preexisting_dirty`) | Agent overwrites or stages developer's uncommitted `ProfileScreen.kt` WIP into unrelated commit | Recorded `ProfileScreen.kt` in `preexisting_dirty`, denied agent writes to it, delivered `HomeScreen.kt` cleanly while preserving developer WIP intact | `3.98s` | **PASSED** |
 | `DW-13` | `PeopleInSpace` | KMP `commonMain` Purity Gate + SQLDelight `.sq` Evolution | `import android.util.Log` leaks into `commonMain`, breaking iOS/Wasm/Desktop targets only in CI | Instant `preflight` `KMP_COMMON_MAIN_PURITY_VIOLATION` block on `android.*` inside `commonMain`; clean SQLDelight `.sq` `:db` + `:common` verification -> `DELIVERED` | `5.46s` | **PASSED** |
 | `DW-14` | `Ecommerce-Compose` | Ecosystem Bridges (`maestro` destructive guard, `health`, `diagnose-session` Zero-PII bundle) | Unchecked Maestro `clearState` wipes physical test device account; opaque hook/token bottlenecks | Blocked unauthorized `clearState` in `.maestro/*.yaml`, probed `health` with 0ms unconfigured overhead, exported Zero-PII forensic bundle | `0.34s` | **PASSED** |
 | `DW-15` | `PeopleInSpace` | Surgical AST `symbol read / replace-body / insert-after` (`SwiftUI` `388`-line + `Kotlin`) | Agent loads & rewrites entire `388`-line `ContentView.swift`, risking brace corruption or concurrent edit loss | Rejected stale `--expected-sha256` & unbalanced `{`, surgically replaced SwiftUI `struct` & inserted Kotlin helper (`non-Gradle` Xcode folder handled cleanly) -> `DELIVERED` | `5.74s` | **PASSED** |
@@ -84,6 +89,7 @@ Beyond `Install` and `T1..T10`, all **`24` daily engineering workflows and subsy
 
 See also:
 - [Controlled 18-Task A/B Comparison (`Without Harness` vs `With Harness v1.3.5`)](ab-comparison-v1.3.5.md)
+- [Consolidated 18-Task Execution Ledger & Quota Economics (`results-v1.3.5.md`)](results-v1.3.5.md)
 - [v1.3.5 Engine, Project-Context & Subagent Benchmarks](v1.3.5-engine-and-context-benchmarks.md)
 
 ## Next Certification Scope

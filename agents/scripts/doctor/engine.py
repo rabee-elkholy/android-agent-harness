@@ -1576,6 +1576,7 @@ class HarnessDoctor:
                 detect_antigravity_remote_mode,
                 inspect_language_server_logs,
                 inspect_windows_stdio_mcp_risk,
+                inspect_zombie_subagent_and_schedule_risks,
                 remote_subagents_explicitly_allowed,
             )
         except ImportError:
@@ -1638,6 +1639,34 @@ class HarnessDoctor:
                 "Windows MCP Transport Guard",
                 "PASS",
                 "Windows MCP transport check healthy (<2 stdio pipe MCP servers configured).",
+            )
+
+        # 9c. Zombie Subagent & 255m Reactive Wakeup Schedule Guard (#199713)
+        zombie_risk = inspect_zombie_subagent_and_schedule_risks(self.repo)
+        sched_files = list(zombie_risk.get("schedule_injected_files") or [])
+        spikes = list(zombie_risk.get("wakeup_spikes") or [])
+        if sched_files or spikes:
+            details_z: list[str] = []
+            if sched_files:
+                details_z.append(f"Remove 'schedule' tool permission from: {', '.join(sched_files)}")
+            if spikes:
+                first_sp = spikes[0]
+                details_z.append(
+                    f"Subagent {first_sp['conversation_id']} exhibited a {first_sp['gap_minutes']}m idle wakeup spike (#199713); always call manage_subagents({{'Action': 'kill_all'}}) after subagent waves."
+                )
+            self.log(
+                category,
+                "Zombie Subagent & Schedule Guard",
+                "WARN",
+                f"Detected #199713 Zombie Subagent reactive-wakeup hazard ({len(sched_files)} schedule config(s), {len(spikes)} wakeup spike(s)).",
+                details_z,
+            )
+        else:
+            self.log(
+                category,
+                "Zombie Subagent & Schedule Guard",
+                "PASS",
+                "Subagent manifests strip 'schedule' wakeup triggers and zero #199713 zombie wakeup spikes detected.",
             )
 
     def check_update_journal(self) -> None:

@@ -135,6 +135,7 @@ DENY_HINTS = {
     "raw_adb": "To read logcat, pass -d or -t <lines> so adb logcat dumps and exits (e.g. `adb logcat -d -t 500` or "
                "`adb logcat -d -t 500 | Select-String -Pattern \"...\"`). For device status or app install/launch, use "
                "`python .agents/harness.py device status` or `python .agents/harness.py device install-start`.",
+    "agy_headless_loop_tos_guard": "Unattended `agy -p` / `--headless` CLI loops and programmatic UI keystroke injection trigger automated Google 403 PERMISSION_DENIED anti-abuse suspension (#199748/#199756). Prepare artifacts locally and invoke via an interactive Skill instead.",
 }
 DANGEROUS = (
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)(?![\w-])", re.I)),
@@ -150,6 +151,7 @@ DANGEROUS = (
     ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
     ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
+    ("agy_headless_loop_tos_guard", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*(?:agy|antigravity)(?:\.exe|\.cmd)?\s+(?:-[a-z]*p\b|--prompt\b|--headless\b)|(?:\b(?:xdotool|pyautogui|sendkeys|wscript\.shell)\b.*\b(?:antigravity|agy)\b)", re.I)),
 )
 WORKFLOW_ENTRYPOINTS = {"workflow.py", "workflow"}
 TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "android-harness"}
@@ -690,7 +692,7 @@ def _handle_command(command: str, *, conversation: str = '') -> None:
         return
     for code, pattern in DANGEROUS:
         if pattern.search(command):
-            if code in ("tracker_write", "git_mutation", "raw_adb") and _audited_harness_command(command):
+            if code in ("tracker_write", "git_mutation", "raw_adb", "agy_headless_loop_tos_guard") and _audited_harness_command(command):
                 continue
             if code == "git_mutation" and _read_only_git_branch_command(command):
                 continue
@@ -1077,14 +1079,29 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             return
     elif name == "manage_subagents":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
-        if act == "list":
-            emit("deny", "ZERO-POLLING INVARIANT: manage_subagents(Action='list') is blocked to prevent polling loops. Subagents notify you reactively upon completion. Yield execution now without calling tools.", tool=name)
+        if act in {"kill_all", "kill"}:
+            emit(
+                "allow",
+                "ZOMBIE_SUBAGENT_REAP_ALLOWED (#199713): Reaping finished/idle subagents via manage_subagents(kill_all/kill) is permitted across all task states to prevent 6-23h zombie sessions and 255m reactive wakeups.",
+                tool=name,
+                reason_code="ZOMBIE_SUBAGENT_REAP_ALLOWED",
+            )
             return
-    elif name == "schedule":
-        cond = str(args.get("TimerCondition") or args.get("timerCondition") or "").strip().lower()
-        dur = args.get("DurationSeconds") or args.get("durationSeconds")
-        if cond in ("any",) or (dur is not None and int(dur) < 180):
-            emit("deny", "ZERO-POLLING INVARIANT: Short schedule timers and condition-based busy-waiting are blocked. Yield execution and await reactive wakeup notifications from the system.", tool=name)
+        emit(
+            "deny",
+            "ZERO-POLLING INVARIANT: manage_subagents(Action='list') is blocked to prevent polling loops. Subagents notify you reactively upon completion; call manage_subagents(Action='kill_all') once the subagent wave or task finishes (#199713).",
+            tool=name,
+            reason_code="ZERO_POLLING_MANAGE_SUBAGENTS",
+        )
+        return
+    elif name == "schedule" or name.startswith("schedules:"):
+        if str(os.environ.get("HARNESS_ALLOW_SCHEDULE_TOOL") or "").strip().lower() not in {"1", "true", "yes"}:
+            emit(
+                "deny",
+                "ZERO-POLLING INVARIANT & ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD (#199713): Tool 'schedule' is blocked inside harness sessions to prevent busy-waiting and 255-minute reactive wakeup quota drain on idle subagents. Yield execution and await normal completion.",
+                tool=name,
+                reason_code="ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD",
+            )
             return
 
     if plan and plan.get("task_id"):
@@ -2614,7 +2631,7 @@ def _main() -> None:
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
             _handle_command(command, conversation=lead_conv)
             return
-        if name in SUBAGENT_TOOLS:
+        if name in SUBAGENT_TOOLS or name.startswith("schedules:"):
             _handle_subagent(name, args, parent_conversation_id=conversation)
             return
         if name in SEARCH_TOOLS:

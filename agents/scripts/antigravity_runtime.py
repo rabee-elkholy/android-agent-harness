@@ -400,3 +400,158 @@ def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None
         "stdio_servers": stdio_servers,
         "config_paths": inspected,
     }
+
+
+ZOMBIE_WAKEUP_GAP_SECONDS = 7200  # 2h+ gap inside a subagent transcript flags #199713 255.3m reactive wakeup
+
+
+def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str] | None:
+    """Classify Nov 2026 Antigravity platform quota/capacity hazards (#199769/#199770 zero-quota 429 & #198333 Flash 503)."""
+    low = str(err_text or "").strip().lower()
+    if not low:
+        return None
+    is_429 = "429" in low or "resource_exhausted" in low or "quota" in low
+    is_zero_limit = (
+        "limit: 0" in low
+        or "limit:0" in low
+        or "0 requests per day" in low
+        or "0 input tokens per minute" in low
+        or "antigravity-preview-09-2026" in low
+        or ("carbon" in low and ("ultra" in low or "entitle" in low or "tier" in low))
+    )
+    if is_429 and is_zero_limit:
+        return {
+            "code": "MANAGED_AGENT_ZERO_QUOTA_429",
+            "issue": "#199769/#199770",
+            "remedy": (
+                "Managed Agent API / tier returned zero Argon/Carbon quota (limit: 0). "
+                "Switch immediately to 100% Pure Flash via: "
+                "python .agents/harness.py review models set --mode flash-project --source conversation "
+                "--proof-reference \"Switch to Pure Flash (#199769)\""
+            ),
+        }
+    is_503 = "503" in low or "service unavailable" in low or ("unavailable" in low and ("capacity" in low or "overloaded" in low or "backoff" in low))
+    if is_503:
+        return {
+            "code": "FLASH_503_CAPACITY_BACKOFF",
+            "issue": "#198333",
+            "remedy": (
+                "Regional Gemini 3.8 Flash capacity retries (4s-24s HTTP 503 backoff) detected (#198333). "
+                "Batch 4-8 parallel view_file reads per turn to minimize round-trips, or use flash-argon-hybrid on COMPLEX tasks."
+            ),
+        }
+    return None
+
+
+def inspect_zombie_subagent_and_schedule_risks(repo: Path, env: dict[str, str] | None = None) -> dict[str, object]:
+    """Detect #199713 Zombie Subagent schedule-permission injection in .agents and >=2h reactive wakeup spikes."""
+    import json as _json
+    from datetime import datetime as _dt
+
+    environ = env if env is not None else os.environ
+    schedule_injected_files: list[str] = []
+
+    agent_md_dirs = [repo / ".agents" / "agents", repo / "agents" / "subagents"]
+    for base in agent_md_dirs:
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file() or f.suffix not in {".md", ".json"}:
+                continue
+            try:
+                raw = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if f.suffix == ".md" and raw.startswith("---"):
+                end = raw.find("\n---", 3)
+                front = raw[: end if end > 0 else 600].lower()
+                if re.search(r"""(?:^|\n)\s*-\s*["']?schedules?(?::|["']|\s|$)""", front):
+                    schedule_injected_files.append(str(f.relative_to(repo) if f.is_relative_to(repo) else f))
+            elif f.suffix == ".json":
+                try:
+                    spec = _json.loads(raw)
+                except ValueError:
+                    continue
+                tools = spec.get("tools") if isinstance(spec, dict) else None
+                if isinstance(tools, list) and any(str(t).strip().lower().startswith("schedule") for t in tools):
+                    schedule_injected_files.append(str(f.relative_to(repo) if f.is_relative_to(repo) else f))
+
+    settings_candidates = [repo / ".agents" / "settings.json", repo / "agents" / "settings.json"]
+    for sf in settings_candidates:
+        if sf.is_file():
+            try:
+                stxt = sf.read_text(encoding="utf-8", errors="replace").lower()
+                if '"schedule"' in stxt or '"schedules:' in stxt:
+                    schedule_injected_files.append(str(sf.relative_to(repo) if sf.is_relative_to(repo) else sf))
+            except OSError:
+                continue
+
+    brain_roots: list[Path] = []
+    brain_override = str(environ.get("ANTIGRAVITY_BRAIN_ROOT") or "").strip()
+    if brain_override:
+        try:
+            brain_roots.append(Path(brain_override).expanduser().resolve())
+        except (OSError, RuntimeError, ValueError):
+            pass
+    else:
+        brain_roots.extend(candidate_brain_roots())
+
+    wakeup_spikes: list[dict[str, object]] = []
+    iso_re = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)")
+    for broot in brain_roots:
+        if not broot.is_dir():
+            continue
+        try:
+            entries = [e for e in broot.iterdir() if e.is_dir() and not e.is_symlink()]
+        except OSError:
+            continue
+        entries.sort(key=lambda e: e.stat().st_mtime if e.exists() else 0.0, reverse=True)
+        for child_dir in entries[:16]:
+            tx = prefer_full_transcript(child_dir / ".system_generated" / "logs" / "transcript.jsonl")
+            if tx is None or not tx.is_file():
+                tx = child_dir / "transcript.jsonl"
+            if not tx.is_file():
+                continue
+            try:
+                size = tx.stat().st_size
+                with tx.open("rb") as fh:
+                    if size > 32768:
+                        fh.seek(size - 32768)
+                    tail = fh.read(32768).decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            if "HARNESS_" not in tail and "REVIEWER_FINGERPRINT" not in tail and "subagent" not in tail.lower():
+                continue
+            stamps: list[float] = []
+            for ln in tail.splitlines():
+                if not ln.strip():
+                    continue
+                try:
+                    obj = _json.loads(ln) if ln.strip().startswith("{") else {}
+                except ValueError:
+                    obj = {}
+                ts_val = obj.get("timestamp") or obj.get("ts") or obj.get("created_at")
+                if isinstance(ts_val, (int, float)) and ts_val > 1_000_000_000:
+                    stamps.append(float(ts_val))
+                    continue
+                m_iso = iso_re.search(str(ts_val or "") or ln)
+                if m_iso:
+                    try:
+                        stamps.append(_dt.fromisoformat(m_iso.group(1).replace("Z", "+00:00")).timestamp())
+                    except ValueError:
+                        continue
+            for prev_t, cur_t in zip(stamps, stamps[1:]):
+                gap = cur_t - prev_t
+                if gap >= ZOMBIE_WAKEUP_GAP_SECONDS:
+                    wakeup_spikes.append({
+                        "conversation_id": child_dir.name,
+                        "gap_minutes": round(gap / 60.0, 1),
+                        "transcript": str(tx),
+                    })
+                    break
+
+    return {
+        "at_risk": bool(schedule_injected_files or wakeup_spikes),
+        "schedule_injected_files": schedule_injected_files,
+        "wakeup_spikes": wakeup_spikes,
+    }
