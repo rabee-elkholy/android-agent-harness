@@ -1025,7 +1025,7 @@ def evaluate_completed_worker_wave(
 
     check_empty = bool(wave_entry.get("check_empty_worktree")) or bool(exec_id)
     empty_git_wave = False
-    if check_empty and (repo / ".git").exists():
+    if w_mode == "FULL_SLICE" and check_empty and (repo / ".git").exists():
         wt_items = _collect_worktree_progress(repo, [])
         empty_git_wave = len(wt_items) == 0
 
@@ -1239,10 +1239,10 @@ def resolve_utility_worker_model(
     - Default, `hydrogen-*`, & `safe-cache-hybrid`: `gemini-4-hydrogen-medium` on `SIMPLE` / test-only gates,
       automatically starting `FULL_SLICE` execution on `COMPLEX` tasks at `gemini-4-hydrogen-high` (54% Terminal-Bench 4.0 ceiling).
     - Native Orchestrator Wave-Boundary Escalation (`worker-friction.json`):
-      * `SIMPLE` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-medium` -> Strike 1 upgrades Wave 2 to `gemini-4-hydrogen-high` ->
-        Strike 2 hands core production files to Lead Architect (`Carbon`).
-      * `COMPLEX` `FULL_SLICE`: Wave 1 starts at `gemini-4-hydrogen-high` -> Strike 1 hands core production files IMMEDIATELY
-        to Lead Architect (`Carbon`) without wasting tokens on `hydrogen-xhigh` (same 54% coding score at 2.76x verbosity).
+      * `SIMPLE` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-medium` -> Wave 2 `gemini-4-hydrogen-high` (#1) ->
+        Wave 3 `gemini-4-hydrogen-high` (#2) -> `Carbon` Lead Takeover (`high_wave_failures >= 2`).
+      * `COMPLEX` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-high` (#1) -> Wave 2 `gemini-4-hydrogen-high` (#2 corrective delta) ->
+        `Carbon` Lead Takeover (`high_wave_failures >= 2`, or 1-wave `Fast-Fail` on explicit architectural/empty-wave blockers).
     - Legacy `flash-argon-hybrid`: `gemini-3.8-flash-medium` on `SIMPLE` / test-only gates,
       upgrading `FULL_SLICE` on `COMPLEX` (or Strike 1 friction) to `gemini-4-argon-low`.
     - Legacy `flash-dynamic` / `risk-hybrid`: `gemini-3.8-flash-medium`.
@@ -2206,9 +2206,49 @@ def _is_exempt_lead_target(repo: Path, raw_target: str) -> bool:
     rel_low = rel.lower()
     if rel_low.startswith(_EXEMPT_REPO_READ_PREFIXES):
         return True
-    if Path(rel_low).name in {"plan.md", "review-package.md", "phase-review-package.md", "agents.md", "gemini.md", "claude.md"}:
+    if Path(rel_low).name in {"plan.md", "review-package.md", "phase-review-package.md", "agents.md", "gemini.md", "claude.md", "codex.md"}:
         return True
     return False
+
+
+def _is_lead_owned_impl_target(repo: Path, raw_target: str, plan: dict[str, Any] | None = None) -> bool:
+    """Return True when the active task is `IMPLEMENTING` and the Lead Architect directly owns `raw_target`."""
+    cleaned = str(raw_target or "").strip()
+    if not cleaned:
+        return False
+    rel = _normalize_repo_rel(repo, cleaned)
+    if not rel:
+        return False
+    tid, status, _ = _current_task_phase_and_status(repo, plan)
+    if not tid or status != "IMPLEMENTING":
+        return False
+    try:
+        pol = evaluate_delegation_policy(repo, task_id=tid, plan=plan)
+    except Exception:
+        return False
+    strat = str(pol.get("strategy") or "")
+    lead_files: list[str] = []
+    if strat in {"SENSITIVE_LEAD_CORE_WORKER_TESTS", "ORCHESTRATOR_FRICTION_LEAD_TAKEOVER"}:
+        lead_files = [str(f) for f in (pol.get("lead_owned_files") or []) if f]
+    elif strat in {
+        "CONFLICT_LEAD_CORE_WORKER_VERIFY",
+        "TRIVIAL_INLINE_LEAD",
+        "INLINE_LEAD_REMOTE_QUOTA_GUARD",
+        "INLINE_LEAD_UNLOADED_WORKER_FALLBACK",
+    }:
+        if plan is None:
+            p_file = task_dir(repo, tid) / "plan.json"
+            if p_file.is_file():
+                try:
+                    plan = read_json(p_file)
+                except Exception:
+                    plan = {}
+        raw_t = list(pol.get("target_files") or (plan or {}).get("expected_files") or [])
+        lead_files = [str(f) for f in raw_t if f and (strat != "CONFLICT_LEAD_CORE_WORKER_VERIFY" or not is_test_file(str(f)))]
+    if not lead_files:
+        return False
+    norm_owned = {_normalize_repo_rel(repo, f).lower() for f in lead_files if f}
+    return rel.lower() in norm_owned
 
 
 def check_and_record_lead_post_subagent_read(
@@ -2247,7 +2287,7 @@ def check_and_record_lead_post_subagent_read(
             if args.get(k):
                 target = str(args[k])
                 break
-        if target and _is_exempt_lead_target(repo, target):
+        if target and (_is_exempt_lead_target(repo, target) or _is_lead_owned_impl_target(repo, target, plan)):
             return (True, "", "")
 
     ledger = _load_utility_ledger(repo)
@@ -3263,7 +3303,7 @@ def worker_write_allowed(repo: Path, targets: list[str], utility_ctx: dict[str, 
 
 _SCOUT_SAFE_COMMAND_RE = re.compile(
     r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+"
-    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|android-inspect|android-ui|debug\s+logs|doctor|health|symbol\s+(?:outline|read))\b"
+    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|android-inspect|android-ui|debug\s+(?:status|logs)|device\s+(?:status|ios-status)|roborazzi\s+(?:capabilities|inspect-tree)|maestro\s+(?:capabilities|list)|pm\s+(?:discover|status)|context\s+(?:preview|status|drift-report)|policy|doctor|health|symbol\s+(?:outline|read))\b"
     r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|android_inspect\.py|static_health_bridge\.py|logcat_doctor\.py)\"?\b"
     r"|\"?[^\"]*?symbol_edit\.py\"?\s+(?:outline|read)\b)",
     re.IGNORECASE,

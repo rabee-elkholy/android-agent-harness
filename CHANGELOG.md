@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.7] - 2026-11-13
+
+### Zero-Choke Lead Reads, Tool-First Chat UX, Scoped Hydrogen Handoff, and Multi-IDE Adapter Parity
+
+- **Zero-Choke Lead Architect Reads & Expanded Scout Read-Only Vocabulary (`agents/scripts/delegation_policy.py`, `agents/scripts/_ecosystem_upgrades_selftest.py`)**: Exempt `lead_owned_files` from `POST_SUBAGENT_FULL_FILE_READ_BLOCKED` and `POST_SCOUT_REREAD_CAP_REACHED` during `IMPLEMENTING` (`_is_lead_owned_impl_target`), scope `EMPTY_WAVE` fast-fail checks to `FULL_SLICE` waves so `TESTS_AND_GATES_ONLY` on clean Git trees never false-alarm, and expand `scout_command_allowed` to permit `policy`, `device status`, `pm status`, `roborazzi capabilities`, and `maestro list` queries.
+- **Tool-First Chat UX, In-Place Review Healing & Multi-IDE Adapter Parity (`agents/rules/harness-rules.md`, `agents/skills/efficient-context/SKILL.md`, `agents/tool-adapters/*`, `README.md`)**: Enforce Tool-First zero chat prose on tool calls (`ask_question`, `run_command`, `invoke_subagent`), route `REVIEW_ENV_BLOCKED` and `PHASE_REVIEW_ENV_BLOCKED` to `harness.py task heal`, and synchronize canonical cards, `--expected-files`, and `--plan-hash` parity across Gemini, Claude, Codex, Qwen, Continue, and Copilot adapters.
+
 ## [1.3.6] - 2026-11-13
 
 ### Gen-4 Hydrogen + Argon Low Complexity-Adaptive Engine, Antigravity Platform Guards, and Flagship Overhaul

@@ -1394,6 +1394,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
     def test_5_hybrid_model_and_new_modules_deep_integration(self) -> None:
         """Verify seamless integration between Option 4 Hybrid Models (`Flash` Scout/Worker + `risk-hybrid`) and all 5 v1.3.1 modules."""
         import delegation_policy as dp
+        import workflow
         import install_tool_adapters as ita
         import review_models
         import review_orchestrator
@@ -2003,6 +2004,137 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         )
         workflow.draft(args_room)
         workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-single-room-with-test"))
+
+    def test_forensic_zero_choke_and_rule_consistency_v135(self) -> None:
+        """Verify Lead-owned files never choke on post-subagent read caps, Scout read-only commands work, and rules/templates stay 100% consistent."""
+        import delegation_policy as dp
+        import workflow
+
+        # 1. Scout read-only harness subcommands allowed; mutating commands denied
+        for ro_cmd in (
+            "python .agents/harness.py policy",
+            "python .agents/harness.py roborazzi capabilities",
+            "python .agents/harness.py maestro list",
+            "python .agents/harness.py device status",
+            "python .agents/harness.py pm status",
+            "python .agents/harness.py context status",
+        ):
+            self.assertTrue(dp.scout_command_allowed(ro_cmd), f"Scout read-only command blocked: {ro_cmd}")
+        for mut_cmd in (
+            "python .agents/harness.py compile",
+            "python .agents/harness.py test",
+            "python .agents/harness.py task draft --task-id x --outcome y",
+            "python .agents/harness.py device install-start",
+        ):
+            self.assertFalse(dp.scout_command_allowed(mut_cmd), f"Scout mutating command leaked: {mut_cmd}")
+
+        # 2. Lead-owned production files (`SENSITIVE_LEAD_CORE_WORKER_TESTS` / `ORCHESTRATOR_FRICTION_LEAD_TAKEOVER`)
+        #    are never choked by `POST_SUBAGENT_FULL_FILE_READ_BLOCKED` or `POST_SCOUT_REREAD_CAP_REACHED`!
+        auth_file = self.repo / "app/src/main/java/com/demo/AuthSessionManager.kt"
+        auth_file.write_text(
+            "package com.demo\n\nclass AuthSessionManager {\n"
+            + "".join(f"    fun checkToken{i}(): Boolean = true\n" for i in range(410))
+            + "}\n",
+            encoding="utf-8",
+        )
+        other_big = self.repo / "app/src/main/java/com/demo/UnownedCatalogScreen.kt"
+        other_big.write_text(
+            "package com.demo\n\nclass UnownedCatalogScreen {\n"
+            + "".join(f"    fun row{i}(): Int = {i}\n" for i in range(410))
+            + "}\n",
+            encoding="utf-8",
+        )
+        self._git("add", "app/src/main/java/com/demo/AuthSessionManager.kt", "app/src/main/java/com/demo/UnownedCatalogScreen.kt")
+        self._git("commit", "-m", "feat: add AuthSessionManager and UnownedCatalogScreen fixtures")
+
+        self._draft_approve_begin(
+            task_id="t-lead-owned-nochoke",
+            title="Harden OAuth token refresh session manager",
+            kind="FEATURE",
+            files=["app/src/main/java/com/demo/AuthSessionManager.kt", "app/src/test/java/com/demo/AuthSessionManagerTest.kt"],
+            surfaces=["AUTH", "SECURITY"],
+        )
+        parent_cid = "conv-lead-nochoke-135"
+        parent_tx = self.brain_app_data / "brain" / parent_cid / ".system_generated" / "logs" / "transcript.jsonl"
+        parent_tx.parent.mkdir(parents=True, exist_ok=True)
+        parent_tx.write_text(
+            json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Harden AuthSessionManager"}) + "\n",
+            encoding="utf-8",
+        )
+
+        dp.record_utility_dispatch(
+            self.repo,
+            agent_type=dp.SCOUT_AGENT,
+            role_label=dp.SCOUT_AGENT,
+            prompt="Inspect callers of AuthSessionManager across modules.",
+            parent_conversation_id=parent_cid,
+            task_id="t-lead-owned-nochoke",
+            task_status="IMPLEMENTING",
+        )
+        dp.mark_utility_wave_completed(self.repo, parent_cid)
+
+        # Full-span read (320 lines > 220) + 5 consecutive reads on `lead_owned_files` (`AuthSessionManager.kt`) MUST all pass!
+        for attempt in range(5):
+            ok_lead, reason_lead, code_lead = dp.check_and_record_lead_post_subagent_read(
+                self.repo,
+                parent_cid,
+                tool_name="view_file",
+                args={"AbsolutePath": str(auth_file), "StartLine": 1, "EndLine": 320},
+            )
+            self.assertTrue(ok_lead, f"Lead-owned file read #{attempt + 1} choked: {code_lead} {reason_lead}")
+
+        # Meanwhile, an unowned >350-line file STILL enforces `POST_SUBAGENT_FULL_FILE_READ_BLOCKED`!
+        ok_unowned, _, code_unowned = dp.check_and_record_lead_post_subagent_read(
+            self.repo,
+            parent_cid,
+            tool_name="view_file",
+            args={"AbsolutePath": str(other_big), "StartLine": 1, "EndLine": 320},
+        )
+        self.assertFalse(ok_unowned)
+        self.assertEqual("POST_SUBAGENT_FULL_FILE_READ_BLOCKED", code_unowned)
+
+        # 3. `TESTS_AND_GATES_ONLY` worker wave on clean Git tree does NOT falsely trigger `EMPTY_WAVE` fast-fail
+        res_tgo = dp.evaluate_completed_worker_wave(
+            self.repo,
+            {
+                "task_id": "t-lead-owned-nochoke",
+                "phase_id": "",
+                "worker_mode": "TESTS_AND_GATES_ONLY",
+                "wave_id": "w-tgo-1",
+                "dispatched_epoch": 0.0,
+                "execution_id": "exec-tgo-clean",
+                "check_empty_worktree": True,
+                "task_status": "IMPLEMENTING",
+            },
+        )
+        self.assertFalse(bool(res_tgo.get("architectural_fast_fail")), f"TESTS_AND_GATES_ONLY falsely fast-failed: {res_tgo}")
+        workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-lead-owned-nochoke"))
+
+        # 4. Cross-template & rule consistency checks (zero self-contradictions, zero stale `edit_file`/`Argon Low`, full `--expected-files` & `--plan-hash` parity)
+        kit_root = Path(__file__).resolve().parents[2]
+        global_tpl = (kit_root / "agents/tool-adapters/gemini-runtime/android-harness-global.md.template").read_text(encoding="utf-8")
+        gemini_tpl = (kit_root / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
+        rules_md = (kit_root / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        self.assertNotIn("do NOT use `ask_question` for plan approval", global_tpl)
+        self.assertIn("6 canonical Markdown cards", global_tpl)
+        self.assertIn("task heal", global_tpl)
+        self.assertIn("phase-review complete-all", global_tpl)
+        self.assertNotIn("Argon Low", gemini_tpl)
+        self.assertIn("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", gemini_tpl)
+        self.assertIn("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", rules_md)
+        self.assertNotIn("edit_file", gemini_tpl)
+        self.assertNotIn("edit_file", rules_md)
+        for host_tpl in (
+            "GEMINI.md.template",
+            "CLAUDE.md.template",
+            "CODEX.md.template",
+            "QWEN.md.template",
+            "continue-android-harness.md.template",
+            "copilot-instructions.md.template",
+        ):
+            htxt = (kit_root / "agents/tool-adapters" / host_tpl).read_text(encoding="utf-8")
+            self.assertIn("--expected-files", htxt, f"{host_tpl} missing --expected-files")
+            self.assertIn("--plan-hash <hash from PLAN_HASH>", htxt, f"{host_tpl} missing --plan-hash")
 
 
 if __name__ == "__main__":
