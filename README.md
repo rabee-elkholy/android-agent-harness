@@ -80,7 +80,7 @@ WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNES
 Open your Android or KMM/KMP repository in **Google Antigravity** (or Claude Code) and paste this single pinned bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.6/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.7/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 What happens automatically and non-destructively:
@@ -106,7 +106,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or initialize directly from a pinned shallow tag clone with **zero global packages**:
 
 ```bash
-git clone --depth 1 --branch v1.3.6 --single-branch \
+git clone --depth 1 --branch v1.3.7 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
