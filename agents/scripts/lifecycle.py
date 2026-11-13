@@ -236,15 +236,33 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
             return False
         content = agent_file.read_text(encoding="utf-8")
         from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
-        from review_models import ANTIGRAVITY_MODEL_CHOICES, _antigravity_frontmatter_model
-        from policy_vocab import CORE_UTILITY_AGENTS
+        from review_models import ANTIGRAVITY_META_PRESETS, ANTIGRAVITY_MODEL_CHOICES, _antigravity_frontmatter_model
+        from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS
         if role in CORE_UTILITY_AGENTS:
             from delegation_policy import render_utility_agent_markdown
             fm_model = _antigravity_frontmatter_model(repo, role)
-            if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
+            if fm_model is not None and (fm_model not in ANTIGRAVITY_MODEL_CHOICES or fm_model in ANTIGRAVITY_META_PRESETS):
                 return False
             u_rendered = render_utility_agent_markdown(role, model=fm_model)
             return content in (u_rendered, with_managed_marker(u_rendered))
+        if role in ON_DEMAND_SPECIALIST_AGENTS:
+            import json as _json
+            src_sp = repo / ".agents" / "subagents" / f"{role}.json"
+            if not src_sp.is_file():
+                src_sp = repo / "agents" / "subagents" / f"{role}.json"
+            if not src_sp.is_file():
+                return False
+            sp_data = _json.loads(src_sp.read_text(encoding="utf-8"))
+            fm_model = _antigravity_frontmatter_model(repo, role)
+            if fm_model is not None and (fm_model not in ANTIGRAVITY_MODEL_CHOICES or fm_model in ANTIGRAVITY_META_PRESETS):
+                return False
+            sp_name = _json.dumps(role, ensure_ascii=False)
+            sp_desc = _json.dumps(str(sp_data.get("description") or role).strip(), ensure_ascii=False)
+            sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
+            sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+            sp_model_line = f"model: {_json.dumps(fm_model, ensure_ascii=False)}\n" if fm_model else ""
+            sp_md = f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+            return content in (sp_md, with_managed_marker(sp_md))
         src = (repo / ".agents" / "subagents" / f"{role}.json")
         if not src.is_file():
             src = (repo / "agents" / "subagents" / f"{role}.json")
@@ -253,7 +271,7 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
         import json as _json
         data = _json.loads(src.read_text(encoding="utf-8"))
         fm_model = _antigravity_frontmatter_model(repo, role)
-        if fm_model is not None and fm_model not in ANTIGRAVITY_MODEL_CHOICES:
+        if fm_model is not None and (fm_model not in ANTIGRAVITY_MODEL_CHOICES or fm_model in ANTIGRAVITY_META_PRESETS):
             return False
         rendered = antigravity_agent_markdown(data, model=fm_model)
         return content in (rendered, with_managed_marker(rendered))

@@ -19,7 +19,7 @@ MANDATORY:
 10. Exact Reviewer Dispatch Procedure (Antigravity):
 1. Use the returned next_action inputs; query status --next only when they are missing.
 2. If code == DISPATCH_REVIEWERS:
-   - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the returned choices (including `flash-argon-project`, `flash-argon-task`, `risk-hybrid-project`, `flash-dynamic-task`, `inherit-task`) and execute its `command_template` before dispatch;
+   - if `before_first_dispatch` (`SELECT_REVIEW_MODEL`) is present, ask the developer once via `ask_question` using the returned choices (including `hydrogen-argon-project`, `hydrogen-argon-task`, `hydrogen-dynamic-project`, `hydrogen-risk-project`, `inherit-task`) and execute its `command_template` before dispatch;
    - use every reviewer in the returned `reviewers` list (never a partial subset);
    - invoke all required reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer);
    - for each reviewer:
@@ -27,7 +27,7 @@ MANDATORY:
        Role = exact reviewer role
        Prompt = exact current reviewer brief
        Workspace = inherit (or omit if host default is used consistently)
-       Model = "flash" if `reviewer_models[role]` contains `flash`, or Model = "pro" if it contains `pro`; otherwise omit `model`/`Model` (INHERIT_PARENT_BY_OMISSION for inherit/argon/carbon)
+       Model = "flash" ONLY if `reviewer_models[role]` contains `flash` (`gemini-3.8-flash-*`), or Model = "pro" if it contains `pro`; otherwise omit `model`/`Model` (`INHERIT_PARENT_BY_OMISSION` / bound via `agent.md` frontmatter for inherit/hydrogen/argon/carbon)
    - do not invent reasoning fields;
    - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`).
 3. Yield immediately with ZERO tool calls whenever a background command (`unit tests`/`compile`) or reviewer subagent is still running; do not poll, do not read `.system_generated/tasks/*.log`, and never append repetitive `Note:` context-bridge reminders between `run_command` steps.
@@ -40,7 +40,7 @@ No legacy PASS token. No EVIDENCE footer. No self-certification.
 1. On BUILD_PHASE_REVIEW_PACKAGE: run `python .agents/harness.py phase-review package --task-id <id> --phase-id <phase>`.
 2. On DISPATCH_PHASE_REVIEWERS:
    - use every reviewer in the returned `reviewers` list (never a partial subset);
-   - invoke all required phase reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer) with exact Role/TypeName/Prompt (pass `Model="flash"` if `reviewer_models[role]` contains `flash`, `Model="pro"` if it contains `pro`, otherwise omit `model`/`Model`; no reasoning fields);
+   - invoke all required phase reviewers in parallel in the same turn (one `invoke_subagent` tool call per reviewer) with exact Role/TypeName/Prompt (pass `Model="flash"` ONLY if `reviewer_models[role]` contains `flash`, `Model="pro"` if it contains `pro`, otherwise omit `model`/`Model` for inherit/hydrogen/argon/carbon; no reasoning fields);
    - in chat, present the Reviewer Dispatch Table (`| Reviewer | Model | Status |` with headers in the conversation language, putting only the role name in `Reviewer` and the model from `reviewer_models` in `Model`);
    - yield execution without polling.
 3. On reactive completion, run `python .agents/harness.py phase-review complete --task-id <id> --phase-id <phase> --reviewer <role> --execution-id <convId>` (repeat `--reviewer` and `--execution-id` when multiple finish together). When other phase reviewers are still running, output at most one concise progress line with the completed count without listing pending reviewer names in prose.

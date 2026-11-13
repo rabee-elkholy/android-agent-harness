@@ -1437,8 +1437,8 @@ class HarnessDoctor:
                         agent_errors.append(f"{role}: subagent must be true")
                     fm_model = fm.get("model")
                     if fm_model is not None:
-                        from review_models import ANTIGRAVITY_MODEL_CHOICES
-                        if str(fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(fm_model) in ("inherit", "flash-dynamic", "hybrid-smart", "risk-hybrid", "flash-argon-hybrid"):
+                        from review_models import ANTIGRAVITY_META_PRESETS, ANTIGRAVITY_MODEL_CHOICES
+                        if str(fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(fm_model) in ANTIGRAVITY_META_PRESETS:
                             agent_errors.append(f"{role}: invalid frontmatter model ({fm_model})")
                     r_tools = set(fm.get("tools") or [])
                     if r_tools != approved_tools:
@@ -1464,18 +1464,36 @@ class HarnessDoctor:
                     if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
                         agent_errors.append(f"{u_role}: invalid frontmatter")
                     allowed_u_models = (
-                        {u_spec["model"], "gemini-4-argon-low"}
+                        {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-low", "gemini-3.8-flash-medium"}
                         if u_role == "harness-worker-agent"
-                        else {u_spec["model"]}
+                        else {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"}
                     )
                     if str(u_fm.get("model") or "") not in allowed_u_models:
                         agent_errors.append(f"{u_role}: unexpected model ({u_fm.get('model')})")
                     if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
                         agent_errors.append(f"{u_role}: tools mismatch")
+                    unmapped_ag_tools = set(u_fm.get("tools") or []) & {"read_file", "write_file", "edit_file", "schedule"}
+                    if unmapped_ag_tools:
+                        agent_errors.append(f"{u_role}: unmapped Antigravity tool(s) {sorted(unmapped_ag_tools)} risk subagent hang")
                     if u_spec["fingerprint"] not in u_txt:
                         agent_errors.append(f"{u_role}: missing fingerprint")
                 except Exception as exc:
                     agent_errors.append(f"{u_role}: unreadable ({exc})")
+            from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, ON_DEMAND_SPECIALIST_AGENTS
+            for sp_role in ON_DEMAND_SPECIALIST_AGENTS:
+                sp_file = agents_base / sp_role / "agent.md"
+                if not sp_file.is_file():
+                    continue
+                try:
+                    sp_fm = _parse_frontmatter(sp_file.read_text(encoding="utf-8"))
+                    sp_tools_set = set(sp_fm.get("tools") or [])
+                    if sp_tools_set != set(ANTIGRAVITY_SCOUT_TOOLS):
+                        agent_errors.append(f"{sp_role}: tools mismatch ({sp_tools_set})")
+                    sp_unmapped = sp_tools_set & {"read_file", "write_file", "edit_file", "schedule"}
+                    if sp_unmapped:
+                        agent_errors.append(f"{sp_role}: unmapped Antigravity tool(s) {sorted(sp_unmapped)} risk subagent hang")
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    agent_errors.append(f"{sp_role}: unreadable ({exc})")
             if agent_errors:
                 self.log(cat, "Custom Reviewer Agents", "FAIL", f"Reviewer agent check failed: {'; '.join(agent_errors)}")
             else:
@@ -1575,6 +1593,7 @@ class HarnessDoctor:
             from antigravity_runtime import (
                 detect_antigravity_remote_mode,
                 inspect_language_server_logs,
+                inspect_windows_smart_app_control_4551_risk,
                 inspect_windows_stdio_mcp_risk,
                 inspect_zombie_subagent_and_schedule_risks,
                 remote_subagents_explicitly_allowed,
@@ -1667,6 +1686,39 @@ class HarnessDoctor:
                 "Zombie Subagent & Schedule Guard",
                 "PASS",
                 "Subagent manifests strip 'schedule' wakeup triggers and zero #199713 zombie wakeup spikes detected.",
+            )
+
+        # 9d. Hydrogen 403 Anti-Burst Pacer (#200029/#199971), Turn-3 Prefix Lock (#200026) & Win11 v2.7.0 Error 4551 (#200037)
+        pts_file = self.agents_dir / "scripts" / "pre_tool_safety.py"
+        pir_file = self.agents_dir / "scripts" / "pre_invocation_reminder.py"
+        has_pacer = pts_file.is_file() and "check_and_apply_hydrogen_burst_pacer" in pts_file.read_text(encoding="utf-8", errors="ignore")
+        has_prefix_lock = pir_file.is_file() and "_has_subagent_transcript_signature" in pir_file.read_text(encoding="utf-8", errors="ignore")
+        sac_risk = inspect_windows_smart_app_control_4551_risk()
+        if not has_pacer or not has_prefix_lock:
+            self.log(
+                category,
+                "Hydrogen Pacer & Win11 Guard",
+                "FAIL",
+                "Missing HYDROGEN_ANTI_BURST_PACER (#200029) or Turn-0 subagent prefix-cache lock (#200026) in hook scripts.",
+            )
+        elif sac_risk.get("at_risk"):
+            arts = ", ".join(str(a) for a in (sac_risk.get("flagged_artifacts") or []))
+            self.log(
+                category,
+                "Hydrogen Pacer & Win11 Guard",
+                "WARN",
+                f"Antigravity IDE v2.7.0 / Windows 11 Smart App Control Error 4551 hazard detected ({arts}) (#200037).",
+                [
+                    "Do NOT disable Windows 11 Smart App Control (cannot be re-enabled without reinstalling Windows).",
+                    "Keep your existing signed Antigravity IDE build and use agy CLI 1.5.7 until Google ships a re-signed v2.7.1 installer.",
+                ],
+            )
+        else:
+            self.log(
+                category,
+                "Hydrogen Pacer & Win11 Guard",
+                "PASS",
+                "HYDROGEN_ANTI_BURST_PACER (#200029/#199971), Turn-0 KV-prefix lock (#200026), and Win11 v2.7.0 Error 4551 guard (#200037) active.",
             )
 
     def check_update_journal(self) -> None:

@@ -589,7 +589,7 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
         choice_ids = [c["id"] for c in prompt["choices"]]
         self.assertEqual(
-            ["flash-argon-project", "flash-argon-task", "risk-hybrid-project", "flash-dynamic-task", "inherit-task"],
+            ["hydrogen-argon-project", "hydrogen-argon-task", "hydrogen-dynamic-project", "hydrogen-risk-project", "inherit-task"],
             choice_ids,
         )
 
@@ -996,6 +996,286 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("allow", ok_mixed.get("decision"), ok_mixed)
 
 
+    def test_hydrogen_argon_hybrid_pure_hydrogen_and_all_edge_cases(self):
+        """Exhaustively verify Carbon Lead + Hydrogen/Argon subagent routing and all 14 edge cases."""
+        import delegation_policy as dp
+        import antigravity_runtime as ar
+        from install_tool_adapters import generate_antigravity_agents
+        from lifecycle import _antigravity_agent_matches_policy
+        from doctor.engine import HarnessDoctor
+        from phase_review import phase_run_file
+        import repair as repair_mod
+        import shutil
+
+        shutil.copytree(Path(__file__).resolve().parents[1] / "subagents", self.repo / ".agents" / "subagents", dirs_exist_ok=True)
+        generate_antigravity_agents(self.repo, dry_run=False)
+
+        conv = "arch-regression-reviewer-agent"
+        roster = [conv, ROLE, SECURITY]
+        efforts_norm = {r: "NORMAL" for r in roster}
+
+        # Edge Case 1: Shorthand & Extra/xHigh normalization + --mode CLI flag compatibility
+        self.assertEqual("hydrogen-argon-hybrid", models.normalize_model_token("hydrogen@hybrid"))
+        self.assertEqual("hydrogen-argon-hybrid", models.normalize_model_token("hydrogen-argon"))
+        self.assertEqual("hydrogen-dynamic", models.normalize_model_token("hydrogen@dynamic"))
+        self.assertEqual("hydrogen-risk-hybrid", models.normalize_model_token("hydrogen@risk"))
+        self.assertEqual("gemini-4-hydrogen-xhigh", models.normalize_model_token("hydrogen@extra"))
+        self.assertEqual("gemini-4-hydrogen-xhigh", models.normalize_model_token("gemini-4-hydrogen-extra"))
+        self.assertEqual(("gemini-4-hydrogen-xhigh", "xhigh"), models.resolve_antigravity_model("hydrogen@xhigh", ROLE, "MAX"))
+        self.assertEqual(("gemini-4-hydrogen-high", "high"), models.resolve_antigravity_model("gemini-4-hydrogen", ROLE, "NORMAL"))
+
+        res_cli = subprocess.run(
+            [
+                sys.executable, str(SCRIPT), "set", "--repo", str(self.repo), "--host", "antigravity",
+                "--mode", "hydrogen-argon-project", "--source", "conversation", "--proof-reference", "Use Hydrogen+Argon project-wide",
+            ],
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(0, res_cli.returncode, res_cli.stdout + res_cli.stderr)
+
+        # Edge Case 2: Band 1 SIMPLE -> 100% gemini-4-hydrogen-medium across Scout, Worker, and ALL reviewers
+        t_simple = "task-hy-simple"
+        plan_s = {
+            "task_id": t_simple,
+            "status": "IMPLEMENTING",
+            "task_kind": "FEATURE",
+            "risk_tier": "T2_MODERATE",
+            "expected_surfaces": ["COMPOSE_UI"],
+            "expected_modules": [":app"],
+            "expected_files": [
+                "app/src/main/java/com/example/HomeScreen.kt",
+                "app/src/main/java/com/example/HomeViewModel.kt",
+                "app/src/test/java/com/example/HomeViewModelTest.kt",
+            ],
+        }
+        atomic_write_json(task_dir(self.repo, t_simple) / "plan.json", plan_s)
+        self.assertEqual("gemini-4-hydrogen-medium", dp.resolve_utility_scout_model(self.repo, t_simple, plan=plan_s))
+        w_simple, tier_s = dp.resolve_utility_worker_model(self.repo, t_simple, plan=plan_s, worker_mode="FULL_SLICE")
+        self.assertEqual(("gemini-4-hydrogen-medium", "SIMPLE"), (w_simple, tier_s))
+        frozen_s = models.freeze_models(
+            self.repo, t_simple, "antigravity", roster, run_id="r-hy-s",
+            policy_data={"surfaces": ["COMPOSE_UI"], "severity": "MEDIUM", "risk_tier": "T2_MODERATE", "reviewer_efforts": efforts_norm},
+            plan=plan_s,
+        )
+        for r in roster:
+            self.assertEqual("gemini-4-hydrogen-medium", frozen_s["reviewers"][r]["resolved_model"])
+            self.assertEqual("medium", frozen_s["reviewers"][r]["thinking_level"])
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_s})
+
+        # Edge Case 3: Band 2 COMPLEX -> Worker & bug-test/security-perf upgrade to gemini-4-hydrogen-high (0 Argon burn!); Scout & arch stay medium
+        t_complex = "task-hy-complex"
+        plan_c = {
+            "task_id": t_complex,
+            "status": "IMPLEMENTING",
+            "task_kind": "BUG",
+            "risk_tier": "T3_SUBSYSTEM",
+            "expected_surfaces": ["COROUTINES", "NETWORK"],
+            "expected_modules": [":app", ":core:network"],
+            "expected_files": [
+                "app/src/main/java/com/example/SyncWorker.kt",
+                "core/network/src/main/java/com/example/ApiClient.kt",
+                "app/src/test/java/com/example/SyncWorkerTest.kt",
+            ],
+        }
+        atomic_write_json(task_dir(self.repo, t_complex) / "plan.json", plan_c)
+        self.assertEqual("gemini-4-hydrogen-medium", dp.resolve_utility_scout_model(self.repo, t_complex, plan=plan_c))
+        w_complex, tier_c = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="FULL_SLICE")
+        self.assertEqual(("gemini-4-hydrogen-high", "COMPLEX"), (w_complex, tier_c))
+        w_red, _ = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="CAPTURE_RED_ONLY")
+        self.assertEqual("gemini-4-hydrogen-medium", w_red)
+        frozen_c = models.freeze_models(
+            self.repo, t_complex, "antigravity", roster, run_id="r-hy-c",
+            policy_data={"surfaces": ["COROUTINES", "NETWORK"], "severity": "HIGH", "risk_tier": "T3_SUBSYSTEM", "reviewer_efforts": efforts_norm},
+            plan=plan_c,
+        )
+        self.assertEqual("gemini-4-hydrogen-high", frozen_c["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("gemini-4-hydrogen-high", frozen_c["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual("gemini-4-hydrogen-medium", frozen_c["reviewers"][conv]["resolved_model"])
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_c})
+
+        # Edge Case 4: Band 3 CRITICAL (T5 AUTH/BILLING) -> Strict hard ceiling at gemini-4-argon-low; Worker runs TESTS_AND_GATES_ONLY on medium
+        t_crit = "task-hy-crit"
+        plan_crit = {
+            "task_id": t_crit,
+            "status": "IMPLEMENTING",
+            "task_kind": "FEATURE",
+            "risk_tier": "T5_CRITICAL",
+            "expected_surfaces": ["AUTH", "BILLING", "CRYPTO"],
+            "expected_modules": [":app"],
+            "expected_files": ["app/src/main/java/com/example/BillingCrypto.kt"],
+        }
+        atomic_write_json(task_dir(self.repo, t_crit) / "plan.json", plan_crit)
+        dec_crit = dp.evaluate_delegation_policy(self.repo, t_crit, plan=plan_crit)
+        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", dec_crit["strategy"])
+        self.assertEqual("gemini-4-hydrogen-medium", dec_crit["worker_model"])
+        frozen_crit = models.freeze_models(
+            self.repo, t_crit, "antigravity", roster, run_id="r-hy-crit",
+            policy_data={
+                "surfaces": ["AUTH", "BILLING", "CRYPTO"],
+                "severity": "CRITICAL",
+                "risk_tier": "T5_CRITICAL",
+                "reviewer_efforts": {SECURITY: "MAX", ROLE: "DEEP", conv: "NORMAL"},
+            },
+            plan=plan_crit,
+        )
+        self.assertEqual("gemini-4-argon-medium", frozen_crit["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual("medium", frozen_crit["reviewers"][SECURITY]["thinking_level"])
+        self.assertEqual("gemini-4-argon-medium", frozen_crit["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("medium", frozen_crit["reviewers"][ROLE]["thinking_level"])
+        self.assertEqual("gemini-4-hydrogen-high", frozen_crit["reviewers"][conv]["resolved_model"])
+        self.assertEqual("high", frozen_crit["reviewers"][conv]["thinking_level"])
+        models.frozen_models({"review_host": "antigravity", "review_models": frozen_crit})
+
+        # Edge Case 5: Pure Hydrogen (`hydrogen-dynamic`) escalates SIMPLE(medium) -> COMPLEX/CRITICAL capped at `high` (zero automatic `xhigh`)
+        models.set_policy(
+            self.repo, models.resolve_preset_policy("hydrogen-dynamic"),
+            task_id=None, host="antigravity", source="conversation", proof_reference="Pure Hydrogen", scope="project",
+        )
+        frozen_pure_crit = models.freeze_models(
+            self.repo, t_crit, "antigravity", roster, run_id="r-pure-crit",
+            policy_data={"surfaces": ["AUTH"], "severity": "CRITICAL", "risk_tier": "T5_CRITICAL", "reviewer_efforts": {r: "MAX" for r in roster}},
+            plan=plan_crit,
+        )
+        for r in roster:
+            self.assertEqual("gemini-4-hydrogen-high", frozen_pure_crit["reviewers"][r]["resolved_model"])
+            self.assertEqual("high", frozen_pure_crit["reviewers"][r]["thinking_level"])
+
+        # Edge Case 6: Native SQLite Protobuf Verification (`models/` prefix, `-n`, `-extra`, `-tiered`, `gemini-4-flash` alias, and Carbon leak rejection!)
+        run_pure = {"review_host": "antigravity", "review_models": frozen_pure_crit}
+        ag_root, id_ok = self.antigravity_identity(
+            configured="models/gemini-4-hydrogen-high",
+            observed="models/gemini-4-hydrogen-n",
+            cid="hy-high-ok",
+        )
+        with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(ag_root)}):
+            ev_ok = models.model_evidence(run_pure, SECURITY, id_ok)
+            self.assertEqual("gemini-4-hydrogen-n", ev_ok["actual_model"])
+            models.validate_model_evidence(run_pure, SECURITY, ev_ok)
+
+            # Explicit manual `hydrogen@xhigh` override still validates `-extra` SQLite metadata cleanly
+            models.set_policy(
+                self.repo, {"schema_version": 1, "default": "gemini-4-hydrogen-xhigh", "overrides": {}},
+                task_id=None, host="antigravity", source="conversation", proof_reference="Manual xhigh", scope="project",
+            )
+            frozen_manual_xh = models.freeze_models(
+                self.repo, t_crit, "antigravity", roster, run_id="r-manual-xhigh",
+                policy_data={"surfaces": ["AUTH"], "severity": "CRITICAL", "risk_tier": "T5_CRITICAL"},
+                plan=plan_crit,
+            )
+            _, id_xh = self.antigravity_identity(
+                configured="models/gemini-4-hydrogen-extra",
+                observed="models/gemini-4-hydrogen-n",
+                cid="hy-xhigh-ok",
+            )
+            ev_xh = models.model_evidence({"review_host": "antigravity", "review_models": frozen_manual_xh}, SECURITY, id_xh)
+            models.validate_model_evidence({"review_host": "antigravity", "review_models": frozen_manual_xh}, SECURITY, ev_xh)
+
+            _, id_alias = self.antigravity_identity(
+                configured="gemini-4-hydrogen",
+                observed="gemini-4-flash-001",
+                cid="hy-alias-ok",
+            )
+            ev_alias = models.model_evidence(run_pure, ROLE, id_alias)
+            models.validate_model_evidence(run_pure, ROLE, ev_alias)
+
+            for leaked_model, cid_bad in (("gemini-4-carbon-medium", "hy-leak-carbon"), ("gemini-3.8-flash-n", "hy-leak-38")):
+                _, id_bad = self.antigravity_identity(configured=leaked_model, observed=leaked_model, cid=cid_bad)
+                with self.assertRaisesRegex(ValidationError, "REVIEW_MODEL_MISMATCH"):
+                    models.model_evidence(run_pure, SECURITY, id_bad)
+
+        # Edge Case 7: Hook enforcement on Hydrogen reviewers & utility agents (Model override forbidden + Remote Mode #198819 guard!)
+        models.set_policy(
+            self.repo, models.resolve_preset_policy("hydrogen-argon-hybrid"),
+            task_id=None, host="antigravity", source="conversation", proof_reference="Back to Hydrogen+Argon", scope="project",
+        )
+        ok_u_bad, msg_u_bad, code_u_bad = dp.validate_utility_dispatch(
+            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan", "Model": "flash"}]
+        )
+        self.assertFalse(ok_u_bad)
+        self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_u_bad)
+        self.assertIn("omit `Model`", msg_u_bad)
+        ok_u_good, _, _ = dp.validate_utility_dispatch(
+            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan repo architecture"}]
+        )
+        self.assertTrue(ok_u_good)
+        self.assertIn('model: "gemini-4-hydrogen-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+
+        fixture, p_task, p_roster, _ = self.phase_fixture()
+        p_plan = read_json(task_dir(fixture.repo, p_task) / "plan.json")
+        p_plan["task_kind"] = "BUG"
+        p_plan["expected_modules"] = [":app", ":core"]
+        atomic_write_json(task_dir(fixture.repo, p_task) / "plan.json", p_plan)
+        # Auth.kt in phase_fixture is CRITICAL -> hydrogen-argon-hybrid uses Argon Medium; hydrogen-dynamic caps at gemini-4-hydrogen-high
+        models.set_policy(
+            fixture.repo,
+            models.resolve_preset_policy("hydrogen-dynamic"),
+            task_id=p_task,
+            host="antigravity",
+            source="conversation",
+            proof_reference="Pure Hydrogen on Phase Review",
+        )
+        p_run = read_json(phase_run_file(task_dir(fixture.repo, p_task), "p1"))
+        for r in p_roster:
+            self.assertTrue(p_run["review_models"]["reviewers"][r]["resolved_model"].startswith("gemini-4-hydrogen-"))
+        p_briefs = {r: Path(p_run["briefs"][r]).read_text(encoding="utf-8") for r in p_roster}
+        # Passing Model='flash' on Hydrogen reviewer -> REVIEWER_MODEL_OVERRIDE_FORBIDDEN
+        _, out_ov = fixture._run_pre_tool_safety({
+            "toolName": "invoke_subagent",
+            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r], "Model": "flash"} for r in p_roster]},
+        })
+        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", json.dumps(out_ov))
+        # Remote Mode (#198819) -> REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD even when Model is omitted on Hydrogen!
+        old_rem = os.environ.get("ANTIGRAVITY_REMOTE_AGENT")
+        os.environ["ANTIGRAVITY_REMOTE_AGENT"] = "1"
+        try:
+            _, out_rem = fixture._run_pre_tool_safety({
+                "toolName": "invoke_subagent",
+                "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r]} for r in p_roster]},
+            })
+            self.assertIn("REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD", json.dumps(out_rem))
+        finally:
+            if old_rem is None:
+                os.environ.pop("ANTIGRAVITY_REMOTE_AGENT", None)
+            else:
+                os.environ["ANTIGRAVITY_REMOTE_AGENT"] = old_rem
+
+        # Local Mode with omitted Model -> ALLOWED
+        _, out_loc = fixture._run_pre_tool_safety({
+            "toolName": "invoke_subagent",
+            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r]} for r in p_roster]},
+        })
+        self.assertEqual("allow", out_loc.get("decision"), out_loc)
+
+        # Edge Case 8: Doctor, Lifecycle ownership, Repair preservation, and Legacy `flash-*` fallback sync!
+        dp.sync_utility_worker_model(self.repo, "gemini-4-hydrogen-high")
+        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-worker-agent/agent.md"))
+        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-scout-agent/agent.md"))
+        doc = HarnessDoctor(self.repo, run_selftest=False)
+        doc.check_antigravity_installation()
+        rev_chk = next(r for r in doc.results if r.name == "Custom Reviewer Agents")
+        self.assertEqual("PASS", rev_chk.status, rev_chk.message)
+
+        models.set_policy(
+            self.repo, models.choice_to_policy("flash-project")[0],
+            task_id=None, host="antigravity", source="conversation", proof_reference="Fallback to Flash", scope="project",
+        )
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        repair_mod.main(["--repo", str(self.repo)])
+        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+
+        # Edge Case 9: Platform hazard classifiers (Hydrogen rollout block, Orchestrator double-planning, Zero-quota 429)
+        h_roll = ar.classify_antigravity_quota_or_capacity_error("PERMISSION_DENIED: model gemini-4-hydrogen is not available on your plan")
+        self.assertEqual("HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK", h_roll["code"])
+        self.assertIn("flash-argon-project", h_roll["remedy"])
+        h_orch = ar.classify_antigravity_quota_or_capacity_error("Error: Effort isn't adjustable for Orchestrator")
+        self.assertEqual("ORCHESTRATOR_DOUBLE_PLANNING_HAZARD", h_orch["code"])
+        h_zero = ar.classify_antigravity_quota_or_capacity_error("HTTP 429 RESOURCE_EXHAUSTED gemini-4-argon: limit: 0 requests per day")
+        self.assertEqual("MANAGED_AGENT_ZERO_QUOTA_429", h_zero["code"])
+        self.assertIn("hydrogen-dynamic-project", h_zero["remedy"])
+
+
 class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
     """Edge-case regression tests for CRIT-1, CRIT-3, and CRIT-5."""
 
@@ -1144,6 +1424,7 @@ class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
         ledger = read_json(phase_ledger_file(task_dir(inner_fixture.repo, task), "p1"))
         self.assertEqual("reviewer-123", ledger["reviewers"][role]["execution_id"])
 
+
+
 if __name__ == "__main__":
     unittest.main()
-

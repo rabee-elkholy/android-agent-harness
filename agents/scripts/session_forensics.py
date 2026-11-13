@@ -147,6 +147,14 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     malformed_calls = 0
     http_503_retries = 0
     zero_quota_429_hits = 0
+    hydrogen_entitlement_blocks = 0
+    orchestrator_handoff_hits = 0
+    tos_violation_403_hits = 0
+    turn3_cache_drop_hits = 0
+    cache_regression_hits = 0
+    prev_cached_tokens = 0
+    prev_prompt_tokens = 0
+    usage_turn_index = 0
     tool_counts: Counter[str] = Counter()
 
     try:
@@ -157,8 +165,14 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 malformed_calls += 1
             if "503" in low and ("unavailable" in low or "retry" in low or "backoff" in low or "overloaded" in low):
                 http_503_retries += 1
-            if ("429" in low or "resource_exhausted" in low) and ("limit: 0" in low or "0 requests per day" in low or "0 input tokens per minute" in low):
+            if "tos_violation" in low or (("403" in low or "permission_denied" in low) and ("suspended" in low or "flagged" in low or "tos_violation" in low)):
+                tos_violation_403_hits += 1
+            elif "hydrogen" in low and ("not available on your plan" in low or "model_not_found" in low or "model not found" in low or ("permission_denied" in low and "hydrogen" in low)):
+                hydrogen_entitlement_blocks += 1
+            elif ("429" in low or "resource_exhausted" in low) and ("limit: 0" in low or "0 requests per day" in low or "0 input tokens per minute" in low):
                 zero_quota_429_hits += 1
+            if "effort isn't adjustable for orchestrator" in low or ("orchestrator" in low and "handing control back to gemini 4 carbon" in low):
+                orchestrator_handoff_hits += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -174,16 +188,39 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             t_name = str(obj.get("tool_name") or ((obj.get("toolCall") or {}).get("name") if isinstance(obj.get("toolCall"), dict) else "") or "")
             if t_name:
                 tool_counts[t_name] += 1
+            compacted = "compaction" in low or "summariz" in low
             for u_key in ("usage", "token_usage", "usageMetadata", "metadata"):
                 u = obj.get(u_key)
                 if isinstance(u, dict):
-                    tok = (
-                        int(u.get("input_tokens") or u.get("promptTokenCount") or u.get("prompt_tokens") or 0)
-                        + int(u.get("cache_read_tokens") or u.get("cachedContentTokenCount") or 0)
-                    ) or int(u.get("total_tokens") or u.get("totalTokenCount") or 0)
+                    raw_prompt = int(u.get("promptTokenCount") or u.get("input_tokens") or u.get("prompt_tokens") or 0)
+                    has_cache_field = "cachedContentTokenCount" in u or "cache_read_tokens" in u
+                    cached_tok = int(u.get("cachedContentTokenCount") or u.get("cache_read_tokens") or 0)
+                    # Note: in Gemini usageMetadata, promptTokenCount includes cachedContentTokenCount; avoid double-adding when promptTokenCount >= cachedContentTokenCount
+                    if "promptTokenCount" in u and raw_prompt >= cached_tok:
+                        tok = raw_prompt or int(u.get("totalTokenCount") or u.get("total_tokens") or 0)
+                    else:
+                        tok = (raw_prompt + cached_tok) or int(u.get("total_tokens") or u.get("totalTokenCount") or 0)
                     if tok > peak_tokens:
                         peak_tokens = tok
                         peak_step = cur_step
+                    if raw_prompt > 0 or cached_tok > 0:
+                        if not compacted and prev_cached_tokens >= 4096:
+                            if cached_tok == 0 and (not has_cache_field or u.get("cachedContentTokenCount", 0) == 0):
+                                turn3_cache_drop_hits += 1
+                            elif 0 < cached_tok < prev_cached_tokens:
+                                cache_regression_hits += 1
+                        elif (
+                            not compacted
+                            and usage_turn_index == 3
+                            and cached_tok == 0
+                            and prev_prompt_tokens >= 8192
+                            and (raw_prompt - prev_prompt_tokens) >= 700
+                        ):
+                            turn3_cache_drop_hits += 1
+                        prev_cached_tokens = cached_tok
+                        prev_prompt_tokens = raw_prompt
+                        usage_turn_index += 1
+                    break
     except OSError:
         pass
 
@@ -197,6 +234,11 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "malformed_tool_calls": malformed_calls,
         "http_503_retries": http_503_retries,
         "zero_quota_429_hits": zero_quota_429_hits,
+        "hydrogen_entitlement_blocks": hydrogen_entitlement_blocks,
+        "orchestrator_handoff_hits": orchestrator_handoff_hits,
+        "tos_violation_403_hits": tos_violation_403_hits,
+        "turn3_cache_drop_hits": turn3_cache_drop_hits,
+        "cache_regression_hits": cache_regression_hits,
         "top_tools": dict(tool_counts.most_common(8)),
     }
 
@@ -293,19 +335,93 @@ def diagnose_session(
             "evidence": f"{denials['AGY_HEADLESS_LOOP_TOS_GUARD']} unattended `agy -p` / UI-injection command(s) blocked (#199748/#199756).",
             "remedy": "Never run unattended `agy -p` loops (triggers automated 403 account ban); prepare local folders and invoke via an interactive Skill.",
         })
+    pacer_info: dict[str, Any] = {"throttled_events": 0, "total_delay_ms": 0, "coalesced_parallel_calls": 0}
+    pacer_file = repo / ".agents" / "cache" / "burst-pacer.json"
+    if pacer_file.is_file():
+        try:
+            raw_p = read_json(pacer_file)
+            if isinstance(raw_p, dict):
+                pacer_info = {
+                    "throttled_events": int(raw_p.get("throttled_events") or 0),
+                    "total_delay_ms": int(raw_p.get("total_delay_ms") or 0),
+                    "coalesced_parallel_calls": int(raw_p.get("coalesced_parallel_calls") or 0),
+                }
+        except (OSError, ValueError, ValidationError):
+            pass
+
+    worker_friction: dict[str, Any] = {"consecutive_failures": 0, "total_failures": 0}
+    eff_tid = str(plan.get("task_id") or task_id or "").strip()
+    if eff_tid:
+        try:
+            from delegation_policy import get_worker_friction_state
+            worker_friction = get_worker_friction_state(repo, eff_tid, plan)
+        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+            worker_friction = worker_friction
+
+    if transcript.get("tos_violation_403_hits", 0) > 0:
+        findings.append({
+            "code": "HYDROGEN_403_TOS_FALSE_POSITIVE",
+            "severity": "HIGH",
+            "evidence": f"{transcript['tos_violation_403_hits']} false-positive 403 PERMISSION_DENIED (TOS_VIOLATION) event(s) detected (#200029/#199971).",
+            "remedy": "Never use Antigravity's built-in Orchestrator mode; keep Harness HYDROGEN_ANTI_BURST_PACER enabled, batch parallel reads per turn, and file the official one-time Antigravity appeal if suspended.",
+        })
+    if transcript.get("turn3_cache_drop_hits", 0) > 0 or transcript.get("cache_regression_hits", 0) >= 2:
+        findings.append({
+            "code": "GEMINI4_TURN3_CACHE_DROP_ANOMALY",
+            "severity": "MEDIUM",
+            "evidence": (
+                f"Detected {transcript.get('turn3_cache_drop_hits', 0)} active cachedContentTokenCount=0 / Turn-3 +701 drop(s) "
+                f"and {transcript.get('cache_regression_hits', 0)} multi-shard KV-cache regression(s) (#200026)."
+            ),
+            "remedy": "Prefer pure `agy` CLI (3.41% cache regression) over ACP IDE extensions (5.86%) on long Carbon sessions, keep Scout waves <=2 batched turns, or switch Scout to `safe-cache-project` (3.8 Flash = 0 cache drops).",
+        })
+    if int(worker_friction.get("consecutive_failures") or 0) >= 2:
+        findings.append({
+            "code": "ORCHESTRATOR_WORKER_FRICTION_ESCALATION",
+            "severity": "MEDIUM",
+            "evidence": (
+                f"Worker hit {worker_friction['consecutive_failures']} consecutive verification failure(s) "
+                f"(last gate: `{worker_friction.get('last_failed_gate') or 'unknown'}`)."
+            ),
+            "remedy": "Native Harness Orchestrator caps automatic Hydrogen at `high`, giving `Hydrogen High` up to 2 attempts (fast-failing immediately on explicit architectural blockers) before handing core files + `worker-handoff.json` (`Zero-Scratch Handoff Capsule`) to Lead (`Carbon`).",
+        })
+    if pacer_info["throttled_events"] > 0:
+        findings.append({
+            "code": "HYDROGEN_BURST_PACER_SMOOTHED",
+            "severity": "INFO",
+            "evidence": (
+                f"HYDROGEN_ANTI_BURST_PACER smoothed {pacer_info['throttled_events']} rapid sequential turn burst(s) "
+                f"({pacer_info['total_delay_ms']}ms total human-cadence cooldown; {pacer_info['coalesced_parallel_calls']} same-turn parallel calls passed at 0ms)."
+            ),
+            "remedy": "Anti-ban burst pacing is operating normally (#200029/#199971 protection active).",
+        })
+    if transcript.get("hydrogen_entitlement_blocks", 0) > 0:
+        findings.append({
+            "code": "HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK",
+            "severity": "HIGH",
+            "evidence": f"{transcript['hydrogen_entitlement_blocks']} Gemini 4 Hydrogen entitlement/rollout block event(s) observed.",
+            "remedy": "Switch project routing to `flash-argon-project` (or `flash-project`) until Gemini 4 Hydrogen finishes rolling out to this account.",
+        })
+    if transcript.get("orchestrator_handoff_hits", 0) > 0:
+        findings.append({
+            "code": "ORCHESTRATOR_DOUBLE_PLANNING_HAZARD",
+            "severity": "MEDIUM",
+            "evidence": f"{transcript['orchestrator_handoff_hits']} Antigravity Orchestrator internal handoff/effort event(s) observed.",
+            "remedy": "Select explicit `Gemini 4 Carbon (Medium)` (or Argon/Claude 5.5) on the main chat instead of `Orchestrator` to avoid double-planning over Harness hooks.",
+        })
     if transcript.get("zero_quota_429_hits", 0) > 0:
         findings.append({
             "code": "MANAGED_AGENT_ZERO_QUOTA_429",
             "severity": "HIGH",
             "evidence": f"{transcript['zero_quota_429_hits']} zero-quota HTTP 429 (`limit: 0`) error(s) on Argon/Carbon (#199769/#199770).",
-            "remedy": "Switch reviewer/subagent routing to 100% Pure Flash (`flash-project`) when running on Free/Pro Managed Agent tiers.",
+            "remedy": "Switch reviewer/subagent routing to 100% Pure Gemini 4 Hydrogen (`hydrogen-dynamic-project`) or `flash-project` fallback.",
         })
     if transcript.get("http_503_retries", 0) > 0:
         findings.append({
             "code": "FLASH_503_CAPACITY_BACKOFF",
             "severity": "MEDIUM",
             "evidence": f"{transcript['http_503_retries']} silent Gemini 3.8 Flash HTTP 503 capacity retry event(s) detected (#198333).",
-            "remedy": "Batch 4-8 `view_file` reads in a single turn to avoid multiplying 4s-24s per-turn 503 backoff delays.",
+            "remedy": "Upgrade subagent routing to `hydrogen-argon-project` (`Gemini 4 Hydrogen`) and batch 4-8 `view_file` reads in a single turn.",
         })
     if not findings:
         findings.append({
@@ -321,6 +437,8 @@ def diagnose_session(
         "task_id": str(plan.get("task_id") or task_id or ""),
         "task_status": str(plan.get("status") or "IDLE"),
         "hook_audit": audit,
+        "burst_pacer": pacer_info,
+        "worker_friction": worker_friction,
         "transcript": transcript,
         "findings": findings,
     }

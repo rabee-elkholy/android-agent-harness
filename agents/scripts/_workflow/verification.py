@@ -211,14 +211,20 @@ def review_action(context: VerificationContext) -> dict | None:
                         hazard = classify_antigravity_quota_or_capacity_error(last_err)
                     except ImportError:
                         hazard = None
+                    heal_hint = (
+                        f" Run `python .agents/harness.py task heal --task-id {task_id}` to reset blocked reviewer(s) in-place "
+                        f"(preserving passed reviewers & Gradle test evidence), then re-dispatch or switch model via "
+                        f"`python .agents/harness.py review models set --task-id {task_id} --scope run --choice inherit-once --source conversation --proof-reference '<reason>'`."
+                    )
                     reason_msg = f"Reviewer '{r}' is blocked by environment: {last_err}."
                     out_payload = {
                         "code": "REVIEW_ENV_BLOCKED",
                         "kind": "HOST_ACTION",
                         "command": "",
+                        "recovery_command": f"python .agents/harness.py task heal --task-id {task_id}",
                         "blocking": True,
                         "reviewer": r,
-                        "reason": f"{reason_msg} [{hazard['code']} {hazard['issue']}] {hazard['remedy']}" if hazard else reason_msg,
+                        "reason": (f"{reason_msg} [{hazard['code']} {hazard['issue']}] {hazard['remedy']}" if hazard else reason_msg) + heal_hint,
                         "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "reviewer": r},
                         "expected": {},
                     }

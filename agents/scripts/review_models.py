@@ -30,6 +30,17 @@ from policy_vocab import CORE_ROUTED_REVIEWERS
 CLAUDE_MODEL_CHOICES = ("inherit", "sonnet", "opus", "haiku")
 ANTIGRAVITY_MODEL_CHOICES = (
     "inherit",
+    "hydrogen-argon-hybrid",
+    "safe-cache-hybrid",
+    "hydrogen-dynamic",
+    "hydrogen-risk-hybrid",
+    "gemini-4-hydrogen",
+    "gemini-4-hydrogen-low",
+    "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen-extra",
+    "hydrogen",
     "flash-argon-hybrid",
     "risk-hybrid",
     "flash-dynamic",
@@ -56,6 +67,25 @@ ANTIGRAVITY_MODEL_CHOICES = (
     "gemini-3.1-pro-high",
     "pro",
 )
+ANTIGRAVITY_META_PRESETS = (
+    "inherit",
+    "hydrogen-argon-hybrid",
+    "safe-cache-hybrid",
+    "hydrogen-dynamic",
+    "hydrogen-risk-hybrid",
+    "flash-argon-hybrid",
+    "risk-hybrid",
+    "flash-dynamic",
+    "argon-dynamic",
+    "carbon-dynamic",
+    "hybrid-smart",
+)
+_COMPLEXITY_AWARE_PRESETS = (
+    "hydrogen-argon-hybrid",
+    "safe-cache-hybrid",
+    "hydrogen-dynamic",
+    "flash-argon-hybrid",
+)
 MODEL_CHOICES = tuple(dict.fromkeys((*CLAUDE_MODEL_CHOICES, *ANTIGRAVITY_MODEL_CHOICES)))
 CLAUDE_MODEL_SOURCE = "https://code.claude.com/docs/en/sub-agents#supported-frontmatter-fields"
 ANTIGRAVITY_MODEL_SOURCE = "https://antigravity.google/docs/subagents/#frontmatter-configuration-yaml"
@@ -66,41 +96,41 @@ CRITICAL_HYBRID_REVIEWERS = (
 )
 
 ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
-    "flash-argon-project": {
-        "id": "flash-argon-project",
+    "hydrogen-argon-project": {
+        "id": "hydrogen-argon-project",
         "index": 1,
         "scope": "project",
-        "preset": "flash-argon-hybrid",
-        "label_ar": "تثبيت الهجين التكيفي الذكي للمشروع كله (flash-argon-project) — موصى به: Flash للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج دون تكرار السؤال",
-        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid for entire project (Recommended — Pure Flash on simple; Argon Low + Flash on complex; capped strictly at Argon Low on critical; stop asking each task)",
-        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+        "preset": "hydrogen-argon-hybrid",
+        "label_ar": "تثبيت هجين الجيل الرابع الذكي للمشروع كله (hydrogen-argon-project) — موصى به: Hydrogen Medium للبسيط، وHydrogen High + Medium للمركب، وArgon Medium للأمان واللوجيك الحرج (T5) دون تكرار السؤال",
+        "label_en": "Complexity-Adaptive Hydrogen + Argon Hybrid for entire project (Recommended — Hydrogen Medium on simple; Hydrogen High + Medium on complex; Argon Medium for critical T5 security/logic + Hydrogen High structural; stop asking each task)",
+        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
     },
-    "flash-argon-task": {
-        "id": "flash-argon-task",
+    "hydrogen-argon-task": {
+        "id": "hydrogen-argon-task",
         "index": 2,
         "scope": "task",
-        "preset": "flash-argon-hybrid",
-        "label_ar": "الهجين التكيفي الذكي لهذه المهمة (flash-argon-task) — Flash للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
-        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid (Pure Flash on simple; Argon Low + Flash on complex; capped strictly at Argon Low on critical) — for this task",
-        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+        "preset": "hydrogen-argon-hybrid",
+        "label_ar": "هجين الجيل الرابع الذكي لهذه المهمة (hydrogen-argon-task) — Hydrogen Medium للبسيط، وHydrogen High + Medium للمركب، وArgon Medium للأمان واللوجيك الحرج (T5)",
+        "label_en": "Complexity-Adaptive Hydrogen + Argon Medium Hybrid (Hydrogen Medium on simple; Hydrogen High + Medium on complex; Argon Medium for critical T5 security/logic + Hydrogen High structural) — for this task",
+        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
     },
-    "risk-hybrid-project": {
-        "id": "risk-hybrid-project",
+    "hydrogen-dynamic-project": {
+        "id": "hydrogen-dynamic-project",
         "index": 3,
         "scope": "project",
-        "preset": "risk-hybrid",
-        "label_ar": "تثبيت الهجين مع موديل المحادثة للمشروع (risk-hybrid-project) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Chat Hybrid for entire project (Flash Medium on T1-T3; Chat model on DEEP/MAX T4-T5; stop asking each task)",
-        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+        "preset": "hydrogen-dynamic",
+        "label_ar": "تثبيت Hydrogen الصافي للمشروع كله (hydrogen-dynamic-project) — صفر استهلاك لكوتا Argon/Carbon (Medium للبسيط، وسقف High للمركب والحرج بدون هدر xHigh)",
+        "label_en": "100% Pure Gemini 4 Hydrogen for entire project (Zero Argon/Carbon subagent quota — Medium on simple, capped at High on complex & critical T5; stop asking each task)",
+        "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
     },
-    "flash-dynamic-task": {
-        "id": "flash-dynamic-task",
+    "hydrogen-risk-project": {
+        "id": "hydrogen-risk-project",
         "index": 4,
-        "scope": "task",
-        "preset": "flash-dynamic",
-        "label_ar": "النظام السريع للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز بـ Flash فقط مع تصعيد التفكير عند الحاجة",
-        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — for this task",
-        "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
+        "scope": "project",
+        "preset": "hydrogen-risk-hybrid",
+        "label_ar": "تثبيت هجين Hydrogen مع موديل المحادثة للمشروع (hydrogen-risk-project) — Hydrogen Medium للعادي وموديل المحادثة (Carbon) تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid for entire project (Hydrogen Medium on T1-T3; Chat model on DEEP/MAX T4-T5; stop asking each task)",
+        "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
     },
     "inherit-task": {
         "id": "inherit-task",
@@ -111,27 +141,135 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "label_en": "Current chat model (Inherit) — for this task",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
+    "hydrogen-argon-once": {
+        "id": "hydrogen-argon-once",
+        "index": 6,
+        "scope": "run",
+        "preset": "hydrogen-argon-hybrid",
+        "label_ar": "هجين الجيل الرابع (Hydrogen + Argon Medium) لهذه المرة فقط (hydrogen-argon-once)",
+        "label_en": "Complexity-Adaptive Hydrogen + Argon Medium Hybrid — this review only",
+        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
+    },
+    "hydrogen-dynamic-task": {
+        "id": "hydrogen-dynamic-task",
+        "index": 7,
+        "scope": "task",
+        "preset": "hydrogen-dynamic",
+        "label_ar": "موديل Hydrogen الصافي لهذه المهمة (hydrogen-dynamic-task) — Medium للبسيط وسقف High للمركب والحرج",
+        "label_en": "100% Pure Gemini 4 Hydrogen (Medium/High ceiling) — for this task",
+        "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+    },
+    "hydrogen-dynamic-once": {
+        "id": "hydrogen-dynamic-once",
+        "index": 8,
+        "scope": "run",
+        "preset": "hydrogen-dynamic",
+        "label_ar": "موديل Hydrogen الصافي لهذه المرة فقط (hydrogen-dynamic-once)",
+        "label_en": "100% Pure Gemini 4 Hydrogen (Medium/High ceiling) — this review only",
+        "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+    },
+    "hydrogen-risk-task": {
+        "id": "hydrogen-risk-task",
+        "index": 9,
+        "scope": "task",
+        "preset": "hydrogen-risk-hybrid",
+        "label_ar": "هجين Hydrogen مع موديل المحادثة لهذه المهمة (hydrogen-risk-task)",
+        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid (Hydrogen Medium on T1-T3; Chat model on DEEP/MAX) — for this task",
+        "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
+    },
+    "hydrogen-risk-once": {
+        "id": "hydrogen-risk-once",
+        "index": 10,
+        "scope": "run",
+        "preset": "hydrogen-risk-hybrid",
+        "label_ar": "هجين Hydrogen مع موديل المحادثة لهذه المرة فقط (hydrogen-risk-once)",
+        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid — this review only",
+        "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
+    },
+    "flash-argon-project": {
+        "id": "flash-argon-project",
+        "index": 11,
+        "scope": "project",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "تثبيت الهجين الكلاسيكي للمشروع كله (flash-argon-project) — احتياطي: Flash 3.8 للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
+        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid for entire project (Fallback when Hydrogen is unavailable)",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
+    "flash-argon-task": {
+        "id": "flash-argon-task",
+        "index": 12,
+        "scope": "task",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "الهجين الكلاسيكي لهذه المهمة (flash-argon-task) — Flash 3.8 للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
+        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid — for this task",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
+    "flash-argon-once": {
+        "id": "flash-argon-once",
+        "index": 13,
+        "scope": "run",
+        "preset": "flash-argon-hybrid",
+        "label_ar": "الهجين الكلاسيكي (Flash 3.8 + Argon Low) لهذه المرة فقط (flash-argon-once)",
+        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid — this review only",
+        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
+    },
+    "risk-hybrid-project": {
+        "id": "risk-hybrid-project",
+        "index": 14,
+        "scope": "project",
+        "preset": "risk-hybrid",
+        "label_ar": "تثبيت الهجين مع موديل المحادثة بـ Flash للمشروع (risk-hybrid-project) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Flash + Chat Hybrid for entire project (Flash Medium on T1-T3; Chat model on DEEP/MAX T4-T5)",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
     "risk-hybrid-task": {
         "id": "risk-hybrid-task",
-        "index": 6,
+        "index": 15,
         "scope": "task",
         "preset": "risk-hybrid",
-        "label_ar": "الهجين حسب الخطورة للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard T1-T3; Chat model automatically on DEEP/MAX T4-T5) — for this task",
+        "label_ar": "الهجين حسب الخطورة بـ Flash للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
+        "label_en": "Risk-Adaptive Flash + Chat Hybrid (Flash Medium on standard T1-T3; Chat model on DEEP/MAX T4-T5) — for this task",
         "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
+    "risk-hybrid-once": {
+        "id": "risk-hybrid-once",
+        "index": 16,
+        "scope": "run",
+        "preset": "risk-hybrid",
+        "label_ar": "الهجين التكيفي بـ Flash لهذه المرة فقط (risk-hybrid-once)",
+        "label_en": "Risk-Adaptive Flash + Chat Hybrid — this review only",
+        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+    },
+    "flash-project": {
+        "id": "flash-project",
+        "index": 17,
+        "scope": "project",
+        "preset": "flash-dynamic",
+        "label_ar": "تثبيت Flash 3.8 الصافي للمشروع كله (flash-project) — احتياطي كامل بدون Gemini 4",
+        "label_en": "Pure Gemini 3.8 Flash (Dynamic Medium/High thinking) for entire project",
+        "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
+    },
+    "flash-dynamic-task": {
+        "id": "flash-dynamic-task",
+        "index": 18,
+        "scope": "task",
+        "preset": "flash-dynamic",
+        "label_ar": "النظام السريع بـ Flash للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز بـ Flash 3.8 فقط",
+        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — for this task",
+        "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "flash-dynamic-once": {
         "id": "flash-dynamic-once",
-        "index": 7,
+        "index": 19,
         "scope": "run",
         "preset": "flash-dynamic",
-        "label_ar": "النظام السريع لهذه المرة فقط (flash-dynamic-once)",
+        "label_ar": "النظام السريع بـ Flash لهذه المرة فقط (flash-dynamic-once)",
         "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — this review only",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "inherit-once": {
         "id": "inherit-once",
-        "index": 8,
+        "index": 20,
         "scope": "run",
         "preset": "inherit",
         "label_ar": "نفس موديل المحادثة لهذه المرة فقط (inherit-once)",
@@ -140,10 +278,10 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
     },
     "hybrid-smart-task": {
         "id": "hybrid-smart-task",
-        "index": 9,
+        "index": 21,
         "scope": "task",
         "preset": "hybrid-smart",
-        "label_ar": "النظام الهجين الذكي للمهمة (hybrid-smart-task) — سريع للفحص العادي وموديل المحادثة للحرج",
+        "label_ar": "النظام الهجين الذكي بـ Flash للمهمة (hybrid-smart-task) — سريع للفحص العادي وموديل المحادثة للحرج",
         "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — for this task",
         "policy": {
             "schema_version": 1,
@@ -151,21 +289,12 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
-    "flash-argon-once": {
-        "id": "flash-argon-once",
-        "index": 10,
-        "scope": "run",
-        "preset": "flash-argon-hybrid",
-        "label_ar": "الهجين التكيفي الذكي (Flash + Argon Low) لهذه المرة فقط (flash-argon-once)",
-        "label_en": "Complexity-Adaptive Flash + Argon Low Hybrid — this review only",
-        "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
-    },
     "hybrid-smart-once": {
         "id": "hybrid-smart-once",
-        "index": 11,
+        "index": 22,
         "scope": "run",
         "preset": "hybrid-smart",
-        "label_ar": "النظام الهجين الذكي لهذه المرة فقط (hybrid-smart-once)",
+        "label_ar": "النظام الهجين الذكي بـ Flash لهذه المرة فقط (hybrid-smart-once)",
         "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — this review only",
         "policy": {
             "schema_version": 1,
@@ -173,18 +302,61 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
-    "risk-hybrid-once": {
-        "id": "risk-hybrid-once",
-        "index": 12,
+    "safe-cache-project": {
+        "id": "safe-cache-project",
+        "index": 23,
+        "scope": "project",
+        "preset": "safe-cache-hybrid",
+        "label_ar": "تثبيت الهجين المحصن للكاش للمشروع (safe-cache-project) — Flash للاستكشاف الطويل (صفر سقوط كاش #200026) مع Hydrogen وArgon Medium للمراجعة والتنفيذ",
+        "label_en": "Cache-Shielded Hybrid for entire project (#200026 — 3.8 Flash on multi-turn Scout sweeps; Hydrogen + Argon Medium on T5 V2 Reviewers & paced Worker)",
+        "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
+    },
+    "safe-cache-task": {
+        "id": "safe-cache-task",
+        "index": 24,
+        "scope": "task",
+        "preset": "safe-cache-hybrid",
+        "label_ar": "الهجين المحصن للكاش لهذه المهمة (safe-cache-task) — Flash للاستكشاف مع Hydrogen وArgon Medium للمراجعة والتنفيذ",
+        "label_en": "Cache-Shielded Hybrid (#200026 — 3.8 Flash Scout + Hydrogen/Argon Medium Reviewers & Worker) — for this task",
+        "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
+    },
+    "safe-cache-once": {
+        "id": "safe-cache-once",
+        "index": 25,
         "scope": "run",
-        "preset": "risk-hybrid",
-        "label_ar": "الهجين التكيفي حسب الخطورة لهذه المرة فقط (risk-hybrid-once)",
-        "label_en": "Risk-Adaptive Hybrid (Flash Medium on standard; Chat model on DEEP/MAX) — this review only",
-        "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
+        "preset": "safe-cache-hybrid",
+        "label_ar": "الهجين المحصن للكاش لهذه المرة فقط (safe-cache-once)",
+        "label_en": "Cache-Shielded Hybrid (#200026) — this review only",
+        "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
     },
 }
 
 _SHORTHAND_MAP = {
+    "hydrogen@hybrid": "hydrogen-argon-hybrid",
+    "hydrogen-argon": "hydrogen-argon-hybrid",
+    "argon-hydrogen-hybrid": "hydrogen-argon-hybrid",
+    "hydrogen@argon": "hydrogen-argon-hybrid",
+    "argon@hydrogen": "hydrogen-argon-hybrid",
+    "safe-cache": "safe-cache-hybrid",
+    "hydrogen@safe-cache": "safe-cache-hybrid",
+    "safe@cache": "safe-cache-hybrid",
+    "hydrogen@dynamic": "hydrogen-dynamic",
+    "hydrogen@auto": "hydrogen-dynamic",
+    "gemini-4-hydrogen@dynamic": "hydrogen-dynamic",
+    "gemini-4-hydrogen@auto": "hydrogen-dynamic",
+    "hydrogen@risk": "hydrogen-risk-hybrid",
+    "hydrogen-risk": "hydrogen-risk-hybrid",
+    "hydrogen@low": "gemini-4-hydrogen-low",
+    "hydrogen@medium": "gemini-4-hydrogen-medium",
+    "hydrogen@high": "gemini-4-hydrogen-high",
+    "hydrogen@xhigh": "gemini-4-hydrogen-xhigh",
+    "hydrogen@extra": "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen-extra": "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen@low": "gemini-4-hydrogen-low",
+    "gemini-4-hydrogen@medium": "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen@high": "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen@xhigh": "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen@extra": "gemini-4-hydrogen-xhigh",
     "argon@hybrid": "flash-argon-hybrid",
     "flash@argon": "flash-argon-hybrid",
     "argon-flash-hybrid": "flash-argon-hybrid",
@@ -262,6 +434,14 @@ def resolve_interactive_choice(choice: str) -> tuple[dict, str]:
 
 def resolve_preset_policy(preset: str) -> dict:
     norm = str(preset or "").strip().lower()
+    if norm in ("hydrogen-argon-hybrid", "argon-hydrogen-hybrid", "hydrogen-argon", "hydrogen-hybrid"):
+        return {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}}
+    if norm in ("safe-cache-hybrid", "safe-cache", "hydrogen-safe-cache"):
+        return {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}}
+    if norm in ("hydrogen-dynamic", "hydrogen"):
+        return {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}}
+    if norm in ("hydrogen-risk-hybrid", "hydrogen-risk"):
+        return {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}}
     if norm in ("flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "argon-hybrid"):
         return {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}}
     if norm in ("flash-dynamic", "flash"):
@@ -277,7 +457,7 @@ def resolve_preset_policy(preset: str) -> dict:
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         }
     raise ValidationError(
-        f"unknown reviewer model preset '{preset}'; use flash-argon-hybrid, flash-dynamic, risk-hybrid, inherit, or hybrid-smart"
+        f"unknown reviewer model preset '{preset}'; use hydrogen-argon-hybrid, hydrogen-dynamic, hydrogen-risk-hybrid, flash-argon-hybrid, flash-dynamic, risk-hybrid, inherit, or hybrid-smart"
     )
 
 
@@ -307,6 +487,28 @@ def resolve_antigravity_model(
     is_deep = intent in ("DEEP", "MAX")
     if req == "inherit":
         return "inherit", "inherit"
+    if req in ("hydrogen-argon-hybrid", "safe-cache-hybrid"):
+        if tier == "CRITICAL" or intent == "MAX":
+            if role in CRITICAL_HYBRID_REVIEWERS or intent == "MAX":
+                return "gemini-4-argon-medium", "medium"
+            return "gemini-4-hydrogen-high", "high"
+        if tier == "COMPLEX" or intent == "DEEP":
+            if role in CRITICAL_HYBRID_REVIEWERS or intent == "DEEP":
+                return "gemini-4-hydrogen-high", "high"
+            return "gemini-4-hydrogen-medium", "medium"
+        return "gemini-4-hydrogen-medium", "medium"
+    if req == "hydrogen-dynamic":
+        if tier == "CRITICAL" or intent == "MAX":
+            return "gemini-4-hydrogen-high", "high"
+        if tier == "COMPLEX" or intent == "DEEP":
+            if role in CRITICAL_HYBRID_REVIEWERS or intent == "DEEP":
+                return "gemini-4-hydrogen-high", "high"
+            return "gemini-4-hydrogen-medium", "medium"
+        return "gemini-4-hydrogen-medium", "medium"
+    if req == "hydrogen-risk-hybrid":
+        return ("inherit", "inherit") if is_deep else ("gemini-4-hydrogen-medium", "medium")
+    if req in ("gemini-4-hydrogen", "hydrogen"):
+        return "gemini-4-hydrogen-high", "high"
     if req == "flash-argon-hybrid":
         if tier == "CRITICAL" or intent == "MAX":
             return "gemini-4-argon-low", "low"
@@ -325,7 +527,7 @@ def resolve_antigravity_model(
         return ("gemini-4-carbon-high", "high") if is_deep else ("gemini-4-carbon-medium", "medium")
     if req in ("gemini-3.1-pro", "pro"):
         return "gemini-3.1-pro-high", "high"
-    for suffix in ("fast", "low", "medium", "high"):
+    for suffix in ("xhigh", "fast", "low", "medium", "high"):
         if req.endswith(f"-{suffix}"):
             return req, suffix
     return req, "medium"
@@ -410,7 +612,9 @@ def validate_for_host(policy: dict, host: str) -> dict:
     if not selected.issubset(cap["choices"]):
         raise ValidationError(
             f"REVIEW_MODEL_UNSUPPORTED: host '{host}' does not support model choice(s) {sorted(selected - set(cap['choices']))}; "
-            "choose inherit explicitly or use a supported native model for this host. No fallback was applied."
+            f"choose inherit explicitly or use a supported native model for this host (for a single task on '{host}' without changing your project policy, "
+            f"run: python .agents/harness.py review models set --task-id <id> --host {host} --scope task --default inherit --source conversation --proof-reference '<reason>'). "
+            "No fallback was applied."
         )
     return policy
 
@@ -825,8 +1029,8 @@ def _resolve_policy(
     if tier_norm not in ("SIMPLE", "COMPLEX", "CRITICAL"):
         tier_norm = "SIMPLE"
     uses_adaptive_argon = (
-        policy.get("default") == "flash-argon-hybrid"
-        or "flash-argon-hybrid" in (policy.get("overrides") or {}).values()
+        policy.get("default") in _COMPLEXITY_AWARE_PRESETS
+        or any(v in _COMPLEXITY_AWARE_PRESETS for v in (policy.get("overrides") or {}).values())
     )
     selections = {}
     for role in reviewers:
@@ -834,7 +1038,7 @@ def _resolve_policy(
             raise ValidationError(f"unknown reviewer role '{role}'")
         requested = policy["overrides"].get(role, policy["default"])
         if host_norm == "antigravity" and requested != "inherit":
-            default_intent = "NORMAL" if requested == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
+            default_intent = "NORMAL" if requested in _COMPLEXITY_AWARE_PRESETS else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
             effort_intent = efforts.get(role) or default_intent
             resolved_model, thinking_level = resolve_antigravity_model(
                 requested,
@@ -855,7 +1059,7 @@ def _resolve_policy(
                 "actual_model": None,
                 "actual_model_status": "UNOBSERVED",
             }
-            if requested == "flash-argon-hybrid":
+            if requested in _COMPLEXITY_AWARE_PRESETS:
                 sel_entry["complexity_tier"] = tier_norm
             selections[role] = sel_entry
         else:
@@ -881,7 +1085,7 @@ def transfer_models(run: dict, host: str, reviewers: list[str], *, plan: dict | 
     frozen_models(run)
     old = run.get("review_models") or {}
     old_efforts = {
-        role: str(sel.get("reasoning_intent") or ("NORMAL" if sel.get("requested_model") == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")))
+        role: str(sel.get("reasoning_intent") or ("NORMAL" if sel.get("requested_model") in _COMPLEXITY_AWARE_PRESETS else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")))
         for role, sel in (old.get("reviewers") or {}).items()
         if isinstance(sel, dict)
     }
@@ -917,7 +1121,7 @@ def frozen_models(run: dict) -> dict:
         if selection.get("native_arguments") != expected_args:
             raise ValidationError("invalid frozen native model arguments")
         if host_norm == "antigravity" and requested != "inherit":
-            default_intent = "NORMAL" if requested == "flash-argon-hybrid" else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
+            default_intent = "NORMAL" if requested in _COMPLEXITY_AWARE_PRESETS else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
             intent = str(selection.get("reasoning_intent") or default_intent)
             sel_tier = str(selection.get("complexity_tier") or frozen.get("complexity_tier") or "SIMPLE")
             exp_resolved, exp_thinking = resolve_antigravity_model(requested, role, intent, complexity_tier=sel_tier)
@@ -964,13 +1168,11 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
         if not effective_inherits:
             if not observed:
                 raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native execution model metadata; frontmatter is configuration only")
-            # The native runtime ID omits thinking and may use a backend suffix.
-            # The executor's separate model field binds the exact thinking choice.
-            family = re.sub(r"-(?:fast|low|medium|high|tiered)$", "", str(expected_resolved))
-            valid_configured = {expected_resolved, f"{family}-tiered"}
-            if observed.get("host_configured_model") not in valid_configured or any(
-                not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?", m) and m != expected_resolved
-                for m in observed.get("host_reported_models", [])
+            if not _matches_antigravity_native_model(
+                str(expected_resolved or ""),
+                selection.get("thinking_level"),
+                observed.get("host_configured_model"),
+                observed.get("host_reported_models", []),
             ):
                 raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} native execution does not match {expected_resolved}")
         return {
@@ -1010,31 +1212,71 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
     }
 
 
+def _matches_antigravity_native_model(
+    expected_resolved: str,
+    thinking_level: object,
+    host_configured: object,
+    host_reported_models: object,
+) -> bool:
+    """Validate observed Antigravity SQLite protobuf model metadata against the frozen reviewer selection.
+
+    Supports all four Gemini 4 Hydrogen thinking levels (`low`, `medium`, `high`, `xhigh`/`extra`)
+    and official Hydrogen backend/alias identifiers while strictly rejecting cross-family leaks
+    (such as a parent Carbon/Argon/Claude model or legacy 3.8 Flash running instead of Hydrogen).
+    """
+    if not expected_resolved or not isinstance(host_configured, str) or not isinstance(host_reported_models, list) or not host_reported_models:
+        return False
+    family = re.sub(r"-(?:fast|low|medium|high|xhigh|extra|tiered)$", "", str(expected_resolved))
+    lvl = str(thinking_level or "").strip().lower()
+    valid_configured = {expected_resolved, family, f"{family}-tiered"}
+    if lvl == "xhigh":
+        valid_configured.add(f"{family}-extra")
+    if family == "gemini-4-hydrogen":
+        valid_configured.update({"gemini-4-flash", "gemini-4-flash-tiered"})
+        if lvl:
+            valid_configured.add(f"gemini-4-flash-{lvl}")
+        if lvl == "xhigh":
+            valid_configured.add("gemini-4-flash-extra")
+        reported_re = re.compile(
+            r"(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+        )
+    else:
+        reported_re = re.compile(
+            re.escape(family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+        )
+    if host_configured not in valid_configured:
+        return False
+    for item in host_reported_models:
+        if not isinstance(item, str) or (not reported_re.fullmatch(item) and item != expected_resolved):
+            return False
+    return True
+
+
 def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
     selection = frozen_models(run).get(role)
     if not selection or selection["requested_model"] == "inherit" or selection.get("resolved_model") == "inherit":
         return
     host_norm = str(run.get("review_host") or "").strip().lower()
     if host_norm == "antigravity":
-        family = re.sub(r"-(?:fast|low|medium|high|tiered)$", "", str(selection.get("resolved_model")))
-        valid_configured = {selection.get("resolved_model"), f"{family}-tiered"}
         if not isinstance(evidence, dict) or (
             evidence.get("settings_sha256") != run["review_models"]["sha256"]
             or evidence.get("requested_model") != selection["requested_model"]
             or evidence.get("resolved_model") != selection.get("resolved_model")
             or evidence.get("thinking_level") != selection.get("thinking_level")
             or evidence.get("actual_model_status") != "NATIVE_METADATA_OBSERVED"
-            or evidence.get("host_configured_model") not in valid_configured
             or not evidence.get("native_metadata_sha256")
             or not evidence.get("execution_id")
             or not evidence.get("host_reported_models")
+            or not _matches_antigravity_native_model(
+                str(selection.get("resolved_model") or ""),
+                selection.get("thinking_level"),
+                evidence.get("host_configured_model"),
+                evidence.get("host_reported_models"),
+            )
         ):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen Antigravity model evidence for {role}")
         native = {key: evidence[key] for key in ("execution_id", "host_configured_model", "host_reported_models", "native_metadata_source") if key in evidence}
-        if evidence["native_metadata_sha256"] != canonical_sha256(native) or any(
-            not re.fullmatch(re.escape(family) + r"(?:-(?:n|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?", m) and m != selection.get("resolved_model")
-            for m in evidence["host_reported_models"]
-        ):
+        if evidence["native_metadata_sha256"] != canonical_sha256(native):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: native model evidence integrity mismatch for {role}")
         return
 
@@ -1048,6 +1290,80 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen model evidence for {role}")
 
 
+def sync_specialist_agent_models(repo: Path, *, policy: dict | None = None, complexity_tier: str = "SIMPLE") -> list[str]:
+    """Synchronize ON_DEMAND_SPECIALIST_AGENTS (`qa-diagnostics-agent`, `android-ui-expert-agent`) frontmatter models while preserving pure Antigravity scout tools."""
+    agents_base = repo / ".agents" / "agents"
+    subagents_base = repo / ".agents" / "subagents"
+    if not subagents_base.is_dir():
+        kit_subagents = Path(__file__).resolve().parents[1] / "subagents"
+        if kit_subagents.is_dir():
+            subagents_base = kit_subagents
+    if not agents_base.is_dir() or not subagents_base.is_dir():
+        return []
+    try:
+        from install_tool_adapters import with_managed_marker
+        from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, ON_DEMAND_SPECIALIST_AGENTS
+    except ImportError:
+        return []
+    pol = policy
+    if pol is None:
+        pol, src_scope = load_policy(repo, None)
+        if src_scope == "default":
+            pol = {"default": "inherit", "overrides": {}}
+    updated: list[str] = []
+    for sp_role in ON_DEMAND_SPECIALIST_AGENTS:
+        sp_json = subagents_base / f"{sp_role}.json"
+        dest = agents_base / sp_role / "agent.md"
+        if not sp_json.is_file() or not dest.parent.is_dir():
+            continue
+        try:
+            sp_data = json.loads(sp_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        req_m = (pol.get("overrides") or {}).get(sp_role, pol.get("default", "inherit"))
+        fm_model = None
+        if req_m and req_m != "inherit":
+            resolved_m, _ = resolve_antigravity_model(str(req_m), sp_role, "NORMAL", complexity_tier=complexity_tier)
+            if resolved_m and resolved_m != "inherit":
+                fm_model = resolved_m
+        sp_name = json.dumps(sp_role, ensure_ascii=False)
+        sp_desc = json.dumps(str(sp_data.get("description") or sp_role).strip(), ensure_ascii=False)
+        sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
+        sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+        sp_model_line = f"model: {json.dumps(fm_model, ensure_ascii=False)}\n" if fm_model else ""
+        sp_md = (
+            f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
+            f"{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+        )
+        rendered_bytes = with_managed_marker(sp_md).encode("utf-8")
+        if not dest.is_file() or dest.read_bytes() != rendered_bytes:
+            from _vnext_common import atomic_write_bytes
+            atomic_write_bytes(dest, rendered_bytes)
+            updated.append(f".agents/agents/{sp_role}/agent.md")
+    ownership_file = repo / ".harness-setup" / "ownership-v1.json"
+    if updated and ownership_file.is_file():
+        try:
+            manifest = read_json(ownership_file)
+            entries = manifest.get("entries")
+            if isinstance(entries, list):
+                changed = False
+                updated_set = set(updated)
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("path") in updated_set:
+                        target = repo / str(entry["path"])
+                        if target.is_file():
+                            entry["post_install_sha256"] = sha256_file(target)
+                            changed = True
+                if changed:
+                    manifest["ownership_sha256"] = canonical_sha256(
+                        {k: v for k, v in manifest.items() if k != "ownership_sha256"}
+                    )
+                    atomic_write_json(ownership_file, manifest)
+        except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
+            pass
+    return updated
+
+
 def effective_reviewer_model(selection: dict | None) -> str:
     """Return a concise human-readable model label for a reviewer selection."""
     if not isinstance(selection, dict):
@@ -1057,7 +1373,7 @@ def effective_reviewer_model(selection: dict | None) -> str:
     actual = str(selection.get("actual_model") or "").strip()
     if resolved and resolved != "inherit":
         return resolved
-    if requested not in ("inherit", "risk-hybrid", "flash-argon-hybrid"):
+    if requested not in ANTIGRAVITY_META_PRESETS:
         return actual or requested
     if actual:
         return f"inherit ({actual})"
@@ -1095,7 +1411,7 @@ def antigravity_dispatch_model_hint(run_or_profile: dict | None, reviewers: list
     if pro_roles:
         parts.append(f"pass Model='pro' for [{', '.join(pro_roles)}]")
     if omit_roles:
-        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter/inherit)")
+        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter for hydrogen/argon/carbon or inherit)")
     return (" In invoke_subagent: " + "; ".join(parts) + ".") if parts else ""
 
 
@@ -1119,6 +1435,28 @@ def build_antigravity_model_prompt(
     """Build the 5-option developer prompt shown before the first review in a task/run on Antigravity."""
     efforts = efforts_by_role or _compute_efforts_by_role(repo, task_id, reviewers)
     complexity_tier = compute_task_complexity_tier(repo, task_id)
+    hydrogen_argon_preview = {
+        role: resolve_antigravity_model(
+            "hydrogen-argon-hybrid",
+            role,
+            efforts.get(role, "NORMAL"),
+            complexity_tier=complexity_tier,
+        )[0]
+        for role in reviewers
+    }
+    hydrogen_dynamic_preview = {
+        role: resolve_antigravity_model(
+            "hydrogen-dynamic",
+            role,
+            efforts.get(role, "NORMAL"),
+            complexity_tier=complexity_tier,
+        )[0]
+        for role in reviewers
+    }
+    hydrogen_risk_preview = {
+        role: resolve_antigravity_model("hydrogen-risk-hybrid", role, efforts.get(role, "NORMAL"))[0]
+        for role in reviewers
+    }
     flash_argon_preview = {
         role: resolve_antigravity_model(
             "flash-argon-hybrid",
@@ -1146,10 +1484,10 @@ def build_antigravity_model_prompt(
         for role in reviewers
     }
     for key in (
-        "flash-argon-project",
-        "flash-argon-task",
-        "risk-hybrid-project",
-        "flash-dynamic-task",
+        "hydrogen-argon-project",
+        "hydrogen-argon-task",
+        "hydrogen-dynamic-project",
+        "hydrogen-risk-project",
         "inherit-task",
     ):
         item = ANTIGRAVITY_INTERACTIVE_CHOICES[key]
@@ -1173,6 +1511,9 @@ def build_antigravity_model_prompt(
         "reviewers": list(reviewers),
         "question_ar": "اختر موديل ومستوى تفكير المراجعين قبل بدء المراجعة:",
         "question_en": "Choose the reviewer model and thinking level before launching reviewers:",
+        "hydrogen_argon_resolution": hydrogen_argon_preview,
+        "hydrogen_dynamic_resolution": hydrogen_dynamic_preview,
+        "hydrogen_risk_resolution": hydrogen_risk_preview,
         "flash_argon_resolution": flash_argon_preview,
         "flash_dynamic_resolution": flash_preview,
         "hybrid_smart_resolution": hybrid_preview,
@@ -1414,10 +1755,12 @@ def set_policy(
                 complexity_tier=complexity_tier,
             )
             sync_antigravity_agent_models(repo, resolved_all.get("reviewers") or {})
+            sync_specialist_agent_models(repo, policy=policy, complexity_tier=complexity_tier)
             try:
-                from delegation_policy import resolve_utility_worker_model, sync_utility_worker_model
-                w_model, _ = resolve_utility_worker_model(repo, task_id=task_id)
-                sync_utility_worker_model(repo, w_model)
+                from delegation_policy import sync_utility_agent_models
+                sync_utility_agent_models(repo, task_id=task_id)
+                unloaded_cache = state_root(repo) / "cache" / "unloaded-utility-agents.json"
+                unloaded_cache.unlink(missing_ok=True)
             except (ImportError, OSError, ValueError, RuntimeError, ValidationError):
                 pass
 
@@ -1438,8 +1781,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default=".")
     parser.add_argument("--task", "--task-id", dest="task")
     parser.add_argument("--host")
-    parser.add_argument("--choice", help="Interactive choice ID (e.g. flash-argon-project, flash-argon-task, risk-hybrid-project, flash-dynamic-task, inherit-task)")
-    parser.add_argument("--preset", choices=("flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
+    parser.add_argument("--choice", "--mode", dest="choice", help="Interactive choice ID (e.g. hydrogen-argon-project, hydrogen-argon-task, hydrogen-dynamic-project, hydrogen-risk-project, flash-argon-project, inherit-task)")
+    parser.add_argument("--preset", choices=("hydrogen-argon-hybrid", "argon-hydrogen-hybrid", "hydrogen-argon", "hydrogen-hybrid", "safe-cache-hybrid", "safe-cache", "hydrogen-safe-cache", "hydrogen-dynamic", "hydrogen", "hydrogen-risk-hybrid", "hydrogen-risk", "flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
     parser.add_argument("--scope", choices=("project", "task", "run"), default=None, help="Policy persistence scope (project, task, or run/once)")
     parser.add_argument("--default", default="inherit", help="Default reviewer model or model@effort")
     parser.add_argument("--reviewer", action="append", default=[], metavar="ROLE=MODEL")
@@ -1488,9 +1831,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             if str(host).strip().lower() == "antigravity":
                 result["dispatch_hint"] = (
-                    "When calling invoke_subagent, pass Model='flash' for every reviewer whose model in reviewer_models contains 'flash', "
-                    "pass Model='pro' for every reviewer whose model contains 'pro', "
-                    "and omit Model (INHERIT_PARENT_BY_OMISSION) for inherit, argon, or carbon reviewers."
+                    "When calling invoke_subagent, pass Model='flash' ONLY for legacy 3.8-flash reviewers whose model in reviewer_models contains 'flash', "
+                    "pass Model='pro' for reviewers whose model contains 'pro', "
+                    "and omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
                 )
         else:
             policy, source = load_policy(repo, args.task)

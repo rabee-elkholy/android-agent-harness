@@ -1473,7 +1473,7 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             p = self.repo / rel
             self.assertTrue(p.is_file(), f"Missing {rel}")
             txt = p.read_text(encoding="utf-8")
-            self.assertIn('model: "gemini-3.8-flash-medium"', txt)
+            self.assertIn('model: "gemini-4-hydrogen-medium"', txt)
             self.assertIn("subagent: true", txt)
             self.assertIn("mainAgent: false", txt)
             self.assertTrue(_antigravity_agent_matches_policy(self.repo, rel))
@@ -3130,6 +3130,445 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                     "import androidx.room.Dao\nclass ProductRepositoryImpl",
                 )
             )
+
+
+
+    def test_nov13_burst_pacer_native_orchestrator_cache_shield_and_win11_guard(self) -> None:
+        """Verify #200029/#199971 anti-burst pacer, Native Orchestrator 2-strike escalation, #200026 cache shield & #200037 Win11 guard."""
+        import json as _json
+        import tempfile
+        from unittest.mock import patch
+
+        import antigravity_runtime as ar
+        import delegation_policy as dp
+        import pre_invocation_reminder as pir
+        import pre_tool_safety as pts
+        import review_models as rm
+        import session_forensics as sf
+        from _vnext_common import atomic_write_json
+        from doctor.engine import HarnessDoctor
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents" / "cache").mkdir(parents=True, exist_ok=True)
+            (repo / ".agents" / "state" / "tasks" / "t-orch").mkdir(parents=True, exist_ok=True)
+            atomic_write_json(repo / ".agents" / "state" / "active-task.json", {"task_id": "t-orch"})
+
+            # 1) HYDROGEN_ANTI_BURST_PACER (#200029 / #199971)
+            fake_now = [1000.0]
+            slept: list[float] = []
+
+            def _clock() -> float:
+                return fake_now[0]
+
+            def _sleep(sec: float) -> None:
+                slept.append(sec)
+                fake_now[0] += sec
+
+            # 6 parallel calls within <=200ms in Turn 1 -> ZERO delay across all 6!
+            for i in range(6):
+                fake_now[0] += 0.03
+                res = pts.check_and_apply_hydrogen_burst_pacer(
+                    repo, "conv-burst-1", tool_name="view_file", mode="enforce", now_fn=_clock, sleep_fn=_sleep,
+                )
+                self.assertFalse(res["applied"])
+                if i > 0:
+                    self.assertTrue(res["coalesced_parallel"])
+            self.assertEqual([], slept)
+
+            # Turns 2 & 3 (0.6s apart) -> still < 4 turns in 6s window -> 0 delay
+            for _ in range(2):
+                fake_now[0] += 0.60
+                res = pts.check_and_apply_hydrogen_burst_pacer(
+                    repo, "conv-burst-1", tool_name="edit_file", mode="enforce", now_fn=_clock, sleep_fn=_sleep,
+                )
+                self.assertFalse(res["applied"])
+            self.assertEqual([], slept)
+
+            # Turn 4 & Turn 5 within 6s window -> MUST smooth burst with 0.80s..1.40s human-cadence cooldown!
+            fake_now[0] += 0.55
+            res4 = pts.check_and_apply_hydrogen_burst_pacer(
+                repo, "conv-burst-1", tool_name="edit_file", mode="enforce", now_fn=_clock, sleep_fn=_sleep,
+            )
+            self.assertTrue(res4["applied"])
+            self.assertGreaterEqual(res4["delay_sec"], 0.80)
+            self.assertLessEqual(res4["delay_sec"], 1.40)
+            self.assertEqual(1, len(slept))
+
+            # Normal human/Gradle cadence (>6.5s gap) -> resets sliding window cleanly to 0 delay!
+            fake_now[0] += 6.50
+            res_calm = pts.check_and_apply_hydrogen_burst_pacer(
+                repo, "conv-burst-1", tool_name="run_command", mode="enforce", now_fn=_clock, sleep_fn=_sleep,
+            )
+            self.assertFalse(res_calm["applied"])
+            self.assertEqual(1, res_calm["turns_in_window"])
+
+            # 2) Native Harness Orchestrator Two-Strike Friction Auto-Escalation
+            plan_simple = {
+                "task_id": "t-orch",
+                "status": "IMPLEMENTING",
+                "kind": "FEATURE",
+                "risk_tier": "T1_LOW",
+                "expected_files": [
+                    "app/src/main/java/com/example/Feature.kt",
+                    "app/src/test/java/com/example/FeatureTest.kt",
+                ],
+                "expected_surfaces": ["UI"],
+                "review_rounds": 0,
+            }
+            atomic_write_json(repo / ".agents" / "state" / "tasks" / "t-orch" / "plan.json", plan_simple)
+
+            # Antigravity v2.31.2 stdin `modelName`: Frontier Carbon/Claude sessions bypass Hydrogen burst pacer at 0ms
+            res_frontier = pts.check_and_apply_hydrogen_burst_pacer(
+                repo, "conv-burst-1", tool_name="edit_file", model_name="gemini-4-carbon-medium", now_fn=_clock, sleep_fn=_sleep,
+            )
+            self.assertFalse(res_frontier["applied"])
+            self.assertEqual("exempt_frontier_model", res_frontier["mode"])
+
+            # Wave 1 initial state -> gemini-4-hydrogen-medium, DELEGATE_WORKER_SLICE
+            pol0 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol0["strategy"])
+            self.assertEqual("gemini-4-hydrogen-medium", pol0["worker_model"])
+            self.assertEqual("NONE", pol0["friction_escalation"])
+
+            # Intra-wave normal TDD compile/test iterations (`is_wave_boundary=False`) MUST NOT prematurely lock out Worker mid-wave!
+            for iw_idx in range(3):
+                dp.record_worker_verification_outcome(
+                    repo, passed=False, gate_name="gradle-compiledebugkotlin", detail=f"Typo {iw_idx}",
+                    task_id="t-orch", is_wave_boundary=False,
+                )
+            pol_mid_wave = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_mid_wave["strategy"])
+            self.assertEqual("gemini-4-hydrogen-medium", pol_mid_wave["worker_model"])
+            self.assertEqual(0, pol_mid_wave["friction_strikes"])
+
+            # Intra-wave runaway cap triggers cleanly at 5 consecutive intra-wave gate failures
+            for _ in range(2):
+                dp.record_worker_verification_outcome(
+                    repo, passed=False, gate_name="unit_tests", detail="Spinning",
+                    task_id="t-orch", is_wave_boundary=False,
+                )
+            with patch("mutation_guard.active_plan", return_value=plan_simple):
+                ok_cap, cap_msg = dp.check_worker_intra_wave_retry_cap(repo, "python .agents/harness.py test")
+            self.assertFalse(ok_cap)
+            self.assertIn("WORKER_INTRA_WAVE_RETRY_CAP", cap_msg)
+
+            # Wave 1 completes at PostToolUse WITHOUT green unit_tests.json -> Wave Failure #1 -> Wave 2 immediately escalates to `gemini-4-hydrogen-high`!
+            dp.evaluate_completed_worker_wave(repo, {
+                "wave_id": "w-simple-1",
+                "task_id": "t-orch",
+                "phase_id": "",
+                "task_status": "IMPLEMENTING",
+                "worker_mode": "FULL_SLICE",
+                "dispatched_epoch": 500.0,
+            })
+            pol_w2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_w2["strategy"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_w2["worker_model"])
+            self.assertEqual(1, pol_w2["friction_strikes"])
+            self.assertEqual("ESCALATED_WORKER_MODEL", pol_w2["friction_escalation"])
+
+            # Duplicate PostToolUse on the same wave_id is strictly idempotent (stays at 1 strike!)
+            dp.evaluate_completed_worker_wave(repo, {
+                "wave_id": "w-simple-1",
+                "task_id": "t-orch",
+                "phase_id": "",
+                "task_status": "IMPLEMENTING",
+                "worker_mode": "FULL_SLICE",
+                "dispatched_epoch": 500.0,
+            })
+            self.assertEqual(1, dp.get_worker_friction_state(repo, "t-orch", plan_simple)["wave_failures"])
+
+            # Wave 2 (`gemini-4-hydrogen-high` attempt #1) fails -> Wave 3 gives `Hydrogen High` its 2nd full attempt before Lead Takeover!
+            dp.evaluate_completed_worker_wave(repo, {
+                "wave_id": "w-simple-2",
+                "task_id": "t-orch",
+                "phase_id": "",
+                "task_status": "IMPLEMENTING",
+                "worker_mode": "FULL_SLICE",
+                "worker_model": "gemini-4-hydrogen-high",
+                "dispatched_epoch": 600.0,
+            })
+            pol_w3_try2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_w3_try2["strategy"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_w3_try2["worker_model"])
+            self.assertEqual(1, pol_w3_try2["high_friction_strikes"])
+            self.assertTrue(pol_w3_try2["previous_wave_handoff"])
+
+            # Wave 3 (`gemini-4-hydrogen-high` attempt #2) ALSO fails -> `high_friction_strikes == 2` triggers Native Orchestrator Lead Takeover (`Carbon`)!
+            dp.evaluate_completed_worker_wave(repo, {
+                "wave_id": "w-simple-3",
+                "task_id": "t-orch",
+                "phase_id": "",
+                "task_status": "IMPLEMENTING",
+                "worker_mode": "FULL_SLICE",
+                "worker_model": "gemini-4-hydrogen-high",
+                "dispatched_epoch": 650.0,
+            })
+            pol_w4 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_w4["strategy"])
+            self.assertEqual("TESTS_AND_GATES_ONLY", pol_w4["worker_mode"])
+            self.assertEqual("LEAD_TAKEOVER", pol_w4["friction_escalation"])
+            self.assertEqual(2, pol_w4["high_friction_strikes"])
+            self.assertEqual("TWO_HYDROGEN_HIGH_FAILURES", pol_w4["takeover_trigger"])
+            self.assertEqual(["app/src/main/java/com/example/Feature.kt"], pol_w4["lead_owned_files"])
+
+            with patch("mutation_guard.active_plan", return_value=plan_simple), \
+                 patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
+                w_ok, _, w_code = dp.worker_write_allowed(
+                    repo,
+                    ["app/src/main/java/com/example/Feature.kt"],
+                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "FULL_SLICE"},
+                )
+            self.assertFalse(w_ok)
+            self.assertEqual("WORKER_FRICTION_CORE_ESCALATED_TO_LEAD", w_code)
+
+            # Lead Architect fixes code and runs full `unit_tests` PASS -> resets wave_failures & high_wave_failures to 0 and resolves handoff!
+            dp.record_worker_verification_outcome(
+                repo, passed=True, gate_name="unit_tests", detail="All green", task_id="t-orch", is_wave_boundary=False,
+            )
+            pol_reset = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_reset["strategy"])
+            self.assertEqual("gemini-4-hydrogen-medium", pol_reset["worker_model"])
+            self.assertEqual(0, pol_reset["friction_strikes"])
+            self.assertEqual(0, pol_reset["high_friction_strikes"])
+            self.assertIsNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
+
+            # COMPLEX slice 2-Strike `Hydrogen High` + Zero-Scratch Handoff Capsule (`worker-handoff.json`):
+            # Wave 1 (`High` #1) writes 85% of code & passes `compile`, fails 1 unit test -> Wave 2 (`High` #2 corrective delta) ->
+            # fails 2nd time -> hands over to `Carbon` with full preserved worktree files, passing gates, failing `cause:`, & cumulative Worker history!
+            plan_complex = {
+                "task_id": "t-orch",
+                "status": "IMPLEMENTING",
+                "kind": "BUG",
+                "risk_tier": "T3_MODERATE",
+                "expected_files": [
+                    "app/src/main/java/com/example/SyncWorker.kt",
+                    "app/src/main/java/com/example/SyncRepository.kt",
+                    "app/src/test/java/com/example/SyncWorkerTest.kt",
+                ],
+                "expected_surfaces": ["COROUTINES", "NETWORK"],
+                "review_rounds": 0,
+            }
+            (repo / ".agents" / "agents" / dp.WORKER_AGENT).mkdir(parents=True, exist_ok=True)
+            (repo / "app/src/main/java/com/example").mkdir(parents=True, exist_ok=True)
+            (repo / "app/src/test/java/com/example").mkdir(parents=True, exist_ok=True)
+            (repo / "app/src/main/java/com/example/SyncRepository.kt").write_text(
+                "package com.example\nclass SyncRepository { suspend fun sync(): Boolean = true }\n",
+                encoding="utf-8",
+            )
+            (repo / "app/src/test/java/com/example/SyncWorkerTest.kt").write_text(
+                "package com.example\nclass SyncWorkerTest { fun retryOnIoException() {} }\n",
+                encoding="utf-8",
+            )
+            (repo / ".agents" / "state" / "results").mkdir(parents=True, exist_ok=True)
+            atomic_write_json(repo / ".agents" / "state" / "results" / "compile.json", {"status": "PASS", "exit_code": 0})
+            atomic_write_json(
+                repo / ".agents" / "state" / "results" / "unit_tests.json",
+                {
+                    "status": "FAIL",
+                    "exit_code": 1,
+                    "failed_tests": ["com.example.SyncWorkerTest#retryOnIoException"],
+                    "cause": "java.lang.AssertionError: expected Result.retry() on IOException at SyncWorkerTest.kt:44",
+                },
+            )
+            atomic_write_json(repo / ".agents" / "state" / "tasks" / "t-orch" / "plan.json", plan_complex)
+            atomic_write_json(repo / ".agents" / "state" / "active-task.json", {"task_id": "t-orch"})
+
+            pol_c0 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
+            self.assertEqual("COMPLEX", pol_c0["complexity_tier"])
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_c0["strategy"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_c0["worker_model"])
+
+            # Wave 1 (`Hydrogen High` #1) fails with structured Worker self-report -> Wave 2 stays on `gemini-4-hydrogen-high` (zero `xhigh`!)
+            dp.evaluate_completed_worker_wave(
+                repo,
+                {
+                    "wave_id": "w-complex-1",
+                    "task_id": "t-orch",
+                    "phase_id": "",
+                    "task_status": "IMPLEMENTING",
+                    "worker_mode": "FULL_SLICE",
+                    "worker_model": "gemini-4-hydrogen-high",
+                    "dispatched_epoch": 1.0,
+                },
+                worker_output=(
+                    "HANDOFF_COMPLETED: Implemented SyncRepository.kt and SyncWorkerTest.kt harness.\n"
+                    "HANDOFF_TRIED_AND_FAILED: Wrapped sync() in runCatching, which accidentally caught CancellationException.\n"
+                    "HANDOFF_EXACT_BLOCKER: SyncWorker.kt:29 returns Result.failure() instead of Result.retry() on IOException."
+                ),
+            )
+            pol_c1 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
+            self.assertEqual("DELEGATE_WORKER_SLICE", pol_c1["strategy"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_c1["worker_model"])
+            self.assertNotIn("xhigh", pol_c1["worker_model"])
+            self.assertEqual(1, pol_c1["high_friction_strikes"])
+            self.assertIn("SyncRepository.kt", pol_c1["previous_wave_handoff"]["summary_for_lead"])
+
+            # Wave 2 (`Hydrogen High` #2) fails -> Now `high_friction_strikes == 2` hands over to `Carbon` with cumulative Zero-Scratch Handoff!
+            dp.evaluate_completed_worker_wave(
+                repo,
+                {
+                    "wave_id": "w-complex-2",
+                    "task_id": "t-orch",
+                    "phase_id": "",
+                    "task_status": "IMPLEMENTING",
+                    "worker_mode": "FULL_SLICE",
+                    "worker_model": "gemini-4-hydrogen-high",
+                    "dispatched_epoch": 1.0,
+                },
+                worker_output=(
+                    "HANDOFF_COMPLETED: Preserved SyncRepository.kt and rethrew CancellationException.\n"
+                    "HANDOFF_TRIED_AND_FAILED: Added retry policy in SyncWorker but dispatcher clock under StandardTestDispatcher stalled.\n"
+                    "HANDOFF_EXACT_BLOCKER: SyncWorkerTest.kt:44 needs advanceUntilIdle() with injected CoroutineDispatcher."
+                ),
+            )
+            pol_c2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
+            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_c2["strategy"])
+            self.assertEqual("LEAD_TAKEOVER", pol_c2["friction_escalation"])
+            self.assertEqual("TWO_HYDROGEN_HIGH_FAILURES", pol_c2["takeover_trigger"])
+            self.assertEqual(2, pol_c2["high_friction_strikes"])
+            self.assertEqual("TESTS_AND_GATES_ONLY", pol_c2["worker_mode"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_c2["worker_model"])
+            handoff_c2 = pol_c2["lead_takeover_handoff"]
+            self.assertFalse(handoff_c2["resolved"])
+            self.assertEqual(2, len(handoff_c2["attempt_history"]))
+            self.assertIn("compile", handoff_c2["passing_gates"])
+            self.assertTrue(any("SyncRepository.kt" in f["file"] for f in handoff_c2["completed_files_on_disk"]))
+            self.assertIn("StandardTestDispatcher", handoff_c2["worker_self_report"]["tried_and_failed"])
+            self.assertIn("DO NOT START FROM SCRATCH", pol_c2["reason"])
+
+            # Verify `PreInvocation` (`pending_post_subagent_directive`) automatically injects the Zero-Scratch Handoff to `Carbon`!
+            w_key, w_dir = dp.pending_post_subagent_directive(repo, "lead-carbon-conv")
+            self.assertTrue(w_key.startswith("takeover-t-orch-"))
+            self.assertIn("DO NOT START FROM SCRATCH", w_dir)
+            self.assertIn("SyncRepository.kt", w_dir)
+            self.assertIn("SyncWorkerTest.kt:44", w_dir)
+
+            w_agent_md = (repo / ".agents" / "agents" / dp.WORKER_AGENT / "agent.md").read_text(encoding="utf-8")
+            self.assertIn('model: "gemini-4-hydrogen-high"', w_agent_md)
+            with patch("mutation_guard.active_plan", return_value=plan_complex), \
+                 patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
+                ok_wc, _, code_wc = dp.worker_write_allowed(
+                    repo,
+                    ["app/src/main/java/com/example/SyncWorker.kt"],
+                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "FULL_SLICE"},
+                )
+                ok_wt, _, _ = dp.worker_write_allowed(
+                    repo,
+                    ["app/src/test/java/com/example/SyncWorkerTest.kt"],
+                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "TESTS_AND_GATES_ONLY"},
+                )
+            self.assertFalse(ok_wc)
+            self.assertEqual("WORKER_FRICTION_CORE_ESCALATED_TO_LEAD", code_wc)
+            self.assertTrue(ok_wt)
+
+            # Fast-Fail Exception Test: Reset strikes, then verify an explicit `ARCHITECTURAL_BLOCKER:` on Wave 1 skips Wave 2 and hands straight to `Carbon`!
+            dp.record_worker_verification_outcome(
+                repo, passed=True, gate_name="unit_tests", detail="Reset before fast-fail check", task_id="t-orch", is_wave_boundary=False,
+            )
+            dp.evaluate_completed_worker_wave(
+                repo,
+                {
+                    "wave_id": "w-fast-fail-arch",
+                    "task_id": "t-orch",
+                    "phase_id": "",
+                    "task_status": "IMPLEMENTING",
+                    "worker_mode": "FULL_SLICE",
+                    "worker_model": "gemini-4-hydrogen-high",
+                    "dispatched_epoch": 1.0,
+                },
+                worker_output="HANDOFF_EXACT_BLOCKER: ARCHITECTURAL_BLOCKER: [SCOPE-HINT] Legacy BillingManagerTest outside expected_files conflicts with new interface.",
+            )
+            pol_ff = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
+            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_ff["strategy"])
+            self.assertEqual(1, pol_ff["friction_strikes"])
+            self.assertEqual("FAST_FAIL_ARCHITECTURAL_BLOCKER", pol_ff["takeover_trigger"])
+
+            # Verify green snapshot-bound `unit_tests.json` at Wave completion passes cleanly and resets strikes!
+            (repo / ".agents" / "state" / "results").mkdir(parents=True, exist_ok=True)
+            atomic_write_json(repo / ".agents" / "state" / "results" / "unit_tests.json", {"status": "PASS", "exit_code": 0})
+            dp.evaluate_completed_worker_wave(repo, {
+                "wave_id": "w-complex-green",
+                "task_id": "t-orch",
+                "phase_id": "",
+                "task_status": "IMPLEMENTING",
+                "worker_mode": "TESTS_AND_GATES_ONLY",
+                "dispatched_epoch": 1.0,
+            })
+            self.assertEqual(0, dp.get_worker_friction_state(repo, "t-orch", plan_complex)["wave_failures"])
+
+            # 3) #200026 Turn-0 Subagent Prefix-Cache Lock & safe-cache-hybrid Routing
+            brain_root = repo / "brain"
+            child_tx = brain_root / "sub-scout-turn0" / ".system_generated" / "logs" / "transcript.jsonl"
+            child_tx.parent.mkdir(parents=True, exist_ok=True)
+            child_tx.write_text(
+                _json.dumps({
+                    "source": "AGENT_ORCHESTRATOR",
+                    "type": "SYSTEM_MESSAGE",
+                    "content": "<SYSTEM_MESSAGE>sender=parent-1 priority=MESSAGE_PRIORITY_HIGH content=Inspect module\n</SYSTEM_MESSAGE>",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            with patch.object(ar, "resolve_transcript", return_value=child_tx),                  patch.object(ar, "prefer_full_transcript", return_value=child_tx):
+                self.assertTrue(pir._is_reviewer_conversation(repo, "sub-scout-turn0"))
+
+            sc_pol, sc_scope = rm.resolve_interactive_choice("safe-cache-project")
+            self.assertEqual("project", sc_scope)
+            self.assertEqual("safe-cache-hybrid", sc_pol["default"])
+            self.assertEqual(("gemini-4-hydrogen-medium", "medium"), rm.resolve_antigravity_model("safe-cache-hybrid", "bug-test-reviewer-agent", "NORMAL", complexity_tier="SIMPLE"))
+            self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "bug-test-reviewer-agent", "DEEP", complexity_tier="COMPLEX"))
+            self.assertEqual(("gemini-4-argon-medium", "medium"), rm.resolve_antigravity_model("safe-cache-hybrid", "security-perf-reviewer-agent", "MAX", complexity_tier="CRITICAL"))
+            self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "arch-regression-reviewer-agent", "NORMAL", complexity_tier="CRITICAL"))
+            with patch.object(rm, "load_policy", return_value=(sc_pol, "project")):
+                self.assertEqual("gemini-3.8-flash-medium", dp.resolve_utility_scout_model(repo, "t-orch", plan_simple))
+                self.assertEqual(("gemini-4-hydrogen-medium", "SIMPLE"), dp.resolve_utility_worker_model(repo, "t-orch", plan_simple))
+
+            # 4) Forensics & Doctor (#200026, #200029/#199971, #200037)
+            c_tos = ar.classify_antigravity_quota_or_capacity_error(
+                "403 PERMISSION_DENIED (TOS_VIOLATION): account was instantly flagged and suspended after Hydrogen plan execution"
+            )
+            self.assertIsNotNone(c_tos)
+            self.assertEqual("HYDROGEN_403_TOS_FALSE_POSITIVE", c_tos["code"])
+
+            c_cache = ar.classify_antigravity_quota_or_capacity_error(
+                "Turn 3 +701 token injection and cachedContentTokenCount=0 multi-shard split"
+            )
+            self.assertIsNotNone(c_cache)
+            self.assertEqual("GEMINI4_TURN3_CACHE_DROP_ANOMALY", c_cache["code"])
+
+            diag_tx = brain_root / "conv-diag-200026" / ".system_generated" / "logs" / "transcript.jsonl"
+            diag_tx.parent.mkdir(parents=True, exist_ok=True)
+            diag_lines = [
+                _json.dumps({"step_index": 0, "usageMetadata": {"promptTokenCount": 33439, "cachedContentTokenCount": 0}}),
+                _json.dumps({"step_index": 1, "usageMetadata": {"promptTokenCount": 33577, "cachedContentTokenCount": 0}}),
+                _json.dumps({"step_index": 2, "usageMetadata": {"promptTokenCount": 33704, "cachedContentTokenCount": 31528}}),
+                _json.dumps({"step_index": 3, "usageMetadata": {"promptTokenCount": 34505}}),  # Turn-3 +701 & omitted cachedContentTokenCount=0!
+                "HTTP 403 PERMISSION_DENIED (TOS_VIOLATION) Error ID: 6a55a8c9-9b7e-4fe3",
+            ]
+            diag_tx.write_text("\n".join(diag_lines) + "\n", encoding="utf-8")
+            with patch.object(ar, "resolve_transcript", return_value=diag_tx),                  patch.object(ar, "prefer_full_transcript", return_value=diag_tx):
+                forensics = sf.diagnose_session(repo, conversation_id="conv-diag-200026", task_id="t-orch")
+            f_codes = {f["code"] for f in forensics["findings"]}
+            self.assertIn("GEMINI4_TURN3_CACHE_DROP_ANOMALY", f_codes)
+            self.assertIn("HYDROGEN_403_TOS_FALSE_POSITIVE", f_codes)
+            self.assertIn("HYDROGEN_BURST_PACER_SMOOTHED", f_codes)
+
+            # #200037 Windows 11 Smart App Control Error 4551 installer check
+            dl_dir = repo / "Downloads"
+            dl_dir.mkdir(parents=True, exist_ok=True)
+            (dl_dir / "AntigravitySetup-2.7.0-x64.exe").write_bytes(b"MZ")
+            sac_hit = ar.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32"},
+                installer_dirs=[dl_dir],
+            )
+            self.assertTrue(sac_hit["applicable"])
+            self.assertTrue(sac_hit["at_risk"])
+            sac_clean = ar.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32"},
+                installer_dirs=[repo / "EmptyDownloads"],
+            )
+            self.assertFalse(sac_clean["at_risk"])
 
 
 if __name__ == "__main__":

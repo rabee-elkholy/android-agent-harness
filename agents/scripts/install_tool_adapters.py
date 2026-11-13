@@ -442,7 +442,7 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
         dest = repo / ".agents" / "agents" / role / "agent.md"
         configured_model = None
         try:
-            from review_models import load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS, frozen_models
+            from review_models import compute_task_complexity_tier, load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS, frozen_models
             from reviewer_host import active_reviews
             from workflow import state_root
             from _vnext_common import read_json
@@ -465,8 +465,9 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
                 if src_scope != "default":
                     req_m = pol.get("overrides", {}).get(role, pol.get("default", "inherit"))
                     if req_m and req_m != "inherit":
-                        eff = "DEEP" if role == "security-perf-reviewer-agent" else "NORMAL"
-                        configured_model, _ = resolve_antigravity_model(req_m, role, eff)
+                        c_tier = compute_task_complexity_tier(repo, active_tid) if active_tid else "SIMPLE"
+                        eff = "NORMAL" if req_m in ("hydrogen-argon-hybrid", "safe-cache-hybrid", "hydrogen-dynamic", "flash-argon-hybrid") else ("DEEP" if role == "security-perf-reviewer-agent" else "NORMAL")
+                        configured_model, _ = resolve_antigravity_model(req_m, role, eff, complexity_tier=c_tier)
         except Exception:
             configured_model = None
         logs.append(
@@ -486,20 +487,39 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
             sp_desc = json.dumps(str(sp_data.get("description") or sp_role).strip(), ensure_ascii=False)
             sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
             sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+            sp_model_line = ""
+            try:
+                from review_models import compute_task_complexity_tier, load_policy, resolve_antigravity_model
+                from workflow import state_root
+                from _vnext_common import read_json
+                active_f = state_root(repo) / "active-task.json"
+                active_tid = (str(read_json(active_f).get("task_id") or "").strip() or None) if active_f.is_file() else None
+                sp_pol, sp_scope = load_policy(repo, active_tid)
+                if sp_scope != "default":
+                    sp_req = sp_pol.get("overrides", {}).get(sp_role, sp_pol.get("default", "inherit"))
+                    if sp_req and sp_req != "inherit":
+                        sp_tier = compute_task_complexity_tier(repo, active_tid) if active_tid else "SIMPLE"
+                        sp_mod, _ = resolve_antigravity_model(sp_req, sp_role, "NORMAL", complexity_tier=sp_tier)
+                        if sp_mod and sp_mod != "inherit":
+                            sp_model_line = f"model: {json.dumps(sp_mod, ensure_ascii=False)}\n"
+            except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+                sp_model_line = ""
             sp_md = (
                 f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
-                f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+                f"{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
             )
             logs.append(write_file(repo / ".agents" / "agents" / sp_role / "agent.md", sp_md, dry_run=dry_run, repo=repo, merge_existing=False))
-    from delegation_policy import WORKER_AGENT, render_utility_agent_markdown, resolve_utility_worker_model
+    from delegation_policy import SCOUT_AGENT, WORKER_AGENT, render_utility_agent_markdown, resolve_utility_scout_model, resolve_utility_worker_model
     for u_role in CORE_UTILITY_AGENTS:
         u_dest = repo / ".agents" / "agents" / u_role / "agent.md"
         u_model = None
-        if u_role == WORKER_AGENT:
-            try:
+        try:
+            if u_role == WORKER_AGENT:
                 u_model, _ = resolve_utility_worker_model(repo)
-            except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
-                u_model = None
+            elif u_role == SCOUT_AGENT:
+                u_model = resolve_utility_scout_model(repo)
+        except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+            u_model = None
         logs.append(
             write_file(
                 u_dest,

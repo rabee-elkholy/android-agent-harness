@@ -269,7 +269,9 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 role = agent_md.parent.name
                 rendered: bytes | None = None
                 if role in CORE_UTILITY_AGENTS:
-                    rendered = with_managed_marker(render_utility_agent_markdown(role)).encode("utf-8")
+                    from delegation_policy import SCOUT_AGENT, resolve_utility_scout_model, resolve_utility_worker_model
+                    u_model = resolve_utility_scout_model(root) if role == SCOUT_AGENT else resolve_utility_worker_model(root)[0]
+                    rendered = with_managed_marker(render_utility_agent_markdown(role, model=u_model)).encode("utf-8")
                 elif role in ON_DEMAND_SPECIALIST_AGENTS:
                     src_json = root / ".agents" / "subagents" / f"{role}.json"
                     if src_json.is_file():
@@ -278,9 +280,29 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                         sp_desc = json.dumps(str(sp_data.get("description") or role).strip(), ensure_ascii=False)
                         sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
                         sp_prompt = str(sp_data.get("system_prompt") or "").strip()
+                        sp_fm_model = _antigravity_frontmatter_model(root, role)
+                        if not sp_fm_model or sp_fm_model == "inherit":
+                            try:
+                                from review_models import compute_task_complexity_tier, load_policy, resolve_antigravity_model
+                                from workflow import state_root
+                                active_f = state_root(root) / "active-task.json"
+                                active_tid = (str(read_json(active_f).get("task_id") or "").strip() or None) if active_f.is_file() else None
+                                sp_pol, sp_scope = load_policy(root, active_tid)
+                                if sp_scope != "default":
+                                    sp_req = sp_pol.get("overrides", {}).get(role, sp_pol.get("default", "inherit"))
+                                    if sp_req and sp_req != "inherit":
+                                        sp_tier = compute_task_complexity_tier(root, active_tid) if active_tid else "SIMPLE"
+                                        sp_fm_model, _ = resolve_antigravity_model(sp_req, role, "NORMAL", complexity_tier=sp_tier)
+                            except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
+                                sp_fm_model = None
+                        sp_model_line = (
+                            f"model: {json.dumps(str(sp_fm_model).strip(), ensure_ascii=False)}\n"
+                            if sp_fm_model and str(sp_fm_model).strip().lower() != "inherit"
+                            else ""
+                        )
                         sp_md = (
                             f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
-                            f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+                            f"{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
                         )
                         rendered = with_managed_marker(sp_md).encode("utf-8")
                 else:

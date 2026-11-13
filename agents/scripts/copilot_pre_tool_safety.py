@@ -72,9 +72,11 @@ def main() -> int:
 
     inner = {"toolCall": {"name": "run_command", "args": {"CommandLine": command}}}
     try:
+        import os as _os
         proc = subprocess.run(
             [sys.executable, str(ENGINE)],
             input=json.dumps(inner),
+            env={**_os.environ, "HARNESS_HOOK_HOST": "copilot"},
             capture_output=True,
             text=True,
             encoding="utf-8",

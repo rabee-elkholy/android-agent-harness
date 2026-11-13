@@ -432,6 +432,159 @@ def _audit(
         pass
 
 
+_ACTIVE_HOOK_CONVERSATION_ID: str = ""
+_ACTIVE_HOOK_MODEL_NAME: str = ""
+
+# HYDROGEN_ANTI_BURST_PACER (#200029 / #199971):
+# Protects Google AI Ultra / Pro accounts from false-positive 403 PERMISSION_DENIED (TOS_VIOLATION)
+# suspensions caused by Gemini 4 Hydrogen firing rapid sequential single-tool turns (<0.5s apart)
+# during Plan Execution, while keeping same-turn parallel tool batches (<=200ms delta) at 0ms delay.
+BURST_COALESCE_PARALLEL_SEC = 0.20
+BURST_WINDOW_SEC = 6.0
+BURST_TURN_THRESHOLD = 4
+BURST_BASE_DELAY_SEC = 0.80
+BURST_STEP_DELAY_SEC = 0.15
+BURST_MAX_DELAY_SEC = 1.40
+
+
+def _burst_pacer_default_mode() -> str:
+    explicit = os.environ.get("HARNESS_BURST_PACER_MODE", "").strip().lower()
+    if explicit in {"off", "0", "false", "disabled"}:
+        return "off"
+    if explicit in {"enforce", "live"}:
+        return "enforce"
+    if explicit == "record_only":
+        return "record_only"
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1" or "unittest" in sys.modules:
+        return "record_only"
+    return "enforce"
+
+
+def _model_exempt_from_hydrogen_burst_pacer(model_name: str) -> bool:
+    """Antigravity hooks pass `modelName` on stdin (https://antigravity.google/docs/hooks/).
+    Slow Frontier models (Carbon, Argon, Claude 5.5, 3.1 Pro) never trigger Hydrogen's 190 tok/s burst filter,
+    whereas Hydrogen, Orchestrator, and untagged sessions require anti-burst protection.
+    """
+    m = str(model_name or "").strip().lower()
+    if not m or "hydrogen" in m or "orchestrator" in m or "gemini-4-flash" in m:
+        return False
+    return any(tok in m for tok in ("carbon", "argon", "claude", "3.1-pro", "gpt-oss"))
+
+
+def check_and_apply_hydrogen_burst_pacer(
+    repo: Path,
+    conversation_id: str,
+    *,
+    tool_name: str = "",
+    model_name: str = "",
+    mode: str | None = None,
+    pacer_path_override: Path | None = None,
+    now_fn=None,
+    sleep_fn=None,
+) -> dict[str, object]:
+    """Smooth rapid sequential multi-turn bursts (#200029 / #199971) without delaying parallel batches."""
+    import hashlib as _hashlib
+    import time as _time
+
+    eff_mode = (mode or _burst_pacer_default_mode()).strip().lower()
+    cid = str(conversation_id or "").strip()
+    hook_host = os.environ.get("HARNESS_HOOK_HOST", "").strip().lower()
+    if eff_mode == "off" or not cid or cid == "claude-session" or (mode is None and hook_host in {"claude", "copilot"}):
+        return {"applied": False, "delay_sec": 0.0, "coalesced_parallel": False, "turns_in_window": 0, "mode": "exempt_non_antigravity_host" if hook_host in {"claude", "copilot"} else eff_mode}
+    if mode is None and _model_exempt_from_hydrogen_burst_pacer(model_name):
+        return {"applied": False, "delay_sec": 0.0, "coalesced_parallel": False, "turns_in_window": 0, "mode": "exempt_frontier_model"}
+
+    is_raw_kit = (repo / "harness_cli.py").is_file() and (repo / "agents" / "VERSION").is_file() and not (repo / ".agents").is_dir()
+    if is_raw_kit and pacer_path_override is None:
+        return {"applied": False, "delay_sec": 0.0, "coalesced_parallel": False, "turns_in_window": 0, "mode": eff_mode}
+
+    clock = now_fn or _time.time
+    sleeper = sleep_fn or _time.sleep
+    pacer_path = pacer_path_override or (repo / ".agents" / "cache" / "burst-pacer.json")
+
+    now = float(clock())
+    delay_sec = 0.0
+    coalesced = False
+    turns_in_window = 1
+
+    try:
+        store: dict[str, object] = {}
+        if pacer_path.is_file():
+            try:
+                loaded = json.loads(pacer_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    store = loaded
+            except (OSError, ValueError):
+                store = {}
+
+        sessions_raw = store.get("sessions")
+        sessions: dict[str, dict[str, object]] = dict(sessions_raw) if isinstance(sessions_raw, dict) else {}
+        # Prune stale sessions (>1h idle) and cap to 32 entries
+        sessions = {
+            str(k): dict(v)
+            for k, v in list(sessions.items())[-32:]
+            if isinstance(v, dict) and (now - float(v.get("last_call_epoch") or 0.0)) <= 3600.0
+        }
+
+        rec = sessions.get(cid)
+        if not isinstance(rec, dict):
+            rec = {"turn_anchors": [], "last_call_epoch": 0.0, "throttled_count": 0, "coalesced_count": 0}
+
+        last_call = float(rec.get("last_call_epoch") or 0.0)
+        raw_anchors = rec.get("turn_anchors")
+        anchors = [
+            float(ts) for ts in (raw_anchors if isinstance(raw_anchors, list) else [])
+            if isinstance(ts, (int, float)) and (now - float(ts)) <= BURST_WINDOW_SEC
+        ]
+
+        if last_call > 0.0 and 0.0 <= (now - last_call) <= BURST_COALESCE_PARALLEL_SEC:
+            # Same-turn parallel tool batch (e.g. 6 parallel view_file calls): zero delay!
+            coalesced = True
+            rec["coalesced_count"] = int(rec.get("coalesced_count") or 0) + 1
+            if not anchors:
+                anchors.append(now)
+            turns_in_window = len(anchors)
+        else:
+            anchors.append(now)
+            turns_in_window = len(anchors)
+            if turns_in_window >= BURST_TURN_THRESHOLD:
+                extra_turns = turns_in_window - BURST_TURN_THRESHOLD
+                jitter_seed = _hashlib.sha256(f"{cid}:{turns_in_window}:{tool_name}".encode("utf-8")).digest()[0]
+                jitter = (jitter_seed / 255.0) * 0.12
+                delay_sec = round(min(BURST_MAX_DELAY_SEC, BURST_BASE_DELAY_SEC + extra_turns * BURST_STEP_DELAY_SEC + jitter), 3)
+                rec["throttled_count"] = int(rec.get("throttled_count") or 0) + 1
+                store["throttled_events"] = int(store.get("throttled_events") or 0) + 1
+                store["total_delay_ms"] = int(store.get("total_delay_ms") or 0) + int(round(delay_sec * 1000))
+                store["last_throttled_tool"] = str(tool_name or "")
+                store["last_throttled_epoch"] = now
+
+        if delay_sec > 0.0 and eff_mode == "enforce":
+            sleeper(delay_sec)
+            now = float(clock())
+
+        rec["turn_anchors"] = anchors[-16:]
+        rec["last_call_epoch"] = now
+        sessions[cid] = rec
+        store["schema_version"] = 1
+        store["coalesced_parallel_calls"] = int(store.get("coalesced_parallel_calls") or 0) + (1 if coalesced else 0)
+        store["sessions"] = sessions
+
+        pacer_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = pacer_path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(store), encoding="utf-8")
+        os.replace(tmp, pacer_path)
+    except OSError:
+        return {"applied": False, "delay_sec": 0.0, "coalesced_parallel": coalesced, "turns_in_window": turns_in_window, "mode": eff_mode}
+
+    return {
+        "applied": delay_sec > 0.0,
+        "delay_sec": delay_sec,
+        "coalesced_parallel": coalesced,
+        "turns_in_window": turns_in_window,
+        "mode": eff_mode,
+    }
+
+
 def emit(
     decision: str,
     reason: str,
@@ -443,7 +596,10 @@ def emit(
     task_id: str = "",
     mcp_fingerprint: str = "",
 ) -> None:
-    _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=conv_hint, task_id=task_id, mcp_fingerprint=mcp_fingerprint)
+    eff_conv = conv_hint or _ACTIVE_HOOK_CONVERSATION_ID
+    if decision == "allow" and eff_conv:
+        check_and_apply_hydrogen_burst_pacer(REPO, eff_conv, tool_name=tool, model_name=_ACTIVE_HOOK_MODEL_NAME)
+    _audit(decision, reason, tool, command, reason_code=reason_code, conv_hint=eff_conv, task_id=task_id, mcp_fingerprint=mcp_fingerprint)
     # Antigravity decodes hook stdout with protojson and rejects unknown fields, so the
     # result carries only its schema; reason codes and fingerprints live in the audit log.
     print(json.dumps({"decision": decision, "reason": reason}, ensure_ascii=False))
@@ -888,17 +1044,19 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
         allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
 
         if "model" in item or (not allowed_native_model and "Model" in item):
+            bound_note = (
+                f"Reviewer '{r_role_hint}' is bound to '{resolved_m}' via .agents/agents/{r_role_hint}/agent.md frontmatter; omit 'Model' in invoke_subagent."
+                if resolved_m and resolved_m != "inherit"
+                else "Do not send 'model' or 'Model' in reviewer invocation. Reviewer model inheritance is achieved by omission."
+            )
             emit(
                 "deny",
-                (
-                    "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
-                    "in reviewer invocation. Reviewer model inheritance is achieved by omission."
-                ),
+                f"REVIEWER_MODEL_OVERRIDE_FORBIDDEN: {bound_note}",
                 tool=tool_name,
                 reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
             )
             return
-        if allowed_native_model == "flash":
+        if allowed_native_model == "flash" or "gemini-4-hydrogen" in resolved_m:
             from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
             rem_active, rem_signals = detect_antigravity_remote_mode()
             if rem_active and not remote_subagents_explicitly_allowed():
@@ -906,7 +1064,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                     "deny",
                     (
                         f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_signals)}). "
-                        f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores Model='flash' in Remote Mode on Argon sessions and drains 3x Argon quota. "
+                        f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores fast-tier subagent overrides in Remote Mode on Frontier sessions and drains 3x Frontier quota. "
                         "Run reviews in Local Mode, switch reviewer policy to 'inherit' on a Carbon/Claude session, or set HARNESS_ALLOW_REMOTE_SUBAGENTS=1."
                     ),
                     tool=tool_name,
@@ -1474,17 +1632,19 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
 
             if "model" in item or (not allowed_native_model and "Model" in item):
+                bound_note = (
+                    f"Reviewer '{r_role_hint}' is bound to '{resolved_m}' via .agents/agents/{r_role_hint}/agent.md frontmatter; omit 'Model' in invoke_subagent."
+                    if resolved_m and resolved_m != "inherit"
+                    else "Do not send 'model' or 'Model' in reviewer invocation. Reviewer model inheritance is achieved by omission."
+                )
                 emit(
                     "deny",
-                    (
-                        "REVIEWER_MODEL_OVERRIDE_FORBIDDEN: Do not send 'model' or 'Model' "
-                        "in reviewer invocation. Reviewer model inheritance is achieved by omission."
-                    ),
+                    f"REVIEWER_MODEL_OVERRIDE_FORBIDDEN: {bound_note}",
                     tool=name,
                     reason_code="REVIEWER_MODEL_OVERRIDE_FORBIDDEN",
                 )
                 return
-            if allowed_native_model == "flash":
+            if allowed_native_model == "flash" or "gemini-4-hydrogen" in resolved_m:
                 from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
                 rem_active, rem_signals = detect_antigravity_remote_mode()
                 if rem_active and not remote_subagents_explicitly_allowed():
@@ -1492,7 +1652,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         "deny",
                         (
                             f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_signals)}). "
-                            f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores Model='flash' in Remote Mode on Argon sessions and drains 3x Argon quota. "
+                            f"Reviewer '{r_role_hint}' is configured for '{resolved_m}', which ignores fast-tier subagent overrides in Remote Mode on Frontier sessions and drains 3x Frontier quota. "
                             "Run reviews in Local Mode, switch reviewer policy to 'inherit' on a Carbon/Claude session, or set HARNESS_ALLOW_REMOTE_SUBAGENTS=1."
                         ),
                         tool=name,
@@ -2402,6 +2562,9 @@ def _main() -> None:
         name, args = _tool_name_and_args(payload)
         reviewer = None
         conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "")
+        global _ACTIVE_HOOK_CONVERSATION_ID, _ACTIVE_HOOK_MODEL_NAME
+        _ACTIVE_HOOK_CONVERSATION_ID = conversation.strip()
+        _ACTIVE_HOOK_MODEL_NAME = str(payload.get("modelName") or payload.get("model_name") or "").strip()
         if conversation and os.environ.get("HARNESS_HOST") == "antigravity":
             from reviewer_host import reviewer_context, discovery_command_allowed
             reviewer = reviewer_context(REPO, conversation, bind=True)
@@ -2502,6 +2665,11 @@ def _main() -> None:
                     ok_w_cmd, reason_w_cmd = worker_command_allowed(cmd_str)
                     if not ok_w_cmd:
                         emit("deny", reason_w_cmd, tool=name, command=cmd_str, reason_code="WORKER_LIFECYCLE_COMMAND_FORBIDDEN")
+                        return
+                    from delegation_policy import check_worker_intra_wave_retry_cap
+                    ok_iw, reason_iw = check_worker_intra_wave_retry_cap(REPO, cmd_str)
+                    if not ok_iw:
+                        emit("deny", reason_iw, tool=name, command=cmd_str, reason_code="WORKER_INTRA_WAVE_RETRY_CAP")
                         return
                     from delegation_policy import extract_symbol_write_targets, worker_write_allowed
                     is_sym_w, sym_targets = extract_symbol_write_targets(cmd_str)

@@ -138,6 +138,50 @@ def write_gate_result(
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
         os.replace(tmp, target)
+
+        # Native Harness Orchestrator: track worker verification pass/fail streaks during IMPLEMENTING
+        try:
+            g_low = str(name or "").lower()
+            st_up = str(payload.get("status") or "").upper()
+            env_cls = str(payload.get("env_class") or "").upper()
+            tracked_gate = (
+                g_low in {"unit_tests", "preflight"}
+                or "compile" in g_low
+                or "lint" in g_low
+                or "roborazzi" in g_low
+            )
+            if tracked_gate and st_up in {"PASS", "FAIL"} and env_cls != "ENV":
+                s_root = directory.parent
+                act_f = s_root / "active-task.json"
+                if act_f.is_file():
+                    from _vnext_common import read_json as _rj
+                    act_tid = str((_rj(act_f) or {}).get("task_id") or "").strip()
+                    if act_tid:
+                        p_f = s_root / "tasks" / act_tid / "plan.json"
+                        if p_f.is_file():
+                            pl_doc = _rj(p_f)
+                            if str(pl_doc.get("status") or "").upper() == "IMPLEMENTING":
+                                repo_root = s_root.parent.parent
+                                from delegation_policy import (
+                                    is_worker_verification_context_active,
+                                    record_worker_verification_outcome,
+                                )
+                                phases = pl_doc.get("phases") or []
+                                pidx = int(pl_doc.get("active_phase_index") or 0)
+                                pid = str(phases[pidx].get("id") or "") if (phases and 0 <= pidx < len(phases)) else ""
+                                if is_worker_verification_context_active(repo_root, act_tid, pid) or (st_up == "PASS" and g_low == "unit_tests"):
+                                    record_worker_verification_outcome(
+                                        repo_root,
+                                        passed=(st_up == "PASS"),
+                                        gate_name=g_low,
+                                        detail=str(payload.get("detail") or ""),
+                                        task_id=act_tid,
+                                        phase_id=pid,
+                                        is_wave_boundary=False,
+                                    )
+        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+            target = target
+
         return target
     except AuthoritativeEvidenceError:
         raise

@@ -22,7 +22,7 @@ Key configuration defaults for Google Antigravity:
 - **AI Host**: Select `Google Antigravity` (`antigravity`).
 - **Clean Install Only**: This architecture version supports deterministic clean installations.
 - **Reviewer Call Safety Cap**: Recommended clean-install value = `20` (acts as a safety ceiling, not a target).
-- **Installed Custom Subagents**: Four dedicated specialist reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) plus two quota-saving `gemini-3.8-flash-medium` utility subagents (`harness-scout-agent`, `harness-worker-agent`) are automatically generated under `.agents/agents/<role>/agent.md`.
+- **Installed Custom Subagents**: Four dedicated specialist reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) plus two quota-saving `gemini-4-hydrogen-medium` / `gemini-4-hydrogen-high` utility subagents (`harness-scout-agent`, `harness-worker-agent`) are automatically generated under `.agents/agents/<role>/agent.md`.
 - **Model & Reasoning**: Inherited by omission from the parent agent; no manual model or reasoning configuration required.
 
 ## Terminal installation (alternative)
@@ -45,7 +45,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan (evaluating Zero-Decision readiness, codebase reuse candidates, path grounding, and multi-phase module DAG ordering via `task plan-check`), and waits for explicit developer approval before any file modification.
 2. **Approval**: Approve the plan in chat (reply with an approval such as "approve", in any language). Single intake approval covers all phases in a multi-phase task without pauses.
-3. **Implementation & Risk-Gated Flash Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — delegating `T0–T3` non-sensitive multi-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-3.8-flash-medium`) while keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
+3. **Implementation & Risk-Gated Flash Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — delegating `T0–T3` non-sensitive multi-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-4-hydrogen-medium` on `SIMPLE`, `gemini-4-hydrogen-high` on `COMPLEX`) while keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash
    python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity

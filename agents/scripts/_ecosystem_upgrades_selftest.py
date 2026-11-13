@@ -1408,8 +1408,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertIn("symbol read", scout_md)
         self.assertIn("symbol replace-body", worker_md)
         self.assertIn("roborazzi verify", worker_md)
-        self.assertIn("gemini-3.8-flash-medium", scout_md)
-        self.assertIn("gemini-3.8-flash-medium", worker_md)
+        self.assertIn("gemini-4-hydrogen-medium", scout_md)
+        self.assertIn("gemini-4-hydrogen-medium", worker_md)
 
         # 2. Verify T5_CRITICAL (`MANIFEST_PERMISSION`) locks production edits to Lead Architect while allowing Flash Worker on tests
         self._draft_approve_begin(

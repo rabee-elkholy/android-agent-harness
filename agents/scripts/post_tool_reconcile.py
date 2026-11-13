@@ -158,15 +158,48 @@ def main() -> int:
                 roles.append(str(top_r).strip())
 
         err_text = str(err or "").lower()
-        if call_name_low == "invoke_subagent" and ("not found" in err_text or "not allowed to be invoked" in err_text):
-            try:
-                from delegation_policy import CORE_UTILITY_AGENTS, record_unloaded_utility_agent
-                parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
-                for r in roles:
-                    if r in CORE_UTILITY_AGENTS:
-                        record_unloaded_utility_agent(repo, parent_cid, r)
-            except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
-                logger_noop = None
+        if call_name_low == "invoke_subagent":
+            parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+            is_unloaded_or_model_rejected = any(
+                sig in err_text
+                for sig in (
+                    "not found",
+                    "not allowed to be invoked",
+                    "invalid model",
+                    "unsupported model",
+                    "not a valid model",
+                    "model unavailable",
+                    "marked unavailable",
+                    "is unavailable",
+                    "not supported for your account",
+                    "not available on your plan",
+                    "entitlement",
+                )
+            )
+            if is_unloaded_or_model_rejected:
+                try:
+                    from delegation_policy import CORE_UTILITY_AGENTS, record_unloaded_utility_agent
+                    eff_cid = parent_cid or "global"
+                    for r in roles:
+                        if r in CORE_UTILITY_AGENTS:
+                            record_unloaded_utility_agent(repo, eff_cid, r)
+                            if eff_cid != "global":
+                                record_unloaded_utility_agent(repo, "global", r)
+                except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                    logger_noop = None
+            elif "harness-worker-agent" in roles:
+                try:
+                    from delegation_policy import WORKER_AGENT, _load_utility_ledger, evaluate_completed_worker_wave, mark_utility_wave_completed
+                    if parent_cid:
+                        mark_utility_wave_completed(repo, parent_cid)
+                    ledger_u = _load_utility_ledger(repo)
+                    for u_item in reversed(ledger_u.get("entries") or []):
+                        if isinstance(u_item, dict) and str(u_item.get("agent_type") or "") == WORKER_AGENT:
+                            if not parent_cid or str(u_item.get("parent_conversation_id") or "") == parent_cid:
+                                evaluate_completed_worker_wave(repo, u_item, invoke_error=str(err or ""))
+                                break
+                except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                    logger_noop = None
 
         st_root = state_root(repo)
         active_task_file = st_root / "active-task.json"

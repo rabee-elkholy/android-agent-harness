@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.6] - 2026-11-13
+
+### Gen-4 Hydrogen + Argon Low Complexity-Adaptive Engine, Antigravity Platform Guards, and Flagship Overhaul
+
+- **Gen-4 `Hydrogen + Argon Low` Complexity-Adaptive Subagent Engine & Full Edge-Case Hardening (`agents/scripts/review_models.py`, `agents/scripts/delegation_policy.py`, `agents/scripts/antigravity_runtime.py`, `agents/scripts/pre_tool_safety.py`, `agents/scripts/review_execution.py`, `agents/scripts/install_tool_adapters.py`, `agents/scripts/doctor/engine.py`, `agents/scripts/lifecycle.py`, `agents/scripts/repair.py`, `agents/scripts/session_forensics.py`, `agents/subagents/harness-{scout,worker}-agent.json`, `agents/tool-adapters/*`, `README.md`, `docs/reviewer-models.md`)**: Add `Gemini 4 Hydrogen` across all four thinking levels (`low`, `medium`, `high`, `xhigh`/`extra`) and ship `hydrogen-argon-hybrid` (`hydrogen-argon-project` / `hydrogen-argon-task`) as the recommended `#1` Antigravity policy (`Gemini 4 Carbon Medium` Lead + `100% gemini-4-hydrogen-medium` on `SIMPLE` + `gemini-4-hydrogen-high`/`medium` on `COMPLEX` with zero `Argon` worker burn + balanced `gemini-4-argon-medium` on `T5_CRITICAL` security/logic specialists, automatic `Hydrogen` capped at `high`, 2-strike `Hydrogen High` escalation with 1-wave `Fast-Fail` blocker detection, and `worker-handoff.json` Zero-Scratch `Carbon` takeover), alongside `hydrogen-dynamic` (`100%` Pure Hydrogen `medium`->`high` ceiling) and `hydrogen-risk-hybrid` while preserving `flash-argon-hybrid` / `flash-dynamic` with zero checksum breakage on in-flight frozen runs; upgrade `Scout` (`gemini-4-hydrogen-medium`) and adaptive `Worker` (`gemini-4-hydrogen-medium` / `gemini-4-hydrogen-high`) with `SUBAGENT_FRONTMATTER_UNPINNED_GUARD`, `Remote Mode` `#198819` Hydrogen quota-leak protection, `models/` prefix normalization and `xhigh`/`extra`/`gemini-4-flash` alias verification in native SQLite protobuf metadata, `HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK` and `ORCHESTRATOR_DOUBLE_PLANNING_HAZARD` diagnostics, and full `repair`/`lifecycle`/`doctor` ownership synchronization.
+
 ## [1.3.5] - 2026-11-12
 
 ### Live Antigravity Transcript Schema & Truncation Resilience, Fast `--tests` Worker Iteration, `plan.md` Compaction, and Full Lifecycle Hardening

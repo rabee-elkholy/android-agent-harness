@@ -3,10 +3,10 @@
 Implements Option 4 Hybrid Orchestration + Project-Wide Multi-Wave Subagent Governance:
 1. Primary Lead Session: Gemini 4 Carbon (Medium) — or Gemini 4 Argon — rotated
    with Claude Sonnet 5.5 / Opus 5.5 when the Gemini weekly/5h bucket reaches ~50%.
-2. `harness-scout-agent` (pinned to `gemini-3.8-flash-medium`): read-only graph,
-   task-context, and batched source inspection subagent returning compact digests
-   (supports 1-3 parallel scouts per wave for broad multi-subsystem studies).
-3. `harness-worker-agent` (pinned to `gemini-3.8-flash-medium`): plan-scoped,
+2. `harness-scout-agent` (pinned to `gemini-4-hydrogen-medium` by default; `gemini-3.8-flash-medium` under legacy `flash-*` fallback): read-only graph,
+   symbol-outline, and batched multi-file exploration returning a compact
+   `file:line` architectural digest so the Lead Architect never sweeps raw files.
+3. `harness-worker-agent` (pinned to `gemini-4-hydrogen-medium` on `SIMPLE` slices and `gemini-4-hydrogen-high` on `COMPLEX` slices by default): plan-scoped,
    single-instance implementation & Gradle compile/test worker governed by
    risk-tier, TDD red-evidence, conflict, and sensitive-surface safety gates.
 4. Project-Wide Step Budgets & Post-Subagent Anti-Reread Caps across ALL subagents
@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -55,6 +56,10 @@ from policy_vocab import (  # noqa: E402
 SCOUT_AGENT = "harness-scout-agent"
 WORKER_AGENT = "harness-worker-agent"
 SPECIALIST_AGENT = "specialist-subagent"
+DEFAULT_UTILITY_HYDROGEN_MODEL = "gemini-4-hydrogen-medium"
+ADAPTIVE_WORKER_HYDROGEN_MODEL = "gemini-4-hydrogen-high"
+# Automatic Hydrogen ceiling capped at `high` (ties `xhigh` at 54% on Terminal-Bench 4.0 without 2.76x token bloat / +69% cost)
+ESCALATED_WORKER_HYDROGEN_MODEL = "gemini-4-hydrogen-high"
 DEFAULT_UTILITY_FLASH_MODEL = "gemini-3.8-flash-medium"
 ADAPTIVE_WORKER_ARGON_MODEL = "gemini-4-argon-low"
 
@@ -97,11 +102,11 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
     SCOUT_AGENT: {
         "name": SCOUT_AGENT,
         "description": (
-            "Fast read-only Android/KMP codebase scout pinned to Gemini 3.8 Flash. "
+            "Fast read-only Android/KMP codebase scout pinned to Gemini 4 Hydrogen (Medium). "
             "Runs harness graph/task-context discovery, batches parallel file reads, and returns "
             "a self-contained (<1,500 tokens) file:line architectural digest so the lead model never re-reads files."
         ),
-        "model": DEFAULT_UTILITY_FLASH_MODEL,
+        "model": DEFAULT_UTILITY_HYDROGEN_MODEL,
         "tools": list(ANTIGRAVITY_SCOUT_TOOLS),
         "fingerprint": UTILITY_AGENT_FINGERPRINTS[SCOUT_AGENT],
         "system_prompt": (
@@ -114,12 +119,12 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "1. **Turn 1 Graph Anchor & Project Context**: Anchor discovery first using `python .agents/harness.py graph --feature <name> --json` "
             "or `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) before broad search. "
             "Honor any `project_notes` and `developer_instructions` returned in that JSON (and read `.agents/project-context/{architecture,conventions,persistence,ui}.md` only when relevant — never read raw `project-facts.json`).\n"
-            "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file`/`read_file` or `grep_search` calls IN PARALLEL in a single turn — "
+            "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file` or `grep_search` calls IN PARALLEL in a single turn — "
             "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (if `grep_search`/`run_command` are unavailable, "
-            "read `.agents/project-context/architecture.md` first and batch `6-8` large `350-500`-line `view_file`/`read_file` ranges per turn). "
+            "read `.agents/project-context/architecture.md` first and batch `6-8` large `350-500`-line `view_file` ranges per turn). "
             "On large `.kt`/`.java`/`.swift` files (>350 lines), run `python .agents/harness.py symbol outline --file <path>` and "
             "`python .agents/harness.py symbol read --file <path> --symbol <Class.method>` (or batch exact line ranges in parallel). "
-            "Finish within <=4 batched turns (hard hook cap: 24 total tool calls).\n"
+            "Pack reads aggressively so exploration finishes within <=2 mega-batched tool turns (6-10 parallel calls/turn, completing at Turn 2 before Gemini 4's Turn-3 +701/cache=0 drop #200026; hard hook cap: 24 total tool calls).\n"
             "3. **Strict Read-Only & Plain-Text Return**: NEVER edit, create, or delete files, NEVER run Gradle builds, lifecycle mutations, "
             "or git writes, NEVER invoke subagents or ask the developer questions, and **NEVER call `send_message`** — output your final "
             "digest directly as plain assistant text and end your turn.\n"
@@ -133,11 +138,11 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
     WORKER_AGENT: {
         "name": WORKER_AGENT,
         "description": (
-            "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 3.8 Flash. "
+            "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 4 Hydrogen (Medium/High). "
             "Executes decision-complete implementation briefs within approved plan.json file boundaries and runs "
             "compile/unit-test gates before returning a concise diff summary."
         ),
-        "model": DEFAULT_UTILITY_FLASH_MODEL,
+        "model": DEFAULT_UTILITY_HYDROGEN_MODEL,
         "tools": list(ANTIGRAVITY_WORKER_TOOLS),
         "fingerprint": UTILITY_AGENT_FINGERPRINTS[WORKER_AGENT],
         "system_prompt": (
@@ -150,8 +155,8 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "## Mandatory Execution Contract\n"
             "1. **Follow Brief & Project Context Literally**: Implement the exact file paths, data types, function signatures, "
             "architectural patterns, `developer_instructions`, and `project-notes.md` rules specified in your brief (never read raw `project-facts.json`). "
-            "Batch `view_file` reads in parallel (4-8 files/ranges per turn; hard hook cap: 32 read/search calls) "
-            "and do NOT invent unrequested abstractions or touch files outside the approved task/phase scope.\n"
+            "Batch `view_file` reads in parallel (4-8 files/ranges per turn; hard hook cap: 32 read/search calls), coalesce multi-hunk edits into `multi_replace_file_content` rather than rapid single-edit bursts (#200029/#199971), "
+            "and do NOT invent unrequested abstractions or touch files outside the approved task/phase scope (if `compile`/`test` fails twice on the same blocker, stop retrying and return exact diagnostics for Native Orchestrator escalation).\n"
             "2. **Respect TDD & Risk Boundaries** enforced by the native PreToolUse hook:\n"
             "   - If `before_first_edit` requires recording baseline test failures, run `python .agents/harness.py test --record-start` first.\n"
             "   - In `CAPTURE_RED_ONLY` mode (BUG reproduction), edit ONLY test files and run `python .agents/harness.py test --capture-red`.\n"
@@ -167,8 +172,9 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "`task revise`, `task cancel`, `task prepare-verification`, `task deliver`, `phase-review`, `review`), NEVER run git commit/reset/checkout, "
             "NEVER prompt the developer directly, and **NEVER call `send_message`**. If `[SCOPE-HINT]` reports a failing legacy regression test outside `expected_files` "
             "whose old assertion conflicts with the new spec (or if blocked by a genuine spec ambiguity), STOP IMMEDIATELY without retrying full builds and report the exact file and assertion to the Lead Architect.\n"
-            "5. **Self-Contained Completion Digest (<1,200 tokens)** with sections `CHANGED_FILES` (with line ranges), `VERIFICATION_RUNS`, and "
-            "`NOTES_FOR_ARCHITECT` as plain assistant text so the Lead Architect only needs a single `git diff` check.\n"
+            "5. **Self-Contained Completion & Zero-Scratch Handoff Digest (<1,200 tokens)** as plain assistant text:\n"
+            "   - When all gates pass: include `CHANGED_FILES` (with line ranges), `VERIFICATION_RUNS`, and `NOTES_FOR_ARCHITECT` so the Lead Architect only needs a single `git diff` check.\n"
+            "   - When ANY gate fails or a blocker stops execution: preserve all working code edits on disk (never revert working progress) and include `HANDOFF_COMPLETED` (exact files/symbols finished and verified), `HANDOFF_TRIED_AND_FAILED` (approaches attempted and why they failed so they are never repeated), and `HANDOFF_EXACT_BLOCKER` (exact `file:line`, symbol, and failing `cause:` — prefixed with `ARCHITECTURAL_BLOCKER:` if blocked by a spec/scope conflict so Native Orchestrator hands over immediately to Carbon).\n"
         ),
     },
 }
@@ -197,6 +203,1030 @@ def render_utility_agent_markdown(role: str, *, model: str | None = None) -> str
     )
 
 
+def _uses_legacy_flash_policy(default_choice: str) -> bool:
+    norm = str(default_choice or "").strip().lower()
+    return (
+        norm in {"flash-argon-hybrid", "flash-dynamic", "flash", "risk-hybrid", "hybrid-smart"}
+        or norm.startswith("gemini-3.8-flash")
+    )
+
+
+# Wave-Boundary Escalation & Zero-Scratch Handoff Thresholds:
+# - Automatic `Hydrogen` ceiling is strictly `gemini-4-hydrogen-high` (`xhigh` automatic routing disabled: same 54% coding score at 2.76x verbosity).
+# - `SIMPLE` `FULL_SLICE`: Wave 1 (`hydrogen-medium`) -> fails -> Wave 2 (`hydrogen-high` #1) -> fails -> Wave 3 (`hydrogen-high` #2) -> fails -> `Carbon` Lead Takeover!
+# - `COMPLEX` `FULL_SLICE`: Wave 1 (`hydrogen-high` #1) -> fails -> Wave 2 (`hydrogen-high` #2 corrective delta) -> fails -> `Carbon` Lead Takeover!
+# - `Fast-Fail` Exception: Immediate `Carbon` Lead Takeover after 1st wave if Worker reports an explicit architectural/scope blocker
+#   (`[SCOPE-HINT]`, `ARCHITECTURAL_BLOCKER`, `SPEC_AMBIGUITY`) or exits a real Git wave with zero worktree progress (`EMPTY_WAVE`).
+# - Every failed wave writes `.agents/state/tasks/<id>/worker-handoff.json` (`Zero-Scratch Handoff Capsule`) preserving on-disk edits,
+#   passing vs failing gates, and cumulative Worker self-reports so `Carbon` resumes from ~85% instead of starting from zero!
+WORKER_FRICTION_MODEL_ESCALATE_STRIKES = 1
+WORKER_FRICTION_LEAD_TAKEOVER_STRIKES = 2
+WORKER_HIGH_FRICTION_TAKEOVER_STRIKES = 2
+MAX_INTRA_WAVE_GATE_FAILS = 5
+
+_ARCHITECTURAL_BLOCKER_RE = re.compile(
+    r"\[SCOPE-HINT\]|ARCHITECTURAL_BLOCKER|SPEC_AMBIGUITY|NEEDS_ARCHITECT_DECISION|OUT_OF_SCOPE_BLOCKER",
+    re.IGNORECASE,
+)
+
+
+def _is_escalated_ceiling_worker_model(model_name: str) -> bool:
+    m = str(model_name or "").strip().lower()
+    return (
+        m.endswith("-high")
+        or m.endswith("-xhigh")
+        or m.endswith("-extra")
+        or m.startswith("gemini-4-argon")
+        or m.startswith("gemini-4-carbon")
+    )
+
+
+def _worker_friction_file(repo: Path, task_id: str) -> Path:
+    return task_dir(repo, task_id) / "worker-friction.json"
+
+
+def _worker_handoff_file(repo: Path, task_id: str) -> Path:
+    return task_dir(repo, task_id) / "worker-handoff.json"
+
+
+def get_worker_friction_state(
+    repo: Path,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+    *,
+    phase_id: str | None = None,
+) -> dict[str, Any]:
+    """Return Native Harness Orchestrator wave-boundary & intra-wave friction state for `(task_id, phase_id)`."""
+    if plan is None and not task_id:
+        try:
+            from mutation_guard import active_plan
+            plan = active_plan(repo)
+        except Exception:
+            plan = None
+    tid = str(task_id or (plan or {}).get("task_id") or "").strip()
+    empty: dict[str, Any] = {
+        "wave_failures": 0,
+        "consecutive_failures": 0,
+        "high_wave_failures": 0,
+        "architectural_fast_fail": False,
+        "fast_fail_reason": "",
+        "intra_wave_gate_failures": 0,
+        "total_wave_failures": 0,
+        "total_failures": 0,
+        "last_failed_gate": "",
+        "last_detail": "",
+        "last_worker_model": "",
+        "phase_id": "",
+    }
+    if not tid:
+        return empty
+
+    if phase_id is None:
+        phases = (plan or {}).get("phases") or []
+        idx = int((plan or {}).get("active_phase_index") or 0)
+        phase_id = str(phases[idx].get("id") or "") if (phases and 0 <= idx < len(phases)) else ""
+    pid = str(phase_id or "").strip()
+    empty["phase_id"] = pid
+
+    f_path = _worker_friction_file(repo, tid)
+    if not f_path.is_file():
+        return empty
+    try:
+        raw = read_json(f_path)
+    except (OSError, ValueError, ValidationError):
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+    by_phase = raw.get("by_phase") if isinstance(raw.get("by_phase"), dict) else {}
+    bucket = by_phase.get(pid or "_root")
+    if not isinstance(bucket, dict):
+        return empty
+    wf = int(bucket.get("wave_failures") if "wave_failures" in bucket else (bucket.get("consecutive_failures") or 0))
+    tot_wf = int(bucket.get("total_wave_failures") if "total_wave_failures" in bucket else (bucket.get("total_failures") or 0))
+    return {
+        "wave_failures": wf,
+        "consecutive_failures": wf,
+        "high_wave_failures": int(bucket.get("high_wave_failures") or 0),
+        "architectural_fast_fail": bool(bucket.get("architectural_fast_fail")),
+        "fast_fail_reason": str(bucket.get("fast_fail_reason") or ""),
+        "intra_wave_gate_failures": int(bucket.get("intra_wave_gate_failures") or 0),
+        "total_wave_failures": tot_wf,
+        "total_failures": tot_wf,
+        "last_failed_gate": str(bucket.get("last_failed_gate") or ""),
+        "last_detail": str(bucket.get("last_detail") or ""),
+        "last_worker_model": str(bucket.get("last_worker_model") or ""),
+        "updated_at": str(bucket.get("updated_at") or ""),
+        "phase_id": pid,
+    }
+
+
+def _worker_friction_triggers_lead_takeover(
+    repo: Path,
+    task_id: str | None,
+    plan: dict[str, Any] | None,
+    friction_or_strikes: dict[str, Any] | int,
+) -> bool:
+    """Return True when Worker wave failures warrant handing core production files to the Lead Architect (`Carbon`)."""
+    if isinstance(friction_or_strikes, dict):
+        fr = friction_or_strikes
+    else:
+        fr = get_worker_friction_state(repo, task_id, plan)
+        if int(friction_or_strikes or 0) != int(fr.get("wave_failures") or 0):
+            fr = dict(fr, wave_failures=int(friction_or_strikes or 0), consecutive_failures=int(friction_or_strikes or 0))
+    wf = int(fr.get("wave_failures") if "wave_failures" in fr else (fr.get("consecutive_failures") or 0))
+    if wf <= 0:
+        return False
+    if bool(fr.get("architectural_fast_fail")):
+        return True
+    high_wf = int(fr.get("high_wave_failures") or 0)
+    if high_wf >= WORKER_HIGH_FRICTION_TAKEOVER_STRIKES:
+        return True
+    rev_rounds = int((plan or {}).get("review_rounds") or 0)
+    if rev_rounds >= 1 and (high_wf >= 1 or wf >= WORKER_FRICTION_LEAD_TAKEOVER_STRIKES):
+        return True
+    try:
+        from review_models import load_policy
+        pol, _ = load_policy(repo, task_id)
+        default_choice = str((pol or {}).get("default") or "inherit").strip().lower()
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, ValidationError):
+        default_choice = "inherit"
+    if _uses_legacy_flash_policy(default_choice) and default_choice != "flash-argon-hybrid":
+        return wf >= WORKER_FRICTION_LEAD_TAKEOVER_STRIKES
+    return False
+
+
+def _extract_worker_transcript_digest(execution_id: str) -> str:
+    """Extract the final assistant text message from a bound Antigravity child Worker transcript."""
+    cid = str(execution_id or "").strip()
+    if not cid:
+        return ""
+    try:
+        tx = prefer_full_transcript(resolve_transcript(cid))
+        if tx is None or not tx.is_file() or tx.stat().st_size > 16 * 1024 * 1024:
+            return ""
+        lines = tx.read_text(encoding="utf-8", errors="replace").splitlines()
+        for raw_line in reversed(lines[-80:]):
+            if not raw_line.strip():
+                continue
+            try:
+                row = json.loads(raw_line)
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            src = str(row.get("source") or "").upper()
+            rtype = str(row.get("type") or "").upper()
+            role = str(row.get("role") or "").lower()
+            if src in {"USER_EXPLICIT", "SYSTEM", "SYSTEM_SDK"} or rtype == "SYSTEM_MESSAGE":
+                continue
+            if role in {"assistant", "model"} or src in {"MODEL", "ASSISTANT", "AGENT"} or "ASSISTANT" in rtype or "MODEL" in rtype:
+                content = row.get("content") or row.get("text") or row.get("message") or ""
+                if isinstance(content, list):
+                    parts = [str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in content]
+                    content = "\n".join(p for p in parts if p)
+                txt = str(content or "").strip()
+                if txt:
+                    return txt[-1800:]
+    except OSError:
+        return ""
+    return ""
+
+
+def _extract_tool_result_text(payload: dict[str, Any]) -> str:
+    """Extract returned subagent summary text from a `PostToolUse` payload if available."""
+    raw_res = (
+        payload.get("toolResult")
+        or payload.get("tool_response")
+        or payload.get("toolOutput")
+        or payload.get("output")
+        or payload.get("result")
+    )
+    if not raw_res:
+        return ""
+    if isinstance(raw_res, str):
+        return raw_res.strip()[-1800:]
+    if isinstance(raw_res, dict):
+        subs = raw_res.get("subagents") or raw_res.get("Subagents") or []
+        if isinstance(subs, list) and subs:
+            chunks = []
+            for sa in subs:
+                if isinstance(sa, dict):
+                    val = sa.get("output") or sa.get("result") or sa.get("response") or sa.get("summary") or sa.get("text") or ""
+                    if val:
+                        chunks.append(str(val).strip())
+            if chunks:
+                return "\n".join(chunks)[-1800:]
+        for k in ("output", "result", "response", "summary", "text", "content"):
+            if raw_res.get(k):
+                return str(raw_res[k]).strip()[-1800:]
+    return ""
+
+
+def _parse_worker_self_report(raw_text: str) -> dict[str, Any]:
+    """Parse structured `HANDOFF_*` (or `CHANGED_FILES` / `NOTES_FOR_ARCHITECT`) sections from Worker output."""
+    txt = str(raw_text or "").strip()
+    if not txt:
+        return {
+            "completed": "",
+            "tried_and_failed": "",
+            "exact_blocker": "",
+            "has_architectural_blocker": False,
+            "raw_digest": "",
+        }
+
+    def _grab(headers: tuple[str, ...]) -> str:
+        pat = (
+            r"(?:^|\n)\s*(?:#+\s*|\*\*|-\s*\*\*)?(?:"
+            + "|".join(re.escape(h) for h in headers)
+            + r")(?:\*\*)?\s*[:\-—]?\s*([\s\S]*?)(?=(?:\n\s*(?:#+\s*|\*\*|-\s*\*\*)?(?:HANDOFF_COMPLETED|HANDOFF_TRIED_AND_FAILED|HANDOFF_EXACT_BLOCKER|CHANGED_FILES|VERIFICATION_RUNS|NOTES_FOR_ARCHITECT)\b)|\Z)"
+        )
+        m = re.search(pat, txt, re.IGNORECASE)
+        if not m:
+            return ""
+        return " ".join(m.group(1).strip().split())[:380]
+
+    completed = _grab(("HANDOFF_COMPLETED", "CHANGED_FILES"))
+    tried = _grab(("HANDOFF_TRIED_AND_FAILED", "VERIFICATION_RUNS"))
+    blocker = _grab(("HANDOFF_EXACT_BLOCKER", "NOTES_FOR_ARCHITECT"))
+    compact_raw = " ".join(txt.split())[:650]
+    return {
+        "completed": completed,
+        "tried_and_failed": tried,
+        "exact_blocker": blocker,
+        "has_architectural_blocker": bool(_ARCHITECTURAL_BLOCKER_RE.search(txt)),
+        "raw_digest": compact_raw,
+    }
+
+
+def _collect_worktree_progress(repo: Path, slice_files: list[str]) -> list[dict[str, Any]]:
+    """Inspect modified & untracked source/test files left on disk by the Worker (never reverts anything)."""
+    items: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    ignored_prefixes = (".agents/", ".claude/", ".github/hooks/", ".codex/")
+    if (repo / ".git").exists():
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "--numstat", "HEAD"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if proc.returncode == 0:
+                for ln in proc.stdout.splitlines():
+                    parts = ln.split("\t")
+                    if len(parts) >= 3:
+                        rel = parts[2].strip().replace("\\", "/")
+                        if not rel or rel.startswith(ignored_prefixes) or rel in seen_paths:
+                            continue
+                        seen_paths.add(rel)
+                        add_n = int(parts[0]) if parts[0].isdigit() else 0
+                        del_n = int(parts[1]) if parts[1].isdigit() else 0
+                        items.append({"file": rel, "status": "MODIFIED", "added_lines": add_n, "deleted_lines": del_n})
+            u_proc = subprocess.run(
+                ["git", "ls-files", "--others", "--exclude-standard"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if u_proc.returncode == 0:
+                for raw_u in u_proc.stdout.splitlines():
+                    rel = raw_u.strip().replace("\\", "/")
+                    if not rel or rel.startswith(ignored_prefixes) or rel in seen_paths:
+                        continue
+                    fp = repo / rel
+                    if fp.is_file():
+                        try:
+                            lc = len(fp.read_text(encoding="utf-8", errors="replace").splitlines())
+                        except OSError:
+                            lc = 0
+                        seen_paths.add(rel)
+                        items.append({"file": rel, "status": "NEW_UNTRACKED", "added_lines": lc, "deleted_lines": 0})
+        except (OSError, subprocess.SubprocessError, ValueError):
+            items = []
+
+    if not items and slice_files:
+        for sf in slice_files:
+            rel = _normalize_repo_rel(repo, str(sf))
+            if not rel or rel in seen_paths:
+                continue
+            fp = repo / rel
+            if fp.is_file():
+                try:
+                    lc = len(fp.read_text(encoding="utf-8", errors="replace").splitlines())
+                except OSError:
+                    lc = 0
+                seen_paths.add(rel)
+                items.append({"file": rel, "status": "PRESENT_ON_DISK", "added_lines": lc, "deleted_lines": 0})
+    return items[:20]
+
+
+def _collect_gate_diagnostics(repo: Path) -> dict[str, Any]:
+    """Extract passing gates vs failing gates and exact `cause:` lines from `.agents/state/results/*.json`."""
+    res_dir = state_root(repo) / "results"
+    passing: list[str] = []
+    failing: list[dict[str, Any]] = []
+    if not res_dir.is_dir():
+        return {"passing_gates": passing, "failing_gates": failing}
+    for gf in sorted(res_dir.glob("*.json")):
+        try:
+            doc = read_json(gf)
+        except (OSError, ValueError, ValidationError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        st = str(doc.get("status") or "").upper()
+        if st == "PASS":
+            passing.append(gf.stem)
+        elif st:
+            failed_tests = [str(t) for t in (doc.get("failed_tests") or doc.get("failures") or []) if t][:8]
+            raw_err = str(
+                doc.get("cause")
+                or doc.get("root_cause")
+                or doc.get("detail")
+                or doc.get("stderr_tail")
+                or doc.get("summary")
+                or ""
+            ).strip()
+            failing.append({
+                "gate": gf.stem,
+                "status": st,
+                "exit_code": doc.get("exit_code"),
+                "failed_tests": failed_tests,
+                "root_cause_excerpt": " ".join(raw_err.split())[:480],
+            })
+    return {"passing_gates": passing, "failing_gates": failing[:4]}
+
+
+def _persist_worker_handoff_capsule(
+    repo: Path,
+    *,
+    task_id: str,
+    phase_id: str,
+    plan: dict[str, Any] | None,
+    passed: bool,
+    bucket: dict[str, Any],
+    wave_id: str = "",
+    worker_model: str = "",
+    worker_text: str = "",
+) -> dict[str, Any]:
+    """Write or resolve `.agents/state/tasks/<task_id>/worker-handoff.json` (`Zero-Scratch Handoff Capsule`)."""
+    h_path = _worker_handoff_file(repo, task_id)
+    pid_key = str(phase_id or "").strip() or "_root"
+    doc: dict[str, Any] = {"schema_version": 1, "task_id": task_id, "by_phase": {}}
+    if h_path.is_file():
+        try:
+            loaded = read_json(h_path)
+            if isinstance(loaded, dict):
+                doc.update(loaded)
+                if not isinstance(doc.get("by_phase"), dict):
+                    doc["by_phase"] = {}
+        except (OSError, ValueError, ValidationError):
+            doc = {"schema_version": 1, "task_id": task_id, "by_phase": {}}
+
+    prev = dict(doc["by_phase"].get(pid_key) or {})
+    if passed:
+        if prev:
+            prev["resolved"] = True
+            prev["resolved_at"] = utc_now()
+            doc["by_phase"][pid_key] = prev
+            try:
+                h_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(h_path, doc)
+            except OSError:
+                return prev
+        return prev
+
+    phases = list((plan or {}).get("phases") or [])
+    slice_files: list[str] = []
+    if phase_id and phases:
+        for ph in phases:
+            if isinstance(ph, dict) and str(ph.get("id") or "") == phase_id:
+                slice_files = [str(f) for f in (ph.get("expected_files") or []) if f]
+                break
+    if not slice_files:
+        slice_files = [str(f) for f in ((plan or {}).get("expected_files") or []) if f]
+
+    files_on_disk = _collect_worktree_progress(repo, slice_files)
+    gates = _collect_gate_diagnostics(repo)
+    report = _parse_worker_self_report(worker_text)
+    wf = int(bucket.get("wave_failures") or 0)
+    high_wf = int(bucket.get("high_wave_failures") or 0)
+    arch_ff = bool(bucket.get("architectural_fast_fail"))
+    ff_reason = str(bucket.get("fast_fail_reason") or "")
+    failed_gate = str(bucket.get("last_failed_gate") or "verification")
+    detail_txt = str(bucket.get("last_detail") or "")
+
+    blocker_line = (
+        report["exact_blocker"]
+        or (gates["failing_gates"][0]["root_cause_excerpt"] if gates["failing_gates"] else "")
+        or detail_txt
+        or f"Gate `{failed_gate}` did not pass."
+    )
+    history = [] if prev.get("resolved") else list(prev.get("attempt_history") or [])
+    if not wave_id or not any(str(h.get("wave_id") or "") == wave_id for h in history):
+        history.append({
+            "wave_id": wave_id or f"wave-{wf}",
+            "wave_number": wf,
+            "worker_model": worker_model or str(bucket.get("last_worker_model") or ADAPTIVE_WORKER_HYDROGEN_MODEL),
+            "failed_gate": failed_gate,
+            "completed": report["completed"],
+            "tried_and_failed": report["tried_and_failed"],
+            "blocker": blocker_line[:320],
+            "files_on_disk_count": len(files_on_disk),
+            "recorded_at": utc_now(),
+        })
+    history = history[-4:]
+
+    takeover_now = _worker_friction_triggers_lead_takeover(repo, task_id, plan, bucket)
+    if arch_ff:
+        trigger = f"FAST_FAIL_{ff_reason or 'ARCHITECTURAL_BLOCKER'}"
+    elif takeover_now and int((plan or {}).get("review_rounds") or 0) >= 1 and high_wf < WORKER_HIGH_FRICTION_TAKEOVER_STRIKES:
+        trigger = "POST_REVIEW_HIGH_FAILURE"
+    elif takeover_now:
+        trigger = "TWO_HYDROGEN_HIGH_FAILURES"
+    else:
+        trigger = "CORRECTIVE_HIGH_WAVE_PENDING"
+
+    files_desc = ", ".join(
+        f"{it['file']} (+{it['added_lines']}/-{it['deleted_lines']})" if it["status"] == "MODIFIED" else f"{it['file']} ({it['status']}, {it['added_lines']}L)"
+        for it in files_on_disk[:6]
+    ) or "no tracked file diffs yet"
+    pass_desc = ", ".join(gates["passing_gates"]) or "none"
+    tried_chain = " | ".join(
+        f"W{h['wave_number']}({h['worker_model']}): {h['tried_and_failed'] or h['blocker']}"
+        for h in history
+    )[:360]
+
+    summary_for_lead = (
+        f"DO NOT START FROM SCRATCH — preserve existing Worker progress on disk ({files_desc}; passing gates: [{pass_desc}]). "
+        f"Exact remaining blocker (`{failed_gate}`): {blocker_line[:260]}. "
+        f"Prior Worker attempts: {tried_chain}. "
+        "Inspect `git diff` and apply a surgical fix on top of completed files without rewriting working code."
+    )
+    corrective_brief_hint = (
+        f"CORRECTIVE WAVE BRIEF CONTEXT: Keep existing worktree progress ({files_desc}; passing gates: [{pass_desc}]). "
+        f"Resolve ONLY remaining blocker on `{failed_gate}`: {blocker_line[:240]} (avoid repeating: {report['tried_and_failed'] or 'prior failed assertion'})."
+    )
+
+    capsule: dict[str, Any] = {
+        "schema_version": 1,
+        "task_id": task_id,
+        "phase_id": str(phase_id or ""),
+        "resolved": False,
+        "takeover_ready": takeover_now,
+        "takeover_trigger": trigger,
+        "wave_failures": wf,
+        "high_wave_failures": high_wf,
+        "architectural_fast_fail": arch_ff,
+        "fast_fail_reason": ff_reason,
+        "last_failed_gate": failed_gate,
+        "completed_files_on_disk": files_on_disk,
+        "passing_gates": gates["passing_gates"],
+        "failing_gates": gates["failing_gates"],
+        "worker_self_report": report,
+        "attempt_history": history,
+        "summary_for_lead": summary_for_lead,
+        "corrective_wave_brief_hint": corrective_brief_hint,
+        "updated_at": utc_now(),
+    }
+    doc["by_phase"][pid_key] = capsule
+    try:
+        h_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(h_path, doc)
+    except OSError:
+        return capsule
+    return capsule
+
+
+def get_worker_handoff_capsule(
+    repo: Path,
+    task_id: str | None,
+    *,
+    phase_id: str | None = None,
+    include_resolved: bool = False,
+) -> dict[str, Any] | None:
+    """Fast (~0.1ms) read of active `Zero-Scratch Handoff Capsule` for `(task_id, phase_id)`."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        return None
+    h_path = _worker_handoff_file(repo, tid)
+    if not h_path.is_file():
+        return None
+    try:
+        doc = read_json(h_path)
+    except (OSError, ValueError, ValidationError):
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("by_phase"), dict):
+        return None
+    pid_key = str(phase_id or "").strip() or "_root"
+    cap = doc["by_phase"].get(pid_key)
+    if not isinstance(cap, dict):
+        return None
+    if cap.get("resolved") and not include_resolved:
+        return None
+    return dict(cap)
+
+
+def reset_intra_wave_gate_failures(repo: Path, task_id: str, phase_id: str = "") -> None:
+    """Reset intra-wave gate retry counter when a fresh Worker wave launches."""
+    tid = str(task_id or "").strip()
+    if not tid:
+        return
+    f_path = _worker_friction_file(repo, tid)
+    if not f_path.is_file():
+        return
+    pid_key = str(phase_id or "").strip() or "_root"
+    try:
+        with StateLock(state_root(repo)):
+            doc = read_json(f_path)
+            if isinstance(doc, dict) and isinstance(doc.get("by_phase"), dict) and isinstance(doc["by_phase"].get(pid_key), dict):
+                doc["by_phase"][pid_key]["intra_wave_gate_failures"] = 0
+                atomic_write_json(f_path, doc)
+    except (OSError, ValueError, ValidationError):
+        return
+
+
+def record_worker_verification_outcome(
+    repo: Path,
+    *,
+    passed: bool,
+    gate_name: str,
+    detail: str = "",
+    task_id: str | None = None,
+    phase_id: str | None = None,
+    is_wave_boundary: bool = True,
+    wave_id: str = "",
+    worker_model_used: str = "",
+    worker_text: str = "",
+    architectural_fast_fail: bool = False,
+    fast_fail_reason: str = "",
+) -> dict[str, Any]:
+    """Record Worker verification outcome & update Zero-Scratch Handoff Capsule (`worker-handoff.json`).
+
+    - `is_wave_boundary=False` (called inside `_gate_results.py` during intra-wave Gradle runs):
+      tracks `intra_wave_gate_failures` (5-retry runaway cap) without prematurely burning a Wave Strike,
+      while resetting `wave_failures=0` & `high_wave_failures=0` immediately whenever full `unit_tests` passes!
+    - `is_wave_boundary=True` (called at `PostToolUse` when a Worker `invoke_subagent` wave exits):
+      tracks both total `wave_failures` and `high_wave_failures` (`Hydrogen High` ceiling attempts),
+      records `architectural_fast_fail` when applicable, and persists `worker-handoff.json`.
+    """
+    plan: dict[str, Any] | None = None
+    if not task_id:
+        try:
+            from mutation_guard import active_plan
+            plan = active_plan(repo)
+        except Exception:
+            plan = None
+    tid = str(task_id or (plan or {}).get("task_id") or "").strip()
+    if not tid:
+        return {"wave_failures": 0, "consecutive_failures": 0, "high_wave_failures": 0, "intra_wave_gate_failures": 0}
+    if plan is None:
+        p_file = task_dir(repo, tid) / "plan.json"
+        if p_file.is_file():
+            try:
+                plan = read_json(p_file)
+            except (OSError, ValueError, ValidationError):
+                plan = {}
+    if phase_id is None:
+        phases = (plan or {}).get("phases") or []
+        idx = int((plan or {}).get("active_phase_index") or 0)
+        phase_id = str(phases[idx].get("id") or "") if (phases and 0 <= idx < len(phases)) else ""
+    pid_str = str(phase_id or "").strip()
+    pid_key = pid_str or "_root"
+    g_low = str(gate_name or "").strip().lower()
+
+    effective_model = str(worker_model_used or "").strip()
+    if is_wave_boundary and not passed and not effective_model:
+        try:
+            effective_model, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="FULL_SLICE")
+        except Exception:
+            effective_model = DEFAULT_UTILITY_HYDROGEN_MODEL
+
+    f_path = _worker_friction_file(repo, tid)
+    result_bucket: dict[str, Any] = {}
+    should_update_handoff = False
+    handoff_passed = False
+    try:
+        with StateLock(state_root(repo)):
+            doc: dict[str, Any] = {"schema_version": 2, "task_id": tid, "by_phase": {}}
+            if f_path.is_file():
+                try:
+                    loaded = read_json(f_path)
+                    if isinstance(loaded, dict):
+                        doc.update(loaded)
+                        if not isinstance(doc.get("by_phase"), dict):
+                            doc["by_phase"] = {}
+                except (OSError, ValueError, ValidationError):
+                    pass
+            bucket = dict(doc["by_phase"].get(pid_key) or {})
+            wf = int(bucket.get("wave_failures") if "wave_failures" in bucket else (bucket.get("consecutive_failures") or 0))
+            high_wf = int(bucket.get("high_wave_failures") or 0)
+            arch_ff = bool(bucket.get("architectural_fast_fail"))
+            ff_reason = str(bucket.get("fast_fail_reason") or "")
+            tot_wf = int(bucket.get("total_wave_failures") if "total_wave_failures" in bucket else (bucket.get("total_failures") or 0))
+            iw_fails = int(bucket.get("intra_wave_gate_failures") or 0)
+            seen_waves = [str(w) for w in (bucket.get("evaluated_waves") or []) if w]
+
+            if wave_id and wave_id in seen_waves:
+                return dict(bucket)
+
+            if is_wave_boundary:
+                if wave_id:
+                    seen_waves = (seen_waves + [wave_id])[-32:]
+                iw_fails = 0
+                should_update_handoff = True
+                handoff_passed = passed
+                if passed:
+                    wf = 0
+                    high_wf = 0
+                    arch_ff = False
+                    ff_reason = ""
+                    bucket["last_failed_gate"] = ""
+                    bucket["last_detail"] = ""
+                else:
+                    wf += 1
+                    tot_wf += 1
+                    if _is_escalated_ceiling_worker_model(effective_model):
+                        high_wf += 1
+                    if architectural_fast_fail:
+                        arch_ff = True
+                        ff_reason = fast_fail_reason or "ARCHITECTURAL_BLOCKER"
+                    bucket["last_failed_gate"] = g_low or "worker_wave"
+                    bucket["last_detail"] = str(detail or "")[:240]
+                    if effective_model:
+                        bucket["last_worker_model"] = effective_model
+            else:
+                if passed:
+                    iw_fails = 0
+                    if g_low == "unit_tests":
+                        wf = 0
+                        high_wf = 0
+                        arch_ff = False
+                        ff_reason = ""
+                        bucket["last_failed_gate"] = ""
+                        bucket["last_detail"] = ""
+                        should_update_handoff = True
+                        handoff_passed = True
+                else:
+                    iw_fails += 1
+                    bucket["last_failed_gate"] = g_low
+                    bucket["last_detail"] = str(detail or "")[:240]
+
+            bucket["wave_failures"] = wf
+            bucket["consecutive_failures"] = wf
+            bucket["high_wave_failures"] = high_wf
+            bucket["architectural_fast_fail"] = arch_ff
+            bucket["fast_fail_reason"] = ff_reason
+            bucket["total_wave_failures"] = tot_wf
+            bucket["total_failures"] = tot_wf
+            bucket["intra_wave_gate_failures"] = iw_fails
+            bucket["evaluated_waves"] = seen_waves
+            bucket["updated_at"] = utc_now()
+            doc["by_phase"][pid_key] = bucket
+            f_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(f_path, doc)
+            result_bucket = dict(bucket)
+    except (OSError, ValidationError):
+        return {"wave_failures": 0, "consecutive_failures": 0, "high_wave_failures": 0, "intra_wave_gate_failures": 0}
+
+    if should_update_handoff:
+        _persist_worker_handoff_capsule(
+            repo,
+            task_id=tid,
+            phase_id=pid_str,
+            plan=plan,
+            passed=handoff_passed,
+            bucket=result_bucket,
+            wave_id=wave_id,
+            worker_model=effective_model,
+            worker_text=worker_text,
+        )
+    return result_bucket
+
+
+def evaluate_completed_worker_wave(
+    repo: Path,
+    wave_entry: dict[str, Any],
+    *,
+    invoke_error: str = "",
+    worker_output: str = "",
+) -> dict[str, Any]:
+    """Judge a completed `harness-worker-agent` wave at `PostToolUse` and persist `worker-handoff.json`.
+
+    Criteria:
+    - Ignores infrastructure/capacity/entitlement errors (`ENV`, HTTP 503/429, rollout blocks).
+    - Extracts Worker self-report from `worker_output` or bound child `brain/<execution_id>` transcript.
+    - Fast-fails straight to `Carbon` (`architectural_fast_fail=True`) if Worker explicitly reports
+      `[SCOPE-HINT]` / `ARCHITECTURAL_BLOCKER` or exits a bound Git wave with zero worktree progress.
+    - Otherwise counts `Hydrogen High` strikes (`high_wave_failures`), handing over to `Carbon` after
+      the 2nd failed `Hydrogen High` wave with a complete `Zero-Scratch Handoff Capsule`.
+    """
+    tid = str(wave_entry.get("task_id") or "").strip()
+    pid = str(wave_entry.get("phase_id") or "").strip()
+    w_mode = str(wave_entry.get("worker_mode") or "FULL_SLICE").upper()
+    wave_id = str(wave_entry.get("wave_id") or "").strip()
+    dispatched_ts = float(wave_entry.get("dispatched_epoch") or 0.0)
+    exec_id = str(wave_entry.get("execution_id") or "").strip()
+    if not tid:
+        return {"evaluated": False}
+
+    p_file = task_dir(repo, tid) / "plan.json"
+    plan: dict[str, Any] = {}
+    if p_file.is_file():
+        try:
+            plan = read_json(p_file)
+        except (OSError, ValueError, ValidationError):
+            plan = {}
+    if str(plan.get("status") or wave_entry.get("task_status") or "").upper() != "IMPLEMENTING":
+        return {"evaluated": False}
+
+    model_used = str(wave_entry.get("worker_model") or "").strip()
+    if not model_used:
+        try:
+            model_used, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode=w_mode)
+        except Exception:
+            model_used = DEFAULT_UTILITY_HYDROGEN_MODEL
+
+    transcript_txt = _extract_worker_transcript_digest(exec_id) if exec_id else ""
+    combined_worker_txt = "\n".join(
+        s for s in (str(wave_entry.get("worker_output") or "").strip(), str(worker_output or "").strip(), transcript_txt) if s
+    )[-2000:]
+    explicit_arch_blocker = bool(_ARCHITECTURAL_BLOCKER_RE.search(combined_worker_txt)) or bool(_ARCHITECTURAL_BLOCKER_RE.search(invoke_error))
+
+    if invoke_error:
+        try:
+            from antigravity_runtime import classify_antigravity_quota_or_capacity_error
+            if classify_antigravity_quota_or_capacity_error(invoke_error) is not None:
+                return {"evaluated": False, "skipped_reason": "platform_or_quota_error"}
+        except ImportError:
+            pass
+        return record_worker_verification_outcome(
+            repo,
+            passed=False,
+            gate_name="invoke_subagent_error",
+            detail=invoke_error[:220],
+            task_id=tid,
+            phase_id=pid,
+            is_wave_boundary=True,
+            wave_id=wave_id,
+            worker_model_used=model_used,
+            worker_text=combined_worker_txt,
+            architectural_fast_fail=explicit_arch_blocker,
+            fast_fail_reason="ARCHITECTURAL_BLOCKER" if explicit_arch_blocker else "",
+        )
+
+    if w_mode == "CAPTURE_RED_ONLY":
+        red_captured = False
+        try:
+            from workflow import resolve_next_action
+            act = resolve_next_action(repo, tid, plan)
+            red_captured = str(act.get("code") or "") != "CAPTURE_RED_EVIDENCE"
+        except (ImportError, OSError, ValueError, KeyError, ValidationError):
+            red_captured = False
+        return record_worker_verification_outcome(
+            repo,
+            passed=red_captured,
+            gate_name="capture_red",
+            detail="" if red_captured else "Worker wave exited before recording failing RED test evidence.",
+            task_id=tid,
+            phase_id=pid,
+            is_wave_boundary=True,
+            wave_id=wave_id,
+            worker_model_used=model_used,
+            worker_text=combined_worker_txt,
+            architectural_fast_fail=explicit_arch_blocker and not red_captured,
+            fast_fail_reason="ARCHITECTURAL_BLOCKER" if (explicit_arch_blocker and not red_captured) else "",
+        )
+
+    res_dir = state_root(repo) / "results"
+    if res_dir.is_dir():
+        for gf in res_dir.glob("*.json"):
+            try:
+                if gf.stat().st_mtime >= max(0.0, dispatched_ts - 1.0):
+                    gdoc = read_json(gf)
+                    if isinstance(gdoc, dict) and str(gdoc.get("env_class") or "").upper() == "ENV":
+                        return {"evaluated": False, "skipped_reason": "env_failure"}
+            except (OSError, ValueError, ValidationError):
+                continue
+
+    phases = list(plan.get("phases") or [])
+    slice_files: list[str] = []
+    if pid and phases:
+        for ph in phases:
+            if isinstance(ph, dict) and str(ph.get("id") or "") == pid:
+                slice_files = [str(f) for f in (ph.get("expected_files") or []) if f]
+                break
+    if not slice_files:
+        slice_files = [str(f) for f in (plan.get("expected_files") or []) if f]
+
+    check_empty = bool(wave_entry.get("check_empty_worktree")) or bool(exec_id)
+    empty_git_wave = False
+    if check_empty and (repo / ".git").exists():
+        wt_items = _collect_worktree_progress(repo, [])
+        empty_git_wave = len(wt_items) == 0
+
+    live_snap = ""
+    try:
+        from delivery_manifest import build_manifest
+        live_snap = str(build_manifest(repo).get("delivery_snapshot_sha256") or "")
+    except Exception:
+        live_snap = ""
+
+    ut_file = res_dir / "unit_tests.json"
+    if ut_file.is_file():
+        try:
+            ut_mtime = ut_file.stat().st_mtime
+            ut_doc = read_json(ut_file)
+            if isinstance(ut_doc, dict):
+                ut_status = str(ut_doc.get("status") or "").upper()
+                ut_snap = str(ut_doc.get("delivery_snapshot_sha256") or "")
+                fresh_time = dispatched_ts <= 0.0 or ut_mtime >= (dispatched_ts - 1.0)
+                snap_ok = (not live_snap) or (not ut_snap) or (ut_snap == live_snap)
+                if ut_status == "PASS" and fresh_time and snap_ok and not explicit_arch_blocker:
+                    return record_worker_verification_outcome(
+                        repo,
+                        passed=True,
+                        gate_name="unit_tests",
+                        detail="Worker wave verified PASS with matching delivery_snapshot_sha256.",
+                        task_id=tid,
+                        phase_id=pid,
+                        is_wave_boundary=True,
+                        wave_id=wave_id,
+                        worker_model_used=model_used,
+                    )
+                fail_detail = str(ut_doc.get("detail") or f"unit_tests status={ut_status}, fresh={fresh_time}, snap_match={snap_ok}")
+                return record_worker_verification_outcome(
+                    repo,
+                    passed=False,
+                    gate_name="architectural_blocker" if explicit_arch_blocker else "unit_tests",
+                    detail=fail_detail,
+                    task_id=tid,
+                    phase_id=pid,
+                    is_wave_boundary=True,
+                    wave_id=wave_id,
+                    worker_model_used=model_used,
+                    worker_text=combined_worker_txt,
+                    architectural_fast_fail=explicit_arch_blocker or empty_git_wave,
+                    fast_fail_reason="ARCHITECTURAL_BLOCKER" if explicit_arch_blocker else ("EMPTY_WAVE" if empty_git_wave else ""),
+                )
+        except (OSError, ValueError, ValidationError):
+            pass
+
+    if explicit_arch_blocker:
+        return record_worker_verification_outcome(
+            repo,
+            passed=False,
+            gate_name="architectural_blocker",
+            detail="Worker reported explicit architectural/scope blocker requiring Lead Architect decision.",
+            task_id=tid,
+            phase_id=pid,
+            is_wave_boundary=True,
+            wave_id=wave_id,
+            worker_model_used=model_used,
+            worker_text=combined_worker_txt,
+            architectural_fast_fail=True,
+            fast_fail_reason="ARCHITECTURAL_BLOCKER",
+        )
+
+    has_code_targets = not slice_files or any(str(f).lower().endswith((".kt", ".java", ".swift", ".kts")) for f in slice_files)
+    has_slice_tests = any(is_test_file(str(f)) for f in slice_files)
+    cur_iw_fails = int(get_worker_friction_state(repo, tid, plan, phase_id=pid).get("intra_wave_gate_failures") or 0)
+    any_fresh_gate_failed = False
+    fresh_compile_or_preflight_pass = ""
+    if res_dir.is_dir():
+        for gf in sorted(res_dir.glob("*.json")):
+            try:
+                g_mtime = gf.stat().st_mtime
+                if dispatched_ts > 0.0 and g_mtime < dispatched_ts - 1.0:
+                    continue
+                g_doc = read_json(gf)
+                if not isinstance(g_doc, dict):
+                    continue
+                g_st = str(g_doc.get("status") or "").upper()
+                if g_st and g_st != "PASS":
+                    any_fresh_gate_failed = True
+                elif g_st == "PASS" and (gf.name == "preflight.json" or "compile" in gf.name):
+                    fresh_compile_or_preflight_pass = gf.stem
+            except (OSError, ValueError, ValidationError):
+                continue
+    if not has_code_targets and fresh_compile_or_preflight_pass and not any_fresh_gate_failed:
+        return record_worker_verification_outcome(
+            repo, passed=True, gate_name=fresh_compile_or_preflight_pass, detail="Resource/docs wave verified PASS via compile/preflight.",
+            task_id=tid, phase_id=pid, is_wave_boundary=True, wave_id=wave_id, worker_model_used=model_used,
+        )
+    t_kind = str(plan.get("kind") or plan.get("task_kind") or "").upper()
+    if (
+        w_mode == "FULL_SLICE"
+        and not has_slice_tests
+        and t_kind != "BUG"
+        and cur_iw_fails == 0
+        and not any_fresh_gate_failed
+        and not empty_git_wave
+    ):
+        gate_lbl = fresh_compile_or_preflight_pass or "zero_test_slice"
+        return record_worker_verification_outcome(
+            repo, passed=True, gate_name=gate_lbl, detail="Zero-test slice completed cleanly without gate failures.",
+            task_id=tid, phase_id=pid, is_wave_boundary=True, wave_id=wave_id, worker_model_used=model_used,
+        )
+
+    return record_worker_verification_outcome(
+        repo,
+        passed=False,
+        gate_name="empty_worker_wave" if empty_git_wave else "missing_unit_tests_gate",
+        detail=(
+            "Worker wave exited with zero modified files on disk and no passing verification gate."
+            if empty_git_wave
+            else "Worker wave exited without a green full `python .agents/harness.py test` gate on current code."
+        ),
+        task_id=tid,
+        phase_id=pid,
+        is_wave_boundary=True,
+        wave_id=wave_id,
+        worker_model_used=model_used,
+        worker_text=combined_worker_txt,
+        architectural_fast_fail=empty_git_wave,
+        fast_fail_reason="EMPTY_WAVE" if empty_git_wave else "",
+    )
+
+_WORKER_GRADLE_GATE_CMD_RE = re.compile(
+    r"\b(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness)\s+(?:compile|test|preflight|lint|roborazzi)\b"
+    r"|\b(?:run_gradle_task|run_tests_gate|preflight_check|roborazzi_gate)\.py\b"
+    r"|\bgradlew(?:\.bat)?\b",
+    re.IGNORECASE,
+)
+
+
+def check_worker_intra_wave_retry_cap(repo: Path, command: str) -> tuple[bool, str]:
+    """Stop runaway intra-wave Gradle loops after 5 consecutive gate failures so Wave 2 can escalate."""
+    if not _WORKER_GRADLE_GATE_CMD_RE.search(str(command or "")):
+        return True, ""
+    state = get_worker_friction_state(repo)
+    iw = int(state.get("intra_wave_gate_failures") or 0)
+    if iw >= MAX_INTRA_WAVE_GATE_FAILS:
+        return (
+            False,
+            f"WORKER_INTRA_WAVE_RETRY_CAP: `{WORKER_AGENT}` hit {iw} consecutive compile/test failures inside this single wave "
+            f"(last gate: `{state.get('last_failed_gate')}`). Stop retrying builds in this session and output your diagnostic "
+            "summary immediately so Native Harness Orchestrator can escalate the next wave.",
+        )
+    return True, ""
+
+
+def is_worker_verification_context_active(repo: Path, task_id: str, phase_id: str = "") -> bool:
+    """True when `HARNESS_UTILITY_AGENT=harness-worker-agent` or an active worker wave owns `(task_id, phase_id)`."""
+    if os.environ.get("HARNESS_UTILITY_AGENT", "").strip() == WORKER_AGENT:
+        return True
+    try:
+        ledger = _load_utility_ledger(repo)
+        for item in reversed(ledger.get("entries") or []):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("task_id") or "") != task_id:
+                continue
+            if phase_id and str(item.get("phase_id") or "") not in ("", phase_id):
+                continue
+            if str(item.get("agent_type") or "") == WORKER_AGENT:
+                if str(item.get("worker_mode") or "") == "CAPTURE_RED_ONLY":
+                    return False
+                return not bool(item.get("wave_completed")) and not bool(item.get("lead_edited_after_wave"))
+    except Exception:
+        return False
+    return False
+
+
+def resolve_utility_scout_model(
+    repo: Path,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+) -> str:
+    """Resolve the active model for `harness-scout-agent`.
+
+    - Default & `hydrogen-*` policies: `gemini-4-hydrogen-medium`.
+    - `safe-cache-hybrid` (#200026 cache shield) & legacy `flash-*` policies: `gemini-3.8-flash-medium`
+      (90.66%-98.08% KV-cache hit rate with zero server-side Turn-3 cache=0 drops).
+    """
+    if plan is None and not task_id:
+        try:
+            from mutation_guard import active_plan
+            plan = active_plan(repo)
+        except Exception:
+            plan = None
+    tid = str(task_id or (plan or {}).get("task_id") or "").strip() or None
+    try:
+        from review_models import load_policy
+        pol, _ = load_policy(repo, tid)
+        default_choice = str((pol or {}).get("default") or "inherit").strip().lower()
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, ValidationError):
+        default_choice = "inherit"
+    if default_choice == "safe-cache-hybrid" or _uses_legacy_flash_policy(default_choice):
+        return DEFAULT_UTILITY_FLASH_MODEL
+    return DEFAULT_UTILITY_HYDROGEN_MODEL
+
+
 def resolve_utility_worker_model(
     repo: Path,
     task_id: str | None = None,
@@ -204,10 +1234,18 @@ def resolve_utility_worker_model(
     *,
     worker_mode: str = "FULL_SLICE",
 ) -> tuple[str, str]:
-    """Resolve the active model and complexity tier for `harness-worker-agent`.
+    """Resolve the active model and complexity tier for `harness-worker-agent` (capped at `Hydrogen High`).
 
-    Under `flash-argon-hybrid`, `FULL_SLICE` execution on `COMPLEX` tasks upgrades the worker
-    to `gemini-4-argon-low` while keeping `SIMPLE` slices and test-only gates on `gemini-3.8-flash-medium`.
+    - Default, `hydrogen-*`, & `safe-cache-hybrid`: `gemini-4-hydrogen-medium` on `SIMPLE` / test-only gates,
+      automatically starting `FULL_SLICE` execution on `COMPLEX` tasks at `gemini-4-hydrogen-high` (54% Terminal-Bench 4.0 ceiling).
+    - Native Orchestrator Wave-Boundary Escalation (`worker-friction.json`):
+      * `SIMPLE` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-medium` -> Strike 1 upgrades Wave 2 to `gemini-4-hydrogen-high` ->
+        Strike 2 hands core production files to Lead Architect (`Carbon`).
+      * `COMPLEX` `FULL_SLICE`: Wave 1 starts at `gemini-4-hydrogen-high` -> Strike 1 hands core production files IMMEDIATELY
+        to Lead Architect (`Carbon`) without wasting tokens on `hydrogen-xhigh` (same 54% coding score at 2.76x verbosity).
+    - Legacy `flash-argon-hybrid`: `gemini-3.8-flash-medium` on `SIMPLE` / test-only gates,
+      upgrading `FULL_SLICE` on `COMPLEX` (or Strike 1 friction) to `gemini-4-argon-low`.
+    - Legacy `flash-dynamic` / `risk-hybrid`: `gemini-3.8-flash-medium`.
     """
     if plan is None and not task_id:
         try:
@@ -234,14 +1272,86 @@ def resolve_utility_worker_model(
         default_choice = "inherit"
         complexity_tier = "SIMPLE"
 
-    if (
-        default_choice == "flash-argon-hybrid"
-        and status == "IMPLEMENTING"
-        and str(worker_mode or "FULL_SLICE").upper() == "FULL_SLICE"
-        and complexity_tier == "COMPLEX"
-    ):
-        return ADAPTIVE_WORKER_ARGON_MODEL, complexity_tier
-    return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
+    w_mode_up = str(worker_mode or "FULL_SLICE").upper()
+    is_full_slice_impl = status == "IMPLEMENTING" and w_mode_up == "FULL_SLICE"
+    is_tests_gate_impl = status == "IMPLEMENTING" and w_mode_up == "TESTS_AND_GATES_ONLY"
+    friction_strikes = 0
+    if (is_full_slice_impl or is_tests_gate_impl) and tid:
+        friction_strikes = int(get_worker_friction_state(repo, tid, plan).get("consecutive_failures") or 0)
+
+    is_complex_full_slice = is_full_slice_impl and complexity_tier == "COMPLEX"
+    if default_choice == "flash-argon-hybrid":
+        if is_complex_full_slice or (is_full_slice_impl and friction_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES):
+            return ADAPTIVE_WORKER_ARGON_MODEL, complexity_tier
+        return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
+    if _uses_legacy_flash_policy(default_choice):
+        return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
+    if is_full_slice_impl and friction_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES:
+        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
+    if is_tests_gate_impl and friction_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES:
+        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
+    if is_complex_full_slice:
+        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
+    return DEFAULT_UTILITY_HYDROGEN_MODEL, complexity_tier
+
+
+def _sync_single_utility_agent_model(repo: Path, role: str, target_model: str) -> bool:
+    dest = repo / ".agents" / "agents" / role / "agent.md"
+    if not dest.parent.is_dir():
+        return False
+    try:
+        from install_tool_adapters import with_managed_marker
+        from _vnext_common import canonical_sha256, sha256_file
+    except ImportError:
+        return False
+    rendered_bytes = with_managed_marker(render_utility_agent_markdown(role, model=target_model)).encode("utf-8")
+    try:
+        current_bytes = dest.read_bytes() if dest.is_file() else None
+    except OSError:
+        current_bytes = None
+    if current_bytes == rendered_bytes:
+        return False
+    dest.write_bytes(rendered_bytes)
+    ownership_file = repo / ".harness-setup" / "ownership-v1.json"
+    rel_path = f".agents/agents/{role}/agent.md"
+    if ownership_file.is_file():
+        try:
+            manifest = read_json(ownership_file)
+            entries = manifest.get("entries")
+            if isinstance(entries, list):
+                changed = False
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("path") == rel_path:
+                        entry["post_install_sha256"] = sha256_file(dest)
+                        changed = True
+                if changed:
+                    manifest["ownership_sha256"] = canonical_sha256(
+                        {k: v for k, v in manifest.items() if k != "ownership_sha256"}
+                    )
+                    atomic_write_json(ownership_file, manifest)
+        except (OSError, ValueError, RuntimeError, KeyError, ValidationError):
+            pass
+    return True
+
+
+def sync_utility_scout_model(repo: Path, target_model: str) -> bool:
+    """Synchronize `.agents/agents/harness-scout-agent/agent.md` to `target_model` and update ownership hash."""
+    return _sync_single_utility_agent_model(repo, SCOUT_AGENT, target_model)
+
+
+def sync_utility_agent_models(
+    repo: Path,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+    *,
+    worker_mode: str = "FULL_SLICE",
+) -> dict[str, str]:
+    """Synchronize both `harness-scout-agent` and `harness-worker-agent` frontmatter to the active policy."""
+    s_model = resolve_utility_scout_model(repo, task_id=task_id, plan=plan)
+    w_model, _ = resolve_utility_worker_model(repo, task_id=task_id, plan=plan, worker_mode=worker_mode)
+    sync_utility_scout_model(repo, s_model)
+    sync_utility_worker_model(repo, w_model)
+    return {SCOUT_AGENT: s_model, WORKER_AGENT: w_model}
 
 
 def sync_utility_worker_model(repo: Path, target_model: str) -> bool:
@@ -333,14 +1443,17 @@ def record_unloaded_utility_agent(repo: Path, conversation_id: str, agent_name: 
 def is_utility_agent_unloaded_in_session(repo: Path, conversation_id: str, agent_name: str) -> bool:
     cid = str(conversation_id or "").strip()
     role = str(agent_name or "").strip()
-    if not cid or not role:
+    if not role:
         return False
     path = _unloaded_agents_path(repo)
     if not path.is_file():
         return False
     try:
         data = read_json(path)
-        return role in ((data.get("sessions") or {}).get(cid) or [])
+        sessions = data.get("sessions") or {}
+        if cid and role in (sessions.get(cid) or []):
+            return True
+        return role in (sessions.get("global") or [])
     except (OSError, ValueError, KeyError, ValidationError):
         return False
 
@@ -568,6 +1681,11 @@ def record_utility_dispatch(
         "task_status": resolved_status,
         "phase_id": resolved_pid,
         "worker_mode": worker_mode,
+        "worker_model": (
+            resolve_utility_worker_model(repo, task_id=resolved_tid, worker_mode=worker_mode)[0]
+            if agent_type == WORKER_AGENT
+            else ""
+        ),
         "read_only_specialist": bool(read_only_specialist),
         "dispatched_at": utc_now(),
         "dispatched_epoch": time.time(),
@@ -584,6 +1702,8 @@ def record_utility_dispatch(
             _save_utility_ledger(repo, ledger)
     except (OSError, ValidationError):
         pass
+    if agent_type == WORKER_AGENT and resolved_tid:
+        reset_intra_wave_gate_failures(repo, resolved_tid, resolved_pid)
     return entry
 
 
@@ -773,24 +1893,33 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     changed = True
                     break
 
-    # Mark the latest wave dispatched by parent_cid as completed now that PostToolUse returned to the Lead Model
+    newly_completed_workers: list[dict[str, Any]] = []
+    # Mark the latest wave dispatched by parent_cid (or bound child when parent_cid is blank) as completed now that PostToolUse returned
+    target_wave_id = ""
     if parent_cid:
-        latest_wave_id = ""
         for item in reversed(entries):
             if str(item.get("parent_conversation_id") or "") == parent_cid:
-                latest_wave_id = str(item.get("wave_id") or "")
+                target_wave_id = str(item.get("wave_id") or "")
                 break
-        if latest_wave_id:
-            now_ts = time.time()
-            cur_turns = _count_parent_user_turns(parent_cid)
-            for item in entries:
-                if str(item.get("parent_conversation_id") or "") == parent_cid and str(item.get("wave_id") or "") == latest_wave_id:
-                    if not item.get("wave_completed"):
-                        item["wave_completed"] = True
-                        item["completed_at_epoch"] = now_ts
-                        if cur_turns > int(item.get("parent_user_turns") or 0):
-                            item["parent_user_turns"] = cur_turns
-                        changed = True
+    elif bound:
+        bound_set = set(bound)
+        for item in reversed(entries):
+            if str(item.get("execution_id") or "") in bound_set:
+                target_wave_id = str(item.get("wave_id") or "")
+                break
+    if target_wave_id:
+        now_ts = time.time()
+        cur_turns = _count_parent_user_turns(parent_cid) if parent_cid else 0
+        for item in entries:
+            if str(item.get("wave_id") or "") == target_wave_id and (not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid):
+                if not item.get("wave_completed"):
+                    item["wave_completed"] = True
+                    item["completed_at_epoch"] = now_ts
+                    if cur_turns > int(item.get("parent_user_turns") or 0):
+                        item["parent_user_turns"] = cur_turns
+                    changed = True
+                    if str(item.get("agent_type") or "") == WORKER_AGENT:
+                        newly_completed_workers.append(dict(item))
 
     if changed:
         try:
@@ -813,6 +1942,10 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                 _save_utility_ledger(repo, live)
         except (OSError, ValidationError):
             pass
+
+    res_txt = _extract_tool_result_text(payload) if newly_completed_workers else ""
+    for w_item in newly_completed_workers:
+        evaluate_completed_worker_wave(repo, w_item, worker_output=res_txt)
     return bound
 
 
@@ -1027,10 +2160,14 @@ def _is_wave_active_for_lead(
                         return False
                 except (OSError, ValueError, ValidationError):
                     pass
+        if a_type == WORKER_AGENT and rec_tid:
+            fr_state = get_worker_friction_state(repo, rec_tid, plan, phase_id=rec_pid)
+            if _worker_friction_triggers_lead_takeover(repo, rec_tid, plan, fr_state):
+                return False
         if a_type == WORKER_AGENT and str(sample.get("worker_mode") or "") in {"CAPTURE_RED_ONLY", "TESTS_AND_GATES_ONLY"}:
             # When Lead Architect owns production code (T4/T5 sensitive, conflict, or post-RED bug fix), do not block Lead reads!
             pol = evaluate_delegation_policy(repo, plan=plan)
-            if pol.get("strategy") in {"SENSITIVE_LEAD_CORE_WORKER_TESTS", "CONFLICT_LEAD_CORE_WORKER_VERIFY"}:
+            if pol.get("strategy") in {"SENSITIVE_LEAD_CORE_WORKER_TESTS", "CONFLICT_LEAD_CORE_WORKER_VERIFY", "ORCHESTRATOR_FRICTION_LEAD_TAKEOVER"}:
                 return False
             if str(sample.get("worker_mode") or "") == "CAPTURE_RED_ONLY" and pol.get("worker_mode") != "CAPTURE_RED_ONLY":
                 return False
@@ -1302,6 +2439,15 @@ def pending_post_subagent_directive(repo: Path, conversation_id: str) -> tuple[s
         plan = active_plan(repo)
     except Exception:
         plan = None
+    if plan is None:
+        try:
+            at_f = state_root(repo) / "active-task.json"
+            if at_f.is_file():
+                at_id = str(read_json(at_f).get("task_id") or "").strip()
+                if at_id and (task_dir(repo, at_id) / "plan.json").is_file():
+                    plan = read_json(task_dir(repo, at_id) / "plan.json")
+        except (OSError, ValueError, ValidationError):
+            plan = None
 
     ledger = _load_utility_ledger(repo)
     entries = [
@@ -1322,6 +2468,17 @@ def pending_post_subagent_directive(repo: Path, conversation_id: str) -> tuple[s
                     f"(hard hook cap: {rem} surgical <=200-line gap checks remaining).",
                 )
             if a_type == WORKER_AGENT:
+                tid_w, st_w, pid_w = _current_task_phase_and_status(repo, plan)
+                if st_w == "IMPLEMENTING" and tid_w:
+                    fr_w = get_worker_friction_state(repo, tid_w, plan, phase_id=pid_w)
+                    if int(fr_w.get("wave_failures") or 0) >= 1 and not _worker_friction_triggers_lead_takeover(repo, tid_w, plan, fr_w):
+                        h_cap = get_worker_handoff_capsule(repo, tid_w, phase_id=pid_w) or {}
+                        hint_txt = str(h_cap.get("corrective_wave_brief_hint") or "").strip()
+                        return (
+                            f"worker-corrective-{latest_wave_id}-{fr_w.get('wave_failures', 1)}",
+                            f"NATIVE ORCHESTRATOR CORRECTIVE `gemini-4-hydrogen-high` WAVE READY (attempt #{int(fr_w.get('high_wave_failures') or 0) + 1} of 2 on High): "
+                            f"{hint_txt} Dispatch `harness-worker-agent` with a concise corrective delta brief (do NOT restart from scratch).",
+                        )
                 return (
                     f"worker-{latest_wave_id}",
                     f"POST-WORKER ANTI-REREAD ACTIVE (slice `{latest_wave_id}`): Run `git diff` once to verify changes, then advance directly to "
@@ -1330,6 +2487,17 @@ def pending_post_subagent_directive(repo: Path, conversation_id: str) -> tuple[s
             return (
                 f"spec-{latest_wave_id}",
                 f"POST-SPECIALIST ANTI-REREAD ACTIVE (`{wave_entries[-1].get('role')}`): Act directly on the specialist's findings without re-reading analyzed files ({rem} surgical checks remaining).",
+            )
+    tid_chk, st_chk, pid_chk = _current_task_phase_and_status(repo, plan)
+    if st_chk == "IMPLEMENTING" and tid_chk:
+        fr_chk = get_worker_friction_state(repo, tid_chk, plan, phase_id=pid_chk)
+        if _worker_friction_triggers_lead_takeover(repo, tid_chk, plan, fr_chk):
+            h_take = get_worker_handoff_capsule(repo, tid_chk, phase_id=pid_chk) or {}
+            s_lead = str(h_take.get("summary_for_lead") or "Inspect `git diff` and apply a surgical fix on top of Worker edits.").strip()
+            trig = str(h_take.get("takeover_trigger") or "TWO_HYDROGEN_HIGH_FAILURES")
+            return (
+                f"takeover-{tid_chk}-{pid_chk or 'root'}-{fr_chk.get('wave_failures', 0)}",
+                f"ORCHESTRATOR LEAD TAKEOVER HANDOFF ({trig}): {s_lead} Delegate final Gradle test execution to `{WORKER_AGENT}` (`TESTS_AND_GATES_ONLY`).",
             )
     return ("", "")
 
@@ -1391,12 +2559,16 @@ def evaluate_delegation_policy(
     before_first_edit_cmd: str | None = None,
 ) -> dict[str, Any]:
     """Compute the deterministic Option 4 risk-gated delegation strategy for the current repo/task."""
+    active_scout_model = resolve_utility_scout_model(repo, task_id=task_id, plan=plan)
+    sync_utility_scout_model(repo, active_scout_model)
     quota_guide = {
         "primary_chat_model": "Gemini 4 Carbon (Medium)",
         "fast_fallback_chat_model": "Gemini 4 Argon (Low/Medium)",
         "midweek_rotation_chat_model": "Claude Sonnet 5.5 (Thinking) / Claude Opus 5.5 (Thinking)",
         "rotation_trigger": "Switch main chat model to Claude 5.5 when `/usage` Gemini weekly bar reaches ~50% (separate quota pool).",
-        "subagent_workhorse_model": DEFAULT_UTILITY_FLASH_MODEL,
+        "orchestrator_guard": "Keep main chat on explicit Carbon Medium / Argon Low / Claude 5.5; do NOT select Antigravity Orchestrator over the harness.",
+        "scout_model": active_scout_model,
+        "subagent_workhorse_model": active_scout_model,
         "anti_reread_contract": (
             f"Never re-read files already analyzed by `{SCOUT_AGENT}`, `{WORKER_AGENT}`, or reviewers "
             f"(hard cap: <={MAX_LEAD_POST_SUBAGENT_READS} surgical gap reads per subagent wave)."
@@ -1464,10 +2636,16 @@ def evaluate_delegation_policy(
                 "project_context": _project_context_handoff(None, set()),
                 "quota_strategy": quota_guide,
             }
+        scout_invoke_arg = "flash" if active_scout_model.startswith("gemini-3.8-flash") else None
+        scout_call_hint = (
+            f"pass `Model='flash'`" if scout_invoke_arg == "flash" else "omit `Model` in `invoke_subagent` so `agent.md` frontmatter applies"
+        )
         return {
             "status": "PRE_PLAN_DISCOVERY",
             "strategy": "DELEGATE_SCOUT_FIRST",
             "recommended_subagent": SCOUT_AGENT,
+            "scout_model": active_scout_model,
+            "scout_invoke_model_arg": scout_invoke_arg,
             "scout_allowed": True,
             "parallel_scout_cap": 3,
             "worker_allowed": False,
@@ -1475,7 +2653,7 @@ def evaluate_delegation_policy(
             "remote_mode_detected": is_remote_mode,
             "reason": (
                 "No active implementation task yet. Delegate multi-file exploration and graph/task-context "
-                f"anchoring to 1-3 parallel `{SCOUT_AGENT}` subagents (`{DEFAULT_UTILITY_FLASH_MODEL}` — split 3+ subsystems across 2-3 scouts), "
+                f"anchoring to 1-3 parallel `{SCOUT_AGENT}` subagents (`{active_scout_model}`, {scout_call_hint} — split 3+ subsystems across 2-3 scouts), "
                 "then synthesize their digests directly without re-reading the codebase."
             ),
             "project_context": _project_context_handoff(None, set()),
@@ -1573,6 +2751,28 @@ def evaluate_delegation_policy(
             "quota_strategy": quota_guide,
         }
 
+    if is_utility_agent_unloaded_in_session(repo, "", WORKER_AGENT):
+        return {
+            "status": status,
+            "task_id": tid,
+            "phase_id": phase_id,
+            "risk_tier": risk_tier,
+            "complexity_tier": "SIMPLE",
+            "router_action": act_code,
+            "before_first_edit": before_first_edit_cmd,
+            "strategy": "INLINE_LEAD_UNLOADED_WORKER_FALLBACK",
+            "recommended_subagent": None,
+            "worker_allowed": False,
+            "worker_mode": "NONE",
+            "target_files": target_files,
+            "reason": (
+                f"ZERO-STALL FALLBACK (#200144/#200147): `{WORKER_AGENT}` could not be launched in this host session "
+                "(unloaded custom agent or rejected/unavailable subagent model). Lead Architect takes over directly so the task never stalls."
+            ),
+            "project_context": ctx_handoff,
+            "quota_strategy": quota_guide,
+        }
+
     if act_code == "CAPTURE_RED_EVIDENCE":
         w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="CAPTURE_RED_ONLY")
         sync_utility_worker_model(repo, w_model)
@@ -1627,7 +2827,8 @@ def evaluate_delegation_policy(
         }
 
     if risk_tier == "T0_TRIVIAL" and len(target_files) <= 1:
-        sync_utility_worker_model(repo, DEFAULT_UTILITY_FLASH_MODEL)
+        base_w_model, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+        sync_utility_worker_model(repo, base_w_model)
         return {
             "status": status,
             "task_id": tid,
@@ -1639,7 +2840,7 @@ def evaluate_delegation_policy(
             "recommended_subagent": None,
             "worker_allowed": True,
             "worker_mode": "FULL_SLICE",
-            "worker_model": DEFAULT_UTILITY_FLASH_MODEL,
+            "worker_model": base_w_model,
             "target_files": target_files,
             "reason": "Single-file T0_TRIVIAL edit: edit inline directly on the lead session to skip subagent round-trip latency.",
             "project_context": ctx_handoff,
@@ -1647,7 +2848,8 @@ def evaluate_delegation_policy(
         }
 
     if block_remote_subagents:
-        sync_utility_worker_model(repo, DEFAULT_UTILITY_FLASH_MODEL)
+        base_w_model, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+        sync_utility_worker_model(repo, base_w_model)
         return {
             "status": status,
             "task_id": tid,
@@ -1670,13 +2872,65 @@ def evaluate_delegation_policy(
             "quota_strategy": quota_guide,
         }
 
+    friction = get_worker_friction_state(repo, tid, plan, phase_id=phase_id) if tid else {"consecutive_failures": 0, "high_wave_failures": 0}
+    f_strikes = int(friction.get("consecutive_failures") or 0)
+    high_strikes = int(friction.get("high_wave_failures") or 0)
+    rev_rounds = int(plan.get("review_rounds") or 0)
+    lead_takeover = _worker_friction_triggers_lead_takeover(repo, tid, plan, friction)
+    if lead_takeover:
+        w_test_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+        sync_utility_worker_model(repo, w_test_model)
+        last_gate = str(friction.get("last_failed_gate") or "verification")
+        handoff_cap = get_worker_handoff_capsule(repo, tid, phase_id=phase_id) if tid else None
+        takeover_trig = str((handoff_cap or {}).get("takeover_trigger") or ("FAST_FAIL_ARCHITECTURAL_BLOCKER" if friction.get("architectural_fast_fail") else "TWO_HYDROGEN_HIGH_FAILURES"))
+        handoff_summary = str((handoff_cap or {}).get("summary_for_lead") or "Inspect `git diff` and build directly on existing Worker progress without starting from scratch.")
+        return {
+            "status": status,
+            "task_id": tid,
+            "phase_id": phase_id,
+            "risk_tier": risk_tier,
+            "complexity_tier": c_tier,
+            "friction_strikes": f_strikes,
+            "high_friction_strikes": high_strikes,
+            "takeover_trigger": takeover_trig,
+            "friction_escalation": "LEAD_TAKEOVER",
+            "before_first_edit": before_first_edit_cmd,
+            "strategy": "ORCHESTRATOR_FRICTION_LEAD_TAKEOVER",
+            "recommended_subagent": WORKER_AGENT,
+            "worker_allowed": True,
+            "worker_mode": "TESTS_AND_GATES_ONLY",
+            "worker_model": w_test_model,
+            "target_files": [f for f in target_files if is_test_file(f)],
+            "lead_owned_files": [f for f in target_files if not is_test_file(f)],
+            "lead_takeover_handoff": handoff_cap or {},
+            "reason": (
+                f"NATIVE HARNESS ORCHESTRATOR ESCALATION (`{takeover_trig}`, total_strikes={f_strikes}, high_strikes={high_strikes} on `{last_gate}`, review_rounds={rev_rounds}): "
+                "Control of core production files is handed to the Lead Architect (`Carbon` / `Argon` / `Claude 5.5`) "
+                f"while `{WORKER_AGENT}` (`{w_test_model}`) runs `TESTS_AND_GATES_ONLY`. {handoff_summary}"
+            ),
+            "project_context": ctx_handoff,
+            "quota_strategy": quota_guide,
+        }
+
     w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="FULL_SLICE")
     sync_utility_worker_model(repo, w_model)
     quota_guide = dict(quota_guide, subagent_workhorse_model=w_model)
+    w_invoke_arg = "flash" if w_model.startswith("gemini-3.8-flash") else None
+    prev_handoff = get_worker_handoff_capsule(repo, tid, phase_id=phase_id) if (tid and f_strikes >= 1) else None
+    escalation_state = "ESCALATED_WORKER_MODEL" if f_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES else "NONE"
+    escalation_note = (
+        f" [Native Orchestrator corrective wave active on `{w_model}` (High attempt #{high_strikes + 1} of {WORKER_HIGH_FRICTION_TAKEOVER_STRIKES} after {f_strikes} failed wave(s)) — {prev_handoff.get('corrective_wave_brief_hint', '')}]"
+        if (escalation_state == "ESCALATED_WORKER_MODEL" and prev_handoff)
+        else (
+            f" [Native Orchestrator corrective wave active: `{w_model}` after {f_strikes} failed worker wave(s)]"
+            if escalation_state == "ESCALATED_WORKER_MODEL"
+            else ""
+        )
+    )
     model_call_hint = (
-        f" (configured on `{w_model}` — omit `Model` in `invoke_subagent` so `agent.md` frontmatter applies)"
-        if w_model == ADAPTIVE_WORKER_ARGON_MODEL
-        else f" (configured on `{w_model}`)"
+        f" (configured on `{w_model}` — pass `Model='flash'`)"
+        if w_invoke_arg == "flash"
+        else f" (configured on `{w_model}` — omit `Model` in `invoke_subagent` so `agent.md` frontmatter applies)"
     )
     return {
         "status": status,
@@ -1684,17 +2938,21 @@ def evaluate_delegation_policy(
         "phase_id": phase_id,
         "risk_tier": risk_tier,
         "complexity_tier": c_tier,
+        "friction_strikes": f_strikes,
+        "high_friction_strikes": high_strikes,
+        "friction_escalation": escalation_state,
+        "previous_wave_handoff": prev_handoff or {},
         "before_first_edit": before_first_edit_cmd,
         "strategy": "DELEGATE_WORKER_SLICE",
         "recommended_subagent": WORKER_AGENT,
         "worker_allowed": True,
         "worker_mode": "FULL_SLICE",
         "worker_model": w_model,
-        "worker_invoke_model_arg": None if w_model == ADAPTIVE_WORKER_ARGON_MODEL else "flash",
+        "worker_invoke_model_arg": w_invoke_arg,
         "target_files": target_files,
         "reason": (
             f"Delegate this {risk_tier} ({c_tier}) slice ({len(target_files)} planned file(s)) in a single `{WORKER_AGENT}` call"
-            f"{model_call_hint} with a Decision-Complete Brief (exact file paths, signatures, local patterns, and `compile`/`test` gate), "
+            f"{model_call_hint}{escalation_note} with a Decision-Complete Brief (exact file paths, signatures, local patterns, and `compile`/`test` gate), "
             "then run `git diff` once and advance directly without re-reading source files."
         ),
         "project_context": ctx_handoff,
@@ -1747,19 +3005,54 @@ def validate_utility_dispatch(
             "MIXED_SUBAGENT_BATCH",
         )
 
-    # Guard against silent frontier quota leak: `harness-scout-agent` is strictly Flash-only;
-    # `harness-worker-agent` is Flash-only unless adaptive `flash-argon-hybrid` upgraded it to `gemini-4-argon-low` on a COMPLEX slice.
-    for item in scout_items:
-        raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
-        if raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
-            return (
-                False,
-                f"Utility subagent '{item.get('TypeName') or item.get('typeName')}' is pinned to Flash for quota protection; "
-                f"remove Model='{raw_model}' (or pass Model='flash').",
-                "UTILITY_MODEL_QUOTA_GUARD",
-            )
+    # Guard against silent frontier quota leak & ensure `.agents/agents/<role>/agent.md` frontmatter is pinned before omitted-Model dispatch!
+    expected_s_model = resolve_utility_scout_model(repo, plan=plan) if scout_items else ""
+    if scout_items:
+        sync_utility_scout_model(repo, expected_s_model)
+        if not expected_s_model.startswith("gemini-3.8-flash") and (repo / ".agents" / "agents").is_dir():
+            from review_models import _antigravity_frontmatter_model
+            pinned_s = _antigravity_frontmatter_model(repo, SCOUT_AGENT)
+            if not pinned_s or pinned_s == "inherit":
+                return (
+                    False,
+                    f"SUBAGENT_FRONTMATTER_UNPINNED_GUARD: `.agents/agents/{SCOUT_AGENT}/agent.md` is missing an explicit `model:` pin (`{expected_s_model}`), "
+                    "which would inherit the parent Carbon/Argon chat model and drain Frontier quota. Run `python .agents/harness.py repair` first.",
+                    "SUBAGENT_FRONTMATTER_UNPINNED_GUARD",
+                )
+        for item in scout_items:
+            raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
+            if expected_s_model.startswith("gemini-3.8-flash"):
+                if raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
+                    return (
+                        False,
+                        f"Utility subagent '{SCOUT_AGENT}' is pinned to `{expected_s_model}`; remove Model='{raw_model}' (or pass Model='flash').",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
+            else:
+                if raw_model:
+                    return (
+                        False,
+                        f"Utility subagent `{SCOUT_AGENT}` is pinned to `{expected_s_model}` via `.agents/agents/{SCOUT_AGENT}/agent.md` frontmatter; "
+                        f"omit `Model` in `invoke_subagent` (do not pass Model='{raw_model}').",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
+
+    pre_policy_decision: dict[str, Any] | None = None
     if worker_items:
-        expected_w_model, _ = resolve_utility_worker_model(repo, plan=plan, worker_mode="FULL_SLICE")
+        pre_policy_decision = evaluate_delegation_policy(repo, plan=plan)
+        active_w_mode = str(pre_policy_decision.get("worker_mode") or "FULL_SLICE")
+        expected_w_model, _ = resolve_utility_worker_model(repo, plan=plan, worker_mode=active_w_mode)
+        sync_utility_worker_model(repo, expected_w_model)
+        if not expected_w_model.startswith("gemini-3.8-flash") and (repo / ".agents" / "agents").is_dir():
+            from review_models import _antigravity_frontmatter_model
+            pinned_w = _antigravity_frontmatter_model(repo, WORKER_AGENT)
+            if not pinned_w or pinned_w == "inherit":
+                return (
+                    False,
+                    f"SUBAGENT_FRONTMATTER_UNPINNED_GUARD: `.agents/agents/{WORKER_AGENT}/agent.md` is missing an explicit `model:` pin (`{expected_w_model}`), "
+                    "which would inherit the parent Carbon/Argon chat model and drain Frontier quota. Run `python .agents/harness.py repair` first.",
+                    "SUBAGENT_FRONTMATTER_UNPINNED_GUARD",
+                )
         for item in worker_items:
             raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
             if expected_w_model == ADAPTIVE_WORKER_ARGON_MODEL:
@@ -1770,10 +3063,18 @@ def validate_utility_dispatch(
                         f"omit `Model` in `invoke_subagent` (do not pass Model='{raw_model}').",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )
+            elif expected_w_model.startswith("gemini-4-hydrogen"):
+                if raw_model:
+                    return (
+                        False,
+                        f"Adaptive `{WORKER_AGENT}` is configured for `{expected_w_model}` via `.agents/agents/{WORKER_AGENT}/agent.md` frontmatter; "
+                        f"omit `Model` in `invoke_subagent` (do not pass Model='{raw_model}').",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
             elif raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
                 return (
                     False,
-                    f"Utility subagent '{item.get('TypeName') or item.get('typeName')}' is pinned to Flash for quota protection; "
+                    f"Utility subagent '{WORKER_AGENT}' is pinned to `{expected_w_model}` for quota protection; "
                     f"remove Model='{raw_model}' (or pass Model='flash').",
                     "UTILITY_MODEL_QUOTA_GUARD",
                 )
@@ -1825,7 +3126,7 @@ def validate_utility_dispatch(
                 f"`{WORKER_AGENT}` must use Workspace='inherit' (got '{ws}') so edits bind to the active task snapshot and EvidenceStore.",
                 "WORKER_WORKSPACE_MISMATCH",
             )
-        policy_decision = evaluate_delegation_policy(repo, plan=plan)
+        policy_decision = pre_policy_decision if pre_policy_decision is not None else evaluate_delegation_policy(repo, plan=plan)
         if not policy_decision.get("worker_allowed"):
             return (
                 False,
@@ -1921,6 +3222,13 @@ def worker_write_allowed(repo: Path, targets: list[str], utility_ctx: dict[str, 
     elif effective_mode == "TESTS_AND_GATES_ONLY":
         non_tests = [t for t in rel_targets if t and not is_test_file(t)]
         if non_tests:
+            if live_policy.get("strategy") == "ORCHESTRATOR_FRICTION_LEAD_TAKEOVER":
+                return (
+                    False,
+                    f"NATIVE ORCHESTRATOR FRICTION ESCALATION: `{WORKER_AGENT}` hit repeated verification failures and is now restricted to test files; "
+                    f"core production file(s) {non_tests} must be resolved directly by the Lead Architect (`Carbon` / `Argon` / `Claude 5.5`).",
+                    "WORKER_FRICTION_CORE_ESCALATED_TO_LEAD",
+                )
             return (
                 False,
                 f"HIGH-SENSITIVITY / CONFLICT GUARD: `{WORKER_AGENT}` is restricted to unit/integration test files on this task; "

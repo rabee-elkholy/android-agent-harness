@@ -226,6 +226,61 @@ def heal_task_state(
         except (OSError, ValueError, ValidationError):
             pass
 
+    # 3a. Clear stuck intra-wave retry cap in worker-friction.json while preserving Zero-Scratch worker-handoff.json
+    if status == "IMPLEMENTING" and (tdir / "worker-friction.json").is_file():
+        try:
+            wf_doc = read_json(tdir / "worker-friction.json")
+            if isinstance(wf_doc, dict) and isinstance(wf_doc.get("by_phase"), dict):
+                cleared_iw = False
+                for _pk, pb in wf_doc["by_phase"].items():
+                    if isinstance(pb, dict) and int(pb.get("intra_wave_gate_failures") or 0) > 0:
+                        pb["intra_wave_gate_failures"] = 0
+                        cleared_iw = True
+                if cleared_iw:
+                    atomic_write_json(tdir / "worker-friction.json", wf_doc)
+                    healed_actions.append("cleared_stuck_intra_wave_gate_counter")
+        except (OSError, ValueError, ValidationError):
+            healed_noop = None
+
+    # 3b. Handle IMPLEMENTING phase-review ENV_BLOCKED in-place without losing phase progress
+    if status == "IMPLEMENTING" and (tdir / "phase-state.json").is_file():
+        try:
+            from phase_review import PHASE_REVIEWING, compute_ledger_sha, get_phase_substate, load_phase_ledger, phase_ledger_file, phase_review_dir, phase_run_file
+            from review_orchestrator import REVIEW_ENV_BLOCKED, REVIEW_NOT_DISPATCHED
+            pstate_cur = read_json(tdir / "phase-state.json")
+            cur_pid = str(pstate_cur.get("current_phase_id") or "").strip()
+            if cur_pid and get_phase_substate(pstate_cur, cur_pid) == PHASE_REVIEWING:
+                rdir_p = phase_review_dir(tdir, cur_pid)
+                prun_f = phase_run_file(tdir, cur_pid)
+                prun_id = str(read_json(prun_f).get("phase_review_run_id") or "") if prun_f.is_file() else ""
+                ok_pl, _, pledger = load_phase_ledger(tdir, cur_pid, expected_run_id=prun_id or None)
+                reset_proles: list[str] = []
+                if ok_pl and isinstance(pledger, dict):
+                    for r_role, r_entry in (pledger.get("reviewers") or {}).items():
+                        if isinstance(r_entry, dict) and r_entry.get("state") == REVIEW_ENV_BLOCKED:
+                            r_entry["state"] = REVIEW_NOT_DISPATCHED
+                            r_entry["last_error"] = None
+                            r_entry["last_error_code"] = None
+                            r_entry.pop("execution_id", None)
+                            r_entry.pop("execution_id_sha256", None)
+                            if prun_id:
+                                (rdir_p / "dispatch" / prun_id / f"{r_role}.json").unlink(missing_ok=True)
+                            reset_proles.append(r_role)
+                pm1 = rdir_p / "post-tool-reconcile-error.json"
+                pm2 = (rdir_p / prun_id / "post-tool-reconcile-error.json") if prun_id else None
+                had_pm = pm1.is_file() or bool(pm2 and pm2.is_file())
+                pm1.unlink(missing_ok=True)
+                if pm2:
+                    pm2.unlink(missing_ok=True)
+                if reset_proles and isinstance(pledger, dict):
+                    pledger["ledger_sha256"] = compute_ledger_sha(pledger)
+                    atomic_write_json(phase_ledger_file(tdir, cur_pid), pledger)
+                    healed_actions.append(f"reset_env_blocked_phase_reviewers:{cur_pid}:{','.join(sorted(reset_proles))}")
+                elif had_pm:
+                    healed_actions.append(f"cleared_phase_post_tool_error_marker:{cur_pid}")
+        except (OSError, ValueError, KeyError, ImportError, ValidationError):
+            pass
+
     # 4. Handle VERIFYING state: corrupt current-run.json or STALE verification run
     if status == "VERIFYING":
         from _workflow import engine as _engine
@@ -243,6 +298,34 @@ def heal_task_state(
                 crun = snap_ver["current_run"]
                 atomic_write_json(crun_file, crun)
                 healed_actions.append("restored_current_run_from_snapshot")
+
+        # 4a. Unblock ENV_BLOCKED final reviewers in-place without discarding passed reviewers or Gradle evidence!
+        if isinstance(crun, dict) and crun.get("run_id"):
+            run_id_cur = str(crun["run_id"])
+            try:
+                from review_orchestrator import REVIEW_ENV_BLOCKED, REVIEW_NOT_DISPATCHED, dispatch_receipt_file, load_ledger, review_execution_dir, save_ledger
+                ledger_cur = load_ledger(tdir, run_id_cur)
+                revs_cur = ledger_cur.get("reviewers") or {}
+                reset_roles: list[str] = []
+                for r_role, r_entry in revs_cur.items():
+                    if isinstance(r_entry, dict) and r_entry.get("state") == REVIEW_ENV_BLOCKED:
+                        r_entry["state"] = REVIEW_NOT_DISPATCHED
+                        r_entry["last_error"] = None
+                        r_entry["last_error_code"] = None
+                        r_entry.pop("execution_id", None)
+                        r_entry.pop("execution_id_sha256", None)
+                        dispatch_receipt_file(tdir, run_id_cur, r_role).unlink(missing_ok=True)
+                        reset_roles.append(r_role)
+                err_marker = review_execution_dir(tdir, run_id_cur) / "post-tool-reconcile-error.json"
+                if reset_roles or err_marker.is_file():
+                    err_marker.unlink(missing_ok=True)
+                    if reset_roles:
+                        save_ledger(tdir, run_id_cur, ledger_cur)
+                        healed_actions.append(f"reset_env_blocked_reviewers:{','.join(sorted(reset_roles))}")
+                    else:
+                        healed_actions.append("cleared_post_tool_reconcile_error_marker")
+            except (OSError, ValueError, KeyError, ImportError, ValidationError):
+                pass
 
         freshness = _engine.verification_freshness(repo, resolved_tid, crun)
         if not freshness.get("fresh"):

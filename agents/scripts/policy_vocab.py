@@ -89,9 +89,11 @@ CORE_UTILITY_AGENTS = (
     "harness-worker-agent",
 )
 
+# Pure Google Antigravity v2.31.2 built-in tool names only (https://antigravity.google/docs/hooks/#supported-tools).
+# Never include unmapped aliases (`read_file`, `write_file`, `edit_file`) in `.agents/agents/*/agent.md` YAML `tools:`,
+# as Antigravity's subagent loader documents a hang hazard when unmapped tool names appear in frontmatter.
 ANTIGRAVITY_SCOUT_TOOLS = (
     "view_file",
-    "read_file",
     "grep_search",
     "find_by_name",
     "list_dir",
@@ -100,12 +102,9 @@ ANTIGRAVITY_SCOUT_TOOLS = (
 
 ANTIGRAVITY_WORKER_TOOLS = (
     "view_file",
-    "read_file",
     "write_to_file",
-    "write_file",
     "replace_file_content",
     "multi_replace_file_content",
-    "edit_file",
     "grep_search",
     "find_by_name",
     "list_dir",

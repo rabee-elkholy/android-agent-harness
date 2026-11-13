@@ -63,8 +63,34 @@ def _post_subagent_directive(conversation_id: str) -> tuple[str, str]:
         return ("", "")
 
 
+def _has_subagent_transcript_signature(conversation_id: str) -> bool:
+    """Detect Turn-0 subagent transcripts (#200026 prefix-cache lock) before ledger binding completes."""
+    if not conversation_id or conversation_id == "claude-session":
+        return False
+    try:
+        from antigravity_runtime import prefer_full_transcript, resolve_transcript
+        tp = prefer_full_transcript(resolve_transcript(conversation_id))
+        if tp is None or not tp.is_file():
+            return False
+        head = tp.read_text(encoding="utf-8", errors="replace")[:4096]
+        if '"USER_EXPLICIT"' in head:
+            return False
+        return (
+            "MESSAGE_PRIORITY_HIGH" in head
+            or "HARNESS_SCOUT_FINGERPRINT=" in head
+            or "HARNESS_WORKER_FINGERPRINT=" in head
+            or "REVIEWER_FINGERPRINT=" in head
+        )
+    except Exception:
+        return False
+
+
 def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
-    """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents."""
+    """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents.
+
+    Also enforces byte-identical Turn-0 systemInstruction+tools prefix stability (#200026) across
+    Scout, Worker, Specialist, and Reviewer subagents before PostToolUse execution_id binding finishes.
+    """
     if not conversation_id:
         return False
     try:
@@ -73,6 +99,8 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
             return True
     except (ImportError, OSError, ValueError, KeyError, ValidationError):
         pass
+    if _has_subagent_transcript_signature(conversation_id):
+        return True
     try:
         from reviewer_host import active_reviews, reviewer_context
         if not any(True for _ in active_reviews(repo)):
@@ -80,18 +108,8 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
         ctx = reviewer_context(repo, conversation_id, bind=False)
         if not ctx:
             return False
-        # Only treat as reviewer when bound to a real reviewer role, or when
-        # the conversation actually has a subagent SYSTEM_MESSAGE transcript
-        # (never suppress an unknown parent conversation before any child launches).
         if ctx.get("role"):
             return True
-        if ctx.get("unverified_reviewer"):
-            from antigravity_runtime import prefer_full_transcript, resolve_transcript
-            tp = prefer_full_transcript(resolve_transcript(conversation_id))
-            if tp is not None and tp.is_file():
-                head = tp.read_text(encoding="utf-8", errors="replace")[:4096]
-                if "MESSAGE_PRIORITY_HIGH" in head and '"USER_EXPLICIT"' not in head:
-                    return True
         return False
     except Exception:
         return False
@@ -116,7 +134,7 @@ def _compact_message() -> str:
     notes_rem = _project_notes_reminder() + _developer_instructions_reminder(plan)
     if not plan:
         bridge_rem = _bridge_reminder()
-        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` (or `harness-scout-agent` on Flash for multi-file sweeps) for discovery, or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
+        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery, or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
@@ -228,9 +246,25 @@ def main() -> None:
             (payload.get("conversationId") or payload.get("conversation_id") or "")
             if isinstance(payload, dict) else ""
         ).strip()
+        model_name = str(
+            (payload.get("modelName") or payload.get("model_name") or "")
+            if isinstance(payload, dict) else ""
+        ).strip()
         if conversation_id and _is_reviewer_conversation(REPO, conversation_id):
             print("{}")
             return
+        model_hazard_prefix = ""
+        m_low = model_name.lower()
+        if "orchestrator" in m_low:
+            model_hazard_prefix = (
+                f"[HAZARD #200029: Built-in `{model_name}` active] Switch the main chat model selector to explicit "
+                "`Gemini 4 Carbon (Medium)` (or `Claude Sonnet 5.5`) — built-in Orchestrator risks false-positive 403 TOS_VIOLATION "
+                "suspensions, locks `--effort`, and bloats shared Carbon context (-24% vs Harness Native Orchestrator -65%..-92%). "
+            )
+        elif "4.6" in m_low and "claude" in m_low:
+            model_hazard_prefix = (
+                f"[DEPRECATION NOTICE: `{model_name}` retires Nov 18, 2026] Switch mid-week rotation to `Claude Sonnet 5.5 (Thinking)` or `Claude Opus 5.5 (Thinking)`. "
+            )
         wave_key, wave_directive = _post_subagent_directive(conversation_id)
         # Antigravity is 0-indexed (0 is first call); 1-indexed hosts start at 1.
         # Avoid dumping the full initial reminder + update check twice when invocation 0 already ran.
@@ -258,6 +292,8 @@ def main() -> None:
                 _record_seen_state(conversation_id, state_key)
         else:
             msg = _compact_message()
+        if model_hazard_prefix:
+            msg = f"{model_hazard_prefix}{msg}"
         print(json.dumps({"injectSteps": [{"ephemeralMessage": msg}]}))
     except Exception:
         print("{}")

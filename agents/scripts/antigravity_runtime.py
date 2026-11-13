@@ -111,7 +111,9 @@ def resolve_transcript(conversation_id: str) -> Path | None:
     for brain_root in brain_roots:
         candidates = [
             brain_root / clean_id / ".system_generated" / "logs" / "transcript.jsonl",
+            brain_root / clean_id / ".system_generated" / "logs" / "transcript_full.jsonl",
             brain_root / clean_id / "transcript.jsonl",
+            brain_root / clean_id / "transcript_full.jsonl",
         ]
         for cand in candidates:
             try:
@@ -170,7 +172,9 @@ def _native_model_field(blob: bytes, path: tuple[int, ...]) -> str | None:
         if len(values) != 1 or not isinstance(values[0], bytes):
             raise ValueError("ambiguous native model metadata")
         value = values[0]
-    model = value.decode("ascii")
+    model = value.decode("ascii").strip()
+    if model.startswith("models/"):
+        model = model[7:]
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{1,127}", model):
         raise ValueError("invalid native model identifier")
     return model
@@ -406,11 +410,92 @@ ZOMBIE_WAKEUP_GAP_SECONDS = 7200  # 2h+ gap inside a subagent transcript flags #
 
 
 def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str] | None:
-    """Classify Nov 2026 Antigravity platform quota/capacity hazards (#199769/#199770 zero-quota 429 & #198333 Flash 503)."""
+    """Classify Nov 2026 Antigravity platform quota/capacity/ban/cache hazards (#200029/#199971, #200026, #199769/#199770, #198333, Hydrogen rollout & Orchestrator)."""
     low = str(err_text or "").strip().lower()
     if not low:
         return None
+    if (
+        "tos_violation" in low
+        or (("403" in low or "permission_denied" in low) and any(k in low for k in ("suspended", "flagged", "tos", "appeal")))
+    ):
+        return {
+            "code": "HYDROGEN_403_TOS_FALSE_POSITIVE",
+            "issue": "#200029/#199971",
+            "remedy": (
+                "False-positive 403 PERMISSION_DENIED (TOS_VIOLATION) triggered by high-velocity sequential tool bursts "
+                "during Gemini 4 Hydrogen / Orchestrator plan execution (#200029/#199971). Keep Harness PreToolUse "
+                "HYDROGEN_ANTI_BURST_PACER enabled, never select Antigravity's built-in Orchestrator mode, batch 4-8 "
+                "parallel view_file calls per turn, and submit the official one-time Antigravity account appeal if suspended."
+            ),
+        }
+    if "cachedcontenttokencount" in low or ("+701" in low and "turn" in low) or "multi-shard" in low:
+        return {
+            "code": "GEMINI4_TURN3_CACHE_DROP_ANOMALY",
+            "issue": "#200026",
+            "remedy": (
+                "Server-side Gemini 4 Turn-3 +701 token injection / cachedContentTokenCount=0 drop or multi-shard KV split "
+                "detected on daily-cloudcode-pa (#200026). Prefer pure agy CLI (3.41% regression) over ACP IDE extensions (5.86%), "
+                "keep V2 reviewers Zero-Hop (1-2 turns, completing before Turn 3), and optionally switch multi-turn Scout sweeps "
+                "to safe-cache-project (3.8 Flash Scout = 0 cache drops)."
+            ),
+        }
+    if "orchestrator" in low and ("effort isn't adjustable" in low or "effort is not adjustable" in low or "double" in low or "re-plan" in low):
+        return {
+            "code": "ORCHESTRATOR_DOUBLE_PLANNING_HAZARD",
+            "issue": "Orchestrator+Harness",
+            "remedy": (
+                "Antigravity built-in Orchestrator runs its own internal Carbon<->Hydrogen planning/handoff loop, "
+                "which conflicts with Harness PreToolUse gates. Select explicit 'Gemini 4 Carbon (Medium)' (or Argon/Claude 5.5) "
+                "on the main chat and let 'hydrogen-argon-project' govern subagents."
+            ),
+        }
+    if (
+        ("invalid model" in low or "unsupported model" in low or "model_id" in low or "not a valid model" in low)
+        and any(tok in low for tok in ("gemini-4-", "hydrogen", "argon", "carbon", "inherit", "flash", "flash_lite"))
+    ) or ("expected" in low and "'inherit'" in low and "'flash'" in low):
+        return {
+            "code": "AGY_CLI_SUBAGENT_MODEL_ID_UNSUPPORTED",
+            "issue": "#200144",
+            "remedy": (
+                "Antigravity CLI (agy v1.5.8) rejected an explicit model ID in subagent frontmatter (#200144 — CLI schema only accepts "
+                "inherit|flash|pro|flash_lite). Run in Antigravity Desktop App v2.31.2, or switch subagents to inherit for CLI sessions via: "
+                "python .agents/harness.py review models set --choice inherit-task --source conversation --proof-reference 'CLI inherit fallback (#200144)'"
+            ),
+        }
+    if (
+        ("marked unavailable" in low or "shows unavailable" in low or "model unavailable" in low or "is unavailable" in low or "entitlement" in low)
+        and any(tok in low for tok in ("hydrogen", "argon", "gemini 4", "gemini-4"))
+        and "503" not in low
+    ):
+        return {
+            "code": "GEMINI4_ENTITLEMENT_DESYNC_UNAVAILABLE",
+            "issue": "#200147/#199992",
+            "remedy": (
+                "Account entitlement desync marked Gemini 4 Hydrogen/Argon as Unavailable (#200147/#199992). "
+                "Run 'Antigravity: Reset Onboarding' (or sign out and back in), or unblock this task immediately via "
+                "'python .agents/harness.py task heal --task-id <id>' followed by '--choice inherit-once' or '--choice flash-project'."
+            ),
+        }
     is_429 = "429" in low or "resource_exhausted" in low or "quota" in low
+    is_entitlement_or_missing = (
+        "not available on your plan" in low
+        or "not supported for your account" in low
+        or "model_not_found" in low
+        or "model not found" in low
+        or ("permission_denied" in low and "hydrogen" in low)
+        or ("404" in low and "hydrogen" in low)
+    )
+    if "hydrogen" in low and (is_entitlement_or_missing or (is_429 and ("limit: 0" in low or "limit:0" in low))):
+        return {
+            "code": "HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK",
+            "issue": "Hydrogen-Rollout",
+            "remedy": (
+                "Gemini 4 Hydrogen is not yet active or entitled on this account/region. "
+                "Fall back cleanly to Flash + Argon Low (or Pure Flash) via: "
+                "python .agents/harness.py review models set --choice flash-argon-project --source conversation "
+                "--proof-reference \"Fallback to Flash+Argon while Hydrogen rolls out\""
+            ),
+        }
     is_zero_limit = (
         "limit: 0" in low
         or "limit:0" in low
@@ -425,9 +510,10 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
             "issue": "#199769/#199770",
             "remedy": (
                 "Managed Agent API / tier returned zero Argon/Carbon quota (limit: 0). "
-                "Switch immediately to 100% Pure Flash via: "
-                "python .agents/harness.py review models set --mode flash-project --source conversation "
-                "--proof-reference \"Switch to Pure Flash (#199769)\""
+                "Switch subagents immediately to 100% Pure Gemini 4 Hydrogen (zero Argon/Carbon quota) via: "
+                "python .agents/harness.py review models set --choice hydrogen-dynamic-project --source conversation "
+                "--proof-reference \"Switch to Pure Hydrogen (#199769)\" "
+                "(or --choice flash-project if Hydrogen is not yet rolled out on your tier)."
             ),
         }
     is_503 = "503" in low or "service unavailable" in low or ("unavailable" in low and ("capacity" in low or "overloaded" in low or "backoff" in low))
@@ -436,8 +522,10 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
             "code": "FLASH_503_CAPACITY_BACKOFF",
             "issue": "#198333",
             "remedy": (
-                "Regional Gemini 3.8 Flash capacity retries (4s-24s HTTP 503 backoff) detected (#198333). "
-                "Batch 4-8 parallel view_file reads per turn to minimize round-trips, or use flash-argon-hybrid on COMPLEX tasks."
+                "Regional capacity retries (4s-24s HTTP 503 backoff) detected (#198333). "
+                "Upgrade subagents from legacy 3.8 Flash to Gemini 4 Hydrogen via: "
+                "python .agents/harness.py review models set --choice hydrogen-argon-project --source conversation "
+                "--proof-reference \"Upgrade to Hydrogen+Argon (#198333)\" and batch 4-8 parallel view_file reads per turn."
             ),
         }
     return None
@@ -554,4 +642,53 @@ def inspect_zombie_subagent_and_schedule_risks(repo: Path, env: dict[str, str] |
         "at_risk": bool(schedule_injected_files or wakeup_spikes),
         "schedule_injected_files": schedule_injected_files,
         "wakeup_spikes": wakeup_spikes,
+    }
+
+
+def inspect_windows_smart_app_control_4551_risk(
+    env: dict[str, str] | None = None,
+    installer_dirs: list[Path] | None = None,
+) -> dict[str, object]:
+    """Detect Windows 11 Smart App Control Error 4551 blocking Antigravity IDE v2.7.0 installer (#200037)."""
+    import sys as _sys
+    environ = env if env is not None else os.environ
+    sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
+    is_win = sim_plat == "win32" or (not sim_plat and _sys.platform == "win32")
+    if not is_win:
+        return {"applicable": False, "at_risk": False, "flagged_artifacts": [], "ide_version": ""}
+
+    ide_ver = str(environ.get("ANTIGRAVITY_IDE_VERSION") or environ.get("AGY_IDE_VERSION") or "").strip()
+    sac_err = str(environ.get("ANTIGRAVITY_INSTALLER_ERROR") or "").strip()
+    flagged: list[str] = []
+
+    if re.search(r"(?:^|[^0-9])2\.7\.0(?:$|[^0-9])", ide_ver):
+        flagged.append(f"ANTIGRAVITY_IDE_VERSION={ide_ver}")
+    if "4551" in sac_err or "smart app control" in sac_err.lower():
+        flagged.append(f"installer_error={sac_err[:120]}")
+
+    dirs_to_scan: list[Path] = []
+    if installer_dirs is not None:
+        dirs_to_scan.extend(installer_dirs)
+    else:
+        home = Path.home()
+        for d in (home / "Downloads", Path(environ.get("TEMP") or "") if environ.get("TEMP") else None):
+            if d is not None and d.is_dir():
+                dirs_to_scan.append(d)
+
+    v270_re = re.compile(r"antigravity.*2[._-]7[._-]0.*\.(?:exe|msi)$", re.IGNORECASE)
+    for d in dirs_to_scan:
+        if not d.is_dir():
+            continue
+        try:
+            for child in d.iterdir():
+                if child.is_file() and v270_re.search(child.name):
+                    flagged.append(str(child))
+        except OSError:
+            continue
+
+    return {
+        "applicable": True,
+        "at_risk": bool(flagged),
+        "flagged_artifacts": flagged[:8],
+        "ide_version": ide_ver,
     }

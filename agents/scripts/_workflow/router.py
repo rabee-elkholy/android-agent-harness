@@ -318,7 +318,8 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             "on the untouched project, so the gate never counts them against this task."
         )
         action["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
-    if run_host == "antigravity" and not has_task_changes:
+    has_active_friction = (_engine.task_dir(repo, task_id) / "worker-friction.json").is_file()
+    if (run_host == "antigravity" and not has_task_changes) or has_active_friction:
         try:
             from delegation_policy import evaluate_delegation_policy
             bfe_existing = str((action.get("before_first_edit") or {}).get("command") or "")
@@ -329,13 +330,21 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 router_action="IMPLEMENT_APPROVED_SCOPE",
                 before_first_edit_cmd=bfe_existing,
             )
-            action["delegation_advisory"] = {
-                "strategy": adv.get("strategy"),
-                "recommended_subagent": adv.get("recommended_subagent"),
-                "worker_mode": adv.get("worker_mode"),
-                "target_files": adv.get("target_files"),
-                "reason": adv.get("reason"),
-            }
+            if (run_host == "antigravity" and not has_task_changes) or int(adv.get("friction_strikes") or 0) > 0:
+                adv_payload = {
+                    "strategy": adv.get("strategy"),
+                    "recommended_subagent": adv.get("recommended_subagent"),
+                    "worker_mode": adv.get("worker_mode"),
+                    "target_files": adv.get("target_files"),
+                    "reason": adv.get("reason"),
+                }
+                if adv.get("lead_owned_files"):
+                    adv_payload["lead_owned_files"] = adv["lead_owned_files"]
+                if adv.get("lead_takeover_handoff"):
+                    adv_payload["lead_takeover_handoff"] = adv["lead_takeover_handoff"]
+                elif adv.get("previous_wave_handoff"):
+                    adv_payload["previous_wave_handoff"] = adv["previous_wave_handoff"]
+                action["delegation_advisory"] = adv_payload
         except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
             pass
     return action
