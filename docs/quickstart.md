@@ -45,7 +45,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan (evaluating Zero-Decision readiness, codebase reuse candidates, path grounding, and multi-phase module DAG ordering via `task plan-check`), and waits for explicit developer approval before any file modification.
 2. **Approval**: Approve the plan in chat (reply with an approval such as "approve", in any language). Single intake approval covers all phases in a multi-phase task without pauses.
-3. **Implementation & Risk-Gated Flash Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — delegating `T0–T3` non-sensitive multi-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-4-hydrogen-medium` on `SIMPLE`, `gemini-4-hydrogen-high` on `COMPLEX`) while keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
+3. **Implementation & Shared-Quota Hydrogen Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — executing `1–3` file non-sensitive `T0–T3` slices inline on the warm Lead cache (`TRIVIAL_INLINE_LEAD`), delegating `4+`-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-4-hydrogen-high` from Wave 1), and keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash
    python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity
@@ -88,6 +88,22 @@ Task A
 → Task B in new chat/worktree
 → return to Task A worktree/chat
 → task status --next (python .agents/harness.py task status --task-id <id> --next)
+```
+
+## Execution Modes (`auto-project` & Stateless `Web-Relay`)
+
+Set Smart Auto once per project (`auto-project`) to keep `<12`-file single-module tasks local in Antigravity while automatically promoting `12+`-file refactors, multi-module changes, `T5` critical surfaces, or `2-Strike` escalations to your separate **Gemini Web (`gemini.google.com`)** quota:
+
+```bash
+# 1. Enable Smart Auto project-wide (or choose normal-project / web-project)
+python .agents/harness.py execution-mode set --choice auto-project --source developer_terminal --proof-reference "Use Smart Auto"
+
+# 2. Pack modified/staged/untracked Android Studio files (or --feature <Name>) into 1 secret-scrubbed .md bundle
+python .agents/harness.py web-pack --dirty --prompt "Complete refactor and unit tests"
+
+# 3. Preview Gemini Web's HARNESS_WEB_MERGE_V1 reply with zero disk writes, then apply
+python .agents/harness.py web-apply --dry-run
+python .agents/harness.py web-apply --source developer_terminal --proof-reference "Apply web merge"
 ```
 
 ### Core Invariants

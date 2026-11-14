@@ -829,7 +829,7 @@ def _test_source(repo: Path, simple: str) -> str:
     from plan_authority import is_test_path
 
     proc = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", f"*{simple}.kt", f"*{simple}.java"],
+        ["git", "-c", "core.quotepath=false", "ls-files", "--cached", "--others", "--exclude-standard", f"*{simple}.kt", f"*{simple}.java"],
         cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     matches = [line for line in proc.stdout.splitlines() if Path(line).stem == simple and is_test_path(line)]

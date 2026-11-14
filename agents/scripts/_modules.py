@@ -16,9 +16,14 @@ _SOURCE_SET_DIRS = (
     "androidMain",
     "commonMain",
     "iosMain",
+    "iOSMain",
     "iosArm64Main",
+    "iOSArm64Main",
     "iosSimulatorArm64Main",
+    "iOSSimulatorArm64Main",
     "iosX64Main",
+    "iOSX64Main",
+    "nonWindowsMain",
     "appleMain",
     "nativeMain",
     "mobileMain",
@@ -245,7 +250,8 @@ _KMP_FORBIDDEN_COMMON_IMPORT_RE = re.compile(
 )
 
 _IOS_SOURCE_SETS = (
-    "iosMain", "appleMain", "nativeMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main",
+    "iosMain", "iOSMain", "appleMain", "nativeMain",
+    "iosArm64Main", "iOSArm64Main", "iosSimulatorArm64Main", "iOSSimulatorArm64Main", "iosX64Main", "iOSX64Main",
 )
 _ANDROID_JVM_SOURCE_SETS = (
     "androidMain", "jvmMain", "desktopMain", "jvmAndAndroidMain",
@@ -562,10 +568,10 @@ def check_kmp_expect_actual_pairs(repo: Path, changed_rel_paths: list[str] | Non
         # Check iOS/Apple platform source sets if present in this module
         ios_dirs = [
             mod_dir / "src" / d
-            for d in ("iosMain", "appleMain", "nativeMain", "mobileMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")
+            for d in (*_IOS_SOURCE_SETS, "mobileMain")
             if (mod_dir / "src" / d).is_dir()
         ]
-        if any((mod_dir / "src" / d).is_dir() for d in ("iosMain", "appleMain", "nativeMain", "iosArm64Main", "iosSimulatorArm64Main", "iosX64Main")):
+        if any((mod_dir / "src" / d).is_dir() for d in _IOS_SOURCE_SETS):
             _verify_platform_target("iosMain", ios_dirs)
 
     if missing_reports:

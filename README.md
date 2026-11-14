@@ -21,7 +21,7 @@
   <a href="#measured-performance--context-efficiency"><b>System Proof &amp; Benchmarks</b></a> ·
   <a href="#what-daily-use-looks-like"><b>Daily Workflow</b></a> ·
   <a href="#antigravity-first-architecture--review-protocol-v2"><b>Antigravity &amp; Review V2</b></a> ·
-  <a href="#hybrid-flash-orchestration--frontier-quota-protection"><b>Hybrid Model Routing</b></a> ·
+  <a href="#shared-quota-hydrogen-orchestration--frontier-quota-protection"><b>Hydrogen Model Routing</b></a> ·
   <a href="#domain-skills-workflows--slash-command-packs"><b>Skills &amp; Command Packs</b></a> ·
   <a href="#capability-detected-android-ecosystem-bridges--ast-symbol-surgery"><b>Ecosystem Bridges</b></a> ·
   <a href="#faq"><b>FAQ</b></a>
@@ -43,10 +43,10 @@ Prompt rules alone decay as conversations cross `50k+` tokens: agents start read
 
 ## Why Android Agent Harness?
 
-Host JVM unit tests (`./gradlew testDebugUnitTest`) catch logic assertions inside mocked classes, yet **silently pass** on many of the costliest Android and KMP production defects. Below is what happens on real multi-module repositories (`mustafaunlu/Ecommerce-Compose` & `joreilly/PeopleInSpace`) when the exact same seeded tasks run unassisted vs. governed by `v1.3.5`:
+Host JVM unit tests (`./gradlew testDebugUnitTest`) catch logic assertions inside mocked classes, yet **silently pass** on many of the costliest Android and KMP production defects. Below is what happens on real multi-module repositories (`mustafaunlu/Ecommerce-Compose` & `joreilly/PeopleInSpace`) when the exact same seeded tasks run unassisted vs. governed by `v1.3.8`:
 
 ```text
-WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNESS v1.3.5
+WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNESS v1.3.8
 ────────────────────────────────────────────────────   ───────────────────────────────────────────────────────────────────
 1. @Entity column added at @Database(version = 1)   -> BLOCKED in 22ms  [ROOM_SCHEMA_MIGRATION_MISSING] (0 tokens)
 2. import android.util.Log inside KMP commonMain    -> BLOCKED in 18ms  [KMP_COMMON_MAIN_PURITY_VIOLATION] (0 tokens)
@@ -148,7 +148,7 @@ Updates synchronize `.agents/` in place without breaking open IDE file watchers,
 
 Every runtime subsystem is implemented in pure Python `3.10–3.14` standard library with content-addressed `blake2b` caching and in-process dispatch. All end-to-end metrics below were measured live against **`mustafaunlu/Ecommerce-Compose`** (`178` files) and **`joreilly/PeopleInSpace`** (`9`-module KMP + `SwiftUI`, `204` files):
 
-| Engineering Dimension | Baseline (`Without Harness` / `v1.3.4`) | Governed by Harness `v1.3.5` | Measured Engineering Gain |
+| Engineering Dimension | Baseline (`Without Harness` / `v1.3.4`) | Governed by Harness `v1.3.8` | Measured Engineering Gain |
 |---|---:|---:|---|
 | **Silent Defect Interception** (`18` Seeded Tasks) | `0 / 18` caught (`100%` escaped) | **`18 / 18` caught & delivered (`0%` escaped)** | **`100%` caught** (`14` by `0`-token Python gates in `<200 ms` + `4` by V2 review) |
 | **Lead-Chat Discovery Tokens** (`18` Tasks) | `112,097` tokens in Frontier chat | **`~8,640` tokens in Frontier chat** | **`-92.3%` Frontier Lead context** (`90,341` raw tokens isolated in Hydrogen `Scout`) |
@@ -258,7 +258,7 @@ Android Agent Harness is built primary-first for **Google Antigravity** with `HA
     - `harness-scout-agent` — Pinned read-only AST/graph explorer (`gemini-4-hydrogen-medium` by default) returning `<1,500`-token `file:line` architectural digests.
     - `harness-worker-agent` — Scoped slice & unit-test builder starting directly on `gemini-4-hydrogen-high` from Wave 1 on `4+`-file slices (while `<4`-file `T0–T3` slices run inline on the warm Lead cache via `TRIVIAL_INLINE_LEAD`), governed by `delegate-plan` (`FULL_SLICE`, `CAPTURE_RED_ONLY`, or `TESTS_AND_GATES_ONLY`).
 - **`Zero-Hop` Inlined Briefs & Single-Turn Batch Ingestion**: Review packages (`<= 24 KB`), `GraphEngine` blast-radius topologies, and passed deterministic gate proofs are inlined directly inside `brief-<role>.md`. `python .agents/harness.py review complete-all --task <id>` (and `phase-review complete-all`) ingests all parallel verdicts in one turn, guarded by a **Reviewer Call Safety Cap** (default: `20`, per-reviewer budget: `12` calls; adjustable per task via `task review-budget`).
-- **Antigravity Platform, Quota & Account-Safety Guards (`v1.3.5`)**:
+- **Antigravity Platform, Quota & Account-Safety Guards**:
   - **Zombie Subagent & `255m` Reactive-Wakeup Guard (`#199713`)**: Strips `schedule` permissions from all `.agents/agents/*/agent.md` manifests, blocks `schedule` / `schedules:*` wakeup triggers (`ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD`), permits `manage_subagents({"Action": "kill_all"})` across all task states to reap idle subagents immediately after waves/tasks finish, and flags `>= 2h` reactive-wakeup spikes in `doctor` and `diagnose-session`.
   - **Unattended `agy -p` & UI-Injection ToS Anti-Ban Guard (`#199748` / `#199756`)**: Blocks unattended `agy -p` / `--headless` loops and programmatic UI keystroke injection (`AGY_HEADLESS_LOOP_TOS_GUARD`) to protect Google AI Ultra accounts from automated `403 PERMISSION_DENIED` suspension while preserving interactive Skill workflows.
   - **Managed Agent `limit: 0` Zero-Quota, Hydrogen Rollout & Regional `503` Diagnostics (`#199769` / `#199770` & `#198333`)**: Classifies Free/Pro tier `HTTP 429` (`limit: 0`) errors on `gemini-4-argon` / `gemini-4-carbon` (`MANAGED_AGENT_ZERO_QUOTA_429` -> 1-command switch to `hydrogen-dynamic-project`), `Gemini 4 Hydrogen` rollout/entitlement blocks (`HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK` -> `flash-argon-project` fallback), `Orchestrator` double-planning friction (`ORCHESTRATOR_DOUBLE_PLANNING_HAZARD`), and regional `gemini-3.8-flash` `HTTP 503` backoff stalls (`FLASH_503_CAPACITY_BACKOFF`) in `diagnose-session`.
@@ -267,9 +267,9 @@ Android Agent Harness is built primary-first for **Google Antigravity** with `HA
 
 ---
 
-## Hybrid Flash Orchestration & Frontier Quota Protection
+## Shared-Quota Hydrogen Orchestration & Frontier Quota Protection
 
-Version `1.3.5` ships the **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`hydrogen-dynamic` / `hydrogen-dynamic-project`)** as the recommended `#1` project-wide routing policy, calibrated to Antigravity's single shared Gemini quota pool (`Carbon` & `Argon` weighted at `3.00x` = `$6/$30` effective vs `Hydrogen` at `1.00x` = `$1.50/$7.50`). It pairs an explicit **`Gemini 4 Carbon (Medium)`** Lead Architect (or `Claude Sonnet/Opus 5.5` separate-pool rotation / `Web-Relay` external offload — never Antigravity's built-in `Orchestrator` dropdown) with warm-cache `<4`-file inline edits (`TRIVIAL_INLINE_LEAD`), Wave-1 `gemini-4-hydrogen-high` `4+`-file `Worker` execution, and zero `3x` `Argon` burn:
+Version `1.3.8` ships the **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`hydrogen-dynamic` / `hydrogen-dynamic-project`)** as the recommended `#1` project-wide routing policy, calibrated to Antigravity's single shared Gemini quota pool (`Carbon` & `Argon` weighted at `3.00x` = `$6/$30` effective vs `Hydrogen` at `1.00x` = `$1.50/$7.50`). It pairs an explicit **`Gemini 4 Carbon (Medium)`** Lead Architect (or `Claude Sonnet/Opus 5.5` separate-pool rotation / `Web-Relay` external offload — never Antigravity's built-in `Orchestrator` dropdown) with warm-cache `<4`-file inline edits (`TRIVIAL_INLINE_LEAD`), Wave-1 `gemini-4-hydrogen-high` `4+`-file `Worker` execution, and zero `3x` `Argon` burn:
 
 | Complexity Band | Automatic Task / Diff Trigger | Routed Execution & Reviewer Models (`hydrogen-dynamic`) | Shared-Pool Quota & Reasoning Profile |
 | :--- | :--- | :--- | :--- |

@@ -37,13 +37,21 @@ def write_gate_result(
     try:
         payload = dict(data)
         try:
-            from delivery_manifest import build_manifest
-            from _repo_files import REPO
+            missing_hashes = not (
+                payload.get("delivery_snapshot_sha256")
+                and payload.get("change_set_sha256")
+                and payload.get("external_inputs_sha256")
+            )
+            if missing_hashes:
+                from delivery_manifest import build_manifest
+                from _repo_files import REPO
 
-            manifest = build_manifest(REPO)
-            payload.setdefault("delivery_snapshot_sha256", manifest["delivery_snapshot_sha256"])
-            payload.setdefault("change_set_sha256", manifest["change_set_sha256"])
-            payload.setdefault("external_inputs_sha256", manifest["external_inputs_sha256"])
+                cand_repo = directory.parent.parent.parent if results_dir_override is not None else REPO
+                target_repo = cand_repo if (cand_repo / ".git").exists() else REPO
+                manifest = build_manifest(target_repo)
+                payload.setdefault("delivery_snapshot_sha256", manifest["delivery_snapshot_sha256"])
+                payload.setdefault("change_set_sha256", manifest["change_set_sha256"])
+                payload.setdefault("external_inputs_sha256", manifest["external_inputs_sha256"])
         except Exception as exc:
             if str(payload.get("status") or "").upper() == "PASS":
                 payload["status"] = "FAIL"
@@ -161,7 +169,7 @@ def write_gate_result(
                         if p_f.is_file():
                             pl_doc = _rj(p_f)
                             pl_status = str(pl_doc.get("status") or "").upper()
-                            if pl_status == "IMPLEMENTING" or (pl_status == "VERIFYING" and st_up == "PASS"):
+                            if pl_status == "IMPLEMENTING" or (pl_status in {"VERIFYING", "READY_FOR_DELIVERY"} and st_up == "PASS"):
                                 repo_root = s_root.parent.parent
                                 from delegation_policy import (
                                     is_worker_verification_context_active,
@@ -171,8 +179,8 @@ def write_gate_result(
                                 pidx = int(pl_doc.get("active_phase_index") or 0)
                                 pid = str(phases[pidx].get("id") or "") if (phases and 0 <= pidx < len(phases)) else ""
                                 if (
-                                    (pl_status == "IMPLEMENTING" and (is_worker_verification_context_active(repo_root, act_tid, pid) or (st_up == "PASS" and g_low == "unit_tests")))
-                                    or (pl_status == "VERIFYING" and st_up == "PASS" and g_low == "unit_tests")
+                                    (pl_status == "IMPLEMENTING" and is_worker_verification_context_active(repo_root, act_tid, pid))
+                                    or (st_up == "PASS" and (g_low in {"unit_tests", "preflight"} or "compile" in g_low))
                                 ):
                                     record_worker_verification_outcome(
                                         repo_root,

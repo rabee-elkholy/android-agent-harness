@@ -906,7 +906,7 @@ def _changed_line_count(repo: Path, changes: list, base_ref: str = "HEAD") -> in
     total = 0
     relevant_paths = {c.rel_posix for c in changes} | {c.old_rel_posix for c in changes if c.old_rel_posix}
     proc = subprocess.run(
-        ["git", "diff", "--numstat", "--ignore-cr-at-eol", base_ref, "--"], cwd=str(repo),
+        ["git", "-c", "core.quotepath=false", "diff", "--numstat", "--ignore-cr-at-eol", base_ref, "--"], cwd=str(repo),
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if proc.returncode == 0:

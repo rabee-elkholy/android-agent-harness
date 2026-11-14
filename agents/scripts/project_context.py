@@ -1696,7 +1696,7 @@ def compute_source_fingerprint(repo: Path) -> dict:
     dirty_items = []
     try:
         proc = subprocess.run(
-            ["git", "status", "--porcelain=v1", "-uall"],
+            ["git", "-c", "core.quotepath=false", "status", "--porcelain=v1", "-uall"],
             cwd=str(root),
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",

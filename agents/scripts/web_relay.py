@@ -303,8 +303,13 @@ def _default_outbox_dir() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     dl = Path.home() / "Downloads" / "Harness-Web-Relay"
-    dl.mkdir(parents=True, exist_ok=True)
-    return dl
+    try:
+        dl.mkdir(parents=True, exist_ok=True)
+        return dl
+    except OSError:
+        tmp_fallback = Path(tempfile.gettempdir()) / "Harness-Web-Relay"
+        tmp_fallback.mkdir(parents=True, exist_ok=True)
+        return tmp_fallback
 
 
 def _default_downloads_dirs() -> list[Path]:
@@ -1334,14 +1339,29 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         return parsed, "stdin"
 
     packs_dir = _web_relay_state_dir(repo) / "packs"
-    known_packs = {p.stem for p in packs_dir.glob("*.json")} if packs_dir.is_dir() else set()
+    known_packs: set[str] = set()
+    unapplied_packs: set[str] = set()
+    if packs_dir.is_dir():
+        for pf in packs_dir.glob("*.json"):
+            known_packs.add(pf.stem)
+            try:
+                pmeta = json.loads(pf.read_text(encoding="utf-8", errors="replace"))
+                if not pmeta.get("applied_at"):
+                    unapplied_packs.add(pf.stem)
+            except (OSError, ValueError):
+                unapplied_packs.add(pf.stem)
 
+    clip_fallback: dict[str, Any] | None = None
     clip_txt = _read_clipboard_text()
     if clip_txt:
         parsed = _extract_merge_json_from_text(clip_txt)
-        if parsed and (not known_packs or str(parsed.get("pack_id") or "") in known_packs):
-            return parsed, "clipboard"
-    candidates: list[tuple[float, dict[str, Any], Path]] = []
+        if parsed:
+            cpid = str(parsed.get("pack_id") or "")
+            if not known_packs or cpid in known_packs:
+                return parsed, "clipboard"
+            clip_fallback = parsed
+
+    candidates: list[tuple[int, float, dict[str, Any], Path]] = []
     for dl_dir in _default_downloads_dirs():
         for cand in dl_dir.iterdir():
             if not cand.is_file():
@@ -1360,18 +1380,23 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
                         for zn in zf.namelist():
                             if zn.endswith(".json"):
                                 doc = _extract_merge_json_from_text(zf.read(zn).decode("utf-8", errors="replace"))
-                                if doc and str(doc.get("pack_id") or "") in known_packs:
-                                    candidates.append((cand.stat().st_mtime, doc, cand))
+                                dpid = str((doc or {}).get("pack_id") or "")
+                                if doc and dpid in known_packs:
+                                    candidates.append((1 if dpid in unapplied_packs else 0, cand.stat().st_mtime, doc, cand))
                 else:
                     doc = _extract_merge_json_from_text(cand.read_text(encoding="utf-8", errors="replace"))
-                    if doc and str(doc.get("pack_id") or "") in known_packs:
-                        candidates.append((cand.stat().st_mtime, doc, cand))
+                    dpid = str((doc or {}).get("pack_id") or "")
+                    if doc and dpid in known_packs:
+                        candidates.append((1 if dpid in unapplied_packs else 0, cand.stat().st_mtime, doc, cand))
             except OSError:
                 continue
     if candidates:
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        _, best_doc, best_path = candidates[0]
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        _, _, best_doc, best_path = candidates[0]
         return best_doc, f"downloads:{best_path}"
+
+    if clip_fallback is not None:
+        return clip_fallback, "clipboard"
 
     raise ValidationError(
         f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{WEB_MERGE_SCHEMA}` JSON found in Clipboard or Downloads. "
