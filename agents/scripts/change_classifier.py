@@ -48,6 +48,50 @@ PRESENTATIONAL_ASSET_EXTENSIONS = {
 ROOM_EXPORTED_SCHEMA_RE = re.compile(r"(^|/)schemas/[a-z0-9_.]+\.[a-z0-9_]+/\d+\.json$")
 
 
+def _read_product_kind_file(prod_file: Path) -> str:
+    try:
+        txt = prod_file.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r'^\s*PROJECT_KIND\s*=\s*["\']([A-Za-z0-9_-]+)["\']', txt, re.M)
+        if m:
+            val = m.group(1).strip().lower()
+            if val in ("application", "library"):
+                return val
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_repo_project_kind(root: Path | str | None = None) -> str:
+    """Resolve PROJECT_KIND scoped to `root` without leaking an installed library host into temp app repos."""
+    env_override = os.environ.get("HARNESS_PROJECT_KIND_OVERRIDE", "").strip().lower()
+    if env_override in ("application", "library"):
+        return env_override
+    own_prod = Path(__file__).resolve().with_name("_product.py")
+    own_repo = Path(__file__).resolve().parents[2]
+    mem_kind = ""
+    try:
+        from _product import PROJECT_KIND
+        mem_kind = str(PROJECT_KIND or "").strip().lower()
+    except (OSError, ValueError, ImportError, _ExpectedArtifactError):
+        mem_kind = ""
+    disk_own_kind = _read_product_kind_file(own_prod) if own_prod.is_file() else ""
+    if mem_kind in ("application", "library") and mem_kind != disk_own_kind:
+        return mem_kind
+    if root is not None:
+        try:
+            rp = Path(root).resolve()
+            if rp != own_repo:
+                for cand in (rp / ".agents" / "scripts" / "_product.py", rp / "agents" / "scripts" / "_product.py"):
+                    if cand.is_file():
+                        target_kind = _read_product_kind_file(cand)
+                        if target_kind:
+                            return target_kind
+                return "application"
+        except (OSError, ValueError, RuntimeError):
+            pass
+    return mem_kind if mem_kind in ("application", "library") else (disk_own_kind or "application")
+
+
 def is_documentation_path(relative: str) -> bool:
     """Whether a path is documentation rather than an Android runtime asset or build/harness file."""
     lower = relative.replace("\\", "/").lower()
@@ -1195,12 +1239,7 @@ def classify(
                             has_implicit_public = True
                             break
 
-            is_library = False
-            try:
-                from _product import PROJECT_KIND
-                is_library = (str(PROJECT_KIND or "").lower() == "library")
-            except (OSError, ValueError, ImportError, _ExpectedArtifactError):
-                pass
+            is_library = (resolve_repo_project_kind(root) == "library")
 
             if has_explicit_public:
                 _add(found, "PUBLIC_API", rel, "PUBLIC_DECLARATION")

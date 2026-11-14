@@ -39,7 +39,9 @@ from _vnext_common import (  # noqa: E402
 )
 from antigravity_runtime import (  # noqa: E402
     ACCEPTED_SYSTEM_SOURCES,
+    _is_invalid_conversation_id,
     detect_antigravity_remote_mode,
+    iter_recent_brain_conversations,
     prefer_full_transcript,
     remote_subagents_explicitly_allowed,
     resolve_transcript,
@@ -1780,12 +1782,14 @@ def _transcript_head_and_dispatch(transcript: Path) -> tuple[bool, str, str]:
                 if row.get("source") in ACCEPTED_SYSTEM_SOURCES and row.get("type") == "SYSTEM_MESSAGE" and not prompt_hash:
                     content = str(row.get("content") or "")
                     m = re.search(
-                        r"sender=([A-Za-z0-9_-]+)\s+priority=MESSAGE_PRIORITY_HIGH\s+content=([\s\S]+?)\n</SYSTEM_MESSAGE>",
+                        r"sender=([A-Za-z0-9_/-]+)\s+priority=MESSAGE_PRIORITY_HIGH\s+content=([\s\S]+?)\n</SYSTEM_MESSAGE>",
                         content,
                     )
                     if m:
-                        sender_id = m.group(1)
-                        prompt_hash = _prompt_sha256(m.group(2))
+                        cand_sender = m.group(1)
+                        if "/" not in cand_sender or not _is_invalid_conversation_id(cand_sender):
+                            sender_id = cand_sender
+                            prompt_hash = _prompt_sha256(m.group(2))
     except OSError:
         return False, "", ""
     return has_user, sender_id, prompt_hash
@@ -1882,14 +1886,8 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
     changed = False
     if any(not e.get("execution_id") for e in entries):
         for brain in brain_dirs:
-            try:
-                children = sorted(brain.iterdir(), key=lambda d: d.stat().st_mtime_ns, reverse=True)[:24]
-            except OSError:
-                continue
-            for child_dir in children:
-                if not child_dir.is_dir():
-                    continue
-                tx = resolve_transcript(child_dir.name)
+            for child_cid, _child_dir in iter_recent_brain_conversations(brain, limit=24):
+                tx = resolve_transcript(child_cid)
                 if tx is None:
                     continue
                 has_user, sender_id, prompt_hash = _transcript_head_and_dispatch(tx)
@@ -1901,8 +1899,8 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     parent_expected = str(item.get("parent_conversation_id") or "")
                     if parent_expected and sender_id and parent_expected != sender_id:
                         continue
-                    item["execution_id"] = child_dir.name
-                    bound.append(child_dir.name)
+                    item["execution_id"] = child_cid
+                    bound.append(child_cid)
                     changed = True
                     break
 
@@ -3521,10 +3519,10 @@ _SCOUT_SAFE_GIT_RE = re.compile(
 _WORKER_FORBIDDEN_LIFECYCLE_RE = re.compile(
     r"\b(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness|workflow(?:\.py)?)\s+"
     r"(?:task\s+(?:draft|revise|approve|approve-sensitive|begin|prepare-verification|complete|deliver|cancel|resume|"
-    r"checkpoint-phase|begin-next-phase|handoff|reconcile-handoff|reconcile-delivery|continue|switch|merge|change-decision|heal|bridge)|"
-    r"draft|revise|approve|approve-sensitive|begin|prepare-verification|complete|deliver|cancel|"
-    r"phase-review|review|init|update|repair|web-apply|web-relay\s+apply|execution-mode\s+set)\b"
-    r"|\b(?:phase_review|record_review|review_orchestrator|zoho_sync|pm_github|lifecycle|install_or_update)\.py\b"
+    r"checkpoint-phase|begin-next-phase|handoff|reconcile-handoff|reconcile-delivery|continue|switch|merge|change-decision|heal|bridge|plan-note)|"
+    r"draft|revise|approve|approve-sensitive|begin|prepare-verification|complete|deliver|cancel|plan-note|"
+    r"phase-review|review|pm|context\s+(?:note|instruct|refresh|generate)|init|update|repair|web-apply|web-relay\s+apply|execution-mode\s+set)\b"
+    r"|\b(?:phase_review|record_review|review_orchestrator|zoho_sync|pm_github|universal_pm|lifecycle|install_or_update)\.py\b"
     r"|\b(?:web_relay\.py\s+apply|execution_mode\.py\s+set)\b",
     re.IGNORECASE,
 )

@@ -3637,5 +3637,539 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertTrue(resolved_doc["resolved"])
 
 
+class TestV139AuditFixes(unittest.TestCase):
+    """Regression coverage for v1.3.9 audited runtime, verifier, static-guard, and template fixes."""
+
+    def test_v139_01_jetski_runtime_roots_and_hierarchical_ids(self) -> None:
+        import antigravity_runtime as ar
+
+        roots = [p.name for p in ar.candidate_runtime_roots()]
+        self.assertIn("jetski", roots)
+
+        valid_jetski_id = "v1/default/jetski_remote_agents_3p/1ab25276-4da2-4140-9a7b-ba987761bdfb"
+        self.assertFalse(ar._is_invalid_conversation_id(valid_jetski_id))
+        self.assertTrue(ar._is_invalid_conversation_id("v1/default/../1ab25276-4da2-4140-9a7b-ba987761bdfb"))
+        self.assertTrue(ar._is_invalid_conversation_id("foo/bar"))
+
+        with tempfile.TemporaryDirectory() as td:
+            app_root = Path(td) / "jetski"
+            tx_file = (
+                app_root
+                / "brain"
+                / "v1"
+                / "default"
+                / "jetski_remote_agents_3p"
+                / "1ab25276-4da2-4140-9a7b-ba987761bdfb"
+                / ".system_generated"
+                / "logs"
+                / "transcript.jsonl"
+            )
+            tx_file.parent.mkdir(parents=True, exist_ok=True)
+            tx_file.write_text('{"source":"SYSTEM","type":"SYSTEM_MESSAGE","content":"hi"}\n', encoding="utf-8")
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_root)}, clear=False):
+                resolved = ar.resolve_transcript(valid_jetski_id)
+                self.assertEqual(tx_file.resolve(), resolved)
+                recent = ar.iter_recent_brain_conversations(app_root / "brain", limit=8)
+                self.assertEqual([valid_jetski_id], [cid for cid, _ in recent])
+
+        rem_cloud, _ = ar.detect_antigravity_remote_mode({"ANTIGRAVITY_MODE": "cloud"})
+        self.assertFalse(rem_cloud)
+        self.assertTrue(ar.is_jetski_cloud_environment({"ANTIGRAVITY_MODE": "jetski"}))
+
+    def test_v139_02_single_expression_suspend_lint_and_room_array_migrations(self) -> None:
+        import fast_kt_lint
+        import room_guard
+
+        bad_kt = (
+            "package com.example\n"
+            "class Repo {\n"
+            "    suspend fun loadData(): String? = try {\n"
+            "        fetchRemote()\n"
+            "    } catch (e: Exception) {\n"
+            "        null\n"
+            "    }\n"
+            "}\n"
+        )
+        good_kt = (
+            "package com.example\n"
+            "import kotlinx.coroutines.CancellationException\n"
+            "class Repo {\n"
+            "    suspend fun loadData(): String? = try {\n"
+            "        fetchRemote()\n"
+            "    } catch (e: CancellationException) {\n"
+            "        throw e\n"
+            "    } catch (e: Exception) {\n"
+            "        null\n"
+            "    }\n"
+            "}\n"
+        )
+        bad_clean = fast_kt_lint._strip_kotlin_comments_preserve_lines(bad_kt)
+        good_clean = fast_kt_lint._strip_kotlin_comments_preserve_lines(good_kt)
+        self.assertEqual(1, len(fast_kt_lint._find_suspend_cancellation_swallows(bad_clean, None)))
+        self.assertEqual(0, len(fast_kt_lint._find_suspend_cancellation_swallows(good_clean, None)))
+
+        db_src = (
+            "package com.example.db\n"
+            "@Database(entities = [UserEntity::class], version = 3)\n"
+            "abstract class AppDatabase : RoomDatabase() {\n"
+            "    companion object {\n"
+            "        val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)\n"
+            "        fun build(ctx: Context) = Room.databaseBuilder(ctx, AppDatabase::class.java, \"db\")\n"
+            "            .addMigrations(*ALL_MIGRATIONS)\n"
+            "            .build()\n"
+            "    }\n"
+            "}\n"
+        )
+        decl = room_guard.parse_database_source(db_src, "app/src/main/java/AppDatabase.kt")
+        self.assertIn("MIGRATION_1_2", decl.registered)
+        self.assertIn("MIGRATION_2_3", decl.registered)
+
+    def test_v139_03_worker_lifecycle_guard_and_templates_and_safety_blocks(self) -> None:
+        import delegation_policy as dp
+
+        for forbidden_cmd in (
+            "python .agents/harness.py task plan-note --task-id t1 --note x",
+            "python .agents/harness.py pm sync",
+            "python .agents/harness.py context note --note x",
+        ):
+            self.assertIsNotNone(dp._WORKER_FORBIDDEN_LIFECYCLE_RE.search(forbidden_cmd), forbidden_cmd)
+
+        gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        global_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
+        self.assertIn("auto-project", gemini_tpl)
+        self.assertIn("auto-project", global_tpl)
+        self.assertNotIn("4 simple choices", gemini_tpl)
+        self.assertLess(len(global_tpl), 6000)
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents" / "scripts").mkdir(parents=True)
+            (repo / ".agents" / "scripts" / "workflow.py").write_text("# engine\n", encoding="utf-8")
+            env = {
+                **os.environ,
+                "HARNESS_REPO": str(repo),
+                "HARNESS_HOOK_SELFTEST_ACTIVE": "1",
+            }
+            for blocked_cmd in (
+                "python .agents/scripts/record_review.py --task t1 --verdict bug-test-reviewer-agent=PASS --allow-lead-verdict",
+                "wc -l .agents/scripts/workflow.py",
+                "git show HEAD:.agents/scripts/workflow.py",
+            ):
+                proc = subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "agents" / "scripts" / "pre_tool_safety.py")],
+                    input=json.dumps({"conversationId": "c-v139", "toolName": "run_command", "toolArgs": {"CommandLine": blocked_cmd}}),
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False,
+                )
+                out = json.loads(proc.stdout.strip())
+                self.assertEqual("deny", out.get("decision"), f"Expected deny for {blocked_cmd}: {out}")
+
+    def test_v139_04_v2_verifier_blocks_medium_self_cert_and_tampered_receipt_and_cancel_clears_pending(self) -> None:
+        import argparse
+        import execution_mode
+        import workflow
+        from _vnext_common import atomic_write_json, canonical_sha256, read_json
+        from evidence_store import EvidenceStore
+        from final_verifier import verify_task
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for g_args in (["init", "-q"], ["config", "user.name", "T"], ["config", "user.email", "t@example.invalid"]):
+                subprocess.run(["git", *g_args], cwd=repo, check=True, capture_output=True)
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            src = repo / "app/src/main/kotlin/com/example/Calc.kt"
+            src.parent.mkdir(parents=True)
+            src.write_text("package com.example\nclass Calc { fun add(a: Int, b: Int) = a + b }\n", encoding="utf-8")
+            tst = repo / "app/src/test/kotlin/com/example/CalcTest.kt"
+            tst.parent.mkdir(parents=True)
+            tst.write_text("package com.example\nclass CalcTest\n", encoding="utf-8")
+            (repo / ".agents/state").mkdir(parents=True)
+            (repo / ".agents/VERSION").write_text("1.3.9\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True, capture_output=True)
+
+            # Set a pending single-task mode and verify cancel clears it
+            execution_mode.set_execution_mode(
+                repo, choice="web-task", source="conversation", proof_reference="use web for this task"
+            )
+            self.assertTrue(execution_mode.pending_task_mode_file(repo).is_file())
+
+            d_res = workflow.draft(argparse.Namespace(
+                repo=str(repo), task_id="t-v139", outcome="Update Calc", kind="FEATURE",
+                planning_depth="STANDARD", expected_files="app/src/main/kotlin/com/example/Calc.kt,app/src/test/kotlin/com/example/CalcTest.kt",
+                expected_modules=":app", expected_surfaces="BUSINESS_LOGIC,TEST_ONLY",
+                approach="Add sub", risks="None", rollback="git checkout",
+                test_strategy="Unit test", device_strategy="None", phases=None,
+                architecture_intent="EXISTING_CHANGE", architecture_target_scope="app/src/main/kotlin/com/example/Calc.kt",
+                architecture_target_family=None, verification_contract=None, external_writes=None,
+                force=False, json=True,
+            ))
+            workflow.record_approval(argparse.Namespace(
+                repo=str(repo), task_id="t-v139", source="conversation",
+                proof_reference="approve", enforcement_tier="RULE_ENFORCED",
+                plan_hash=d_res["plan_sha256"], approval_token=None, json=True,
+            ))
+            src.write_text("package com.example\nclass Calc { fun add(a: Int, b: Int) = a + b; fun sub(a: Int, b: Int) = a - b }\n", encoding="utf-8")
+            tst.write_text("package com.example\nclass CalcTest { fun ok() {} }\n", encoding="utf-8")
+
+            prep2 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="t-v139", host="antigravity", json=True))
+
+            # Nested scratch script dropped post-prepare must block final_verifier
+            nested_scratch = repo / "app/src/scratch_helper.py"
+            nested_scratch.write_text("# temp\n", encoding="utf-8")
+            v_scratch = verify_task(repo, "t-v139")
+            self.assertEqual("STALE", v_scratch["status"])
+            self.assertTrue(any("app/src/scratch_helper.py" in r for r in v_scratch.get("blocked_by", [])), v_scratch)
+            nested_scratch.unlink()
+            tdir = repo / ".agents/state/tasks/t-v139"
+            crun = read_json(tdir / "current-run.json")
+            pol = read_json(Path(crun["policy"]))
+            self.assertEqual("MEDIUM", pol.get("severity"))
+            store = EvidenceStore(repo / ".agents/state")
+            snap = crun["delivery_snapshot_sha256"]
+            cset = crun["change_set_sha256"]
+            run_id = crun["run_id"]
+            for g_name, prod in (("preflight", "preflight_check"), ("unit_tests", "run_tests_gate")):
+                store.write(snapshot=snap, run_id=run_id, name=g_name, producer=prod, harness_version="1.3.9", change_set=cset, status="PASS", evidence={"passed": True})
+            store.write(
+                snapshot=snap, run_id=run_id, name="reviews", producer="review_orchestrator",
+                harness_version="1.3.9", change_set=cset, status="PASS",
+                evidence={
+                    "review_protocol_version": 2,
+                    "reviewers": pol["reviewers"],
+                    "reports": [{"reviewer": r, "verdict": "PASS", "independent_execution_verified": False} for r in pol["reviewers"]],
+                    "blocking_findings": [],
+                    "is_truncated": False,
+                },
+            )
+            v_unver = verify_task(repo, "t-v139")
+            self.assertNotEqual("APPROVED", v_unver["status"])
+            self.assertTrue(any("independent_execution_verified=false" in b for b in v_unver.get("blocked_by", [])), v_unver)
+
+            # Cancel task and verify pending_task_mode_file is cleaned up
+            execution_mode.set_execution_mode(
+                repo, choice="web-task", source="conversation", proof_reference="switch for task"
+            )
+            workflow.cancel(argparse.Namespace(repo=str(repo), task_id="t-v139", source="developer_terminal", proof_reference=""))
+            self.assertFalse(execution_mode.pending_task_mode_file(repo).exists())
+
+    def test_v139_05_cloud_readonly_home_shm_contract_and_jetski_metadata_and_host_bind(self) -> None:
+        import antigravity_runtime as ar
+        import harness_cli
+        import reviewer_host as rh
+        import web_relay as wr
+        from _vnext_common import ValidationError, atomic_write_json, read_json
+
+        # 1) HARNESS_SELFTEST_TMP="" must NEVER be overridden even when /dev/shm has >16 GiB free
+        args = harness_cli.build_parser().parse_args(["selftest", "--quick", "--jobs", "1", "--kit", str(REPO_ROOT)])
+        fake_usage = type("U", (), {"total": 32 * 1024**3, "used": 1 * 1024**3, "free": 31 * 1024**3})()
+        with unittest.mock.patch.dict(os.environ, {"HARNESS_SELFTEST_TMP": ""}, clear=False),                 unittest.mock.patch.object(harness_cli, "_verify_kit_checksums", return_value=None),                 unittest.mock.patch("shutil.disk_usage", return_value=fake_usage),                 unittest.mock.patch("subprocess.run", return_value=unittest.mock.MagicMock(returncode=0)) as mock_run:
+            self.assertEqual(0, harness_cli.cmd_selftest(args))
+            for call in mock_run.call_args_list:
+                self.assertEqual(os.environ.get("TEMP"), call.kwargs["env"].get("TEMP"))
+
+        # 2) Read-only $HOME/Downloads falls back cleanly to tempfile.gettempdir() / Harness-Web-Relay
+        with tempfile.TemporaryDirectory() as td:
+            ro_home = Path(td) / "ro_home"
+            ro_home.mkdir()
+            ro_env = {k: v for k, v in os.environ.items() if k not in {"HARNESS_WEB_RELAY_DIR", "HARNESS_WEB_RELAY_OUTBOX"}}
+            with unittest.mock.patch.dict(os.environ, ro_env, clear=True),                     unittest.mock.patch("pathlib.Path.home", return_value=ro_home),                     unittest.mock.patch.object(Path, "mkdir", side_effect=[OSError(30, "Read-only file system"), None]):
+                out_dir = wr._default_outbox_dir()
+                self.assertEqual("Harness-Web-Relay", out_dir.name)
+
+        # 3) Hierarchical Jetski native_model_metadata + reviewer_host sender & lifecycle_action auto-bind
+        with tempfile.TemporaryDirectory() as td:
+            app_root = Path(td) / "jetski"
+            repo = Path(td) / "app"
+            tdir = repo / ".agents/state/tasks/t-jetski"
+            run_id = "run-j1"
+            (tdir / "review-execution" / run_id).mkdir(parents=True)
+            brief_file = tdir / "brief-bug.md"
+            brief_text = "Review task t-jetski package sha256=deadbeef"
+            brief_file.write_text(brief_text + "\n", encoding="utf-8")
+            atomic_write_json(tdir / "plan.json", {"task_id": "t-jetski", "status": "VERIFYING"})
+            atomic_write_json(tdir / "current-run.json", {
+                "task_id": "t-jetski",
+                "run_id": run_id,
+                "review_host": "antigravity",
+                "review_protocol_version": 2,
+                "briefs": {"bug-test-reviewer-agent": str(brief_file)},
+            })
+            ledger_p = tdir / "review-execution" / run_id / "ledger.json"
+            atomic_write_json(ledger_p, {
+                "schema_version": 1,
+                "task_id": "t-jetski",
+                "run_id": run_id,
+                "reviewers": {"bug-test-reviewer-agent": {"state": "DISPATCHED", "brief": str(brief_file)}},
+            })
+
+            child_id = "v1/default/jetski_remote_agents_3p/child-uuid-9999"
+            parent_id = "v1/default/jetski_remote_agents_3p/parent-uuid-1111"
+            tx_path = app_root / "brain" / child_id / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_path.parent.mkdir(parents=True, exist_ok=True)
+            sys_msg = {
+                "source": "SYSTEM_SDK",
+                "type": "SYSTEM_MESSAGE",
+                "content": f"<SYSTEM_MESSAGE>sender={parent_id} priority=MESSAGE_PRIORITY_HIGH content={brief_text}\n</SYSTEM_MESSAGE>",
+            }
+            tx_path.write_text(json.dumps(sys_msg) + "\n", encoding="utf-8")
+
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_root)}, clear=False):
+                # native_model_metadata must extract full hierarchical child_id (not 'v1') and return {} cleanly when no .db file exists
+                meta = ar.native_model_metadata(tx_path)
+                self.assertEqual({}, meta)
+
+                # lifecycle_action must discover nested Jetski child_id and bind both execution_id and hierarchical parent_execution_id
+                rh.lifecycle_action(
+                    repo,
+                    read_json(tdir / "current-run.json"),
+                    read_json(ledger_p)["reviewers"],
+                )
+                bound_entry = read_json(ledger_p)["reviewers"]["bug-test-reviewer-agent"]
+                self.assertEqual(child_id, bound_entry.get("execution_id"))
+                self.assertEqual(parent_id, bound_entry.get("parent_execution_id"))
+
+        # 4) harness-rules.md 5-choice and V2 self-certification parity
+        rules_txt = (REPO_ROOT / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        self.assertIn("auto-project", rules_txt)
+        self.assertIn("Review Protocol V2", rules_txt)
+
+    def test_v139_06_jetski_utility_subagent_post_tool_ide_artifact_and_define_subagent_snake_case(self) -> None:
+        import delegation_policy as dp
+        import post_tool_reconcile as ptr
+        import pre_tool_safety as pts
+        from _vnext_common import atomic_write_json, read_json
+
+        parent_id = "v1/default/jetski_remote_agents_3p/lead-uuid-0001"
+        scout_id = "v1/default/jetski_remote_agents_3p/scout-uuid-0002"
+        rev_id = "v1/default/jetski_remote_agents_3p/rev-uuid-0003"
+
+        with tempfile.TemporaryDirectory() as td:
+            app_root = Path(td) / "jetski"
+            repo = Path(td) / "app"
+            (repo / ".agents/state/tasks/t-j6/review-execution/run-j6").mkdir(parents=True)
+
+            # A) Utility subagent (Scout) hierarchical sender + bind_utility_from_post_tool
+            scout_prompt = "Analyze CartViewModel and dependencies across :app"
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_root)}, clear=False):
+                dp.record_utility_dispatch(
+                    repo,
+                    agent_type="harness-scout-agent",
+                    role_label="harness-scout-agent",
+                    prompt=scout_prompt,
+                    parent_conversation_id=parent_id,
+                    task_id="t-j6",
+                    wave_id="wave-j6",
+                )
+            scout_tx = app_root / "brain" / scout_id / ".system_generated" / "logs" / "transcript.jsonl"
+            scout_tx.parent.mkdir(parents=True, exist_ok=True)
+            scout_tx.write_text(json.dumps({
+                "source": "SYSTEM_SDK",
+                "type": "SYSTEM_MESSAGE",
+                "content": f"<SYSTEM_MESSAGE>sender={parent_id} priority=MESSAGE_PRIORITY_HIGH content={scout_prompt}\n</SYSTEM_MESSAGE>",
+            }) + "\n", encoding="utf-8")
+
+            # B) PostToolUse _bind_candidates_from_brain + hierarchical conversationId regex
+            brief_f = repo / ".agents/state/tasks/t-j6/brief-bug.md"
+            brief_txt = "Review package for t-j6 sha=123456"
+            brief_f.write_text(brief_txt + "\n", encoding="utf-8")
+            atomic_write_json(repo / ".agents/state/tasks/t-j6/plan.json", {"task_id": "t-j6", "status": "VERIFYING"})
+            atomic_write_json(repo / ".agents/state/tasks/t-j6/current-run.json", {
+                "task_id": "t-j6",
+                "run_id": "run-j6",
+                "review_host": "antigravity",
+                "review_protocol_version": 2,
+                "briefs": {"bug-test-reviewer-agent": str(brief_f)},
+            })
+            ledger_p = repo / ".agents/state/tasks/t-j6/review-execution/run-j6/ledger.json"
+            atomic_write_json(ledger_p, {
+                "schema_version": 1,
+                "task_id": "t-j6",
+                "run_id": "run-j6",
+                "reviewers": {"bug-test-reviewer-agent": {"state": "DISPATCHED", "brief": str(brief_f)}},
+            })
+            rev_tx = app_root / "brain" / rev_id / ".system_generated" / "logs" / "transcript.jsonl"
+            rev_tx.parent.mkdir(parents=True, exist_ok=True)
+            rev_tx.write_text(json.dumps({
+                "source": "SYSTEM_SDK",
+                "type": "SYSTEM_MESSAGE",
+                "content": f"<SYSTEM_MESSAGE>sender={parent_id} priority=MESSAGE_PRIORITY_HIGH content={brief_txt}\n</SYSTEM_MESSAGE>",
+            }) + "\n", encoding="utf-8")
+
+            ide_task_md = app_root / "brain" / parent_id / "task.md"
+            ide_task_md.parent.mkdir(parents=True, exist_ok=True)
+            ide_task_md.write_text("# Task\n", encoding="utf-8")
+            bad_ide_md = app_root / "brain" / "foo" / "bar" / "task.md"
+            bad_ide_md.parent.mkdir(parents=True, exist_ok=True)
+            bad_ide_md.write_text("# Bad\n", encoding="utf-8")
+
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_root)}, clear=False):
+                bound_utils = dp.bind_utility_from_post_tool(repo, {"conversationId": parent_id})
+                self.assertEqual([scout_id], bound_utils)
+                ctx_u = dp.utility_subagent_context(repo, scout_id)
+                self.assertIsNotNone(ctx_u)
+                self.assertEqual("harness-scout-agent", ctx_u["agent_type"])
+
+                # Verify PostToolUse regex also accepts hierarchical Jetski conversationId up to 255 chars
+                raw_tool_out = json.dumps({"conversationId": rev_id, "bad": "foo/bar/not-jetski"})
+                extracted_cids = {
+                    cid
+                    for cid in ptr.re.findall(r'conversation(?:Id|_id)[\"\s:=]+([A-Za-z0-9_/-]{4,255})', raw_tool_out)
+                    if not ptr._is_invalid_conversation_id(cid)
+                }
+                self.assertEqual({rev_id}, extracted_cids)
+
+                ptr._bind_candidates_from_brain(repo, {"conversationId": parent_id})
+                self.assertEqual(rev_id, read_json(ledger_p)["reviewers"]["bug-test-reviewer-agent"].get("execution_id"))
+
+                # C) _is_ide_artifact accepts 5-part Jetski path and rejects arbitrary foo/bar
+                self.assertTrue(pts._is_ide_artifact(ide_task_md.resolve()))
+                self.assertFalse(pts._is_ide_artifact(bad_ide_md.resolve()))
+
+            # D) _validate_define_subagent blocks snake_case enable_write_tools and enable_subagent_tools
+            ok_sub, _, code_sub = pts._validate_define_subagent(
+                {"name": "bug-test-reviewer-agent", "enable_subagent_tools": True, "enable_write_tools": False},
+                "define_subagent",
+            )
+            self.assertFalse(ok_sub)
+            self.assertEqual("SUBAGENT_NESTING_FORBIDDEN", code_sub)
+
+            ok_wr, _, code_wr = pts._validate_define_subagent(
+                {"name": "harness-scout-agent", "enable_subagent_tools": False, "enable_write_tools": True},
+                "define_subagent",
+            )
+            self.assertFalse(ok_wr)
+            self.assertEqual("READ_ONLY_SUBAGENT_WRITE_FORBIDDEN", code_wr)
+
+            ok_wk, _, _ = pts._validate_define_subagent(
+                {"name": "harness-worker-agent", "enable_subagent_tools": False, "enable_write_tools": True},
+                "define_subagent",
+            )
+            self.assertTrue(ok_wk)
+
+
+    def test_v139_07_library_project_kind_isolation_doctor_stderr_and_prepare_verification_json(self):
+        """Verify library PROJECT_KIND never bleeds into temp app repos, doctor captures stderr, and prepare-verification --json emits JSON."""
+        import change_classifier as cc
+        kit_root = Path(__file__).resolve().parents[2]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_repo = root / "temp-app"
+            app_repo.mkdir()
+            for git_args in (["init", "-q"], ["config", "user.name", "Test"], ["config", "user.email", "t@e.invalid"]):
+                subprocess.run(["git", *git_args], cwd=app_repo, check=True)
+            (app_repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (app_repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (app_repo / "app/src/main/kotlin/com/example").mkdir(parents=True)
+            (app_repo / "app/src/test/kotlin/com/example").mkdir(parents=True)
+            (app_repo / "app/build.gradle.kts").write_text('plugins { id("com.android.library") }\n', encoding="utf-8")
+            calc = app_repo / "app/src/main/kotlin/com/example/Calc.kt"
+            calc.write_text("package com.example\nclass Calc { fun add(a: Int, b: Int) = a + b }\n", encoding="utf-8")
+            calc_t = app_repo / "app/src/test/kotlin/com/example/CalcTest.kt"
+            calc_t.write_text("package com.example\nclass CalcTest { fun addOk() {} }\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=app_repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=app_repo, check=True)
+
+            # Install into an Android LIBRARY project (no applicationId/AndroidManifest -> PROJECT_KIND == 'library')
+            ans = root / "answers.json"
+            ans.write_text(json.dumps({
+                "i0": True,
+                "i1": "LibSmoke",
+                "i2": sys.executable,
+                "i4": "skip",
+                "i14": ["antigravity"],
+                "i20": "none",
+            }), encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(kit_root / "harness_cli.py"), "init", "--repo", str(app_repo), "--kit", str(kit_root), "--answers-json", str(ans)],
+                cwd=app_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            prod_txt = (app_repo / ".agents/scripts/_product.py").read_text(encoding="utf-8")
+            self.assertTrue("PROJECT_KIND = 'library'" in prod_txt or 'PROJECT_KIND = "library"' in prod_txt, prod_txt)
+            self.assertEqual("library", cc.resolve_repo_project_kind(app_repo))
+
+            # External uninitialized temp dir must default to 'application', not inherit host 'library'
+            ext_tmp = root / "unconfigured-app"
+            ext_tmp.mkdir()
+            self.assertEqual("application", cc.resolve_repo_project_kind(ext_tmp))
+
+            # Doctor --json inside the installed library project must pass 100% (including _hook_selftest.py)
+            ag_root = root / "ag-data"
+            ag_root.mkdir()
+            doc_env = {**os.environ, "ANTIGRAVITY_APP_DATA": str(ag_root), "HARNESS_UPDATE_CHECK": "off"}
+            doc_p = subprocess.run(
+                [sys.executable, ".agents/harness.py", "doctor", "--json"],
+                cwd=app_repo,
+                env=doc_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            doc_json = json.loads(doc_p.stdout)
+            fails = [r for r in doc_json.get("results", doc_json.get("checks", [])) if isinstance(r, dict) and r.get("status") == "FAIL"]
+            self.assertEqual([], fails)
+
+            # Verify prepare-verification --json outputs valid JSON with review_protocol_version == 2
+            subprocess.run(
+                [sys.executable, ".agents/harness.py", "execution-mode", "set", "--choice", "auto-project", "--source", "conversation", "--proof-reference", "auto"],
+                cwd=app_repo,
+                env=doc_env,
+                check=True,
+                capture_output=True,
+            )
+            draft_p = subprocess.run(
+                [
+                    sys.executable, ".agents/harness.py", "task", "draft", "--repo", str(app_repo), "--task-id", "t-lib",
+                    "--outcome", "Add sub", "--kind", "FEATURE",
+                    "--expected-files", "app/src/main/kotlin/com/example/Calc.kt,app/src/test/kotlin/com/example/CalcTest.kt",
+                    "--expected-modules", ":app", "--expected-surfaces", "BUSINESS_LOGIC,PUBLIC_API,TEST_ONLY",
+                    "--approach", "Add sub", "--risks", "Low", "--rollback", "git checkout",
+                    "--test-strategy", "CalcTest", "--device-strategy", "Library unit test",
+                    "--architecture-intent", "EXISTING_CHANGE", "--architecture-target-scope", "app/src/main/kotlin/com/example/Calc.kt",
+                    "--json",
+                ],
+                cwd=app_repo,
+                env=doc_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            p_hash = json.loads(draft_p.stdout)["plan_sha256"][:12]
+            subprocess.run(
+                [
+                    sys.executable, ".agents/harness.py", "task", "approve", "--repo", str(app_repo), "--task-id", "t-lib",
+                    "--source", "conversation", "--proof-reference", "Proceed",
+                    "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", p_hash, "--json",
+                ],
+                cwd=app_repo,
+                env=doc_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            calc.write_text("package com.example\nclass Calc { fun add(a: Int, b: Int) = a + b; fun sub(a: Int, b: Int) = a - b }\n", encoding="utf-8")
+            calc_t.write_text("package com.example\nclass CalcTest { fun addOk() {}; fun subOk() {} }\n", encoding="utf-8")
+            pv_json_p = subprocess.run(
+                [sys.executable, ".agents/harness.py", "task", "prepare-verification", "--repo", str(app_repo), "--task-id", "t-lib", "--host", "antigravity", "--json"],
+                cwd=app_repo,
+                env=doc_env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            pv_data = json.loads(pv_json_p.stdout)
+            self.assertEqual(2, pv_data.get("review_protocol_version"))
+            self.assertTrue(str(pv_data.get("run_id", "")).startswith("run-"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

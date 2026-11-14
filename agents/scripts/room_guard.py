@@ -240,12 +240,24 @@ def parse_database_source(
     auto_migrations = frozenset(
         (int(a), int(b)) for a, b in find_auto_migrations(text)
     )
+    array_defs: dict[str, set[str]] = {}
+    for arr_m in re.finditer(
+        r"\b(?:val|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(?:arrayOf|listOf|setOf)\s*\(([^)]*)\)",
+        text,
+        re.DOTALL,
+    ):
+        arr_name = arr_m.group(1)
+        arr_items = {tok for tok in IDENT_RE.findall(arr_m.group(2)) if tok not in ADD_MIGRATIONS_KW}
+        if arr_items:
+            array_defs[arr_name] = arr_items
     registered: set[str] = set()
     add_blocks = _extract_add_migrations_blocks(text, target_db_class=class_name)
     for block in add_blocks:
         for token in IDENT_RE.findall(block):
             if token not in ADD_MIGRATIONS_KW:
                 registered.add(token)
+                if token in array_defs:
+                    registered.update(array_defs[token])
     return DatabaseDecl(
         rel=rel,
         class_name=class_name,

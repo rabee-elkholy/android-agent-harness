@@ -28,7 +28,7 @@ def candidate_runtime_roots() -> tuple[Path, ...]:
             pass
 
     home = Path.home().resolve()
-    for suffix in ("antigravity", "antigravity-cli", "antigravity-ide"):
+    for suffix in ("antigravity", "antigravity-cli", "antigravity-ide", "jetski"):
         standard = (home / ".gemini" / suffix).resolve()
         if standard not in roots:
             roots.append(standard)
@@ -54,22 +54,79 @@ def is_trusted_antigravity_path(path: Path | str) -> bool:
         return False
 
 
+_JETSKI_HIERARCHICAL_ID_RE = re.compile(
+    r"^v\d+/[A-Za-z0-9_-]{1,64}/(?:jetski[A-Za-z0-9_-]*|remote_agents[A-Za-z0-9_-]*)/[A-Za-z0-9_-]{4,128}$"
+)
+
+
 def _is_invalid_conversation_id(conversation_id: str) -> bool:
     if not conversation_id or not isinstance(conversation_id, str):
         return True
-    if "\0" in conversation_id:
+    if "\0" in conversation_id or any(ord(ch) < 32 for ch in conversation_id):
         return True
     cid = conversation_id.strip().strip("'\"")
     if not cid or len(cid) > 255:
         return True
-    if "/" in cid or "\\" in cid or ".." in cid or ":" in cid or cid.startswith("file:"):
+    if "\\" in cid or ".." in cid or ":" in cid or cid.startswith("file:"):
         return True
+    if "/" in cid:
+        if not _JETSKI_HIERARCHICAL_ID_RE.fullmatch(cid):
+            return True
+        if any(seg in {"", ".", ".."} for seg in cid.split("/")):
+            return True
     try:
         if Path(cid).is_absolute():
             return True
     except Exception:
         return True
     return False
+
+
+def iter_recent_brain_conversations(
+    brain_root: Path,
+    *,
+    limit: int = 32,
+    max_depth: int = 5,
+) -> list[tuple[str, Path]]:
+    """Return `(conversation_id, directory)` sorted newest-first across flat and Jetski brain trees."""
+    if not brain_root.is_dir():
+        return []
+    marker_names = ("transcript.jsonl", "transcript_full.jsonl", "task.md", "implementation_plan.md", "walkthrough.md")
+    discovered: dict[str, tuple[int, Path]] = {}
+
+    def _mtime_ns(p: Path) -> int:
+        try:
+            return int(p.stat().st_mtime_ns)
+        except OSError:
+            return 0
+
+    def _scan(cur: Path, depth: int) -> None:
+        if depth > max_depth:
+            return
+        try:
+            children = [c for c in cur.iterdir() if c.is_dir() and not c.is_symlink()]
+        except OSError:
+            return
+        for child in children:
+            try:
+                rel_id = child.relative_to(brain_root).as_posix()
+            except ValueError:
+                continue
+            has_markers = (child / ".system_generated").is_dir() or any((child / m).is_file() for m in marker_names)
+            if depth == 1 and not rel_id.startswith("v"):
+                discovered[rel_id] = (_mtime_ns(child), child)
+                continue
+            if has_markers and not _is_invalid_conversation_id(rel_id):
+                discovered[rel_id] = (_mtime_ns(child), child)
+                continue
+            if depth == 1 and not has_markers and not re.fullmatch(r"v\d+", rel_id) and not _is_invalid_conversation_id(rel_id):
+                discovered[rel_id] = (_mtime_ns(child), child)
+            if depth < max_depth and (rel_id.startswith("v") or not has_markers):
+                _scan(child, depth + 1)
+
+    _scan(brain_root, 1)
+    ranked = sorted(discovered.items(), key=lambda kv: kv[1][0], reverse=True)
+    return [(cid, info[1]) for cid, info in ranked[: max(1, limit)]]
 
 
 ACCEPTED_SYSTEM_SOURCES = frozenset({"SYSTEM", "SYSTEM_SDK"})
@@ -191,12 +248,28 @@ def native_model_metadata(transcript: Path) -> dict:
     if root is None:
         raise ValidationError("REVIEW_MODEL_UNVERIFIED: transcript is outside trusted Antigravity storage")
     parts = resolved.relative_to(root).parts
-    execution_id = parts[0]
+    if ".system_generated" in parts:
+        conv_parts = parts[: parts.index(".system_generated")]
+    elif parts and parts[-1] in {"transcript.jsonl", "transcript_full.jsonl"}:
+        conv_parts = parts[:-1]
+    else:
+        conv_parts = parts[:1]
+    execution_id = "/".join(conv_parts) if conv_parts else (parts[0] if parts else "")
     canonical = resolve_transcript(execution_id)
     if canonical is None or canonical.resolve() != resolved:
         raise ValidationError("REVIEW_MODEL_UNVERIFIED: model proof requires the canonical execution transcript")
-    database = root.parent / "conversations" / f"{execution_id}.db"
-    if database.is_symlink() or not database.resolve().is_relative_to(root.parent.resolve()) or not database.is_file():
+    db_candidates = [root.parent / "conversations" / f"{execution_id}.db"]
+    if "/" in execution_id:
+        db_candidates.append(root.parent / "conversations" / f"{execution_id.rsplit('/', 1)[-1]}.db")
+    database: Path | None = None
+    for db_cand in db_candidates:
+        try:
+            if not db_cand.is_symlink() and db_cand.resolve().is_relative_to(root.parent.resolve()) and db_cand.is_file():
+                database = db_cand
+                break
+        except OSError:
+            continue
+    if database is None:
         return {}
     def _fetch_rows(db_path: Path) -> tuple[list, list]:
         base_uri = db_path.resolve().as_uri()
@@ -273,13 +346,33 @@ def detect_antigravity_remote_mode(env: dict[str, str] | None = None) -> tuple[b
             signals.append(f"{key}={environ.get(key)}")
     for mode_key in ("ANTIGRAVITY_MODE", "AGY_MODE", "ANTIGRAVITY_SESSION_MODE"):
         val = str(environ.get(mode_key) or "").strip().lower()
-        if val in {"remote", "remote-agent", "remote_agent", "web", "cloud"}:
+        if val in {"remote", "remote-agent", "remote_agent", "web"}:
             signals.append(f"{mode_key}={environ.get(mode_key)}")
     for args_key in ("AGY_ARGS", "ANTIGRAVITY_CLI_ARGS", "ANTIGRAVITY_LAUNCH_ARGS"):
         raw_args = str(environ.get(args_key) or "").strip()
         if "--remote-agent" in raw_args or re.search(r"(?:^|\s)--remote(?:\s|$)", raw_args):
             signals.append(f"{args_key} contains --remote-agent")
     return (bool(signals), signals)
+
+
+def is_jetski_cloud_environment(env: dict[str, str] | None = None) -> bool:
+    """Return True when running natively inside an Antigravity Cloud / Jetski container."""
+    environ = env if env is not None else os.environ
+    mode_vals = {
+        str(environ.get(k) or "").strip().lower()
+        for k in ("ANTIGRAVITY_MODE", "AGY_MODE", "ANTIGRAVITY_SESSION_MODE")
+    }
+    if mode_vals & {"jetski", "cloud"}:
+        return True
+    if str(environ.get("JETSKI_AGENT") or environ.get("ANTIGRAVITY_CLOUD") or "").strip().lower() in {"1", "true", "yes"}:
+        return True
+    try:
+        home = Path.home()
+        if (home / ".gemini" / "jetski").is_dir() and not (home / ".gemini" / "antigravity-ide").is_dir():
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def remote_subagents_explicitly_allowed(env: dict[str, str] | None = None) -> bool:
@@ -317,6 +410,7 @@ def inspect_language_server_logs(env: dict[str, str] | None = None) -> dict[str,
     home = Path.home()
     _add(home / "Library" / "Logs" / "Antigravity" / "language_server.log")
     _add(home / ".gemini" / "antigravity" / "logs" / "language_server.log")
+    _add(home / ".gemini" / "jetski" / "logs" / "language_server.log")
     _add(home / ".antigravity" / "logs" / "language_server.log")
     _add(home / ".config" / "Antigravity" / "logs" / "language_server.log")
 
@@ -589,12 +683,7 @@ def inspect_zombie_subagent_and_schedule_risks(repo: Path, env: dict[str, str] |
     for broot in brain_roots:
         if not broot.is_dir():
             continue
-        try:
-            entries = [e for e in broot.iterdir() if e.is_dir() and not e.is_symlink()]
-        except OSError:
-            continue
-        entries.sort(key=lambda e: e.stat().st_mtime if e.exists() else 0.0, reverse=True)
-        for child_dir in entries[:16]:
+        for conv_id, child_dir in iter_recent_brain_conversations(broot, limit=16):
             tx = prefer_full_transcript(child_dir / ".system_generated" / "logs" / "transcript.jsonl")
             if tx is None or not tx.is_file():
                 tx = prefer_full_transcript(child_dir / "transcript.jsonl")
@@ -640,7 +729,7 @@ def inspect_zombie_subagent_and_schedule_risks(repo: Path, env: dict[str, str] |
                 gap = cur_t - prev_t
                 if gap >= ZOMBIE_WAKEUP_GAP_SECONDS:
                     wakeup_spikes.append({
-                        "conversation_id": child_dir.name,
+                        "conversation_id": conv_id,
                         "gap_minutes": round(gap / 60.0, 1),
                         "transcript": str(tx),
                     })

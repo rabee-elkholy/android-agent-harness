@@ -11,7 +11,7 @@ from pathlib import Path
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPTS_DIR))
 from _vnext_common import ValidationError as _ExpectedArtifactError, read_json
-from antigravity_runtime import candidate_brain_roots, is_trusted_antigravity_path
+from antigravity_runtime import _is_invalid_conversation_id, candidate_brain_roots, is_trusted_antigravity_path, iter_recent_brain_conversations
 from evidence_store import StateLock
 from review_orchestrator import REVIEW_DISPATCHED, REVIEW_ENV_BLOCKED, load_ledger, save_ledger
 from workflow import state_root, task_dir
@@ -61,21 +61,14 @@ def _bind_candidates_from_brain(repo: Path, payload: dict) -> None:
     for brain_root in roots:
         if not brain_root.is_dir():
             continue
-        recent_dirs: list[tuple[float, str]] = []
-        try:
-            for entry in brain_root.iterdir():
-                if not entry.is_dir() or entry.is_symlink() or entry.name == parent_cid:
+        for child_id, child_dir in iter_recent_brain_conversations(brain_root, limit=16):
+            if child_id == parent_cid:
+                continue
+            try:
+                if child_dir.stat().st_mtime < cutoff:
                     continue
-                try:
-                    mtime = entry.stat().st_mtime
-                except OSError:
-                    continue
-                if mtime >= cutoff:
-                    recent_dirs.append((mtime, entry.name))
-        except OSError:
-            continue
-        recent_dirs.sort(reverse=True)
-        for _, child_id in recent_dirs[:12]:
+            except OSError:
+                continue
             try:
                 reviewer_context(repo, child_id, bind=True)
             except Exception:
@@ -113,7 +106,11 @@ def main() -> int:
                 or payload.get("result")
                 or ""
             )
-            matched_ids = set(re.findall(r'conversationId[\"\s:]+([A-Za-z0-9_-]{4,128})', output))
+            matched_ids = {
+                cid
+                for cid in re.findall(r'conversation(?:Id|_id)[\"\s:=]+([A-Za-z0-9_/-]{4,255})', output)
+                if not _is_invalid_conversation_id(cid)
+            }
             for execution_id in matched_ids:
                 reviewer_context(repo, execution_id, bind=True)
             if call_name_low in {"invoke_subagent", ""}:

@@ -1809,6 +1809,15 @@ def cancel(args: argparse.Namespace) -> dict:
             pass
     from discovery_receipt import clear_latest_discovery_receipt
     clear_latest_discovery_receipt(repo)
+    try:
+        from execution_mode import pending_task_mode_file
+        pend_f = pending_task_mode_file(repo)
+        if pend_f.is_file():
+            pend_data = read_json(pend_f)
+            if str(pend_data.get("intended_task_id") or "") in {"", args.task_id}:
+                pend_f.unlink(missing_ok=True)
+    except (ImportError, OSError, ValueError, ValidationError):
+        pass
     _clear_cancel_request(repo, args.task_id)
     return plan
 
@@ -4312,7 +4321,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.action not in {"continue", "bridge", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal", "plan-check"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
-        if args.action in {"continue", "merge", "bridge"} and args.json:
+        if args.action in {"continue", "merge", "bridge", "prepare-verification"} and args.json:
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
                 result = args.handler(args)
@@ -4396,14 +4405,17 @@ def main(argv: list[str] | None = None) -> int:
             print(tb_text, file=sys.stderr)
         return 1
     if args.action == "prepare-verification":
-        print(f"HARNESS_RUN_ID={result['run_id']}")
-        print(f"HARNESS_DELIVERY_SNAPSHOT={result['delivery_snapshot_sha256']}")
-        if result.get("verification_recipes"):
-            print("VERIFICATION_RECIPES:")
-            for recipe in result["verification_recipes"]:
-                print(f"  [{recipe['surface']}]:")
-                for step in recipe["steps"]:
-                    print(f"    - {step}")
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"HARNESS_RUN_ID={result['run_id']}")
+            print(f"HARNESS_DELIVERY_SNAPSHOT={result['delivery_snapshot_sha256']}")
+            if result.get("verification_recipes"):
+                print("VERIFICATION_RECIPES:")
+                for recipe in result["verification_recipes"]:
+                    print(f"  [{recipe['surface']}]:")
+                    for step in recipe["steps"]:
+                        print(f"    - {step}")
     elif args.action in ("change-decision", "plan-note", "heal"):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "plan-check":

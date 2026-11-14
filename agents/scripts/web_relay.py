@@ -305,11 +305,14 @@ def _default_outbox_dir() -> Path:
     dl = Path.home() / "Downloads" / "Harness-Web-Relay"
     try:
         dl.mkdir(parents=True, exist_ok=True)
+        probe = dl / f".write-probe-{os.getpid()}"
+        probe.write_bytes(b"")
+        probe.unlink(missing_ok=True)
         return dl
     except OSError:
-        tmp_fallback = Path(tempfile.gettempdir()) / "Harness-Web-Relay"
-        tmp_fallback.mkdir(parents=True, exist_ok=True)
-        return tmp_fallback
+        fb = Path(tempfile.gettempdir()).resolve() / "Harness-Web-Relay"
+        fb.mkdir(parents=True, exist_ok=True)
+        return fb
 
 
 def _default_downloads_dirs() -> list[Path]:
@@ -320,11 +323,17 @@ def _default_downloads_dirs() -> list[Path]:
             p = Path(val).expanduser().resolve()
             if p not in dirs:
                 dirs.append(p)
-    home_dl = Path.home() / "Downloads"
-    if home_dl.is_dir():
-        for cand in (home_dl / "Harness-Web-Relay", home_dl):
-            if cand not in dirs:
-                dirs.append(cand)
+    try:
+        home_dl = Path.home() / "Downloads"
+        if home_dl.is_dir():
+            for cand in (home_dl / "Harness-Web-Relay", home_dl):
+                if cand not in dirs:
+                    dirs.append(cand)
+    except OSError:
+        pass
+    tmp_fb = Path(tempfile.gettempdir()).resolve() / "Harness-Web-Relay"
+    if tmp_fb not in dirs and tmp_fb.is_dir():
+        dirs.append(tmp_fb)
     return [d for d in dirs if d.is_dir()]
 
 
@@ -1545,6 +1554,15 @@ def apply_web_merge(
         if not staged_f.is_file():
             raise ValidationError(f"No staged web-relay operations found for phase '{pid}'.")
         staged_doc = read_json(staged_f)
+        if isinstance(staged_doc, dict) and staged_doc.get("staged_sha256"):
+            expected_st_sha = canonical_sha256({
+                "task_id": str(staged_doc.get("task_id") or tid),
+                "phase_id": str(staged_doc.get("phase_id") or pid),
+                "writes": list(staged_doc.get("writes") or []),
+                "deletes": list(staged_doc.get("deletes") or []),
+            })
+            if staged_doc.get("staged_sha256") != expected_st_sha:
+                raise ValidationError(f"STAGED_PHASE_TAMPERED: Staged Web-Relay payload for phase '{pid}' failed SHA-256 verification.")
         if dry_run:
             return {
                 "status": "DRY_RUN_STAGED_PHASE",
@@ -1562,6 +1580,13 @@ def apply_web_merge(
         for dl in staged_doc.get("deletes") or []:
             (repo / dl).unlink(missing_ok=True)
         staged_f.unlink(missing_ok=True)
+        gate_env = {**os.environ, "HARNESS_REPO": str(repo), "PYTHONIOENCODING": "utf-8"}
+        lint_script = (repo / ".agents" / "scripts" / "fast_kt_lint.py") if (repo / ".agents" / "scripts" / "fast_kt_lint.py").is_file() else (SCRIPTS_DIR / "fast_kt_lint.py")
+        str_script = (repo / ".agents" / "scripts" / "check_strings.py") if (repo / ".agents" / "scripts" / "check_strings.py").is_file() else (SCRIPTS_DIR / "check_strings.py")
+        st_lint_proc = subprocess.run([sys.executable, str(lint_script)], cwd=repo, env=gate_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        st_str_proc = subprocess.run([sys.executable, str(str_script)], cwd=repo, env=gate_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        st_lint_ok = st_lint_proc.returncode == 0
+        st_str_ok = st_str_proc.returncode == 0
         try:
             from delivery_manifest import build_task_manifest, load_task_baseline
             st_manifest = build_task_manifest(repo, load_task_baseline(repo, tid), expected_files=plan_doc.get("expected_files"))
@@ -1574,12 +1599,19 @@ def apply_web_merge(
                 "change_set_sha256": str(st_manifest.get("change_set_sha256") or ""),
                 "files_written": [w["path"] for w in staged_doc.get("writes") or []],
                 "files_deleted": list(staged_doc.get("deletes") or []),
-                "fast_kt_lint_ok": True,
-                "check_strings_ok": True,
+                "fast_kt_lint_ok": st_lint_ok,
+                "check_strings_ok": st_str_ok,
             })
         except (ImportError, OSError, ValueError, ValidationError):
             st_manifest = {}
-        return {"status": "APPLIED_STAGED_PHASE", "task_id": tid, "phase_id": pid, "files_written": [w["path"] for w in staged_doc.get("writes") or []]}
+        return {
+            "status": "APPLIED_STAGED_PHASE",
+            "task_id": tid,
+            "phase_id": pid,
+            "files_written": [w["path"] for w in staged_doc.get("writes") or []],
+            "fast_kt_lint_ok": st_lint_ok,
+            "check_strings_ok": st_str_ok,
+        }
 
     payload, payload_origin = _resolve_incoming_merge_payload(repo, merge_file, use_stdin)
     pack_id = str(payload.get("pack_id") or "").strip()
@@ -2237,6 +2269,18 @@ def apply_web_merge(
                         bucket = {"writes": merged_w, "deletes": merged_d}
                 except (OSError, ValueError, ValidationError):
                     pass
+            bucket = {
+                "task_id": tid,
+                "phase_id": f_pid,
+                "writes": list(bucket.get("writes") or []),
+                "deletes": list(bucket.get("deletes") or []),
+            }
+            bucket["staged_sha256"] = canonical_sha256({
+                "task_id": tid,
+                "phase_id": f_pid,
+                "writes": bucket["writes"],
+                "deletes": bucket["deletes"],
+            })
             atomic_write_json(st_file, bucket)
             staged_phases_summary[f_pid] = [x["path"] for x in bucket["writes"]] + list(bucket["deletes"])
         active_writes = filtered_w

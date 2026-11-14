@@ -906,8 +906,9 @@ def main(argv: list[str] | None = None) -> int:
             rep["subagent_id"] = conv_id
             rep["transcript_path"] = str(transcript_file)
 
+            from antigravity_runtime import _is_invalid_conversation_id
             receipt_file = task_directory / "reviewer-dispatches" / f"{reviewer}.json"
-            if receipt_file.is_file() and not ("/" in conv_id or "\\" in conv_id or ":" in conv_id):
+            if receipt_file.is_file() and not _is_invalid_conversation_id(conv_id):
                 try:
                     rc = read_json(receipt_file)
                     if not rc.get("subagent_id"):

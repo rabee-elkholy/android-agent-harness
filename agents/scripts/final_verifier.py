@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -614,9 +616,16 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
     for repo_field in ("root_sha256", "git_common_dir_sha256", "branch", "head"):
         if cur_repo.get(repo_field) != rec_repo.get(repo_field):
             reasons.append(f"current repository {repo_field} does not match the delivery manifest")
-    lingering_scratch = list(repo.glob("scratch_*.py")) + list(repo.glob("script_step*.py"))
+    _skip_scratch_dirs = {".git", ".agents", "agents", ".gradle", "build", ".idea", "node_modules", ".venv", "venv", "__pycache__"}
+    lingering_scratch: list[Path] = []
+    for _root_d, _dirs, _files in os.walk(repo, followlinks=False):
+        _dirs[:] = [d for d in _dirs if d not in _skip_scratch_dirs and not d.startswith(".harness")]
+        for _fn in _files:
+            if (_fn.startswith("scratch_") or _fn.startswith("script_step")) and _fn.endswith(".py"):
+                lingering_scratch.append(Path(_root_d) / _fn)
     if lingering_scratch:
-        reasons.append(f"lingering scratch scripts detected in repository: {', '.join(p.name for p in lingering_scratch)}")
+        rel_names = [p.relative_to(repo).as_posix() for p in sorted(lingering_scratch)[:8]]
+        reasons.append(f"lingering scratch scripts detected in repository: {', '.join(rel_names)}")
     if reasons:
         return _blocked("STALE", reasons, checks)
 
@@ -932,18 +941,95 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     reasons.append("review contains unresolved blocking findings")
                 severity = str(policy.get("severity") or "").upper()
                 sensitive = sorted(set(policy.get("surfaces") or []) & SENSITIVE_SURFACES)
-                if severity in ("HIGH", "CRITICAL") or sensitive:
+                protocol_ver = max(
+                    int(current.get("review_protocol_version") or 1),
+                    int(evidence.get("review_protocol_version") or 1),
+                )
+                require_independent_proof = bool(severity in ("HIGH", "CRITICAL") or sensitive or protocol_ver >= 2)
+                v2_exec_root = task_directory / "review-execution" / str(run_id)
+                v2_ledger_data: dict = {}
+                if int(evidence.get("review_protocol_version") or 0) >= 2 and (v2_exec_root / "ledger.json").is_file():
+                    try:
+                        v2_ledger_data = read_json(v2_exec_root / "ledger.json")
+                    except Exception:
+                        v2_ledger_data = {}
+                if require_independent_proof:
                     for rep in evidence.get("reports") or []:
                         rev_name = str(rep.get("reviewer") or "")
                         if not rep.get("independent_execution_verified"):
+                            scope_reason = f"{severity} severity changes" if (severity in ("HIGH", "CRITICAL") or sensitive) else "Review Protocol V2"
                             err_msg = (
                                 f"reviewer {rev_name} lacks verified independent execution proof "
-                                f"(self-certified by lead agent / independent_execution_verified=false) required for {severity} severity changes"
+                                f"(self-certified by lead agent / independent_execution_verified=false) required for {scope_reason}"
                             )
                             reasons.append(err_msg)
                             checks[-1]["status"] = "FAIL"
                             checks[-1]["detail"] = err_msg
                             break
+                        if int(evidence.get("review_protocol_version") or 0) >= 2 and v2_exec_root.is_dir():
+                            v2_res_file = v2_exec_root / "results" / f"{rev_name}.json"
+                            if not v2_res_file.is_file():
+                                err_msg = f"reviewer {rev_name} Review Protocol V2 result artifact is missing"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
+                            try:
+                                v2_res = read_json(v2_res_file)
+                                expected_res_sha = canonical_sha256(v2_res.get("result") or {})
+                                expected_eid_sha = hashlib.sha256(str(v2_res.get("execution_id") or "").encode("utf-8")).hexdigest()
+                                if (
+                                    v2_res.get("task_id") != plan.get("task_id")
+                                    or v2_res.get("run_id") != run_id
+                                    or v2_res.get("reviewer") != rev_name
+                                    or v2_res.get("result_sha256") != expected_res_sha
+                                    or (rep.get("result_sha256") and v2_res.get("result_sha256") != rep.get("result_sha256"))
+                                    or v2_res.get("execution_id_sha256") != expected_eid_sha
+                                    or (rep.get("execution_id_sha256") and v2_res.get("execution_id_sha256") != rep.get("execution_id_sha256"))
+                                ):
+                                    err_msg = f"reviewer {rev_name} Review Protocol V2 result artifact hash or identity mismatch"
+                                    reasons.append(err_msg)
+                                    checks[-1]["status"] = "FAIL"
+                                    checks[-1]["detail"] = err_msg
+                                    break
+                            except Exception:
+                                err_msg = f"reviewer {rev_name} Review Protocol V2 result artifact is corrupted"
+                                reasons.append(err_msg)
+                                checks[-1]["status"] = "FAIL"
+                                checks[-1]["detail"] = err_msg
+                                break
+                            v2_disp_file = v2_exec_root / "dispatch" / f"{rev_name}.json"
+                            ledger_rev = (v2_ledger_data.get("reviewers") or {}).get(rev_name) or {}
+                            if v2_disp_file.is_file() or ledger_rev.get("dispatch_nonce"):
+                                if not v2_disp_file.is_file():
+                                    err_msg = f"reviewer {rev_name} Review Protocol V2 dispatch receipt is missing"
+                                    reasons.append(err_msg)
+                                    checks[-1]["status"] = "FAIL"
+                                    checks[-1]["detail"] = err_msg
+                                    break
+                                try:
+                                    v2_rc = read_json(v2_disp_file)
+                                    exp_v2_rc_sha = canonical_sha256({k: v for k, v in v2_rc.items() if k != "receipt_sha256"})
+                                    if (
+                                        v2_rc.get("schema_version") != 2
+                                        or v2_rc.get("reviewer") != rev_name
+                                        or v2_rc.get("task_id") != plan.get("task_id")
+                                        or v2_rc.get("run_id") != run_id
+                                        or v2_rc.get("delivery_snapshot_sha256") != snapshot
+                                        or v2_rc.get("change_set_sha256") != change_set
+                                        or v2_rc.get("receipt_sha256") != exp_v2_rc_sha
+                                    ):
+                                        err_msg = f"reviewer {rev_name} Review Protocol V2 dispatch receipt is invalid or mismatched"
+                                        reasons.append(err_msg)
+                                        checks[-1]["status"] = "FAIL"
+                                        checks[-1]["detail"] = err_msg
+                                        break
+                                except Exception:
+                                    err_msg = f"reviewer {rev_name} Review Protocol V2 dispatch receipt is corrupted"
+                                    reasons.append(err_msg)
+                                    checks[-1]["status"] = "FAIL"
+                                    checks[-1]["detail"] = err_msg
+                                    break
                         proof = rep.get("execution_proof") or {}
                         if proof.get("task_id") and (proof.get("task_id") != plan.get("task_id") or proof.get("run_id") != run_id):
                             err_msg = f"reviewer {rev_name} execution proof task/run mismatch"

@@ -147,6 +147,7 @@ DANGEROUS = (
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
     ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
     ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
+    ("lead_verdict_bypass", re.compile(r"record_review(?:\.py)?\b.*--allow-lead-verdict\b", re.I)),
     ("exported_component_acceptance", re.compile(r"exported_component_guard\.py\b.*--accept\b", re.I)),
     ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
@@ -651,72 +652,72 @@ def check_and_apply_hydrogen_burst_pacer(
     turns_in_window = 1
 
     try:
-        store: dict[str, object] = {}
-        if pacer_path.is_file():
-            try:
-                loaded = json.loads(pacer_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    store = loaded
-            except (OSError, ValueError):
-                store = {}
+        from evidence_store import StateLock
+        pacer_path.parent.mkdir(parents=True, exist_ok=True)
+        with StateLock(pacer_path.parent / ".burst-pacer-lock"):
+            store: dict[str, object] = {}
+            if pacer_path.is_file():
+                try:
+                    loaded = json.loads(pacer_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        store = loaded
+                except (OSError, ValueError):
+                    store = {}
 
-        sessions_raw = store.get("sessions")
-        sessions: dict[str, dict[str, object]] = dict(sessions_raw) if isinstance(sessions_raw, dict) else {}
-        # Prune stale sessions (>1h idle) and cap to 32 entries
-        sessions = {
-            str(k): dict(v)
-            for k, v in list(sessions.items())[-32:]
-            if isinstance(v, dict) and (now - float(v.get("last_call_epoch") or 0.0)) <= 3600.0
-        }
+            sessions_raw = store.get("sessions")
+            sessions: dict[str, dict[str, object]] = dict(sessions_raw) if isinstance(sessions_raw, dict) else {}
+            sessions = {
+                str(k): dict(v)
+                for k, v in list(sessions.items())[-32:]
+                if isinstance(v, dict) and (now - float(v.get("last_call_epoch") or 0.0)) <= 3600.0
+            }
 
-        rec = sessions.get(cid)
-        if not isinstance(rec, dict):
-            rec = {"turn_anchors": [], "last_call_epoch": 0.0, "throttled_count": 0, "coalesced_count": 0}
+            rec = sessions.get(cid)
+            if not isinstance(rec, dict):
+                rec = {"turn_anchors": [], "last_call_epoch": 0.0, "throttled_count": 0, "coalesced_count": 0}
 
-        last_call = float(rec.get("last_call_epoch") or 0.0)
-        raw_anchors = rec.get("turn_anchors")
-        anchors = [
-            float(ts) for ts in (raw_anchors if isinstance(raw_anchors, list) else [])
-            if isinstance(ts, (int, float)) and (now - float(ts)) <= BURST_WINDOW_SEC
-        ]
+            last_call = float(rec.get("last_call_epoch") or 0.0)
+            raw_anchors = rec.get("turn_anchors")
+            anchors = [
+                float(ts) for ts in (raw_anchors if isinstance(raw_anchors, list) else [])
+                if isinstance(ts, (int, float)) and (now - float(ts)) <= BURST_WINDOW_SEC
+            ]
 
-        if last_call > 0.0 and 0.0 <= (now - last_call) <= BURST_COALESCE_PARALLEL_SEC:
-            # Same-turn parallel tool batch (e.g. 6 parallel view_file calls): zero delay!
-            coalesced = True
-            rec["coalesced_count"] = int(rec.get("coalesced_count") or 0) + 1
-            if not anchors:
+            if last_call > 0.0 and 0.0 <= (now - last_call) <= BURST_COALESCE_PARALLEL_SEC:
+                coalesced = True
+                rec["coalesced_count"] = int(rec.get("coalesced_count") or 0) + 1
+                if not anchors:
+                    anchors.append(now)
+                turns_in_window = len(anchors)
+            else:
                 anchors.append(now)
-            turns_in_window = len(anchors)
-        else:
-            anchors.append(now)
-            turns_in_window = len(anchors)
-            if turns_in_window >= BURST_TURN_THRESHOLD:
-                extra_turns = turns_in_window - BURST_TURN_THRESHOLD
-                jitter_seed = _hashlib.sha256(f"{cid}:{turns_in_window}:{tool_name}".encode("utf-8")).digest()[0]
-                jitter = (jitter_seed / 255.0) * 0.12
-                delay_sec = round(min(BURST_MAX_DELAY_SEC, BURST_BASE_DELAY_SEC + extra_turns * BURST_STEP_DELAY_SEC + jitter), 3)
-                rec["throttled_count"] = int(rec.get("throttled_count") or 0) + 1
-                store["throttled_events"] = int(store.get("throttled_events") or 0) + 1
-                store["total_delay_ms"] = int(store.get("total_delay_ms") or 0) + int(round(delay_sec * 1000))
-                store["last_throttled_tool"] = str(tool_name or "")
-                store["last_throttled_epoch"] = now
+                turns_in_window = len(anchors)
+                if turns_in_window >= BURST_TURN_THRESHOLD:
+                    extra_turns = turns_in_window - BURST_TURN_THRESHOLD
+                    jitter_seed = _hashlib.sha256(f"{cid}:{turns_in_window}:{tool_name}".encode("utf-8")).digest()[0]
+                    jitter = (jitter_seed / 255.0) * 0.12
+                    delay_sec = round(min(BURST_MAX_DELAY_SEC, BURST_BASE_DELAY_SEC + extra_turns * BURST_STEP_DELAY_SEC + jitter), 3)
+                    rec["throttled_count"] = int(rec.get("throttled_count") or 0) + 1
+                    store["throttled_events"] = int(store.get("throttled_events") or 0) + 1
+                    store["total_delay_ms"] = int(store.get("total_delay_ms") or 0) + int(round(delay_sec * 1000))
+                    store["last_throttled_tool"] = str(tool_name or "")
+                    store["last_throttled_epoch"] = now
+
+            effective_epoch = now + (delay_sec if (delay_sec > 0.0 and eff_mode == "enforce") else 0.0)
+            rec["turn_anchors"] = anchors[-16:]
+            rec["last_call_epoch"] = effective_epoch
+            sessions[cid] = rec
+            store["schema_version"] = 1
+            store["coalesced_parallel_calls"] = int(store.get("coalesced_parallel_calls") or 0) + (1 if coalesced else 0)
+            store["sessions"] = sessions
+
+            tmp = pacer_path.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(store), encoding="utf-8")
+            os.replace(tmp, pacer_path)
 
         if delay_sec > 0.0 and eff_mode == "enforce":
             sleeper(delay_sec)
-            now = float(clock())
-
-        rec["turn_anchors"] = anchors[-16:]
-        rec["last_call_epoch"] = now
-        sessions[cid] = rec
-        store["schema_version"] = 1
-        store["coalesced_parallel_calls"] = int(store.get("coalesced_parallel_calls") or 0) + (1 if coalesced else 0)
-        store["sessions"] = sessions
-
-        pacer_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = pacer_path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(store), encoding="utf-8")
-        os.replace(tmp, pacer_path)
-    except OSError:
+    except (OSError, ValidationError):
         return {"applied": False, "delay_sec": 0.0, "coalesced_parallel": coalesced, "turns_in_window": turns_in_window, "mode": eff_mode}
 
     return {
@@ -787,11 +788,13 @@ def _extract_all_targets(args: dict) -> list[str]:
 
 def _is_ide_artifact(resolved: Path) -> bool:
     try:
-        from antigravity_runtime import candidate_brain_roots
+        from antigravity_runtime import _is_invalid_conversation_id, candidate_brain_roots
         for root in candidate_brain_roots():
             if resolved.is_relative_to(root):
                 parts = resolved.relative_to(root).parts
-                return len(parts) == 2 and parts[1] in {"implementation_plan.md", "task.md", "walkthrough.md"}
+                if len(parts) >= 2 and parts[-1] in {"implementation_plan.md", "task.md", "walkthrough.md"}:
+                    conv_id = "/".join(parts[:-1])
+                    return not _is_invalid_conversation_id(conv_id)
         return False
     except Exception:
         return False
@@ -964,13 +967,25 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
     if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude":
         command = join_continuations(command)
     from mutation_guard import _split_segments, _tokens
-    read_commands = {"cat", "type", "more", "head", "tail", "sed", "rg", "grep", "get-content", "gc", "select-string", "sls"}
+    read_commands = {
+        "cat", "type", "more", "less", "head", "tail", "sed", "awk", "gawk",
+        "wc", "nl", "rg", "grep", "get-content", "gc", "select-string", "sls",
+    }
     for segment in _split_segments(command) or []:
         tokens = _tokens(segment)
-        if tokens and tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe") in read_commands:
+        if not tokens:
+            continue
+        cmd0 = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
+        if cmd0 in read_commands:
             if any(_installed_engine_target(token, recursive=True) for token in tokens[1:]):
                 _deny_engine_read("run_command", command)
                 return
+        elif cmd0 == "git" and len(tokens) >= 3 and tokens[1].lower() == "show":
+            for token in tokens[2:]:
+                git_rel = token.split(":", 1)[1] if ":" in token and not token.startswith("-") else token
+                if _installed_engine_target(git_rel, recursive=True):
+                    _deny_engine_read("run_command", command)
+                    return
     active_tid = ""
     try:
         p = active_plan(REPO)
@@ -2570,23 +2585,25 @@ def _conversation_started_at(payload: dict) -> float | None:
         return None
     try:
         import time
+        from evidence_store import StateLock
         path = _audit_path().with_name("hook-conversations.json")
-        try:
-            seen = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(seen, dict):
-                seen = {}
-        except (OSError, ValueError):
-            seen = {}
-        if conversation in seen:
-            return float(seen[conversation])
-        seen[conversation] = time.time()
-        newest = sorted(seen.items(), key=lambda item: float(item[1]))[-CONVERSATION_LIMIT:]
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_name = tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=str(path.parent))
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(dict(newest), handle)
-        os.replace(temp_name, path)
-        return float(seen[conversation])
+        with StateLock(path.parent / ".hook-conversations-lock"):
+            try:
+                seen = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(seen, dict):
+                    seen = {}
+            except (OSError, ValueError):
+                seen = {}
+            if conversation in seen:
+                return float(seen[conversation])
+            seen[conversation] = time.time()
+            newest = sorted(seen.items(), key=lambda item: float(item[1]))[-CONVERSATION_LIMIT:]
+            fd, temp_name = tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=str(path.parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(dict(newest), handle)
+            os.replace(temp_name, path)
+            return float(seen[conversation])
     except Exception:
         return None
 
@@ -2681,9 +2698,17 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
             f"Unsupported custom subagent definition '{sub_name}'. Only harness-governed subagents {sorted(allowed_all)} may be registered.",
             "UNSUPPORTED_SUBAGENT_DEFINITION",
         )
-    if bool(args.get("EnableSubagentTools") or args.get("enableSubagentTools")):
+    if bool(
+        args.get("EnableSubagentTools")
+        or args.get("enableSubagentTools")
+        or args.get("enable_subagent_tools")
+    ):
         return (False, "Nested subagent delegation (`EnableSubagentTools=True`) is forbidden.", "SUBAGENT_NESTING_FORBIDDEN")
-    if sub_name != "harness-worker-agent" and bool(args.get("EnableWriteTools") or args.get("enableWriteTools")):
+    if sub_name != "harness-worker-agent" and bool(
+        args.get("EnableWriteTools")
+        or args.get("enableWriteTools")
+        or args.get("enable_write_tools")
+    ):
         return (False, f"Subagent `{sub_name}` is strictly read-only (`EnableWriteTools` must be False).", "READ_ONLY_SUBAGENT_WRITE_FORBIDDEN")
     sys_prompt = str(args.get("SystemPrompt") or args.get("systemPrompt") or args.get("system_prompt") or "")
     json_spec = (REPO / ".agents" / "subagents" / f"{sub_name}.json")

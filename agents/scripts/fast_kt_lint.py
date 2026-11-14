@@ -125,8 +125,35 @@ def _find_suspend_cancellation_swallows(clean_text: str, modified_lines: set[int
                 open_brace = pos
                 break
             elif paren_depth == 0 and ch == "=":
-                # Single-expression suspend fun `suspend fun foo() = runCatching { ... }` or `try { ... } catch ...`
-                # Scan until next top-level declaration or end of expression block
+                # Single-expression suspend fun `suspend fun foo() = try { ... } catch (e: Exception) { ... }`
+                expr_start = pos + 1
+                epos = expr_start
+                b_depth = 0
+                p_depth = 0
+                k_depth = 0
+                while epos < len(clean_text):
+                    ech = clean_text[epos]
+                    if ech == "{":
+                        b_depth += 1
+                    elif ech == "}":
+                        if b_depth == 0:
+                            break
+                        b_depth -= 1
+                    elif ech == "(":
+                        p_depth += 1
+                    elif ech == ")":
+                        p_depth = max(0, p_depth - 1)
+                    elif ech == "[":
+                        k_depth += 1
+                    elif ech == "]":
+                        k_depth = max(0, k_depth - 1)
+                    elif b_depth == 0 and p_depth == 0 and k_depth == 0 and ech == "\n":
+                        rest = clean_text[epos + 1 :].lstrip(" \t\r\n")
+                        if not rest.startswith((".", "?.", "?:", "catch", "finally", "else", "+", "-", "&&", "||", "{")):
+                            break
+                    epos += 1
+                if epos > expr_start:
+                    suspend_ranges.append((expr_start, epos))
                 break
             pos += 1
         if open_brace != -1:
@@ -153,7 +180,15 @@ def _find_suspend_cancellation_swallows(clean_text: str, modified_lines: set[int
             if not any(ln in modified_lines for ln in range(catch_line, catch_end_line + 1)):
                 continue
         caught_var = m_catch.group(1)
-        rethrows_cancellation = bool(
+        preceding_window = clean_text[max(0, catch_start - 320) : catch_start]
+        has_sibling_cancel_catch = bool(
+            re.search(
+                r"\bcatch\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*(?:[A-Za-z0-9_.]+\.)?CancellationException\s*\)\s*\{[^{}]*\bthrow\b[^{}]*\}\s*$",
+                preceding_window,
+                re.DOTALL,
+            )
+        )
+        rethrows_cancellation = has_sibling_cancel_catch or bool(
             re.search(r"\bCancellationException\b|\bensureActive\s*\(|\byield\s*\(", catch_body)
             or re.search(rf"\bthrow\s+{re.escape(caught_var)}\b", catch_body)
         )

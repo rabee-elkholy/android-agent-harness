@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.9] - 2026-11-14
+
+### Fixed & Improved
+- **Antigravity Cloud / Jetski Runtime & Subagent Parity**: Added `~/.gemini/jetski` discovery, bounded hierarchical Jetski conversation ID resolution (`v1/<ns>/jetski_remote_agents_*/<id>`), hierarchical `native_model_metadata()` SQLite resolution, recursive `brain/` scanning and `sender=` binding across Reviewer (`reviewer_host`, `review complete-all`, `phase-review complete-all`), Utility Scout/Worker (`delegation_policy`), and `PostToolUse` (`post_tool_reconcile`) lifecycles, 5-part Jetski IDE artifact recognition (`_is_ide_artifact`), `snake_case` `define_subagent` privilege guards, and read-only `$HOME` Web-Relay outbox fallback without affecting Desktop IDE contracts.
+- **Cryptographic V2 Review Receipt Cross-Verification**: `final_verifier.py` now enforces `independent_execution_verified` across all severities (`LOW`..`CRITICAL`) on Review Protocol V2, cross-checks V2 `dispatch/<reviewer>.json` and `results/<reviewer>.json` SHA-256 digests directly, and blocks `--allow-lead-verdict` via `pre_tool_safety.py`.
+- **Execution Mode Template Parity & Lean Global Directive**: Synced `GEMINI.md.template` and `android-harness-global.md.template` to all 5 execution mode choices (including `auto-project` Smart Auto) and reduced global adapter duplication by ~55%.
+- **Live Static Gates on Staged Web-Relay Phases**: `web-apply --staged-phase` now executes `fast_kt_lint.py` and `check_strings.py` directly on applied `p2..pN` phase files before writing `web-relay-receipt.json`.
+- **Static Guard & Concurrency Hardening**: Extended `fast_kt_lint.py` to catch swallowed `CancellationException` in single-expression `suspend fun = try { ... }` bodies, expanded `*ALL_MIGRATIONS` array/list constants in `room_guard.py`, added `StateLock` serialization around `burst-pacer.json`, `hook-conversations.json`, and `reminder-state.json`, cleared unbound `pending-task-mode.json` on `task cancel`, isolated repo-scoped `PROJECT_KIND` resolution in `change_classifier.py` / `_hook_selftest.py` so `doctor` passes cleanly on Android `library` repositories, included `stderr` tracebacks in `doctor` hook selftest diagnostics, enabled structured JSON output on `task prepare-verification --json`, recursive `scratch_*.py` detection, `git show`/`wc`/`nl`/`awk` engine-read protection, and automatic Linux `/dev/shm` tmpfs acceleration for `selftest`.
+
 ## [1.3.8] - 2026-11-14
 
 ### Execution Mode Selector, Optional Manual Web-Relay, and Shared-Quota Optimal Hydrogen Engine

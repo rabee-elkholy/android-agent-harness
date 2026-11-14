@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 from _vnext_common import ValidationError, atomic_write_json, read_json, redact_text, state_root, task_dir, utc_now
-from antigravity_runtime import ACCEPTED_SYSTEM_SOURCES, prefer_full_transcript, resolve_transcript
+from antigravity_runtime import ACCEPTED_SYSTEM_SOURCES, _is_invalid_conversation_id, iter_recent_brain_conversations, prefer_full_transcript, resolve_transcript
 from evidence_store import StateLock
 
 
@@ -203,8 +203,11 @@ def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> di
         from contextlib import closing
         with closing(identity_messages(transcript)) as messages:
             for content in messages:
-                message = re.search(r'sender=([A-Za-z0-9_-]+) priority=MESSAGE_PRIORITY_HIGH content=([\s\S]+?)\n</SYSTEM_MESSAGE>', content)
+                message = re.search(r'sender=([A-Za-z0-9_/-]+) priority=MESSAGE_PRIORITY_HIGH content=([\s\S]+?)\n</SYSTEM_MESSAGE>', content)
                 if not message:
+                    continue
+                sender_id = message[1]
+                if "/" in sender_id and _is_invalid_conversation_id(sender_id):
                     continue
                 prompt = message[2].replace("\r\n", "\n").strip()
                 for run, ledger_path, role, entry, brief_path, expected in candidates:
@@ -301,16 +304,9 @@ def lifecycle_action(repo: Path, run: dict, reviewers: dict) -> dict | None:
         try:
             from antigravity_runtime import candidate_brain_roots
             for brain_root in candidate_brain_roots():
-                if not brain_root.is_dir():
-                    continue
-                recent_dirs = sorted(
-                    (d for d in brain_root.iterdir() if d.is_dir() and not d.is_symlink()),
-                    key=lambda d: d.stat().st_mtime_ns,
-                    reverse=True,
-                )[:24]
-                for child_dir in recent_dirs:
+                for conv_id, _child_dir in iter_recent_brain_conversations(brain_root, limit=24):
                     try:
-                        reviewer_context(repo, child_dir.name, bind=True)
+                        reviewer_context(repo, conv_id, bind=True)
                     except (OSError, ValueError, KeyError, ValidationError):
                         continue
             for cand_run, ledger_path in active_reviews(repo):

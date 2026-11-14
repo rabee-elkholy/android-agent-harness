@@ -223,20 +223,22 @@ def _record_seen_state(conversation_id: str, state_key: str) -> None:
         return
     cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
     try:
-        data: dict[str, str] = {}
-        if cache_path.is_file():
-            try:
-                raw = json.loads(cache_path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
-            except (OSError, ValueError):
-                data = {}
-        data[conversation_id] = state_key
+        from evidence_store import StateLock
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
-        tmp_path.write_text(json.dumps(data), encoding="utf-8")
-        os.replace(tmp_path, cache_path)
-    except (OSError, ValueError):
+        with StateLock(cache_path.parent / ".reminder-state-lock"):
+            data: dict[str, str] = {}
+            if cache_path.is_file():
+                try:
+                    raw = json.loads(cache_path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
+                except (OSError, ValueError):
+                    data = {}
+            data[conversation_id] = state_key
+            tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
+            tmp_path.write_text(json.dumps(data), encoding="utf-8")
+            os.replace(tmp_path, cache_path)
+    except (OSError, ValueError, ImportError):
         return
 
 

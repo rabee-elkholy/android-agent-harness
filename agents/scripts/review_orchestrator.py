@@ -1221,22 +1221,12 @@ def main(argv: list[str] | None = None) -> int:
 
             from review_sources import has_trusted_review_source
             if has_trusted_review_source(run_host):
-                from antigravity_runtime import candidate_brain_roots
+                from antigravity_runtime import candidate_brain_roots, iter_recent_brain_conversations
                 from reviewer_host import reviewer_context
                 for brain_root in candidate_brain_roots():
-                    if not brain_root.is_dir():
-                        continue
-                    try:
-                        recent_children = sorted(
-                            (d for d in brain_root.iterdir() if d.is_dir() and not d.is_symlink()),
-                            key=lambda d: d.stat().st_mtime_ns,
-                            reverse=True,
-                        )[:32]
-                    except OSError:
-                        continue
-                    for child_dir in recent_children:
+                    for conv_id, _child_dir in iter_recent_brain_conversations(brain_root, limit=32):
                         try:
-                            reviewer_context(repo, child_dir.name, bind=True)
+                            reviewer_context(repo, conv_id, bind=True)
                         except (OSError, ValueError, KeyError, ValidationError):
                             continue
 

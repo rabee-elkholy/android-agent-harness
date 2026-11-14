@@ -51,6 +51,7 @@ class HookTests(unittest.TestCase):
         self.env = os.environ.copy()
         self.env["HARNESS_REPO"] = str(self.repo)
         self.env["HARNESS_HOOK_STATE"] = str(self.state / "hook-state.json")
+        self.env["HARNESS_PROJECT_KIND_OVERRIDE"] = "application"
 
     def tearDown(self):
         self.temp.cleanup()

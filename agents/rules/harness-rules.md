@@ -35,7 +35,7 @@ Lifecycle (`PLAN -> BUILD -> VERIFY -> SHIP -> DONE`): Follow `NEXT_ACTION`/`NEX
 
 - `draft`/`revise` and `prepare-verification` compute central policy automatically (`python .agents/harness.py policy --json` for standalone diagnostics). Load routed skills before acting; resolve `UNKNOWN` with the developer.
 - During `VERIFYING`, execute on one frozen change-set in strict order: (1) `preflight`, (2) `run_tests_gate.py` when selected, (3) AI Specialist Reviewers, (4) Assemble & Device Verification, (5) Interactive Mobile Walkthrough & Sign-off, (6) `verify` then `complete`.
-- Final assemble/device requires all routed reviews PASS with zero blocking findings. Self-certification is forbidden on HIGH/CRITICAL or sensitive work; reviewer failure/timeout/quota is `ENV_BLOCKED`.
+- Final assemble/device requires all routed reviews PASS with zero blocking findings. Self-certification is forbidden across Review Protocol V2 and on HIGH/CRITICAL or sensitive work; reviewer failure/timeout/quota is `ENV_BLOCKED`.
 - At `REVIEW_ROUND_CAP_REACHED` or budget exhaustion, ask and record via `task review-budget`. Adjudicate findings via `task validate-finding --task-id <id> --finding-id <id> --status <CONFIRMED|FALSE_POSITIVE> --reason "<proof>"`. TDD is required for regressions (zero tests cannot pass a required test gate; failed-then-passed is `SUSPECTED_FLAKY`).
 - `delivery_snapshot_sha256` and `change_set_sha256` bind every gate, review, and APK hash under `.agents/state/runs/`. Stale/partial evidence blocks delivery; user-cancelled reviewers require explicit `review resume`.
 
@@ -58,6 +58,6 @@ Lifecycle (`PLAN -> BUILD -> VERIFY -> SHIP -> DONE`): Follow `NEXT_ACTION`/`NEX
 | Resume | `python .agents/harness.py task resume --task-id <id>` |
 | Assemble / Device | `python .agents/harness.py assemble` / `python .agents/harness.py device install-start` |
 | Android UI / Inspect | `python .agents/harness.py android-ui capabilities` / `android-inspect declaration <symbol>` |
-| Execution mode | `python .agents/harness.py execution-mode show` / `execution-mode set --choice <normal-task\|normal-project\|web-task\|web-project\|ask-every-task> --source conversation --proof-reference "<words>"` |
+| Execution mode | `python .agents/harness.py execution-mode show` / `execution-mode set --choice <auto-project\|normal-task\|normal-project\|web-task\|web-project\|ask-every-task> --source conversation --proof-reference "<words>"` |
 | Manual Web-Relay | `python .agents/harness.py web-pack [--files <csv>] [--prompt "..."]` / `web-apply --source conversation --proof-reference "<words>"` (`.agents/workflows/web-relay.md`) |
 | Verify | `python .agents/harness.py verify --task-id <id>` |

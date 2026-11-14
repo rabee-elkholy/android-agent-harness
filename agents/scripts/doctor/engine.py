@@ -991,7 +991,10 @@ class HarnessDoctor:
             if proc.returncode == 0:
                 self.log(category, "Hook Selftest Suite", "PASS", "Full selftest suite passed (0 test failures).")
             else:
-                out_snippet = "\n".join(proc.stdout.strip().splitlines()[-5:])
+                combined_out = "\n".join(
+                    part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip()
+                )
+                out_snippet = "\n".join(combined_out.splitlines()[-10:])
                 self.log(category, "Hook Selftest Suite", "FAIL", f"Selftest failed with exit code {proc.returncode}:\n{out_snippet}")
         else:
             self.log(category, "Hook Selftest Suite", "WARN", "_hook_selftest.py script missing.")

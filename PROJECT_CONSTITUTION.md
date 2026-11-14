@@ -221,12 +221,13 @@ Do not pass:
 
 Reasoning escalation is allowed only through a trusted host-native capability whose real supported argument/schema was detected.
 
-Do not create a cross-provider model-routing subsystem or pass `model`/`Model`
-in Antigravity `invoke_subagent` tool arguments. On Antigravity, developer-selected
-reviewer models (`flash-dynamic`, `hybrid-smart`, `inherit`, or explicit Gemini 3.8
-Flash/Pro thinking slugs) are bound through `.agents/agents/<role>/agent.md` YAML
-frontmatter (`model:`) while `invoke_subagent` arguments remain strictly
-`Prompt`, `Role`, `TypeName`, and `Workspace`.
+Do not create a cross-provider model-routing subsystem. On Antigravity, default
+Gen-4 policies (`hydrogen-dynamic`, `hydrogen-risk`, `inherit`, and all `gemini-4-*`
+slugs) bind subagent models strictly through `.agents/agents/<role>/agent.md` YAML
+frontmatter (`model:`) with `invoke_subagent` omitting `model`/`Model`
+(`INHERIT_PARENT_BY_OMISSION`: `Prompt`, `Role`, `TypeName`, and `Workspace` only;
+passing native `Model="flash"` / `"pro"` is permitted solely as a legacy compatibility
+fallback when a legacy `gemini-3.8-flash-*` or `gemini-3.1-pro-*` profile is explicitly selected).
 
 ### 3.8 Review proof cannot be self-certified
 

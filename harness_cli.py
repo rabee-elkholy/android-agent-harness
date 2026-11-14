@@ -1356,7 +1356,24 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             ]
         total = len(items)
         jobs = min(jobs, total)
+        auto_shm_dir: tempfile.TemporaryDirectory[str] | None = None
+        if (
+            "HARNESS_SELFTEST_TMP" not in os.environ
+            and "unittest" not in sys.modules
+            and sys.platform.startswith("linux")
+        ):
+            shm_path = Path("/dev/shm")
+            try:
+                if shm_path.is_dir() and os.access(shm_path, os.W_OK | os.X_OK):
+                    free_b = shutil.disk_usage(shm_path).free
+                    if free_b >= 2 * 1024 * 1024 * 1024:
+                        auto_shm_dir = tempfile.TemporaryDirectory(prefix="harness-selftest-", dir=str(shm_path))
+            except OSError:
+                auto_shm_dir = None
         env = _selftest_env()
+        if auto_shm_dir is not None:
+            env["HARNESS_SELFTEST_TMP"] = auto_shm_dir.name
+            env["TEMP"] = env["TMP"] = env["TMPDIR"] = auto_shm_dir.name
         _live(f"selftest mode: {mode} (jobs: {jobs})")
         if env.get("HARNESS_SELFTEST_TMP", "").strip():
             _live(f"selftest temp: {env['TEMP']}")
@@ -1449,6 +1466,11 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             _live(f"{rank}. {t_label} {t_el:.1f}s")
         return 0
     finally:
+        if "auto_shm_dir" in locals() and auto_shm_dir is not None:
+            try:
+                auto_shm_dir.cleanup()
+            except OSError:
+                pass
         os.chdir(prev_cwd)
 
 
