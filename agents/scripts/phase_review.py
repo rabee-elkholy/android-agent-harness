@@ -1797,6 +1797,9 @@ def _main(argv: list[str] | None = None) -> int:
     finalize_cmd.add_argument("--task-id", "--task", dest="task_id", required=True)
     finalize_cmd.add_argument("--phase-id", required=True)
 
+    for _psp in (pkg_cmd, dispatch_cmd, complete_cmd, complete_all_cmd, finalize_cmd):
+        _psp.add_argument("--json", action="store_true", help="Accept --json flag cleanly")
+
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
     from host_continuation import assert_execution_session

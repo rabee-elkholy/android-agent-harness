@@ -211,7 +211,9 @@ def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> di
                     continue
                 prompt = message[2].replace("\r\n", "\n").strip()
                 for run, ledger_path, role, entry, brief_path, expected in candidates:
-                    if prompt != expected and not pointer_matches(prompt, role, str(brief_path), expected):
+                    alt_paths = [str(task_dir(repo, str(run["task_id"])) / "active-briefs" / f"brief-{role}.md")] if run.get("task_id") else []
+                    prior_digs = list((run.get("accepted_prior_brief_digests") or {}).get(role) or [])
+                    if prompt != expected and not pointer_matches(prompt, role, str(brief_path), expected, alternate_paths=alt_paths, accepted_digests=prior_digs):
                         continue
                     if entry.get("execution_id") not in (None, "", execution_id):
                         raise ValidationError("reviewer execution identity conflicts with its bound receipt")

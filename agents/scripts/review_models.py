@@ -1153,14 +1153,20 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             if not effective_inherits:
                 raise
             observed = {}  # Parent inheritance requires no invented native proof.
+        proven_upward_parent = False
         if not effective_inherits:
             if not observed:
                 raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native execution model metadata; frontmatter is configuration only")
+            exp_fam_chk, _ = _split_antigravity_family_and_tier(str(expected_resolved or ""))
+            obs_fam_chk, _ = _split_antigravity_family_and_tier(str(observed.get("host_configured_model") or ""))
+            if exp_fam_chk == "gemini-4-hydrogen" and obs_fam_chk in _UPWARD_GEMINI4_PARENT_FAMILIES and not selection.get("model_argument"):
+                proven_upward_parent = _is_proven_upward_parent_inheritance(run, identity, observed)
             if not _matches_antigravity_native_model(
                 str(expected_resolved or ""),
                 selection.get("thinking_level"),
                 observed.get("host_configured_model"),
                 observed.get("host_reported_models", []),
+                allow_upward_parent_inheritance=proven_upward_parent,
             ):
                 raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} native execution does not match {expected_resolved}")
         return {
@@ -1169,6 +1175,7 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             "thinking_level": selection.get("thinking_level"),
             "actual_model": (observed.get("host_reported_models") or [None])[-1],
             "actual_model_status": "NATIVE_METADATA_OBSERVED" if observed else "UNOBSERVED",
+            **({"parent_inherited_upgrade": True} if proven_upward_parent else {}),
             **observed,
             "settings_sha256": (run.get("review_models") or {}).get("sha256"),
         }
@@ -1224,49 +1231,125 @@ def _split_antigravity_family_and_tier(slug: str) -> tuple[str, str | None]:
     return clean, None
 
 
+_UPWARD_GEMINI4_PARENT_FAMILIES = frozenset({"gemini-4-carbon", "gemini-4-argon"})
+
+
+def _is_proven_upward_parent_inheritance(run: dict, identity: dict, observed: dict) -> bool:
+    """Verify whether an observed Carbon/Argon reviewer inherited its model from an active Carbon/Argon parent Lead session."""
+    obs_family, obs_tier = _split_antigravity_family_and_tier(str(observed.get("host_configured_model") or ""))
+    if obs_family not in _UPWARD_GEMINI4_PARENT_FAMILIES or obs_tier in ("fast", "low"):
+        return False
+    parent_cids: list[str] = []
+    tx_raw = identity.get("transcript_path")
+    if tx_raw:
+        try:
+            from antigravity_runtime import prefer_full_transcript
+            tx_p = prefer_full_transcript(Path(str(tx_raw))) or Path(str(tx_raw))
+            if tx_p.is_file():
+                with tx_p.open("r", encoding="utf-8", errors="replace") as fh:
+                    for _ in range(10):
+                        ln = fh.readline()
+                        if not ln:
+                            break
+                        for m in re.finditer(r"sender=([A-Za-z0-9._/-]+)", ln):
+                            scid = m.group(1).strip()
+                            if scid and scid not in parent_cids:
+                                parent_cids.append(scid)
+        except OSError:
+            pass
+    pol_raw = str(run.get("policy") or "").strip()
+    if pol_raw:
+        try:
+            pol_p = Path(pol_raw).resolve()
+            # `<state_root>/tasks/<tid>/policy-*.json` -> `parents[2]` is `<state_root>`
+            st_dir = pol_p.parents[2] if len(pol_p.parents) >= 3 else None
+            if st_dir and st_dir.is_dir():
+                for fname, key in (("active-conversation.json", "conversation_id"), ("hook-conversations.json", "last_lead_conversation_id")):
+                    cf = st_dir / fname
+                    if cf.is_file():
+                        doc = read_json(cf)
+                        val = str(doc.get(key) or "").strip()
+                        if val and val not in parent_cids:
+                            parent_cids.append(val)
+        except (OSError, ValueError, KeyError, TypeError, ValidationError):
+            pass
+    if not parent_cids:
+        return False
+    try:
+        from antigravity_runtime import native_model_metadata
+        for pcid in parent_cids[:4]:
+            if pcid == str(observed.get("execution_id") or ""):
+                continue
+            try:
+                p_meta = native_model_metadata(pcid)
+            except Exception:
+                continue
+            if isinstance(p_meta, dict) and p_meta.get("host_configured_model"):
+                p_fam, _ = _split_antigravity_family_and_tier(str(p_meta["host_configured_model"]))
+                if p_fam == obs_family:
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def _matches_antigravity_native_model(
     expected_resolved: str,
     thinking_level: object,
     host_configured: object,
     host_reported_models: object,
+    *,
+    allow_upward_parent_inheritance: bool = False,
 ) -> bool:
     """Validate observed Antigravity SQLite protobuf model metadata against the frozen reviewer selection.
 
-    Antigravity Desktop inherits the parent session's thinking tier when `Model` is omitted
-    (e.g. running `gemini-4-hydrogen-high` when `gemini-4-hydrogen-medium` was resolved on a `SIMPLE` task).
-    Within the `gemini-4-hydrogen` (`1.00x`) family, all valid Hydrogen thinking tiers and `gemini-4-flash*`
-    backend aliases are accepted; on other families (`argon`, `carbon`, `3.8-flash`), equal-or-higher
-    thinking tiers within the exact same family are accepted, while cross-family leaks (`Carbon`, `Argon`,
-    `Claude`, or `3.8 Flash` running instead of `Hydrogen`) fail closed with `REVIEW_MODEL_MISMATCH`.
+    Antigravity Desktop inherits the parent session's model and thinking tier when `Model` is omitted
+    (`INHERIT_PARENT_BY_OMISSION`). Within `gemini-4-hydrogen` (`1.00x`), all valid Hydrogen thinking
+    tiers and `gemini-4-flash*` backend aliases are accepted. When `allow_upward_parent_inheritance` is
+    proven (the parent Lead session itself is running `Carbon` or `Argon`), upward Gemini-4 inheritance
+    fulfilling a `Hydrogen` reviewer policy is accepted without false `REVIEW_MODEL_MISMATCH`, while
+    unproven cross-family quota leaks (#198819), downward family drops (`Hydrogen` or `3.8 Flash` when
+    `Carbon`/`Argon` was required), and cross-vendor mismatches strictly fail closed.
     """
     if not expected_resolved or not isinstance(host_configured, str) or not isinstance(host_reported_models, list) or not host_reported_models:
         return False
     exp_family, exp_suffix_tier = _split_antigravity_family_and_tier(expected_resolved)
     obs_family, obs_tier = _split_antigravity_family_and_tier(host_configured)
-    if not exp_family or obs_family != exp_family:
+    if not exp_family or not obs_family:
+        return False
+
+    upward_gemini4_inherited = (
+        allow_upward_parent_inheritance
+        and exp_family == "gemini-4-hydrogen"
+        and obs_family in _UPWARD_GEMINI4_PARENT_FAMILIES
+        and obs_tier not in ("fast", "low")
+    )
+    if obs_family != exp_family and not upward_gemini4_inherited:
         return False
 
     lvl_str = str(thinking_level or "").strip().lower()
     exp_tier = lvl_str if lvl_str in _THINKING_TIER_RANKS else exp_suffix_tier
 
-    if exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
+    if not upward_gemini4_inherited and exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
         if _THINKING_TIER_RANKS[obs_tier] < _THINKING_TIER_RANKS[exp_tier]:
             return False
 
-    if exp_family == "gemini-4-hydrogen":
+    target_reported_family = obs_family if upward_gemini4_inherited else exp_family
+    if target_reported_family == "gemini-4-hydrogen":
         reported_re = re.compile(
             r"(?:models/)?(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     else:
         reported_re = re.compile(
-            r"(?:models/)?" + re.escape(exp_family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?" + re.escape(target_reported_family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     exp_clean = re.sub(r"^models/", "", str(expected_resolved).strip().lower())
+    obs_clean = re.sub(r"^models/", "", str(host_configured).strip().lower())
     for item in host_reported_models:
         if not isinstance(item, str):
             return False
         item_clean = re.sub(r"^models/", "", item.strip().lower())
-        if not reported_re.fullmatch(item_clean) and item_clean != exp_clean:
+        if not reported_re.fullmatch(item_clean) and item_clean not in {exp_clean, obs_clean}:
             return False
     return True
 
@@ -1291,6 +1374,7 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
                 selection.get("thinking_level"),
                 evidence.get("host_configured_model"),
                 evidence.get("host_reported_models"),
+                allow_upward_parent_inheritance=bool(evidence.get("parent_inherited_upgrade")),
             )
         ):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen Antigravity model evidence for {role}")
@@ -1612,9 +1696,26 @@ def _refresh_undispatched_runs(repo: Path, task_id: str, host: str) -> dict[str,
             frozen = freeze_models(
                 repo, task_id, run_host, roster, run_id=run_id, policy_data=policy_data, plan=plan
             )
+            pkg_path = active_review_package_path(repo, current)
+            prior_digests: dict[str, list[str]] = dict(current.get("accepted_prior_brief_digests") or {})
+            if pkg_path.is_file():
+                import hashlib as _hl
+                pkg_dir = pkg_path.parent
+                for b_file in pkg_dir.glob("brief-*.md"):
+                    role_name = b_file.stem.removeprefix("brief-")
+                    try:
+                        b_norm = b_file.read_text(encoding="utf-8").replace("\r\n", "\n").strip()
+                        d16 = _hl.sha256(b_norm.encode("utf-8")).hexdigest()[:16]
+                        bucket = list(prior_digests.get(role_name) or [])
+                        if d16 not in bucket:
+                            bucket.append(d16)
+                        prior_digests[role_name] = bucket[-4:]
+                    except OSError:
+                        pass
+            if prior_digests:
+                current["accepted_prior_brief_digests"] = prior_digests
             current["review_models"] = frozen
             atomic_write_json(crun_f, current)
-            pkg_path = active_review_package_path(repo, current)
             if pkg_path.is_file():
                 pkg_dir = pkg_path.parent
                 pkg_path.unlink(missing_ok=True)
@@ -1626,6 +1727,18 @@ def _refresh_undispatched_runs(repo: Path, task_id: str, host: str) -> dict[str,
                 build_package(repo, task_id)
             refreshed["run_id"] = run_id
             refreshed["active_run_models"] = frozen.get("reviewers") or {}
+            try:
+                from review_execution import resolve_execution_profile
+                prof = resolve_execution_profile(repo, task_id, host=run_host)
+                prompts_now = {
+                    r_name: str((r_cfg or {}).get("brief_pointer_prompt") or "")
+                    for r_name, r_cfg in (prof.get("reviewers") or {}).items()
+                    if isinstance(r_cfg, dict) and (r_cfg or {}).get("brief_pointer_prompt")
+                }
+                if prompts_now:
+                    refreshed["reviewer_prompts"] = prompts_now
+            except (ImportError, OSError, ValueError, KeyError, ValidationError):
+                pass
 
     return refreshed
 
@@ -1815,6 +1928,9 @@ def main(argv: list[str] | None = None) -> int:
                 if result.get("scope") == "task"
                 else "future review runs across the project; existing runs are unchanged"
             )
+            ref_prompts = ((result.get("refreshed_run") or {}).get("reviewer_prompts") or {})
+            if ref_prompts:
+                result["reviewer_prompts"] = ref_prompts
             if str(host).strip().lower() == "antigravity":
                 result["dispatch_hint"] = (
                     "When calling invoke_subagent, pass Model='flash' ONLY for legacy 3.8-flash reviewers whose model in reviewer_models contains 'flash', "

@@ -445,23 +445,36 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
         outcome["test_failure_only"] = False
     run_root = Path(cwd).resolve() if cwd else REPO_ROOT
     gradle_args = with_plain_console(task_args, repo=run_root)
-    task_label = task_args[0] if task_args else "gradle"
-    artifact_name = gate_artifact_name(task_label)
+    explicit_tasks: list[str] = []
+    skip_next = False
+    for _arg in task_args:
+        if skip_next:
+            skip_next = False
+            continue
+        if _arg == "--tests":
+            skip_next = True
+            continue
+        if not _arg.startswith("-"):
+            explicit_tasks.append(_arg)
+    task_label = " ".join(explicit_tasks) if len(explicit_tasks) > 1 else (task_args[0] if task_args else "gradle")
+    target_labels = explicit_tasks or [task_args[0] if task_args else "gradle"]
 
     def record(status: str, exit_code: int, env_class: str = "", detail: str = "", **extra) -> None:
         if diagnostic is not None:
             diagnostic.update(extra)
             return
-        write_gate_result(artifact_name, {
-            "schema_version": 1,
-            "task": task_label,
-            "status": status,
-            "exit_code": exit_code,
-            "env_class": env_class,
-            "git_sha": current_head_sha(),
-            "detail": detail,
-            **extra,
-        })
+        sha_now = current_head_sha()
+        for t_item in target_labels:
+            write_gate_result(gate_artifact_name(t_item), {
+                "schema_version": 1,
+                "task": t_item,
+                "status": status,
+                "exit_code": exit_code,
+                "env_class": env_class,
+                "git_sha": sha_now,
+                "detail": detail,
+                **extra,
+            })
 
     if any("assemble" in arg.lower() for arg in task_args):
         state_dir = run_root / ".agents" / "state"

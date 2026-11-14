@@ -1371,7 +1371,9 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             clip_fallback = parsed
 
     candidates: list[tuple[int, float, dict[str, Any], Path]] = []
-    for dl_dir in _default_downloads_dirs():
+    inbox_dir = _web_relay_state_dir(repo) / "inbox"
+    scan_dirs: list[Path] = ([inbox_dir] if inbox_dir.is_dir() else []) + _default_downloads_dirs()
+    for dl_dir in scan_dirs:
         for cand in dl_dir.iterdir():
             if not cand.is_file():
                 continue
@@ -2479,6 +2481,15 @@ def apply_web_merge(
 
     cum_written = list(dict.fromkeys([*prev_written, *(w["path"] for w in active_writes)]))
     cum_deleted = list(dict.fromkeys([*(x for x in prev_deleted if x not in cum_written), *active_deletes]))
+    if payload_origin.startswith("downloads:") or payload_origin.startswith("file:"):
+        raw_orig_p = payload_origin.split(":", 1)[1]
+        try:
+            orig_p = Path(raw_orig_p).resolve()
+            inbox_root = (_web_relay_state_dir(repo) / "inbox").resolve()
+            if orig_p.is_file() and orig_p.parent == inbox_root:
+                orig_p.unlink(missing_ok=True)
+        except OSError:
+            pass
     receipt_doc = {
         "schema_version": 1,
         "pack_id": pack_id,

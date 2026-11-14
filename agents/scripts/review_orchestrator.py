@@ -1151,6 +1151,9 @@ def main(argv: list[str] | None = None) -> int:
     resume_p.add_argument("--source", choices=("conversation",), required=True)
     resume_p.add_argument("--proof-reference", required=True)
 
+    for _sp in (complete_p, complete_all_p, finalize_p, dispatch_p, dispatch_batch_p, status_p, resume_p):
+        _sp.add_argument("--json", action="store_true", help="Emit structured JSON output")
+
     args = parser.parse_args(argv)
     if not args.subcommand:
         parser.print_help(sys.stderr)
@@ -1262,27 +1265,56 @@ def main(argv: list[str] | None = None) -> int:
             except (ImportError, OSError, ValueError, KeyError):
                 model_map_all = {}
 
+            completed_items: list[dict[str, Any]] = []
             for idx, (rev_name, exec_id) in enumerate(pairs_to_complete):
                 if idx == 0:
                     res = complete_review(repo, args.task, rev_name, exec_id, host=args.host or run_host)
                 else:
                     res = _complete_review_core(repo, args.task, rev_name, exec_id, host=args.host or run_host, _freshness_checked=True)
                 eff_model = model_map_all.get(rev_name, "inherit")
-                print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
+                completed_items.append({"reviewer": rev_name, "model": eff_model, "verdict": res.get("verdict")})
+                if not getattr(args, "json", False):
+                    print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
 
             st_after = get_review_execution_status(repo, args.task)
             rev_states = st_after.get("reviewers") or {}
             if required_reviewers and all(rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED) for r in required_reviewers):
                 final_res = finalize_review_execution(repo, args.task)
-                _print_finalized_review_summary(final_res)
+                if getattr(args, "json", False):
+                    import io as _io, contextlib as _ctx
+                    buf = _io.StringIO()
+                    with _ctx.redirect_stdout(buf):
+                        _print_finalized_review_summary(final_res)
+                    print(json.dumps({
+                        "status": "FINALIZED",
+                        "task_id": args.task,
+                        "completed": completed_items,
+                        "finalized": final_res,
+                        "summary_text": buf.getvalue().strip(),
+                    }, indent=2, ensure_ascii=False))
+                else:
+                    _print_finalized_review_summary(final_res)
                 return 0
             done_cnt = sum(1 for r in required_reviewers if rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED))
             waiting = [r for r in required_reviewers if rev_states.get(r, {}).get("state") not in (REVIEW_COMPLETED, REVIEW_INGESTED)]
-            print(f"REVIEW_PARTIAL_PROGRESS: {done_cnt}/{len(required_reviewers)} completed; waiting on: {', '.join(waiting)}")
+            if getattr(args, "json", False):
+                print(json.dumps({
+                    "status": "PARTIAL",
+                    "task_id": args.task,
+                    "completed_count": done_cnt,
+                    "total_required": len(required_reviewers),
+                    "waiting_on": waiting,
+                    "completed": completed_items,
+                }, indent=2, ensure_ascii=False))
+            else:
+                print(f"REVIEW_PARTIAL_PROGRESS: {done_cnt}/{len(required_reviewers)} completed; waiting on: {', '.join(waiting)}")
             return 0
         elif args.subcommand == "finalize":
             res = finalize_review_execution(repo, args.task)
-            _print_finalized_review_summary(res)
+            if getattr(args, "json", False):
+                print(json.dumps(res, indent=2, ensure_ascii=False))
+            else:
+                _print_finalized_review_summary(res)
             return 0
         elif args.subcommand in ("dispatch", "dispatch-batch", "dispatch_batch") and _run_uses_native_dispatch(repo, args.task):
             raise ValidationError(

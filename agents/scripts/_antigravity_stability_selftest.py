@@ -3791,7 +3791,8 @@ class TestV139AuditFixes(unittest.TestCase):
             tst.parent.mkdir(parents=True)
             tst.write_text("package com.example\nclass CalcTest\n", encoding="utf-8")
             (repo / ".agents/state").mkdir(parents=True)
-            (repo / ".agents/VERSION").write_text("1.3.10\n", encoding="utf-8")
+            _kit_ver = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+            (repo / ".agents/VERSION").write_text(_kit_ver + "\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
             subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True, capture_output=True)
 
@@ -3837,10 +3838,10 @@ class TestV139AuditFixes(unittest.TestCase):
             cset = crun["change_set_sha256"]
             run_id = crun["run_id"]
             for g_name, prod in (("preflight", "preflight_check"), ("unit_tests", "run_tests_gate")):
-                store.write(snapshot=snap, run_id=run_id, name=g_name, producer=prod, harness_version="1.3.10", change_set=cset, status="PASS", evidence={"passed": True})
+                store.write(snapshot=snap, run_id=run_id, name=g_name, producer=prod, harness_version=_kit_ver, change_set=cset, status="PASS", evidence={"passed": True})
             store.write(
                 snapshot=snap, run_id=run_id, name="reviews", producer="review_orchestrator",
-                harness_version="1.3.10", change_set=cset, status="PASS",
+                harness_version=_kit_ver, change_set=cset, status="PASS",
                 evidence={
                     "review_protocol_version": 2,
                     "reviewers": pol["reviewers"],
@@ -4172,6 +4173,308 @@ class TestV139AuditFixes(unittest.TestCase):
             self.assertEqual(2, pv_data.get("review_protocol_version"))
             self.assertTrue(str(pv_data.get("run_id", "")).startswith("run-"))
 
+
+
+class TestV1311RashaqaLiveFixes(unittest.TestCase):
+    """End-to-end regression suite for all 7 v1.3.11 real-world Rashaqa benchmark optimizations."""
+
+    def test_v1311_01_upward_carbon_argon_parent_inheritance_and_downward_block(self) -> None:
+        import review_models as rm
+
+        # Proven upward inheritance (Carbon or Argon Lead session running Hydrogen policy) -> PASS
+        self.assertTrue(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-4-carbon-high",
+                ["gemini-4-carbon"],
+                allow_upward_parent_inheritance=True,
+            )
+        )
+        self.assertTrue(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-high",
+                "high",
+                "gemini-4-argon-medium",
+                ["gemini-4-argon"],
+                allow_upward_parent_inheritance=True,
+            )
+        )
+        # Unproven cross-family leak (#198819) -> FAIL CLOSED
+        self.assertFalse(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-4-carbon-medium",
+                ["gemini-4-carbon"],
+                allow_upward_parent_inheritance=False,
+            )
+        )
+        # Downward leak (Hydrogen or 3.8 Flash running when Carbon was required, or 3.8 Flash when Hydrogen was required) -> FAIL CLOSED
+        self.assertFalse(
+            rm._matches_antigravity_native_model(
+                "gemini-4-carbon-medium",
+                "medium",
+                "gemini-4-hydrogen-high",
+                ["gemini-4-hydrogen"],
+                allow_upward_parent_inheritance=True,
+            )
+        )
+        self.assertFalse(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-3.8-flash-high",
+                ["gemini-3.8-flash"],
+                allow_upward_parent_inheritance=True,
+            )
+        )
+
+    def test_v1311_02_web_relay_inbox_write_allowed_and_auto_discovered_and_cleaned(self) -> None:
+        from unittest.mock import patch
+        import pre_tool_safety as pts
+        import web_relay as wr
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            _kv = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+            (repo / ".agents/VERSION").write_text(_kv + "\n", encoding="utf-8")
+            (repo / ".gitignore").write_text(".agents/\n.harness-setup/\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "Demo"\ninclude(":app")\n', encoding="utf-8")
+            (repo / "app/src/main/java/com/demo").mkdir(parents=True, exist_ok=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            target_kt = repo / "app/src/main/java/com/demo/Sample.kt"
+            target_kt.write_text('package com.demo\nfun greet(): String = "hi"\n', encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            inbox_rel = ".agents/state/web-relay/inbox/merge.json"
+            res_ok = pts.check_write_safety(repo, inbox_rel)
+            self.assertEqual("ALLOW", res_ok["decision"], res_ok)
+            res_deny = pts.check_write_safety(repo, ".agents/state/active-task.json")
+            self.assertEqual("DENY", res_deny["decision"], res_deny)
+
+            outbox_d = repo / ".agents/state/web-relay/test-outbox"
+            downloads_d = repo / ".agents/state/web-relay/test-downloads"
+            outbox_d.mkdir(parents=True, exist_ok=True)
+            downloads_d.mkdir(parents=True, exist_ok=True)
+            with patch.dict(
+                os.environ,
+                {
+                    "HARNESS_NO_CLIPBOARD": "1",
+                    "HARNESS_WEB_RELAY_OUTBOX": str(outbox_d),
+                    "HARNESS_WEB_RELAY_DOWNLOADS": str(downloads_d),
+                },
+            ):
+                pack_info = wr.build_web_pack(
+                    repo,
+                    task_id="t-inbox-v1311",
+                    prompt="Update greet() in Sample.kt",
+                    kind="FEATURE",
+                    files=["app/src/main/java/com/demo/Sample.kt"],
+                    no_clipboard=True,
+                )
+                inbox_f = repo / inbox_rel
+                inbox_f.parent.mkdir(parents=True, exist_ok=True)
+                merge_payload = {
+                    "schema": "HARNESS_WEB_MERGE_V1",
+                    "pack_id": pack_info["pack_id"],
+                    "status": "READY",
+                    "plan_spec": {
+                        "task_id": "t-inbox-v1311",
+                        "kind": "FEATURE",
+                        "outcome": "Update greet return value",
+                        "approach": "Modify Sample.kt",
+                        "risks": "None",
+                    },
+                    "operations": [
+                        {
+                            "action": "MODIFY",
+                            "path": "app/src/main/java/com/demo/Sample.kt",
+                            "hunks": [
+                                {
+                                    "search": 'fun greet(): String = "hi"',
+                                    "replace": 'fun greet(): String = "hello-v1311"',
+                                    "replace_all": False,
+                                }
+                            ],
+                        }
+                    ],
+                }
+                inbox_f.write_text(json.dumps(merge_payload), encoding="utf-8")
+                applied = wr.apply_web_merge(
+                    repo,
+                    source="conversation",
+                    proof_reference="Apply web merge",
+                )
+                self.assertEqual("APPLIED", applied["status"])
+                self.assertIn("hello-v1311", target_kt.read_text(encoding="utf-8"))
+                self.assertFalse(inbox_f.exists(), "Consumed inbox merge file should be cleaned up automatically")
+
+    def test_v1311_03_absolute_brief_paths_short_mirror_and_models_set_pointer_survival(self) -> None:
+        import argparse
+        import review_execution as rex
+        import review_models as rm
+        import workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            _kv = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+            (repo / ".agents/VERSION").write_text(_kv + "\n", encoding="utf-8")
+            (repo / ".gitignore").write_text(".agents/\n.harness-setup/\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "Demo"\ninclude(":app")\n', encoding="utf-8")
+            src_f = repo / "app/src/main/kotlin/com/demo/Calc.kt"
+            src_f.parent.mkdir(parents=True, exist_ok=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            src_f.write_text("package com.demo\nclass Calc { fun add(a: Int, b: Int) = a + b }\n", encoding="utf-8")
+            tst_f = repo / "app/src/test/kotlin/com/demo/CalcTest.kt"
+            tst_f.parent.mkdir(parents=True, exist_ok=True)
+            tst_f.write_text("package com.demo\nclass CalcTest\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            tid = "t-ptr-v1311"
+            d_res = workflow.draft(argparse.Namespace(
+                repo=str(repo),
+                task_id=tid,
+                outcome="Update Calc",
+                kind="FEATURE",
+                planning_depth="STANDARD",
+                expected_files="app/src/main/kotlin/com/demo/Calc.kt,app/src/test/kotlin/com/demo/CalcTest.kt",
+                expected_modules=":app",
+                expected_surfaces="BUSINESS_LOGIC,TEST_ONLY",
+                approach="Add sub helper",
+                risks="None",
+                rollback="git checkout",
+                test_strategy="Unit test",
+                device_strategy="None",
+                phases=None,
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope="app/src/main/kotlin/com/demo/Calc.kt",
+                architecture_target_family=None,
+                verification_contract=None,
+                external_writes=None,
+                force=False,
+                json=True,
+            ))
+            workflow.record_approval(argparse.Namespace(
+                repo=str(repo),
+                task_id=tid,
+                source="conversation",
+                proof_reference="approve",
+                enforcement_tier="RULE_ENFORCED",
+                plan_hash=d_res["plan_sha256"],
+                approval_token=None,
+                json=True,
+            ))
+            src_f.write_text("package com.demo\nclass Calc { fun add(a: Int, b: Int) = a + b; fun sub(a: Int, b: Int) = a - b }\n", encoding="utf-8")
+            tst_f.write_text("package com.demo\nclass CalcTest { fun ok() {} }\n", encoding="utf-8")
+            workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id=tid, host="antigravity", json=True))
+            import review_package as rp
+            rp.build_package(repo, tid)
+
+            prof_before = rex.resolve_execution_profile(repo, tid, host="antigravity")
+            rev_before = prof_before["reviewers"]["bug-test-reviewer-agent"]
+            ptr_before = rev_before["brief_pointer_prompt"]
+            self.assertIn("active-briefs", rev_before["short_brief_path"])
+            self.assertIn("active-briefs", ptr_before)
+            self.assertIn(repo.as_posix(), rev_before["brief_content"])
+            self.assertIn((repo / "app/src/main/kotlin/com/demo/Calc.kt").resolve().as_posix(), rev_before["brief_content"])
+
+            pol_new, sc_new = rm.resolve_interactive_choice("hydrogen-dynamic-task")
+            rec = rm.set_policy(
+                repo, pol_new, task_id=tid, host="antigravity", source="conversation", proof_reference="Use Hydrogen", scope=sc_new,
+            )
+            ref_prompts = (rec.get("refreshed_run") or {}).get("reviewer_prompts") or {}
+            self.assertIn("bug-test-reviewer-agent", ref_prompts)
+
+            prof_after = rex.resolve_execution_profile(repo, tid, host="antigravity")
+            rev_after = prof_after["reviewers"]["bug-test-reviewer-agent"]
+            self.assertTrue(
+                rex.pointer_matches(
+                    ptr_before,
+                    "bug-test-reviewer-agent",
+                    rev_after["brief_path"],
+                    rev_after["brief_content"],
+                    alternate_paths=[rev_after["short_brief_path"], rev_after["canonical_brief_path"]],
+                    accepted_digests=rev_after["accepted_prior_brief_digests"],
+                ),
+                "Pre-model-set same-run pointer should remain valid after `review models set` rebuilds brief!",
+            )
+            forged = re.sub(r"\(sha256 [0-9a-f]{16}\)", "(sha256 0000000000000000)", ptr_before)
+            self.assertFalse(
+                rex.pointer_matches(
+                    forged,
+                    "bug-test-reviewer-agent",
+                    rev_after["brief_path"],
+                    rev_after["brief_content"],
+                    alternate_paths=[rev_after["short_brief_path"], rev_after["canonical_brief_path"]],
+                    accepted_digests=rev_after["accepted_prior_brief_digests"],
+                )
+            )
+
+    def test_v1311_04_three_scout_waves_unread_gap_reads_cli_json_flags_and_hydrogen_lead_direct(self) -> None:
+        from unittest.mock import patch
+        import delegation_policy as dp
+        import verification_steps as vs
+        import review_orchestrator as ro
+
+        self.assertEqual(3, dp.MAX_SCOUT_WAVES_PER_USER_TURN)
+        self.assertIn("NEVER chain shell commands", dp.UTILITY_AGENT_SPECS[dp.SCOUT_AGENT]["system_prompt"])
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            f_read = repo / "app/src/main/java/com/demo/ReadByScout.kt"
+            f_unread = repo / "app/src/main/java/com/demo/UnreadViewModel.kt"
+            f_read.parent.mkdir(parents=True, exist_ok=True)
+            f_read.write_text("package com.demo\nclass ReadByScout\n", encoding="utf-8")
+            f_unread.write_text("package com.demo\nclass UnreadViewModel\n", encoding="utf-8")
+
+            tx_dir = repo / "brain" / "parent-v1311" / ".system_generated" / "logs"
+            tx_dir.mkdir(parents=True, exist_ok=True)
+            parent_tx = tx_dir / "transcript.jsonl"
+            parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Audit 17 files"}) + "\n", encoding="utf-8")
+            dp._save_utility_ledger(repo, {
+                "schema_version": 1,
+                "entries": [{
+                    "wave_id": "w-scout-v1311",
+                    "agent_type": dp.SCOUT_AGENT,
+                    "role": dp.SCOUT_AGENT,
+                    "parent_conversation_id": "parent-v1311",
+                    "parent_user_turns": 1,
+                    "execution_id": "child-scout-1",
+                    "wave_completed": True,
+                    "completed_at_epoch": 9999999999.0,
+                    "lead_post_reads": 3,
+                    "inspected_files": ["app/src/main/java/com/demo/ReadByScout.kt"],
+                    "dispatched_epoch": 9999999999.0,
+                }],
+            })
+            with patch("antigravity_runtime.resolve_transcript", side_effect=lambda cid: parent_tx if cid == "parent-v1311" else None):
+                ok_reread, _, code_reread = dp.check_and_record_lead_post_subagent_read(
+                    repo, "parent-v1311", tool_name="view_file", args={"AbsolutePath": str(f_read), "StartLine": 1, "EndLine": 10},
+                )
+                self.assertFalse(ok_reread)
+                self.assertEqual("POST_SCOUT_REREAD_CAP_REACHED", code_reread)
+
+                ok_unread, _, _ = dp.check_and_record_lead_post_subagent_read(
+                    repo, "parent-v1311", tool_name="view_file", args={"AbsolutePath": str(f_unread), "StartLine": 1, "EndLine": 10},
+                )
+                self.assertTrue(ok_unread, "Unread target file outside Scout's inspected_files must be permitted")
+
+            rc_vs = vs.main(["--repo", str(repo), "--task", "nonexistent-task", "--json"])
+            self.assertEqual(1, rc_vs)
+            rc_ro = ro.main(["status", "--repo", str(repo), "--task-id", "nonexistent-task", "--json"])
+            self.assertEqual(1, rc_ro)
 
 
 class TestV1310DesktopDrillFixes(unittest.TestCase):

@@ -651,6 +651,7 @@ def generate_task_brief(
         f"- **Task Kind**: {task_kind}",
         f"- **Expected Surfaces**: {', '.join(expected_surfaces) or 'NONE'}",
         f"- **Expected Modules**: {', '.join(expected_modules) or 'NONE'}",
+        f"- **Repository Root (Mandatory Absolute Paths for File Tools)**: `{repo.resolve().as_posix()}` — Antigravity `read_file`/`view_file` tools REQUIRE full absolute paths (never pass repo-relative paths like `app/src/...`).",
     ]
     try:
         from plan_notes import brief_note_lines
@@ -699,16 +700,18 @@ def generate_task_brief(
         )
     delta_files = [str(f) for f in ((policy.get("fix_delta") or {}).get("files") or []) if str(f).strip()]
     if delta_files:
-        brief_lines.append("- **Follow-Up Delta Files (Modified Since Prior Run — Focus Here First)**:")
+        brief_lines.append("- **Follow-Up Delta Files (Modified Since Prior Run — Focus Here First, Full Absolute Paths)**:")
         for df in delta_files[:20]:
-            brief_lines.append(f"  * `{df}`")
+            abs_df = (repo / df).resolve().as_posix()
+            brief_lines.append(f"  * `{abs_df}` (`{df}`)")
         brief_lines.append(
             "  * *(Follow-up review round: evaluate the delta diff in the package and any unresolved finding validations below without re-reading unchanged task files unless required to verify an unresolved finding.)*"
         )
-    brief_lines.append("- **Target Changed Paths**:")
+    brief_lines.append("- **Target Changed Paths (Use Full Absolute Path in `read_file`/`view_file`)**:")
     focus_paths = reading_guide["focus_files"] if reading_guide else changed_paths
     for p in focus_paths[:20]:
-        brief_lines.append(f"  * `{p}`")
+        abs_p = (repo / p).resolve().as_posix()
+        brief_lines.append(f"  * `{abs_p}` (`{p}`)")
     if len(focus_paths) > 20:
         brief_lines.append(f"  * *(and {len(focus_paths) - 20} more files; see complete package)*")
     if reading_guide:
@@ -835,7 +838,14 @@ def generate_task_brief(
     ])
 
     brief_path = package_dir / f"brief-{reviewer}.md"
-    atomic_write_bytes(brief_path, redact_text("\n".join(brief_lines)).encode("utf-8"))
+    rendered_brief = redact_text("\n".join(brief_lines)).encode("utf-8")
+    atomic_write_bytes(brief_path, rendered_brief)
+    try:
+        short_dir = task_dir(repo, task_id) / "active-briefs"
+        short_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(short_dir / f"brief-{reviewer}.md", rendered_brief)
+    except (OSError, ValidationError):
+        pass
     return brief_path
 
 

@@ -388,22 +388,30 @@ class CriticalSafetyTests(unittest.TestCase):
             repo = Path(directory)
             ran: list[str] = []
 
+            invocations = 0
+
             def gradle(args, **kwargs):
-                ran.extend(args)
-                module = args[0].split(":")[2]
-                folder = repo / "modules" / module / "build/test-results/testDebugUnitTest"
-                folder.mkdir(parents=True, exist_ok=True)
-                (folder / "r.xml").write_text(passing if module == "a" else failing)
-                if module == "b":
-                    kwargs["outcome"].update(test_failure_only=True)
-                    return 1
-                return 0
+                nonlocal invocations
+                invocations += 1
+                task_targets = [a for a in args if a.startswith(":")]
+                ran.extend(task_targets)
+                rc = 0
+                for t_arg in task_targets:
+                    module = t_arg.split(":")[2]
+                    folder = repo / "modules" / module / "build/test-results/testDebugUnitTest"
+                    folder.mkdir(parents=True, exist_ok=True)
+                    (folder / "r.xml").write_text(passing if module == "a" else failing)
+                    if module == "b":
+                        kwargs["outcome"].update(test_failure_only=True)
+                        rc = 1
+                return rc
             written: dict = {}
             with mock.patch.object(run_tests_gate, "REPO", repo), mock.patch.object(run_tests_gate, "resolve_target_tasks", return_value=tasks), \
                     mock.patch.object(run_tests_gate, "load_baseline", return_value={"unit_tests": []}), \
                     mock.patch.object(run_tests_gate, "write_gate_result", side_effect=lambda name, data: written.update(data)), \
                     mock.patch.object(run_tests_gate, "current_head_sha", return_value=""), mock.patch.object(run_gradle_task, "run_gradle", side_effect=gradle):
                 code = run_tests_gate.main([])
+            self.assertEqual(1, invocations, "Multi-module unit tests should batch into a single Gradle daemon invocation")
             self.assertEqual(tasks, ran)
             self.assertNotEqual(0, code)
             self.assertEqual(["B#b"], written.get("new_regressions"))

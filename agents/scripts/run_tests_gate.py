@@ -974,6 +974,13 @@ def execution_identity(repo: Path) -> dict:
 
 def run_test_tasks(tasks: list[str], extra: list[str]) -> tuple[int, dict]:
     from run_gradle_task import run_gradle
+    if len(tasks) > 1 and "--tests" not in extra:
+        batch_outcome: dict = {}
+        cont_flag = [] if "--continue" in extra else ["--continue"]
+        label = " ".join(tasks)
+        with step_progress(f"Running unit tests ({len(tasks)} modules): {label}"):
+            batch_code = run_gradle([*tasks, *cont_flag, *extra], outcome=batch_outcome)
+        return batch_code, batch_outcome
     code, attributable, outcome = 0, True, {}
     for task in tasks:
         item_outcome: dict = {}

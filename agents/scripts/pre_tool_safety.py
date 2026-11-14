@@ -881,6 +881,13 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
         or relative.startswith(".agents/project-context/legacy-overrides/")
     ):
         return False, "Project context notes, instructions, and architecture policies are developer-owned and immutable to model file tools to prevent context poisoning.", False
+    if (
+        relative.startswith(".agents/state/web-relay/inbox/")
+        and len(Path(relative).parts) == 5
+        and resolved.suffix.lower() in {".json", ".md", ".txt"}
+        and not resolved.is_symlink()
+    ):
+        return True, str(resolved), True
     if any(relative == r or relative.startswith(r + "/") for r in PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
     is_kit_dev = (root / "harness_cli.py").is_file() and (root / "scripts_dev").is_dir()
@@ -1991,8 +1998,15 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     return
                 route = reviewer_routes[matched]
                 expected_prompt = str(route.get("brief_content") or "").replace("\r\n", "\n").strip()
+                alt_briefs = [str(p) for p in (route.get("short_brief_path"), route.get("canonical_brief_path")) if p]
+                prior_digs = list(route.get("accepted_prior_brief_digests") or [])
                 if supplied_prompt != expected_prompt and not pointer_matches(
-                    supplied_prompt, matched, str(route.get("brief_path") or ""), expected_prompt,
+                    supplied_prompt,
+                    matched,
+                    str(route.get("brief_path") or ""),
+                    expected_prompt,
+                    alternate_paths=alt_briefs,
+                    accepted_digests=prior_digs,
                 ):
                     emit(
                         "deny",

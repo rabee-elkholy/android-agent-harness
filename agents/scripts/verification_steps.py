@@ -18,13 +18,21 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
 
-def _dispatch(repo: Path, script: str, arguments: list[str]) -> int:
+def _dispatch(repo: Path, script: str, arguments: list[str], *, quiet_stdout: bool = False) -> int:
     env = dict(os.environ, HARNESS_REPO=str(repo))
+    if quiet_stdout:
+        proc = subprocess.run(
+            [sys.executable, "-u", str(SCRIPTS / script), *arguments],
+            cwd=str(repo), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        if proc.returncode and proc.stdout:
+            print(proc.stdout, file=sys.stderr, end="" if proc.stdout.endswith("\n") else "\n")
+        return proc.returncode
     return subprocess.run([sys.executable, "-u", str(SCRIPTS / script), *arguments],
                           cwd=str(repo), env=env, check=False).returncode
 
 
-def run_steps(repo: Path, task_id: str, host: str | None = None) -> tuple[int, dict]:
+def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: bool = False) -> tuple[int, dict]:
     from _vnext_common import ValidationError
     from evidence_store import StateLock
     from host_continuation import assert_execution_session
@@ -78,11 +86,12 @@ def run_steps(repo: Path, task_id: str, host: str | None = None) -> tuple[int, d
                 summary.update(status="FAILED", next_action=_compact_for_host(action),
                                reason="NO_VERIFICATION_PROGRESS: the router repeated a completed step. Diagnose before retrying.")
                 return 1, summary
-            print(f"VERIFICATION_STEP={code}", flush=True)
+            if not json_only:
+                print(f"VERIFICATION_STEP={code}", flush=True)
             started = time.monotonic()
             from task_metrics import operation_span
             with operation_span(repo, "verification-dispatch", task_id=task_id, counters={"dispatches": 1}):
-                exit_code = _dispatch(repo, script, arguments)
+                exit_code = _dispatch(repo, script, arguments, quiet_stdout=True) if json_only else _dispatch(repo, script, arguments)
             timings.append({"step": code, "duration_seconds": round(time.monotonic() - started, 3), "exit_code": exit_code})
             if exit_code:
                 summary.update(status="FAILED", failed_step=code, exit_code=exit_code,
@@ -95,11 +104,12 @@ def main(argv: list[str] | None = None) -> int:
     from _vnext_common import ValidationError
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--task-id", "--task", dest="task_id", required=True)
     parser.add_argument("--host", default=None)
+    parser.add_argument("--json", action="store_true", help="Emit pure JSON output on stdout")
     args = parser.parse_args(argv)
     try:
-        code, result = run_steps(Path(args.repo).resolve(), args.task_id, args.host)
+        code, result = run_steps(Path(args.repo).resolve(), args.task_id, args.host, json_only=bool(args.json))
     except (ValidationError, OSError) as exc:
         code, result = 1, {"status": "FAILED", "task_id": args.task_id, "reason": str(exc)}
     print(json.dumps(result, ensure_ascii=True, indent=2))

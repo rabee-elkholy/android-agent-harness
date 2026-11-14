@@ -73,23 +73,65 @@ def brief_pointer_prompt(role: str, brief_path: str, brief_text: str) -> str:
 
 
 
-def pointer_matches(supplied: str, role: str, brief_path: str, brief_text: str) -> bool:
-    """Match the complete pointer while treating symlink aliases as the same brief."""
+def pointer_matches(
+    supplied: str,
+    role: str,
+    brief_path: str,
+    brief_text: str,
+    *,
+    alternate_paths: list[str] | None = None,
+    accepted_digests: list[str] | None = None,
+) -> bool:
+    """Match the complete pointer across canonical/short-mirror paths and same-run model refreshes."""
+    norm_supplied = supplied.replace("\r\n", "\n").strip()
     match = re.fullmatch(
         r"You are (?P<role>[^\s]+)\. Read your complete review brief at (?P<path>[^\r\n]+) "
         r"\(sha256 (?P<digest>[0-9a-f]{16})\) "
         r"with your file tools and follow it exactly, including its output contract\.",
-        supplied.replace("\r\n", "\n").strip(),
+        norm_supplied,
     )
     if not match or match["role"] != role or not brief_path:
         return False
+    allowed_resolved: set[Path] = set()
+    for cand_p in [brief_path, *(alternate_paths or [])]:
+        if not cand_p:
+            continue
+        try:
+            allowed_resolved.add(Path(cand_p).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
     try:
-        if Path(match["path"]).resolve() != Path(brief_path).resolve():
-            return False
+        supplied_resolved = Path(match["path"]).resolve()
     except (OSError, RuntimeError, ValueError):
         return False
-    # Reuse the generator's normalized hash and exact pointer contract.
-    return supplied.replace("\r\n", "\n").strip() == brief_pointer_prompt(role, match["path"], brief_text)
+    if supplied_resolved not in allowed_resolved:
+        is_same_state_mirror = False
+        try:
+            canon_res = Path(brief_path).resolve()
+            # `<state>/runs/<snap>/<run_id>/brief-<role>.md` -> parents[3] == `<state>`
+            # `<state>/tasks/<tid>/active-briefs/brief-<role>.md` -> parents[3] == `<state>`
+            if (
+                len(canon_res.parents) >= 4
+                and len(supplied_resolved.parents) >= 4
+                and canon_res.parents[3] == supplied_resolved.parents[3]
+                and supplied_resolved.parent.name == "active-briefs"
+                and supplied_resolved.name == f"brief-{role}.md"
+                and supplied_resolved.is_file()
+            ):
+                is_same_state_mirror = True
+        except (OSError, RuntimeError, ValueError):
+            is_same_state_mirror = False
+        if not is_same_state_mirror:
+            return False
+    if norm_supplied == brief_pointer_prompt(role, match["path"], brief_text):
+        return True
+    if accepted_digests and match["digest"] in set(accepted_digests):
+        expected_with_prior = (
+            f"You are {role}. Read your complete review brief at {match['path']} (sha256 {match['digest']}) "
+            "with your file tools and follow it exactly, including its output contract."
+        )
+        return norm_supplied == expected_with_prior
+    return False
 
 
 def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -> dict:
@@ -159,15 +201,24 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         )
 
         brief_file = ""
+        canonical_brief_file = ""
+        short_brief_file = ""
         brief_text = ""
         if protocol >= 2:
             exact_brief = canonical_pkg_path.parent / f"brief-{rev}.md"
             if exact_brief.is_file():
-                brief_file = str(exact_brief)
+                canonical_brief_file = str(exact_brief)
+                brief_file = canonical_brief_file
                 try:
                     brief_text = exact_brief.read_text(encoding="utf-8")
                 except Exception:
                     brief_text = ""
+                short_mirror = directory / "active-briefs" / f"brief-{rev}.md"
+                try:
+                    if short_mirror.is_file() and short_mirror.read_text(encoding="utf-8") == brief_text:
+                        short_brief_file = str(short_mirror)
+                except OSError:
+                    pass
         else:
             brief_candidates = [
                 d / f"brief-{rev}.md" for d in candidate_pkg_dirs
@@ -192,8 +243,11 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
                 "reasoning_value": reasoning["native_value"],
             },
             "brief_path": brief_file,
+            "canonical_brief_path": canonical_brief_file or brief_file,
+            "short_brief_path": short_brief_file,
+            "accepted_prior_brief_digests": list((current.get("accepted_prior_brief_digests") or {}).get(rev) or []),
             "brief_content": brief_text,
-            "brief_pointer_prompt": brief_pointer_prompt(rev, brief_file, brief_text) if brief_text else "",
+            "brief_pointer_prompt": brief_pointer_prompt(rev, short_brief_file or brief_file, brief_text) if brief_text else "",
             "review_package_path": review_pkg_str,
             "output_contract": "HARNESS_REVIEW_RESULT_V2",
             "v2_output_contract": "HARNESS_REVIEW_RESULT_V2",

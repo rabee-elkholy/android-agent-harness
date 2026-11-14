@@ -33,6 +33,9 @@ What `web-pack` guarantees automatically:
 - **Zero-Secret Vault Redaction**: Blocks `.env`, `keystore`, `.jks`, `local.properties`, `google-services.json`, `GoogleService-Info.plist`, and `*secret*`/`*credentials*`, and replaces inline tokens (`AIza...`, `Bearer ...`, `sk-...`, `api_key=...`) with `__HARNESS_REDACTED_SECRET_N__` stored locally under `.agents/state/web-relay/packs/<pack_id>.json`.
 - **AST Neighbor Signatures**: Includes public signatures of direct callers/callees (`READ_ONLY_NEIGHBOR_SIGNATURES`), `project-facts.json`, code-relevant `project-notes.md`, active `developer-instructions.json`, and any `worker-handoff.json` diagnostics.
 
+
+> **Zero-Rewrite `web-apply` Rule**: Always run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` **FIRST with NO `--file` flag** — it automatically discovers the merge payload from Clipboard, `~/Downloads`, or `.agents/state/web-relay/inbox/`. NEVER re-emit the merge JSON via shell redirection or external paths; ONLY if raw JSON was pasted in chat and `web-apply` reports no file in Clipboard/Downloads, write it once via `write_file` to `.agents/state/web-relay/inbox/merge.json` and re-run `web-apply`.
+
 ## Step 2: Developer Interaction on Gemini Web (`gemini.google.com`)
 
 1. Open `gemini.google.com` (`Gemini 4 Carbon`), press `Ctrl+V` to attach/paste the Context Pack (plus attach any external Figma/UI screenshot image directly alongside it if implementing a visual mockup), and send.
