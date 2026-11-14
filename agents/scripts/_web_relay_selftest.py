@@ -190,8 +190,10 @@ class WebRelaySelftest(unittest.TestCase):
             "    '  <testcase name=\"roundingHalfUpWorks\" classname=\"com.demo.app.CheckoutCalculatorTest\"/>\\n'\n"
             "    '</testsuite>\\n', encoding='utf-8')\n"
         )
+        import base64
+        bat_b64 = base64.b64encode(bat_py.encode("utf-8")).decode("ascii")
         gradlew_bat.write_text(
-            f'@echo off\r\n"{sys.executable}" -c {json.dumps(bat_py)}\r\n',
+            f'@echo off\r\n"{sys.executable}" -c "import base64; exec(base64.b64decode(\'{bat_b64}\').decode())"\r\n',
             encoding="utf-8",
         )
 

@@ -137,7 +137,15 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_name, path)
+        for attempt in range(6):
+            try:
+                os.replace(temp_name, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                import time
+                time.sleep(0.01 * (attempt + 1))
     finally:
         try:
             os.unlink(temp_name)
