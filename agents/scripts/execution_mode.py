@@ -452,6 +452,24 @@ def resolve_effective_execution_mode(
     strict: bool = False,
 ) -> dict[str, Any]:
     """Pure read-only resolution of effective execution mode (zero disk writes)."""
+    with _MODE_THREAD_LOCK:
+        return _resolve_effective_execution_mode_unlocked(
+            repo,
+            task_id=task_id,
+            plan=plan,
+            candidate_files=candidate_files,
+            strict=strict,
+        )
+
+
+def _resolve_effective_execution_mode_unlocked(
+    repo: Path,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+    *,
+    candidate_files: list[str] | None = None,
+    strict: bool = False,
+) -> dict[str, Any]:
     repo = Path(repo).resolve()
     tid, resolved_plan = _resolve_target_task_and_plan(repo, task_id=task_id, plan=plan)
     plan_status = str((resolved_plan or {}).get("status") or "").strip().upper()
@@ -1099,21 +1117,22 @@ def verify_execution_mode_integrity(repo: Path) -> tuple[bool, list[str]]:
     """Inspect project, pending, and live-task `execution-mode.json` files for tamper/schema integrity (`doctor`)."""
     repo = Path(repo).resolve()
     errors: list[str] = []
-    for candidate in (project_mode_file(repo), pending_task_mode_file(repo)):
-        if candidate.is_file():
-            _, err = _read_verified_record(candidate, strict=False)
-            if err:
-                errors.append(err)
-    tasks_root = state_root(repo) / "tasks"
-    if tasks_root.is_dir():
-        for tdir in sorted(tasks_root.iterdir()):
-            if not tdir.is_dir():
-                continue
-            tm = tdir / "execution-mode.json"
-            if tm.is_file():
-                _, err = _read_verified_record(tm, strict=False)
+    with _MODE_THREAD_LOCK:
+        for candidate in (project_mode_file(repo), pending_task_mode_file(repo)):
+            if candidate.is_file():
+                _, err = _read_verified_record(candidate, strict=False)
                 if err:
-                    errors.append(f"{tdir.name}/{err}")
+                    errors.append(err)
+        tasks_root = state_root(repo) / "tasks"
+        if tasks_root.is_dir():
+            for tdir in sorted(tasks_root.iterdir()):
+                if not tdir.is_dir():
+                    continue
+                tm = tdir / "execution-mode.json"
+                if tm.is_file():
+                    _, err = _read_verified_record(tm, strict=False)
+                    if err:
+                        errors.append(f"{tdir.name}/{err}")
     return (len(errors) == 0), errors
 
 
