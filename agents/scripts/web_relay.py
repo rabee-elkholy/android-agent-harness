@@ -1333,14 +1333,14 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             raise ValidationError(f"Standard input did not contain a valid `{WEB_MERGE_SCHEMA}` JSON payload.")
         return parsed, "stdin"
 
+    packs_dir = _web_relay_state_dir(repo) / "packs"
+    known_packs = {p.stem for p in packs_dir.glob("*.json")} if packs_dir.is_dir() else set()
+
     clip_txt = _read_clipboard_text()
     if clip_txt:
         parsed = _extract_merge_json_from_text(clip_txt)
-        if parsed:
+        if parsed and (not known_packs or str(parsed.get("pack_id") or "") in known_packs):
             return parsed, "clipboard"
-
-    packs_dir = _web_relay_state_dir(repo) / "packs"
-    known_packs = {p.stem for p in packs_dir.glob("*.json")} if packs_dir.is_dir() else set()
     candidates: list[tuple[float, dict[str, Any], Path]] = []
     for dl_dir in _default_downloads_dirs():
         for cand in dl_dir.iterdir():

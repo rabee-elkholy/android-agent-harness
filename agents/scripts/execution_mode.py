@@ -20,6 +20,7 @@ import argparse
 import json
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,7 @@ from evidence_store import StateLock  # noqa: E402
 SCHEMA_VERSION = 1
 PENDING_CHOICE_TTL_SECONDS = 6 * 3600
 TERMINAL_TASK_STATES = frozenset({"DELIVERED", "CANCELLED"})
+_MODE_THREAD_LOCK = threading.RLock()
 CONFLICT_TASK_KINDS = frozenset({"CONFLICT", "FIX_CONFLICT", "MERGE"})
 _CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}\s|={7}\s*$|>{7}\s)", re.MULTILINE)
 AUTO_WEB_FILE_THRESHOLD = 12
@@ -720,7 +722,7 @@ def set_execution_mode(
     explicit_tid = validate_id(task_id, "task id") if str(task_id or "").strip() else ""
 
     lock_path = state_root(repo) / "locks" / "execution-mode.lock"
-    with StateLock(lock_path):
+    with _MODE_THREAD_LOCK, StateLock(lock_path, timeout_seconds=30.0):
         now_iso = utc_now()
         now_epoch = round(time.time(), 3)
 
@@ -889,7 +891,7 @@ def bind_pending_execution_mode_to_task(repo: Path, task_id: str) -> dict[str, A
     if not pend_file.is_file():
         return None
     lock_path = state_root(repo) / "locks" / "execution-mode.lock"
-    with StateLock(lock_path):
+    with _MODE_THREAD_LOCK, StateLock(lock_path, timeout_seconds=30.0):
         pend_rec, err = _read_verified_record(pend_file, strict=False)
         if err or pend_rec is None or _is_pending_expired(pend_rec):
             pend_file.unlink(missing_ok=True)
@@ -928,7 +930,7 @@ def record_pending_pack_link(repo: Path, pack_id: str) -> None:
     if not pend_file.is_file():
         return
     lock_path = state_root(repo) / "locks" / "execution-mode.lock"
-    with StateLock(lock_path):
+    with _MODE_THREAD_LOCK, StateLock(lock_path, timeout_seconds=30.0):
         pend_rec, err = _read_verified_record(pend_file, strict=False)
         if err or pend_rec is None or str(pend_rec.get("mode") or "") not in {"web", "auto"}:
             return

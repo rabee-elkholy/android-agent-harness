@@ -167,6 +167,33 @@ class WebRelaySelftest(unittest.TestCase):
             encoding="utf-8",
         )
         gradlew.chmod(gradlew.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        gradlew_bat = self.repo / "gradlew.bat"
+        bat_py = (
+            "import pathlib, sys\n"
+            "calc = pathlib.Path('app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt')\n"
+            "test = pathlib.Path('app/src/test/kotlin/com/demo/app/CheckoutCalculatorTest.kt')\n"
+            "xml_dir = pathlib.Path('app/build/test-results/testDebugUnitTest')\n"
+            "xml_dir.mkdir(parents=True, exist_ok=True)\n"
+            "if test.is_file() and 'EXPECT_ROUNDING_FIX' in test.read_text('utf-8') and 'ROUNDING_FIXED' not in calc.read_text('utf-8'):\n"
+            "    (xml_dir / 'TEST-com.demo.app.CheckoutCalculatorTest.xml').write_text(\n"
+            "        '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n'\n"
+            "        '<testsuite name=\"com.demo.app.CheckoutCalculatorTest\" tests=\"1\" failures=\"1\" errors=\"0\">\\n'\n"
+            "        '  <testcase name=\"roundingHalfUpWorks\" classname=\"com.demo.app.CheckoutCalculatorTest\">\\n'\n"
+            "        '    <failure message=\"Expected 95 but was 94\">java.lang.AssertionError: Expected 95 but was 94</failure>\\n'\n"
+            "        '  </testcase>\\n</testsuite>\\n', encoding='utf-8')\n"
+            "    print('> Task :app:testDebugUnitTest FAILED')\n"
+            "    print('BUILD FAILED in 1s')\n"
+            "    sys.exit(1)\n"
+            "(xml_dir / 'TEST-com.demo.app.CheckoutCalculatorTest.xml').write_text(\n"
+            "    '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n'\n"
+            "    '<testsuite name=\"com.demo.app.CheckoutCalculatorTest\" tests=\"1\" failures=\"0\" errors=\"0\">\\n'\n"
+            "    '  <testcase name=\"roundingHalfUpWorks\" classname=\"com.demo.app.CheckoutCalculatorTest\"/>\\n'\n"
+            "    '</testsuite>\\n', encoding='utf-8')\n"
+        )
+        gradlew_bat.write_text(
+            f'@echo off\r\n"{sys.executable}" -c {json.dumps(bat_py)}\r\n',
+            encoding="utf-8",
+        )
 
         _git(self.repo, "add", ".")
         _git(self.repo, "commit", "-qm", "initial fixture")
@@ -180,6 +207,7 @@ class WebRelaySelftest(unittest.TestCase):
             "HARNESS_REPO": str(self.repo),
             "HARNESS_WEB_RELAY_OUTBOX": str(self.outbox),
             "HARNESS_WEB_RELAY_DOWNLOADS": str(self.downloads),
+            "HARNESS_NO_CLIPBOARD": "1",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUNBUFFERED": "1",
         }
