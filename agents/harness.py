@@ -15,7 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
-    "heal", "plan-check", "bridge",
+    "heal", "plan-check", "plan-note", "bridge",
 })
 
 
@@ -36,7 +36,7 @@ def _run(script: str, args: list[str]) -> int:
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"], ["bridge"]))
     read_only = read_only or (script == "generate_project_context.py" and args[:1] in (["preview"], ["status"], ["drift-report"]))
     read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
-    read_only = read_only or script == "incident_reporter.py"
+    read_only = read_only or script in {"incident_reporter.py", "repair.py", "execution_mode.py"}
     # Merge checks the execution sessions of every source before applying; preview is read-only.
     read_only = (
         read_only
@@ -46,6 +46,7 @@ def _run(script: str, args: list[str]) -> int:
         or (script == "roborazzi_gate.py" and args[:1] in (["capabilities"], ["inspect-tree"]))
         or (script == "maestro_bridge.py" and args[:1] in (["capabilities"], ["list"]))
         or (script == "session_forensics.py")
+        or (script == "web_relay.py" and (args[:1] in (["pack"], ["status"]) or (args[:1] == ["apply"] and "--dry-run" in args)))
     )
     # The bounded verification runner owns its execution lease, including when
     # invoked directly; taking it here too would create a nested lock.
@@ -75,6 +76,8 @@ def _run(script: str, args: list[str]) -> int:
             or (script == "static_health_bridge.py" and args[:1] in (["capabilities"], ["report"]))
             or (script == "symbol_edit.py" and args[:1] in (["outline"], ["read"]))
             or (script == "workflow.py" and args[:1] == ["status"])
+            or (script == "web_relay.py" and args[:1] == ["status"])
+            or (script == "execution_mode.py" and (not args or args[:1] == ["show"]))
         )
     )
     if in_process_ok:
@@ -309,7 +312,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|symbol|task|doctor|diagnose-session|health|policy|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|symbol|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -361,6 +364,20 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("task_context.py", ["--repo", str(REPO_ROOT), *args])
     if command == "delegate-plan":
         return _run("delegation_policy.py", ["--repo", str(REPO_ROOT), *args])
+    if command == "execution-mode":
+        if not args:
+            return _run("execution_mode.py", ["show", "--repo", str(REPO_ROOT)])
+        if args[0] in {"-h", "--help", "help"}:
+            return _run("execution_mode.py", ["--help"])
+        if args[0] in {"show", "set"}:
+            sub_c, rest_c = args[0], list(args[1:])
+            if not {"-h", "--help"} & set(rest_c) and "--repo" not in rest_c and not any(a.startswith("--repo=") for a in rest_c):
+                rest_c = ["--repo", str(REPO_ROOT), *rest_c]
+            return _run("execution_mode.py", [sub_c, *rest_c])
+        forwarded_em = list(args)
+        if not {"-h", "--help"} & set(forwarded_em) and "--repo" not in forwarded_em and not any(a.startswith("--repo=") for a in forwarded_em):
+            forwarded_em = ["--repo", str(REPO_ROOT), *forwarded_em]
+        return _run("execution_mode.py", ["show", *forwarded_em])
     if command == "symbol":
         return _run("symbol_edit.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "health":
@@ -371,6 +388,23 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("maestro_bridge.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "diagnose-session":
         return _run("session_forensics.py", [*args, "--repo", str(REPO_ROOT)])
+    if command == "web-pack":
+        forwarded = list(args)
+        if not {"-h", "--help"} & set(forwarded) and "--repo" not in forwarded and not any(a.startswith("--repo=") for a in forwarded):
+            forwarded = ["--repo", str(REPO_ROOT), *forwarded]
+        return _run("web_relay.py", ["pack", *forwarded])
+    if command == "web-apply":
+        forwarded = list(args)
+        if not {"-h", "--help"} & set(forwarded) and "--repo" not in forwarded and not any(a.startswith("--repo=") for a in forwarded):
+            forwarded = ["--repo", str(REPO_ROOT), *forwarded]
+        return _run("web_relay.py", ["apply", *forwarded])
+    if command == "web-relay":
+        if not args or args[0] in {"-h", "--help", "help"}:
+            return _run("web_relay.py", ["--help"])
+        sub_cmd, rest_args = args[0], list(args[1:])
+        if not {"-h", "--help"} & set(rest_args) and "--repo" not in rest_args and not any(a.startswith("--repo=") for a in rest_args):
+            rest_args = ["--repo", str(REPO_ROOT), *rest_args]
+        return _run("web_relay.py", [sub_cmd, *rest_args])
     if command == "graph":
         forwarded = list(args)
         if "--repo" not in forwarded:
@@ -383,6 +417,11 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("workflow.py", forwarded)
     if command == "doctor":
         return _run("harness_doctor.py", ["--repo", str(REPO_ROOT), *args])
+    if command == "repair":
+        forwarded = list(args)
+        if "--repo" not in forwarded and not any(a.startswith("--repo=") for a in forwarded):
+            forwarded = ["--repo", str(REPO_ROOT), *forwarded]
+        return _run("repair.py", forwarded)
     if command == "preflight":
         return _run("preflight_check.py", args)
     if command == "test":

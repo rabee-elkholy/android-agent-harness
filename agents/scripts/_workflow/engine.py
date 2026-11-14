@@ -470,6 +470,11 @@ def draft(args: argparse.Namespace) -> dict:
                 )
 
     plan = _build_and_save_plan(repo, args, task_id, is_revision=False)
+    try:
+        from execution_mode import bind_pending_execution_mode_to_task
+        bind_pending_execution_mode_to_task(repo, task_id)
+    except (ImportError, OSError, ValueError, ValidationError):
+        pass
     _write_plan_document(repo, task_id, plan)
     return plan
 
@@ -1911,6 +1916,15 @@ def _resume_locked(args: argparse.Namespace) -> dict:
         plan.pop("ready_change_set_sha256", None)
         plan.pop("ready_run_id", None)
         save_plan(_plan_path(repo, args.task_id), plan)
+        wr_rec_f = task_dir(repo, args.task_id) / "web-relay-receipt.json"
+        if wr_rec_f.is_file():
+            try:
+                wr_d = read_json(wr_rec_f)
+                if isinstance(wr_d, dict):
+                    wr_d["stale_after_reopen"] = True
+                    atomic_write_json(wr_rec_f, wr_d)
+            except (OSError, ValueError, ValidationError):
+                pass
         atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
         return plan
 
@@ -1923,6 +1937,15 @@ def _resume_locked(args: argparse.Namespace) -> dict:
     plan["status"] = "IMPLEMENTING"
     plan["resumed_at"] = utc_now()
     save_plan(_plan_path(repo, args.task_id), plan)
+    wr_rec_v = task_dir(repo, args.task_id) / "web-relay-receipt.json"
+    if wr_rec_v.is_file():
+        try:
+            wr_dv = read_json(wr_rec_v)
+            if isinstance(wr_dv, dict):
+                wr_dv["resumed_from_verification"] = True
+                atomic_write_json(wr_rec_v, wr_dv)
+        except (OSError, ValueError, ValidationError):
+            pass
     atomic_write_json(state_root(repo) / "active-task.json", {"task_id": args.task_id, "plan_path": str(_plan_path(repo, args.task_id)), "updated_at": utc_now()})
     return plan
 
@@ -3249,7 +3272,22 @@ def status(args: argparse.Namespace) -> dict:
         task_id = _focused_task_id(repo)
     if not task_id:
         raise ValidationError("no active task found in repository state; specify --task-id <id>")
-    plan = _load_plan(repo, task_id)
+    plan = dict(_load_plan(repo, task_id))
+    try:
+        from execution_mode import resolve_effective_execution_mode
+        em_info = resolve_effective_execution_mode(repo, task_id=task_id, plan=plan)
+        plan["execution_mode"] = {
+            "mode": em_info.get("mode"),
+            "choice": em_info.get("choice"),
+            "scope": em_info.get("effective_scope"),
+            **(
+                {"conflict_auto_local_override": True}
+                if em_info.get("conflict_auto_local_override")
+                else {}
+            ),
+        }
+    except (ImportError, OSError, ValueError, ValidationError):
+        plan.setdefault("execution_mode", None)
     if bool(getattr(args, "next", False)):
         plan = dict(plan)
         plan["task_state"] = plan.get("status")

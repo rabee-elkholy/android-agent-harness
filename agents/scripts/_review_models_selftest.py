@@ -589,7 +589,7 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("SELECT_REVIEW_MODEL", prompt["code"])
         choice_ids = [c["id"] for c in prompt["choices"]]
         self.assertEqual(
-            ["hydrogen-argon-project", "hydrogen-argon-task", "hydrogen-dynamic-project", "hydrogen-risk-project", "inherit-task"],
+            ["hydrogen-dynamic-project", "hydrogen-dynamic-task", "safe-cache-project", "hydrogen-risk-project", "inherit-task"],
             choice_ids,
         )
 
@@ -1034,7 +1034,7 @@ class ReviewerModelsTests(unittest.TestCase):
         )
         self.assertEqual(0, res_cli.returncode, res_cli.stdout + res_cli.stderr)
 
-        # Edge Case 2: Band 1 SIMPLE -> 100% gemini-4-hydrogen-medium across Scout, Worker, and ALL reviewers
+        # Edge Case 2: Band 1 SIMPLE -> Scout & reviewers on gemini-4-hydrogen-medium; Worker starts on gemini-4-hydrogen-high from Wave 1
         t_simple = "task-hy-simple"
         plan_s = {
             "task_id": t_simple,
@@ -1052,7 +1052,7 @@ class ReviewerModelsTests(unittest.TestCase):
         atomic_write_json(task_dir(self.repo, t_simple) / "plan.json", plan_s)
         self.assertEqual("gemini-4-hydrogen-medium", dp.resolve_utility_scout_model(self.repo, t_simple, plan=plan_s))
         w_simple, tier_s = dp.resolve_utility_worker_model(self.repo, t_simple, plan=plan_s, worker_mode="FULL_SLICE")
-        self.assertEqual(("gemini-4-hydrogen-medium", "SIMPLE"), (w_simple, tier_s))
+        self.assertEqual(("gemini-4-hydrogen-high", "SIMPLE"), (w_simple, tier_s))
         frozen_s = models.freeze_models(
             self.repo, t_simple, "antigravity", roster, run_id="r-hy-s",
             policy_data={"surfaces": ["COMPOSE_UI"], "severity": "MEDIUM", "risk_tier": "T2_MODERATE", "reviewer_efforts": efforts_norm},
@@ -1083,7 +1083,7 @@ class ReviewerModelsTests(unittest.TestCase):
         w_complex, tier_c = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="FULL_SLICE")
         self.assertEqual(("gemini-4-hydrogen-high", "COMPLEX"), (w_complex, tier_c))
         w_red, _ = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="CAPTURE_RED_ONLY")
-        self.assertEqual("gemini-4-hydrogen-medium", w_red)
+        self.assertEqual("gemini-4-hydrogen-high", w_red)
         frozen_c = models.freeze_models(
             self.repo, t_complex, "antigravity", roster, run_id="r-hy-c",
             policy_data={"surfaces": ["COROUTINES", "NETWORK"], "severity": "HIGH", "risk_tier": "T3_SUBSYSTEM", "reviewer_efforts": efforts_norm},
@@ -1108,7 +1108,7 @@ class ReviewerModelsTests(unittest.TestCase):
         atomic_write_json(task_dir(self.repo, t_crit) / "plan.json", plan_crit)
         dec_crit = dp.evaluate_delegation_policy(self.repo, t_crit, plan=plan_crit)
         self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", dec_crit["strategy"])
-        self.assertEqual("gemini-4-hydrogen-medium", dec_crit["worker_model"])
+        self.assertEqual("gemini-4-hydrogen-high", dec_crit["worker_model"])
         frozen_crit = models.freeze_models(
             self.repo, t_crit, "antigravity", roster, run_id="r-hy-crit",
             policy_data={
@@ -1119,10 +1119,10 @@ class ReviewerModelsTests(unittest.TestCase):
             },
             plan=plan_crit,
         )
-        self.assertEqual("gemini-4-argon-medium", frozen_crit["reviewers"][SECURITY]["resolved_model"])
-        self.assertEqual("medium", frozen_crit["reviewers"][SECURITY]["thinking_level"])
-        self.assertEqual("gemini-4-argon-medium", frozen_crit["reviewers"][ROLE]["resolved_model"])
-        self.assertEqual("medium", frozen_crit["reviewers"][ROLE]["thinking_level"])
+        self.assertEqual("gemini-4-hydrogen-high", frozen_crit["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual("high", frozen_crit["reviewers"][SECURITY]["thinking_level"])
+        self.assertEqual("gemini-4-hydrogen-high", frozen_crit["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("high", frozen_crit["reviewers"][ROLE]["thinking_level"])
         self.assertEqual("gemini-4-hydrogen-high", frozen_crit["reviewers"][conv]["resolved_model"])
         self.assertEqual("high", frozen_crit["reviewers"][conv]["thinking_level"])
         models.frozen_models({"review_host": "antigravity", "review_models": frozen_crit})

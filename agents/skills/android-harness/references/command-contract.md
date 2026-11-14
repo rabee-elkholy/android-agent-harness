@@ -475,3 +475,17 @@ An ambiguous source location is rejected. Use `debug install [--device SERIAL]`,
 `debug strip [--attempt ID]` removes matching owned lines. Delivery checks the entire build tree.
 Resolve a changed diagnostic line manually. An external editor does not participate in the task lock.
 Identity is confirmed only for matching installed APK hashes. Diagnostic evidence cannot satisfy RED.
+
+---
+
+## Optional Manual Web-Relay Bridge (`web-pack` / `web-apply`)
+
+Stateless on-demand bridge for developers who choose to run heavy planning/coding in Gemini Web while keeping 100% local safety, Gradle, ADB, and default Antigravity mode (`hydrogen-dynamic-project`) unchanged:
+
+```bash
+python .agents/harness.py web-pack [--task-id <id>] [--prompt "<goal>"] [--feature <Name>] [--file <path>] [--retry]
+python .agents/harness.py web-apply --source conversation --proof-reference "<developer confirmation>" [--staged-phase]
+python .agents/harness.py web-relay status --json
+```
+
+> **Instruction**: Do not inspect `web_relay.py` before execution, and never run `web-pack` or `web-apply` unless the developer explicitly asks for Web-Relay.

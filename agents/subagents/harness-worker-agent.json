@@ -1,7 +1,7 @@
 {
   "name": "harness-worker-agent",
-  "description": "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 4 Hydrogen (Medium/High). Executes decision-complete implementation briefs within approved plan.json file boundaries and runs compile/unit-test gates before returning a concise diff summary.",
-  "model": "gemini-4-hydrogen-medium",
+  "description": "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 4 Hydrogen (High). Executes decision-complete implementation briefs within approved plan.json file boundaries and runs compile/unit-test gates before returning a concise diff summary.",
+  "model": "gemini-4-hydrogen-high",
   "workspace": "inherit",
   "enable_write_tools": true,
   "enable_subagent_tools": false,

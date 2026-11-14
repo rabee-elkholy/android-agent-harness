@@ -1,12 +1,12 @@
 """Risk-gated Flash subagent delegation policy and runtime guards for Antigravity.
 
 Implements Option 4 Hybrid Orchestration + Project-Wide Multi-Wave Subagent Governance:
-1. Primary Lead Session: Gemini 4 Carbon (Medium) — or Gemini 4 Argon — rotated
-   with Claude Sonnet 5.5 / Opus 5.5 when the Gemini weekly/5h bucket reaches ~50%.
-2. `harness-scout-agent` (pinned to `gemini-4-hydrogen-medium` by default; `gemini-3.8-flash-medium` under legacy `flash-*` fallback): read-only graph,
+1. Primary Lead Session: Gemini 4 Carbon (Medium) — or Gemini 4 Hydrogen (High) 1x fallback — rotated
+   with Claude Sonnet 5.5 / Opus 5.5 (separate pool) or Web-Relay when the shared Gemini bucket reaches ~50%.
+2. `harness-scout-agent` (pinned to `gemini-4-hydrogen-medium` by default; `gemini-3.8-flash-medium` under `safe-cache-hybrid` / legacy `flash-*`): read-only graph,
    symbol-outline, and batched multi-file exploration returning a compact
    `file:line` architectural digest so the Lead Architect never sweeps raw files.
-3. `harness-worker-agent` (pinned to `gemini-4-hydrogen-medium` on `SIMPLE` slices and `gemini-4-hydrogen-high` on `COMPLEX` slices by default): plan-scoped,
+3. `harness-worker-agent` (pinned to `gemini-4-hydrogen-high` from Wave 1 on `4+`-file slices; `<4`-file slices execute inline on the warm Lead cache): plan-scoped,
    single-instance implementation & Gradle compile/test worker governed by
    risk-tier, TDD red-evidence, conflict, and sensitive-surface safety gates.
 4. Project-Wide Step Budgets & Post-Subagent Anti-Reread Caps across ALL subagents
@@ -77,6 +77,7 @@ MAX_SCOUT_WAVES_PER_USER_TURN = 2
 
 SENSITIVE_SURFACES = frozenset({"BILLING", "AUTH", "SECURITY", "SENSITIVE_DATA", "CRYPTO"})
 HIGH_SENSITIVITY_TIERS = frozenset({"T4_SENSITIVE", "T5_CRITICAL"})
+MIN_WORKER_SLICE_FILES = 4
 CONFLICT_KINDS = frozenset({"CONFLICT", "FIX_CONFLICT", "MERGE"})
 BLOCKING_PRE_WORKER_CODES = frozenset({
     "SYNC_ZOHO_START",
@@ -138,11 +139,11 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
     WORKER_AGENT: {
         "name": WORKER_AGENT,
         "description": (
-            "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 4 Hydrogen (Medium/High). "
+            "Plan-scoped Android/KMP implementation and Gradle verification worker pinned to Gemini 4 Hydrogen (High). "
             "Executes decision-complete implementation briefs within approved plan.json file boundaries and runs "
             "compile/unit-test gates before returning a concise diff summary."
         ),
-        "model": DEFAULT_UTILITY_HYDROGEN_MODEL,
+        "model": ADAPTIVE_WORKER_HYDROGEN_MODEL,
         "tools": list(ANTIGRAVITY_WORKER_TOOLS),
         "fingerprint": UTILITY_AGENT_FINGERPRINTS[WORKER_AGENT],
         "system_prompt": (
@@ -466,10 +467,12 @@ def _collect_worktree_progress(repo: Path, slice_files: list[str]) -> list[dict[
     if (repo / ".git").exists():
         try:
             proc = subprocess.run(
-                ["git", "diff", "--numstat", "HEAD"],
+                ["git", "-c", "core.quotepath=false", "diff", "--numstat", "HEAD"],
                 cwd=repo,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=2,
                 check=False,
             )
@@ -485,10 +488,12 @@ def _collect_worktree_progress(repo: Path, slice_files: list[str]) -> list[dict[
                         del_n = int(parts[1]) if parts[1].isdigit() else 0
                         items.append({"file": rel, "status": "MODIFIED", "added_lines": add_n, "deleted_lines": del_n})
             u_proc = subprocess.run(
-                ["git", "ls-files", "--others", "--exclude-standard"],
+                ["git", "-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"],
                 cwd=repo,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=2,
                 check=False,
             )
@@ -862,7 +867,21 @@ def record_worker_verification_outcome(
             else:
                 if passed:
                     iw_fails = 0
-                    if g_low == "unit_tests":
+                    p_slices = list((plan or {}).get("phases") or [])
+                    s_files: list[str] = []
+                    if pid_str and p_slices:
+                        for _ph in p_slices:
+                            if isinstance(_ph, dict) and str(_ph.get("id") or "") == pid_str:
+                                s_files = [str(f) for f in (_ph.get("expected_files") or []) if f]
+                                break
+                    if not s_files:
+                        s_files = [str(f) for f in ((plan or {}).get("expected_files") or []) if f]
+                    zero_test_non_bug = (
+                        bool(s_files)
+                        and not any(is_test_file(str(f)) for f in s_files)
+                        and str((plan or {}).get("kind") or (plan or {}).get("task_kind") or "").upper() != "BUG"
+                    )
+                    if g_low == "unit_tests" or (zero_test_non_bug and (g_low == "preflight" or "compile" in g_low)):
                         wf = 0
                         high_wf = 0
                         arch_ff = False
@@ -1190,7 +1209,7 @@ def is_worker_verification_context_active(repo: Path, task_id: str, phase_id: st
             if phase_id and str(item.get("phase_id") or "") not in ("", phase_id):
                 continue
             if str(item.get("agent_type") or "") == WORKER_AGENT:
-                if str(item.get("worker_mode") or "") == "CAPTURE_RED_ONLY":
+                if str(item.get("worker_mode") or "") == "CAPTURE_RED_ONLY" or bool(item.get("dispatch_failed")):
                     return False
                 return not bool(item.get("wave_completed")) and not bool(item.get("lead_edited_after_wave"))
     except Exception:
@@ -1234,14 +1253,12 @@ def resolve_utility_worker_model(
     *,
     worker_mode: str = "FULL_SLICE",
 ) -> tuple[str, str]:
-    """Resolve the active model and complexity tier for `harness-worker-agent` (capped at `Hydrogen High`).
+    """Resolve the active model and complexity tier for `harness-worker-agent` (starts on `Hydrogen High` from Wave 1).
 
-    - Default, `hydrogen-*`, & `safe-cache-hybrid`: `gemini-4-hydrogen-medium` on `SIMPLE` / test-only gates,
-      automatically starting `FULL_SLICE` execution on `COMPLEX` tasks at `gemini-4-hydrogen-high` (54% Terminal-Bench 4.0 ceiling).
+    - Default, `hydrogen-*`, & `safe-cache-hybrid`: starts directly on `gemini-4-hydrogen-high` (1.00x shared-pool weight,
+      Intelligence 51) from Wave 1 so code generation never wastes a failed `Hydrogen Medium` wave in the shared Gemini pool.
     - Native Orchestrator Wave-Boundary Escalation (`worker-friction.json`):
-      * `SIMPLE` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-medium` -> Wave 2 `gemini-4-hydrogen-high` (#1) ->
-        Wave 3 `gemini-4-hydrogen-high` (#2) -> `Carbon` Lead Takeover (`high_wave_failures >= 2`).
-      * `COMPLEX` `FULL_SLICE`: Wave 1 `gemini-4-hydrogen-high` (#1) -> Wave 2 `gemini-4-hydrogen-high` (#2 corrective delta) ->
+      * Wave 1 `gemini-4-hydrogen-high` (#1) -> Wave 2 `gemini-4-hydrogen-high` (#2 corrective delta) ->
         `Carbon` Lead Takeover (`high_wave_failures >= 2`, or 1-wave `Fast-Fail` on explicit architectural/empty-wave blockers).
     - Legacy `flash-argon-hybrid`: `gemini-3.8-flash-medium` on `SIMPLE` / test-only gates,
       upgrading `FULL_SLICE` on `COMPLEX` (or Strike 1 friction) to `gemini-4-argon-low`.
@@ -1286,13 +1303,7 @@ def resolve_utility_worker_model(
         return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
     if _uses_legacy_flash_policy(default_choice):
         return DEFAULT_UTILITY_FLASH_MODEL, complexity_tier
-    if is_full_slice_impl and friction_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES:
-        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
-    if is_tests_gate_impl and friction_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES:
-        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
-    if is_complex_full_slice:
-        return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
-    return DEFAULT_UTILITY_HYDROGEN_MODEL, complexity_tier
+    return ADAPTIVE_WORKER_HYDROGEN_MODEL, complexity_tier
 
 
 def _sync_single_utility_agent_model(repo: Path, role: str, target_model: str) -> bool:
@@ -1471,7 +1482,7 @@ def discover_impacted_existing_tests(repo: Path, expected_files: list[str] | set
         return []
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "ls-files"],
+            ["git", "-C", str(repo), "-c", "core.quotepath=false", "ls-files"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -1492,7 +1503,7 @@ def discover_impacted_existing_tests(repo: Path, expected_files: list[str] | set
         r"(?:class|interface|object|fun)\s+(?:[A-Za-z0-9_<>,.?*\s]+\.)?([A-Za-z_][A-Za-z0-9_]*)\b",
         re.M,
     )
-    for rel_p in sorted(norm_expected)[:20]:
+    for rel_p in sorted(norm_expected)[:120]:
         if not rel_p.endswith((".kt", ".java")) or is_test_file(rel_p):
             continue
         fp = repo / rel_p
@@ -1792,6 +1803,8 @@ def utility_subagent_context(repo: Path, conversation_id: str, *, bind: bool = F
             "read_only_specialist": env_override != WORKER_AGENT,
         }
 
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() in {"claude", "copilot"}:
+        return None
     cid = str(conversation_id or "").strip()
     if not cid or cid == "claude-session":
         return None
@@ -1949,11 +1962,15 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
     return bound
 
 
-def mark_utility_wave_completed(repo: Path, parent_conversation_id: str, *, wave_id: str = "") -> None:
-    """Explicitly mark the latest (or specified) utility wave for `parent_conversation_id` as completed."""
+def mark_utility_wave_completed(
+    repo: Path,
+    parent_conversation_id: str,
+    *,
+    wave_id: str = "",
+    dispatch_failed: bool = False,
+) -> None:
+    """Explicitly mark the latest (or specified) utility wave as completed (and optionally `dispatch_failed`)."""
     parent_cid = str(parent_conversation_id or "").strip()
-    if not parent_cid:
-        return
     try:
         with StateLock(state_root(repo)):
             ledger = _load_utility_ledger(repo)
@@ -1961,16 +1978,18 @@ def mark_utility_wave_completed(repo: Path, parent_conversation_id: str, *, wave
             target_wave = wave_id
             if not target_wave:
                 for item in reversed(entries):
-                    if str(item.get("parent_conversation_id") or "") == parent_cid:
+                    if not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid:
                         target_wave = str(item.get("wave_id") or "")
                         break
             if not target_wave:
                 return
             now_ts = time.time()
-            cur_turns = _count_parent_user_turns(parent_cid)
+            cur_turns = _count_parent_user_turns(parent_cid) if parent_cid else 0
             for item in entries:
-                if str(item.get("parent_conversation_id") or "") == parent_cid and str(item.get("wave_id") or "") == target_wave:
+                if (not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid) and str(item.get("wave_id") or "") == target_wave:
                     item["wave_completed"] = True
+                    if dispatch_failed:
+                        item["dispatch_failed"] = True
                     if not item.get("completed_at_epoch"):
                         item["completed_at_epoch"] = now_ts
                     if cur_turns > int(item.get("parent_user_turns") or 0):
@@ -1979,6 +1998,54 @@ def mark_utility_wave_completed(repo: Path, parent_conversation_id: str, *, wave
     except (OSError, ValidationError):
         pass
 
+
+def _adaptive_slice_file_count(repo: Path, *, full_task: bool = False) -> int:
+    """Return active phase/task planned file count for scale-adaptive subagent read caps."""
+    try:
+        from mutation_guard import active_plan
+        plan = active_plan(repo, allow_missing=True)
+    except (ImportError, OSError, ValueError, ValidationError):
+        plan = None
+    if not isinstance(plan, dict) or not plan:
+        return 0
+    total_expected = len(plan.get("expected_files") or [])
+    status_up = str(plan.get("status") or "").strip().upper()
+    if full_task or status_up in {"VERIFYING", "READY_FOR_DELIVERY"}:
+        return total_expected
+    phases = plan.get("phases")
+    if isinstance(phases, list) and phases:
+        tid = str(plan.get("task_id") or "").strip()
+        completed: set[str] = set()
+        cur_pid = ""
+        if tid:
+            ps_f = task_dir(repo, tid) / "phase-state.json"
+            if ps_f.is_file():
+                try:
+                    ps = read_json(ps_f)
+                    if isinstance(ps, dict):
+                        cur_pid = str(ps.get("current_phase_id") or "").strip()
+                        completed = {str(x).strip() for x in (ps.get("completed_phases") or []) if str(x).strip()}
+                except (OSError, ValueError, ValidationError):
+                    pass
+        cur_len = 0
+        if cur_pid:
+            for ph in phases:
+                if isinstance(ph, dict) and str(ph.get("id") or "") == cur_pid and cur_pid not in completed:
+                    pf = ph.get("expected_files") or ph.get("files") or []
+                    cur_len = len(pf)
+                    break
+        idx_len = 0
+        try:
+            idx = int(plan.get("active_phase_index") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        if 0 <= idx < len(phases) and isinstance(phases[idx], dict):
+            pf = phases[idx].get("expected_files") or phases[idx].get("files") or []
+            idx_len = len(pf)
+        best_phase_len = max(cur_len, idx_len)
+        if best_phase_len > 0:
+            return best_phase_len
+    return total_expected
 
 def check_and_record_subagent_step_budget(
     repo: Path,
@@ -2007,7 +2074,8 @@ def check_and_record_subagent_step_budget(
     if kind_up == "WORKER":
         if t_low not in read_search_tools:
             return (True, "", "")
-        cap = MAX_WORKER_READ_CALLS
+        slice_n = _adaptive_slice_file_count(repo)
+        cap = max(MAX_WORKER_READ_CALLS, min(140, slice_n + 16)) if slice_n > 16 else MAX_WORKER_READ_CALLS
         code = "WORKER_READ_BUDGET_REACHED"
         label = WORKER_AGENT
         guidance = (
@@ -2037,7 +2105,9 @@ def check_and_record_subagent_step_budget(
     elif kind_up == "REVIEWER":
         if t_low not in (read_search_tools | {"run_command"}):
             return (True, "", "")
-        cap = MAX_REVIEWER_TOOL_CALLS
+        is_final_review = not str(run_id or "").strip().lower().startswith("phase-")
+        slice_n = _adaptive_slice_file_count(repo, full_task=is_final_review)
+        cap = max(MAX_REVIEWER_TOOL_CALLS, min(48, (slice_n // 2) + 8)) if slice_n > 8 else MAX_REVIEWER_TOOL_CALLS
         code = "REVIEWER_STEP_BUDGET_REACHED"
         label = role or "reviewer-subagent"
         guidance = (
@@ -2085,6 +2155,8 @@ def check_and_record_subagent_step_budget(
 
 def mark_lead_edit_or_transition(repo: Path, parent_conversation_id: str) -> None:
     """Unlock post-worker read cap when the Lead Architect performs a direct code edit."""
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() in {"claude", "copilot"}:
+        return
     parent_cid = str(parent_conversation_id or "").strip()
     if not parent_cid or parent_cid == "claude-session":
         return
@@ -2111,7 +2183,7 @@ def _is_wave_active_for_lead(
     plan: dict[str, Any] | None,
 ) -> bool:
     """Return True if a subagent wave has completed and its post-subagent anti-reread window is still active."""
-    if not wave_entries:
+    if not wave_entries or all(bool(e.get("dispatch_failed")) for e in wave_entries):
         return False
     sample = wave_entries[-1]
     # Check whether the wave has completed (via PostToolUse mark OR bound child DONE transcript)
@@ -2134,6 +2206,18 @@ def _is_wave_active_for_lead(
         return False
 
     tid_now, status_now, pid_now = _current_task_phase_and_status(repo, plan)
+    # Expire anti-reread window if developer switched mid-task to Manual Web-Relay (`web-apply`) after the subagent wave
+    if tid_now:
+        wr_receipt = task_dir(repo, tid_now) / "web-relay-receipt.json"
+        if wr_receipt.is_file():
+            try:
+                wr_doc = read_json(wr_receipt)
+                wr_at = str(wr_doc.get("applied_at") or "")
+                wave_at = max(str(e.get("completed_at") or e.get("dispatched_at") or "") for e in wave_entries)
+                if wr_at and (not wave_at or wr_at >= wave_at):
+                    return False
+            except (OSError, ValueError, ValidationError):
+                pass
     a_type = str(sample.get("agent_type") or "")
     rec_status = str(sample.get("task_status") or "IDLE").upper()
     rec_tid = str(sample.get("task_id") or "")
@@ -2219,7 +2303,7 @@ def _is_lead_owned_impl_target(repo: Path, raw_target: str, plan: dict[str, Any]
     rel = _normalize_repo_rel(repo, cleaned)
     if not rel:
         return False
-    tid, status, _ = _current_task_phase_and_status(repo, plan)
+    tid, status, pid = _current_task_phase_and_status(repo, plan)
     if not tid or status != "IMPLEMENTING":
         return False
     try:
@@ -2227,6 +2311,21 @@ def _is_lead_owned_impl_target(repo: Path, raw_target: str, plan: dict[str, Any]
     except Exception:
         return False
     strat = str(pol.get("strategy") or "")
+    if strat == "TRIVIAL_INLINE_LEAD":
+        ledger = _load_utility_ledger(repo)
+        if any(
+            isinstance(e, dict)
+            and not bool(e.get("dispatch_failed"))
+            and (
+                (str(e.get("agent_type") or "") == WORKER_AGENT and str(e.get("worker_mode") or "") == "FULL_SLICE")
+                or str(e.get("agent_type") or "") == SPECIALIST_AGENT
+            )
+            and str(e.get("task_id") or "") == tid
+            and str(e.get("phase_id") or "") == pid
+            and not bool(e.get("lead_edited_after_wave"))
+            for e in (ledger.get("entries") or [])
+        ):
+            return False
     lead_files: list[str] = []
     if strat in {"SENSITIVE_LEAD_CORE_WORKER_TESTS", "ORCHESTRATOR_FRICTION_LEAD_TAKEOVER"}:
         lead_files = [str(f) for f in (pol.get("lead_owned_files") or []) if f]
@@ -2266,6 +2365,8 @@ def check_and_record_lead_post_subagent_read(
     `USER_INPUT` turns, phase transitions (`p1 -> p2`), lifecycle transitions (`IDLE -> IMPLEMENTING`),
     or Lead Architect code edits.
     """
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() in {"claude", "copilot"}:
+        return (True, "", "")
     parent_cid = str(parent_conversation_id or "").strip()
     if not parent_cid or parent_cid == "claude-session":
         return (True, "", "")
@@ -2384,6 +2485,8 @@ def check_post_reviewer_reread_guard(
     plan: dict[str, Any] | None = None,
 ) -> tuple[bool, str, str]:
     """Prevent the Lead Model from re-reading application source files while reviewers are finished and awaiting `complete-all` / `assemble`."""
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() in {"claude", "copilot"}:
+        return (True, "", "")
     parent_cid = str(parent_conversation_id or "").strip()
     if not parent_cid or parent_cid == "claude-session":
         return (True, "", "")
@@ -2471,6 +2574,8 @@ def check_post_reviewer_reread_guard(
 
 def pending_post_subagent_directive(repo: Path, conversation_id: str) -> tuple[str, str]:
     """Return `(wave_state_key, directive)` for `pre_invocation_reminder.py` right after any subagent wave completes."""
+    if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() in {"claude", "copilot"}:
+        return ("", "")
     cid = str(conversation_id or "").strip()
     if not cid or cid == "claude-session":
         return ("", "")
@@ -2603,10 +2708,13 @@ def evaluate_delegation_policy(
     sync_utility_scout_model(repo, active_scout_model)
     quota_guide = {
         "primary_chat_model": "Gemini 4 Carbon (Medium)",
-        "fast_fallback_chat_model": "Gemini 4 Argon (Low/Medium)",
+        "fast_fallback_chat_model": "Gemini 4 Hydrogen (High)",
         "midweek_rotation_chat_model": "Claude Sonnet 5.5 (Thinking) / Claude Opus 5.5 (Thinking)",
-        "rotation_trigger": "Switch main chat model to Claude 5.5 when `/usage` Gemini weekly bar reaches ~50% (separate quota pool).",
-        "orchestrator_guard": "Keep main chat on explicit Carbon Medium / Argon Low / Claude 5.5; do NOT select Antigravity Orchestrator over the harness.",
+        "rotation_trigger": (
+            "All Gemini models share ONE `/usage` quota pool (Carbon/Argon at 3.00x vs Hydrogen/Flash at 1.00x); "
+            "offload heavy runs via Web-Relay (`gemini.google.com`) or switch main chat to Claude 5.5 (separate pool) at ~50%."
+        ),
+        "orchestrator_guard": "Keep main chat on explicit Carbon Medium / Hydrogen High (1x) / Claude 5.5; do NOT select Antigravity Orchestrator over the harness.",
         "scout_model": active_scout_model,
         "subagent_workhorse_model": active_scout_model,
         "anti_reread_contract": (
@@ -2692,9 +2800,9 @@ def evaluate_delegation_policy(
             "worker_mode": "NONE",
             "remote_mode_detected": is_remote_mode,
             "reason": (
-                "No active implementation task yet. Delegate multi-file exploration and graph/task-context "
-                f"anchoring to 1-3 parallel `{SCOUT_AGENT}` subagents (`{active_scout_model}`, {scout_call_hint} — split 3+ subsystems across 2-3 scouts), "
-                "then synthesize their digests directly without re-reading the codebase."
+                "No active implementation task yet. For 1-3 known target files, inspect inline on the warm Lead session (`task-context` / `view_file`) "
+                f"to avoid cold subagent startup overhead; for 4+ files or unknown cross-module exploration, delegate to 1-3 parallel `{SCOUT_AGENT}` subagents "
+                f"(`{active_scout_model}`, {scout_call_hint}), then synthesize their digests directly without re-reading the codebase."
             ),
             "project_context": _project_context_handoff(None, set()),
             "quota_strategy": quota_guide,
@@ -2791,6 +2899,97 @@ def evaluate_delegation_policy(
             "quota_strategy": quota_guide,
         }
 
+    try:
+        from execution_mode import inspect_web_phase_progress, resolve_effective_execution_mode
+        eff_em = resolve_effective_execution_mode(repo, task_id=tid, plan=plan, candidate_files=target_files)
+        wp_prog = inspect_web_phase_progress(repo, plan, target_files=target_files)
+    except (ImportError, OSError, ValueError):
+        eff_em = {"mode": "normal", "choice": "unset", "effective_scope": "unset"}
+        wp_prog = {"phase_id": phase_id, "has_staged_phase": False, "has_applied_web_changes": False}
+
+    if eff_em.get("mode") == "web" and not eff_em.get("conflict_auto_local_override"):
+        if not wp_prog.get("has_applied_web_changes"):
+            if wp_prog.get("pending_continuation_pack_id"):
+                next_web_cmd = 'python .agents/harness.py web-apply --source conversation --proof-reference "<words>"'
+                web_reason = (
+                    f"Web execution mode (`{eff_em.get('choice')}`) is awaiting Gemini Web reply for continuation pack "
+                    f"`{wp_prog['pending_continuation_pack_id']}` (batch {wp_prog.get('batch_index')}/{wp_prog.get('total_batches')}) on task `{tid}`. "
+                    f"Once the developer pastes/copies the reply, apply via `{next_web_cmd}`."
+                )
+            elif wp_prog.get("has_staged_phase"):
+                next_web_cmd = 'python .agents/harness.py web-apply --staged-phase --source conversation --proof-reference "<words>"'
+                web_reason = (
+                    f"Web execution mode (`{eff_em.get('choice')}`) has pre-staged changes ready for phase `{phase_id}` on task `{tid}`. "
+                    f"Apply them directly via `{next_web_cmd}`."
+                )
+            elif wp_prog.get("needs_retry_pack"):
+                next_web_cmd = f"python .agents/harness.py web-pack --task-id {tid} --retry"
+                web_reason = (
+                    f"Task `{tid}` resumed after verification/review feedback in Web mode (`{eff_em.get('choice')}`). "
+                    f"Run `{next_web_cmd}` to pack failure diagnostics for Gemini Web, then apply via `web-apply` "
+                    "(or apply a surgical local fix if trivial)."
+                )
+            else:
+                next_web_cmd = f"python .agents/harness.py web-pack --task-id {tid}"
+                web_reason = (
+                    f"Web execution mode (`{eff_em.get('choice')}`) is active for task `{tid}`"
+                    + (f" (phase `{phase_id}`)" if phase_id else "")
+                    + f". Run `{next_web_cmd}` to copy the Context Pack for Gemini Web, then apply the reply via "
+                    '`python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` '
+                    '(or switch to local mode anytime via `execution-mode set --choice normal-task --source conversation --proof-reference "<words>"`).'
+                )
+            return {
+                "status": status,
+                "task_id": tid,
+                "phase_id": phase_id,
+                "risk_tier": risk_tier,
+                "router_action": act_code,
+                "execution_mode": "web",
+                "execution_mode_choice": eff_em.get("choice"),
+                "strategy": "WEB_RELAY_ACTIVE",
+                "recommended_subagent": None,
+                "worker_allowed": False,
+                "worker_mode": "NONE",
+                "next_command": next_web_cmd,
+                "target_files": target_files,
+                "reason": web_reason,
+                "project_context": ctx_handoff,
+                "quota_strategy": quota_guide,
+            }
+        if act_code != "CAPTURE_RED_EVIDENCE":
+            w_test_m, c_tier_w = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
+            sync_utility_worker_model(repo, w_test_m)
+            ver_cmd = (
+                f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{phase_id}"'
+                if phase_id
+                else f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity"
+            )
+            return {
+                "status": status,
+                "task_id": tid,
+                "phase_id": phase_id,
+                "risk_tier": risk_tier,
+                "complexity_tier": c_tier_w,
+                "router_action": act_code,
+                "execution_mode": "web",
+                "execution_mode_choice": eff_em.get("choice"),
+                "strategy": "WEB_RELAY_APPLIED_VERIFY",
+                "recommended_subagent": None,
+                "worker_allowed": True,
+                "worker_mode": "TESTS_AND_GATES_ONLY",
+                "worker_model": w_test_m,
+                "next_command": ver_cmd,
+                "target_files": [f for f in target_files if is_test_file(f)],
+                "reason": (
+                    f"Web-Relay changes are already applied on disk for task `{tid}`"
+                    + (f" (phase `{phase_id}`)" if phase_id else "")
+                    + f". Proceed directly to `{ver_cmd}` without re-reading applied files unless a gate fails "
+                    f"(if a gate fails, run `python .agents/harness.py web-pack --task-id {tid} --retry` or fix minor nits locally)."
+                ),
+                "project_context": ctx_handoff,
+                "quota_strategy": quota_guide,
+            }
+
     if is_utility_agent_unloaded_in_session(repo, "", WORKER_AGENT):
         return {
             "status": status,
@@ -2866,27 +3065,6 @@ def evaluate_delegation_policy(
             "quota_strategy": quota_guide,
         }
 
-    if risk_tier == "T0_TRIVIAL" and len(target_files) <= 1:
-        base_w_model, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
-        sync_utility_worker_model(repo, base_w_model)
-        return {
-            "status": status,
-            "task_id": tid,
-            "phase_id": phase_id,
-            "risk_tier": risk_tier,
-            "complexity_tier": "SIMPLE",
-            "before_first_edit": before_first_edit_cmd,
-            "strategy": "TRIVIAL_INLINE_LEAD",
-            "recommended_subagent": None,
-            "worker_allowed": True,
-            "worker_mode": "FULL_SLICE",
-            "worker_model": base_w_model,
-            "target_files": target_files,
-            "reason": "Single-file T0_TRIVIAL edit: edit inline directly on the lead session to skip subagent round-trip latency.",
-            "project_context": ctx_handoff,
-            "quota_strategy": quota_guide,
-        }
-
     if block_remote_subagents:
         base_w_model, _ = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
         sync_utility_worker_model(repo, base_w_model)
@@ -2956,6 +3134,32 @@ def evaluate_delegation_policy(
     sync_utility_worker_model(repo, w_model)
     quota_guide = dict(quota_guide, subagent_workhorse_model=w_model)
     w_invoke_arg = "flash" if w_model.startswith("gemini-3.8-flash") else None
+
+    if f_strikes == 0 and (0 < len(target_files) < MIN_WORKER_SLICE_FILES or (risk_tier == "T0_TRIVIAL" and len(target_files) == 0)):
+        return {
+            "status": status,
+            "task_id": tid,
+            "phase_id": phase_id,
+            "risk_tier": risk_tier,
+            "complexity_tier": c_tier,
+            "friction_strikes": 0,
+            "high_friction_strikes": 0,
+            "friction_escalation": "NONE",
+            "before_first_edit": before_first_edit_cmd,
+            "strategy": "TRIVIAL_INLINE_LEAD",
+            "recommended_subagent": None,
+            "worker_allowed": True,
+            "worker_mode": "FULL_SLICE",
+            "worker_model": w_model,
+            "worker_invoke_model_arg": w_invoke_arg,
+            "target_files": target_files,
+            "reason": (
+                f"Warm-cache small-scope slice ({len(target_files)} planned file(s) < {MIN_WORKER_SLICE_FILES}): "
+                "execute inline directly on the Lead session to skip the ~12.4K-token cold subagent spawn tax in the shared Gemini pool."
+            ),
+            "project_context": ctx_handoff,
+            "quota_strategy": quota_guide,
+        }
     prev_handoff = get_worker_handoff_capsule(repo, tid, phase_id=phase_id) if (tid and f_strikes >= 1) else None
     escalation_state = "ESCALATED_WORKER_MODEL" if f_strikes >= WORKER_FRICTION_MODEL_ESCALATE_STRIKES else "NONE"
     escalation_note = (
@@ -3126,13 +3330,14 @@ def validate_utility_dispatch(
     parent_cid = str(parent_conversation_id or "").strip()
 
     # Cap consecutive scout waves within the SAME developer turn (resets automatically on every new USER_INPUT)
-    if scout_items and parent_cid and parent_cid != "claude-session":
+    if scout_items and parent_cid and parent_cid != "claude-session" and os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() not in {"claude", "copilot"}:
         cur_turns = _count_parent_user_turns(parent_cid)
         ledger = _load_utility_ledger(repo)
         prior_scout_waves = {
             str(e.get("wave_id") or "")
             for e in (ledger.get("entries") or [])
             if isinstance(e, dict)
+            and not bool(e.get("dispatch_failed"))
             and str(e.get("parent_conversation_id") or "") == parent_cid
             and str(e.get("agent_type") or "") == SCOUT_AGENT
             and int(e.get("parent_user_turns") or 0) == cur_turns
@@ -3302,10 +3507,10 @@ def worker_write_allowed(repo: Path, targets: list[str], utility_ctx: dict[str, 
 
 
 _SCOUT_SAFE_COMMAND_RE = re.compile(
-    r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+"
-    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|android-inspect|android-ui|debug\s+(?:status|logs)|device\s+(?:status|ios-status)|roborazzi\s+(?:capabilities|inspect-tree)|maestro\s+(?:capabilities|list)|pm\s+(?:discover|status)|context\s+(?:preview|status|drift-report)|policy|doctor|health|symbol\s+(?:outline|read))\b"
-    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|android_inspect\.py|static_health_bridge\.py|logcat_doctor\.py)\"?\b"
-    r"|\"?[^\"]*?symbol_edit\.py\"?\s+(?:outline|read)\b)",
+    r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-(?:3(?:\.\d+)?|u|B|S|E)\s+)*"
+    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|delegate-plan|diagnose-session|android-inspect|android-ui|debug\s+(?:status|logs)|device\s+(?:status|ios-status)|roborazzi\s+(?:capabilities|inspect-tree)|maestro\s+(?:capabilities|list)|pm\s+(?:discover|status)|context\s+(?:preview|status|drift-report)|task\s+(?:status|coverage|metrics|plan-check|bridge)|journey\s+(?:list|validate)|policy|doctor|health|version|commands|symbol\s+(?:outline|read)|web-pack|web-relay\s+(?:pack|status)|execution-mode(?:\s+show)?(?!\s+set))\b"
+    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|delegation_policy\.py|session_forensics\.py|android_inspect\.py|static_health_bridge\.py|logcat_doctor\.py)\"?\b"
+    r"|\"?[^\"]*?(?:symbol_edit\.py\"?\s+(?:outline|read)|web_relay\.py\"?\s+(?:pack|status)|execution_mode\.py\"?\s+show)\b)",
     re.IGNORECASE,
 )
 _SCOUT_SAFE_GIT_RE = re.compile(
@@ -3318,8 +3523,9 @@ _WORKER_FORBIDDEN_LIFECYCLE_RE = re.compile(
     r"(?:task\s+(?:draft|revise|approve|approve-sensitive|begin|prepare-verification|complete|deliver|cancel|resume|"
     r"checkpoint-phase|begin-next-phase|handoff|reconcile-handoff|reconcile-delivery|continue|switch|merge|change-decision|heal|bridge)|"
     r"draft|revise|approve|approve-sensitive|begin|prepare-verification|complete|deliver|cancel|"
-    r"phase-review|review|init|update|repair)\b"
-    r"|\b(?:phase_review|record_review|review_orchestrator|zoho_sync|pm_github|lifecycle|install_or_update)\.py\b",
+    r"phase-review|review|init|update|repair|web-apply|web-relay\s+apply|execution-mode\s+set)\b"
+    r"|\b(?:phase_review|record_review|review_orchestrator|zoho_sync|pm_github|lifecycle|install_or_update)\.py\b"
+    r"|\b(?:web_relay\.py\s+apply|execution_mode\.py\s+set)\b",
     re.IGNORECASE,
 )
 

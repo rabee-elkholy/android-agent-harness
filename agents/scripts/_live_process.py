@@ -33,9 +33,21 @@ def enable_line_buffered_stdio() -> None:
                 pass
 
 
+def _json_output_mode() -> bool:
+    if os.environ.get("HARNESS_LIVE_STDERR", "").strip() == "1":
+        return True
+    argv = sys.argv[1:]
+    if "--json" in argv or "--format=json" in argv:
+        return True
+    for i, arg in enumerate(argv[:-1]):
+        if arg == "--format" and argv[i + 1].strip().lower() == "json":
+            return True
+    return False
+
+
 def live_print(msg: str, *, err: bool = False, end: str = "\n") -> None:
     global _open_step_line
-    stream = sys.stderr if err else sys.stdout
+    stream = sys.stderr if (err or _json_output_mode()) else sys.stdout
     if _open_step_line and not (msg.startswith("[Done]") or msg.startswith("[Fail]")):
         try:
             print("", file=stream, flush=True)

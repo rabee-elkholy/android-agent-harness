@@ -241,6 +241,8 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                     "worker_mode": adv_red.get("worker_mode"),
                     "target_files": adv_red.get("target_files"),
                     "reason": adv_red.get("reason"),
+                    **({"next_command": adv_red["next_command"]} if adv_red.get("next_command") else {}),
+                    **({"execution_mode": adv_red["execution_mode"]} if adv_red.get("execution_mode") else {}),
                 }
             except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
                 pass
@@ -274,7 +276,20 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
     phases = plan.get("phases") or []
     if phases:
         from .phase_routing import phase_implementation_action
-        return phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, phases)
+        ph_action = phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, phases)
+        try:
+            act_p_idx = int(plan.get("active_phase_index") or 0)
+            if isinstance(ph_action, dict) and 0 <= act_p_idx < len(phases):
+                cur_pid = str(phases[act_p_idx].get("id") or "")
+                if cur_pid and (tdir / "staged-web-phases" / f"{cur_pid}.json").is_file():
+                    ph_action["staged_web_phase"] = cur_pid
+                    ph_action["reason"] = str(ph_action.get("reason") or "") + (
+                        f" Staged Web-Relay changes are waiting for phase {cur_pid!r}; "
+                        "apply them when authorized via `python .agents/harness.py web-apply --staged-phase --source conversation --proof-reference \"<words>\"`."
+                    )
+        except (OSError, ValueError, KeyError, TypeError):
+            cur_pid = ""
+        return ph_action
     is_conflict_task = str(plan.get("task_kind") or "").upper() in ("CONFLICT", "FIX_CONFLICT", "MERGE")
     action = {
         "code": "IMPLEMENT_APPROVED_SCOPE",
@@ -308,6 +323,19 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 "Ensure all conflict markers are removed and no code from either branch was dropped. "
                 f"When complete, run: {done_command}"
             )
+        try:
+            relay_receipt_path = _engine.task_dir(repo, task_id) / "web-relay-receipt.json"
+            if relay_receipt_path.is_file():
+                relay_receipt = _engine.read_json(relay_receipt_path)
+                cur_cs = str(task_manifest.get("change_set_sha256") or "")
+                if cur_cs and str(relay_receipt.get("change_set_sha256") or "") == cur_cs:
+                    action["web_relay_applied"] = True
+                    action["reason"] += (
+                        " Web-Relay changes are already written and static-checked; "
+                        "proceed directly to prepare-verification without re-reading applied files unless a gate fails."
+                    )
+        except (OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
+            relay_receipt_path = None
         action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
     elif _engine._should_record_task_start(repo, task_id, plan):
         # O64: without a record, an old failing test in another feature blocks the gate later and
@@ -318,6 +346,19 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             "on the untouched project, so the gate never counts them against this task."
         )
         action["before_first_edit"] = {"code": "RECORD_TASK_START_FAILURES", "kind": "HARNESS_COMMAND", "command": record}
+    try:
+        phases_list = plan.get("phases") or []
+        act_p_idx = int(plan.get("active_phase_index") or 0)
+        if phases_list and 0 <= act_p_idx < len(phases_list):
+            cur_pid = str(phases_list[act_p_idx].get("id") or "")
+            if cur_pid and (_engine.task_dir(repo, task_id) / "staged-web-phases" / f"{cur_pid}.json").is_file():
+                action["staged_web_phase"] = cur_pid
+                action["reason"] += (
+                    f" Staged Web-Relay changes are waiting for phase '{cur_pid}'; "
+                    'apply them when authorized via `python .agents/harness.py web-apply --staged-phase --source conversation --proof-reference "<words>"`.'
+                )
+    except (OSError, ValueError, KeyError, TypeError):
+        cur_pid = ""
     has_active_friction = (_engine.task_dir(repo, task_id) / "worker-friction.json").is_file()
     if (run_host == "antigravity" and not has_task_changes) or has_active_friction:
         try:
@@ -338,6 +379,10 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                     "target_files": adv.get("target_files"),
                     "reason": adv.get("reason"),
                 }
+                if adv.get("next_command"):
+                    adv_payload["next_command"] = adv["next_command"]
+                if adv.get("execution_mode"):
+                    adv_payload["execution_mode"] = adv["execution_mode"]
                 if adv.get("lead_owned_files"):
                     adv_payload["lead_owned_files"] = adv["lead_owned_files"]
                 if adv.get("lead_takeover_handoff"):
@@ -345,6 +390,8 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 elif adv.get("previous_wave_handoff"):
                     adv_payload["previous_wave_handoff"] = adv["previous_wave_handoff"]
                 action["delegation_advisory"] = adv_payload
+                if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
+                    action["reason"] += f" Web mode active: run `{adv['next_command']}` to build the Gemini Web Context Pack."
         except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
             pass
     return action

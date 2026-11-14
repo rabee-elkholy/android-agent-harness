@@ -817,7 +817,7 @@ def build_task_diff(
         chunks: list[str] = []
         for offset in range(0, len(safe_paths), 100):
             proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", "HEAD", "--", *safe_paths[offset:offset+100]],
+                ["git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", "HEAD", "--", *safe_paths[offset:offset+100]],
                 cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             chunks.append(proc.stdout or "")
@@ -845,6 +845,22 @@ def build_task_diff(
     secret_markers = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
     diff_chunks: list[str] = []
 
+    base_ref = task_base_head or "HEAD"
+    pending_git_specs: list[str] = []
+
+    def _flush_pending_git_specs() -> None:
+        if not pending_git_specs:
+            return
+        dedup_specs = list(dict.fromkeys(pending_git_specs))
+        pending_git_specs.clear()
+        for off in range(0, len(dedup_specs), 100):
+            proc = subprocess.run(
+                ["git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", base_ref, "--", *dedup_specs[off:off + 100]],
+                cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+            )
+            if proc.stdout:
+                diff_chunks.append(proc.stdout)
+
     sorted_changes = sorted(task_changes, key=lambda c: (c.get("path") or "", c.get("old_path") or "", c.get("status") or ""))
     for item in sorted_changes:
         rel = item.get("path") or ""
@@ -859,6 +875,7 @@ def build_task_diff(
         target_path = root / rel
 
         if status == "BASELINE_DIRTY_REMOVED":
+            _flush_pending_git_specs()
             if base_copy and base_copy.is_file():
                 base_lines = base_copy.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
                 try:
@@ -872,30 +889,26 @@ def build_task_diff(
             continue
 
         if base_copy and base_copy.is_file() and target_path.is_file():
+            _flush_pending_git_specs()
             base_lines = base_copy.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
             cur_lines = target_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
             chunk = "".join(difflib.unified_diff(base_lines, cur_lines, fromfile=f"a/{rel}", tofile=f"b/{rel}"))
             if chunk:
                 diff_chunks.append(chunk)
         elif status == "A" and not _is_tracked_in_head(root, rel):
+            _flush_pending_git_specs()
             if target_path.is_file():
                 cur_lines = target_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
                 chunk = "".join(difflib.unified_diff([], cur_lines, fromfile="/dev/null", tofile=f"b/{rel}"))
                 if chunk:
                     diff_chunks.append(chunk)
         else:
-            base_ref = task_base_head or "HEAD"
-            pathspec = [rel]
+            pending_git_specs.append(rel)
             old_rel = item.get("old_path")
             if old_rel and old_rel != rel:
-                pathspec.append(old_rel)
-            proc = subprocess.run(
-                ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", base_ref, "--", *pathspec],
-                cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
-            )
-            if proc.stdout:
-                diff_chunks.append(proc.stdout)
+                pending_git_specs.append(old_rel)
 
+    _flush_pending_git_specs()
     return "".join(diff_chunks)
 
 
@@ -1202,7 +1215,7 @@ def build_task_manifest(
             current_head = git_text(repo, "rev-parse", "HEAD")
             if current_head != task_base_head:
                 proc = subprocess.run(
-                    ["git", "diff", "--name-status", task_base_head, current_head],
+                    ["git", "-c", "core.quotepath=false", "diff", "--name-status", task_base_head, current_head],
                     cwd=str(repo),
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",

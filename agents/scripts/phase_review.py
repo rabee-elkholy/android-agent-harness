@@ -155,15 +155,12 @@ def _compute_phase_diff(repo: Path, paths: list[str], base_ref: str | None = Non
         else:
             git_paths.append(p)
     if git_paths:
-        cmd = ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10"]
-        if base_ref:
-            cmd.append(base_ref)
-        else:
-            cmd.append("HEAD")
-        cmd.extend(["--", *git_paths])
-        proc = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-        if proc.returncode == 0 and proc.stdout:
-            chunks.append(proc.stdout)
+        ref_arg = base_ref if base_ref else "HEAD"
+        for offset in range(0, len(git_paths), 100):
+            cmd = ["git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=10", ref_arg, "--", *git_paths[offset:offset + 100]]
+            proc = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+            if proc.returncode == 0 and proc.stdout:
+                chunks.append(proc.stdout)
     return "".join(chunks)
 
 

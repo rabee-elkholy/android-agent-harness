@@ -96,76 +96,76 @@ CRITICAL_HYBRID_REVIEWERS = (
 )
 
 ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
-    "hydrogen-argon-project": {
-        "id": "hydrogen-argon-project",
-        "index": 1,
-        "scope": "project",
-        "preset": "hydrogen-argon-hybrid",
-        "label_ar": "تثبيت هجين الجيل الرابع الذكي للمشروع كله (hydrogen-argon-project) — موصى به: Hydrogen Medium للبسيط، وHydrogen High + Medium للمركب، وArgon Medium للأمان واللوجيك الحرج (T5) دون تكرار السؤال",
-        "label_en": "Complexity-Adaptive Hydrogen + Argon Hybrid for entire project (Recommended — Hydrogen Medium on simple; Hydrogen High + Medium on complex; Argon Medium for critical T5 security/logic + Hydrogen High structural; stop asking each task)",
-        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
-    },
-    "hydrogen-argon-task": {
-        "id": "hydrogen-argon-task",
-        "index": 2,
-        "scope": "task",
-        "preset": "hydrogen-argon-hybrid",
-        "label_ar": "هجين الجيل الرابع الذكي لهذه المهمة (hydrogen-argon-task) — Hydrogen Medium للبسيط، وHydrogen High + Medium للمركب، وArgon Medium للأمان واللوجيك الحرج (T5)",
-        "label_en": "Complexity-Adaptive Hydrogen + Argon Medium Hybrid (Hydrogen Medium on simple; Hydrogen High + Medium on complex; Argon Medium for critical T5 security/logic + Hydrogen High structural) — for this task",
-        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
-    },
     "hydrogen-dynamic-project": {
         "id": "hydrogen-dynamic-project",
-        "index": 3,
+        "index": 1,
         "scope": "project",
         "preset": "hydrogen-dynamic",
-        "label_ar": "تثبيت Hydrogen الصافي للمشروع كله (hydrogen-dynamic-project) — صفر استهلاك لكوتا Argon/Carbon (Medium للبسيط، وسقف High للمركب والحرج بدون هدر xHigh)",
-        "label_en": "100% Pure Gemini 4 Hydrogen for entire project (Zero Argon/Carbon subagent quota — Medium on simple, capped at High on complex & critical T5; stop asking each task)",
+        "label": "Gemini 4 Hydrogen — always for this project (Recommended: fast, 1x quota)",
+        "label_en": "Gemini 4 Hydrogen — always for this project (Recommended: fast, 1x quota)",
+        "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+    },
+    "hydrogen-dynamic-task": {
+        "id": "hydrogen-dynamic-task",
+        "index": 2,
+        "scope": "task",
+        "preset": "hydrogen-dynamic",
+        "label": "Gemini 4 Hydrogen — this task only (fast, 1x quota)",
+        "label_en": "Gemini 4 Hydrogen — this task only (fast, 1x quota)",
         "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
     },
     "hydrogen-risk-project": {
         "id": "hydrogen-risk-project",
-        "index": 4,
+        "index": 3,
         "scope": "project",
         "preset": "hydrogen-risk-hybrid",
-        "label_ar": "تثبيت هجين Hydrogen مع موديل المحادثة للمشروع (hydrogen-risk-project) — Hydrogen Medium للعادي وموديل المحادثة (Carbon) تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid for entire project (Hydrogen Medium on T1-T3; Chat model on DEEP/MAX T4-T5; stop asking each task)",
+        "label": "Hydrogen + Chat Model on critical tasks — always for this project",
+        "label_en": "Hydrogen + Chat Model on critical tasks — always for this project",
         "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
     },
     "inherit-task": {
         "id": "inherit-task",
-        "index": 5,
+        "index": 4,
         "scope": "task",
         "preset": "inherit",
-        "label_ar": "نفس موديل المحادثة للمهمة (inherit-task) — استخدام الموديل الأساسي لكل المراجعين",
-        "label_en": "Current chat model (Inherit) — for this task",
+        "label": "Current chat model (Inherit) — this task only",
+        "label_en": "Current chat model (Inherit) — this task only",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
-    "hydrogen-argon-once": {
-        "id": "hydrogen-argon-once",
+    "safe-cache-project": {
+        "id": "safe-cache-project",
+        "index": 5,
+        "scope": "project",
+        "preset": "safe-cache-hybrid",
+        "label": "Cache-Safe Flash + Hydrogen — always for this project (best for large scans)",
+        "label_en": "Cache-Safe Flash + Hydrogen — always for this project (best for large scans)",
+        "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
+    },
+    "hydrogen-argon-project": {
+        "id": "hydrogen-argon-project",
         "index": 6,
-        "scope": "run",
+        "scope": "project",
         "preset": "hydrogen-argon-hybrid",
-        "label_ar": "هجين الجيل الرابع (Hydrogen + Argon Medium) لهذه المرة فقط (hydrogen-argon-once)",
-        "label_en": "Complexity-Adaptive Hydrogen + Argon Medium Hybrid — this review only",
+        "label": "Gemini 4 Hydrogen (1x ceiling) — always for this project (legacy alias)",
+        "label_en": "Gemini 4 Hydrogen (1x ceiling) — always for this project (legacy alias)",
         "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
     },
-    "hydrogen-dynamic-task": {
-        "id": "hydrogen-dynamic-task",
+    "hydrogen-argon-task": {
+        "id": "hydrogen-argon-task",
         "index": 7,
         "scope": "task",
-        "preset": "hydrogen-dynamic",
-        "label_ar": "موديل Hydrogen الصافي لهذه المهمة (hydrogen-dynamic-task) — Medium للبسيط وسقف High للمركب والحرج",
-        "label_en": "100% Pure Gemini 4 Hydrogen (Medium/High ceiling) — for this task",
-        "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+        "preset": "hydrogen-argon-hybrid",
+        "label": "Gemini 4 Hydrogen (1x ceiling) — this task only (legacy alias)",
+        "label_en": "Gemini 4 Hydrogen (1x ceiling) — this task only (legacy alias)",
+        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
     },
     "hydrogen-dynamic-once": {
         "id": "hydrogen-dynamic-once",
         "index": 8,
         "scope": "run",
         "preset": "hydrogen-dynamic",
-        "label_ar": "موديل Hydrogen الصافي لهذه المرة فقط (hydrogen-dynamic-once)",
-        "label_en": "100% Pure Gemini 4 Hydrogen (Medium/High ceiling) — this review only",
+        "label": "Gemini 4 Hydrogen — this review only",
+        "label_en": "Gemini 4 Hydrogen — this review only",
         "policy": {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
     },
     "hydrogen-risk-task": {
@@ -173,8 +173,8 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 9,
         "scope": "task",
         "preset": "hydrogen-risk-hybrid",
-        "label_ar": "هجين Hydrogen مع موديل المحادثة لهذه المهمة (hydrogen-risk-task)",
-        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid (Hydrogen Medium on T1-T3; Chat model on DEEP/MAX) — for this task",
+        "label": "Hydrogen + Chat Model on critical tasks — this task only",
+        "label_en": "Hydrogen + Chat Model on critical tasks — this task only",
         "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
     },
     "hydrogen-risk-once": {
@@ -182,107 +182,116 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 10,
         "scope": "run",
         "preset": "hydrogen-risk-hybrid",
-        "label_ar": "هجين Hydrogen مع موديل المحادثة لهذه المرة فقط (hydrogen-risk-once)",
-        "label_en": "Risk-Adaptive Hydrogen + Chat Hybrid — this review only",
+        "label": "Hydrogen + Chat Model on critical tasks — this review only",
+        "label_en": "Hydrogen + Chat Model on critical tasks — this review only",
         "policy": {"schema_version": 1, "default": "hydrogen-risk-hybrid", "overrides": {}},
+    },
+    "hydrogen-argon-once": {
+        "id": "hydrogen-argon-once",
+        "index": 11,
+        "scope": "run",
+        "preset": "hydrogen-argon-hybrid",
+        "label": "Gemini 4 Hydrogen (1x ceiling) — this review only (legacy alias)",
+        "label_en": "Gemini 4 Hydrogen (1x ceiling) — this review only (legacy alias)",
+        "policy": {"schema_version": 1, "default": "hydrogen-argon-hybrid", "overrides": {}},
     },
     "flash-argon-project": {
         "id": "flash-argon-project",
-        "index": 11,
+        "index": 12,
         "scope": "project",
         "preset": "flash-argon-hybrid",
-        "label_ar": "تثبيت الهجين الكلاسيكي للمشروع كله (flash-argon-project) — احتياطي: Flash 3.8 للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
-        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid for entire project (Fallback when Hydrogen is unavailable)",
+        "label": "Flash 3.8 + Argon Low fallback — always for this project",
+        "label_en": "Flash 3.8 + Argon Low fallback — always for this project",
         "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
     },
     "flash-argon-task": {
         "id": "flash-argon-task",
-        "index": 12,
+        "index": 13,
         "scope": "task",
         "preset": "flash-argon-hybrid",
-        "label_ar": "الهجين الكلاسيكي لهذه المهمة (flash-argon-task) — Flash 3.8 للبسيط، وArgon Low + Flash للمعقد، وسقف Argon Low للحرج",
-        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid — for this task",
+        "label": "Flash 3.8 + Argon Low fallback — this task only",
+        "label_en": "Flash 3.8 + Argon Low fallback — this task only",
         "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
     },
     "flash-argon-once": {
         "id": "flash-argon-once",
-        "index": 13,
+        "index": 14,
         "scope": "run",
         "preset": "flash-argon-hybrid",
-        "label_ar": "الهجين الكلاسيكي (Flash 3.8 + Argon Low) لهذه المرة فقط (flash-argon-once)",
-        "label_en": "Legacy Complexity-Adaptive Flash 3.8 + Argon Low Hybrid — this review only",
+        "label": "Flash 3.8 + Argon Low fallback — this review only",
+        "label_en": "Flash 3.8 + Argon Low fallback — this review only",
         "policy": {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}},
     },
     "risk-hybrid-project": {
         "id": "risk-hybrid-project",
-        "index": 14,
+        "index": 15,
         "scope": "project",
         "preset": "risk-hybrid",
-        "label_ar": "تثبيت الهجين مع موديل المحادثة بـ Flash للمشروع (risk-hybrid-project) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Flash + Chat Hybrid for entire project (Flash Medium on T1-T3; Chat model on DEEP/MAX T4-T5)",
+        "label": "Flash 3.8 + Chat Model on critical tasks — always for this project",
+        "label_en": "Flash 3.8 + Chat Model on critical tasks — always for this project",
         "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
     },
     "risk-hybrid-task": {
         "id": "risk-hybrid-task",
-        "index": 15,
+        "index": 16,
         "scope": "task",
         "preset": "risk-hybrid",
-        "label_ar": "الهجين حسب الخطورة بـ Flash للمهمة (risk-hybrid-task) — Flash Medium للعادي وموديل المحادثة تلقائياً للحرج (T4/T5)",
-        "label_en": "Risk-Adaptive Flash + Chat Hybrid (Flash Medium on standard T1-T3; Chat model on DEEP/MAX T4-T5) — for this task",
+        "label": "Flash 3.8 + Chat Model on critical tasks — this task only",
+        "label_en": "Flash 3.8 + Chat Model on critical tasks — this task only",
         "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
     },
     "risk-hybrid-once": {
         "id": "risk-hybrid-once",
-        "index": 16,
+        "index": 17,
         "scope": "run",
         "preset": "risk-hybrid",
-        "label_ar": "الهجين التكيفي بـ Flash لهذه المرة فقط (risk-hybrid-once)",
-        "label_en": "Risk-Adaptive Flash + Chat Hybrid — this review only",
+        "label": "Flash 3.8 + Chat Model on critical tasks — this review only",
+        "label_en": "Flash 3.8 + Chat Model on critical tasks — this review only",
         "policy": {"schema_version": 1, "default": "risk-hybrid", "overrides": {}},
     },
     "flash-project": {
         "id": "flash-project",
-        "index": 17,
+        "index": 18,
         "scope": "project",
         "preset": "flash-dynamic",
-        "label_ar": "تثبيت Flash 3.8 الصافي للمشروع كله (flash-project) — احتياطي كامل بدون Gemini 4",
-        "label_en": "Pure Gemini 3.8 Flash (Dynamic Medium/High thinking) for entire project",
+        "label": "Gemini 3.8 Flash only — always for this project",
+        "label_en": "Gemini 3.8 Flash only — always for this project",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "flash-dynamic-task": {
         "id": "flash-dynamic-task",
-        "index": 18,
+        "index": 19,
         "scope": "task",
         "preset": "flash-dynamic",
-        "label_ar": "النظام السريع بـ Flash للمهمة (flash-dynamic-task) — توفير السرعة والتوكنز بـ Flash 3.8 فقط",
-        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — for this task",
+        "label": "Gemini 3.8 Flash only — this task only",
+        "label_en": "Gemini 3.8 Flash only — this task only",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "flash-dynamic-once": {
         "id": "flash-dynamic-once",
-        "index": 19,
+        "index": 20,
         "scope": "run",
         "preset": "flash-dynamic",
-        "label_ar": "النظام السريع بـ Flash لهذه المرة فقط (flash-dynamic-once)",
-        "label_en": "Gemini 3.8 Flash (Dynamic Medium/High thinking) — this review only",
+        "label": "Gemini 3.8 Flash only — this review only",
+        "label_en": "Gemini 3.8 Flash only — this review only",
         "policy": {"schema_version": 1, "default": "flash-dynamic", "overrides": {}},
     },
     "inherit-once": {
         "id": "inherit-once",
-        "index": 20,
+        "index": 21,
         "scope": "run",
         "preset": "inherit",
-        "label_ar": "نفس موديل المحادثة لهذه المرة فقط (inherit-once)",
+        "label": "Current chat model (Inherit) — this review only",
         "label_en": "Current chat model (Inherit) — this review only",
         "policy": {"schema_version": 1, "default": "inherit", "overrides": {}},
     },
     "hybrid-smart-task": {
         "id": "hybrid-smart-task",
-        "index": 21,
+        "index": 22,
         "scope": "task",
         "preset": "hybrid-smart",
-        "label_ar": "النظام الهجين الذكي بـ Flash للمهمة (hybrid-smart-task) — سريع للفحص العادي وموديل المحادثة للحرج",
-        "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — for this task",
+        "label": "Flash 3.8 + Chat Model for security/logic — this task only",
+        "label_en": "Flash 3.8 + Chat Model for security/logic — this task only",
         "policy": {
             "schema_version": 1,
             "default": "flash-dynamic",
@@ -291,33 +300,24 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
     },
     "hybrid-smart-once": {
         "id": "hybrid-smart-once",
-        "index": 22,
+        "index": 23,
         "scope": "run",
         "preset": "hybrid-smart",
-        "label_ar": "النظام الهجين الذكي بـ Flash لهذه المرة فقط (hybrid-smart-once)",
-        "label_en": "Smart Hybrid (Flash dynamic for standard + Chat model for critical) — this review only",
+        "label": "Flash 3.8 + Chat Model for security/logic — this review only",
+        "label_en": "Flash 3.8 + Chat Model for security/logic — this review only",
         "policy": {
             "schema_version": 1,
             "default": "flash-dynamic",
             "overrides": {role: "inherit" for role in CRITICAL_HYBRID_REVIEWERS},
         },
     },
-    "safe-cache-project": {
-        "id": "safe-cache-project",
-        "index": 23,
-        "scope": "project",
-        "preset": "safe-cache-hybrid",
-        "label_ar": "تثبيت الهجين المحصن للكاش للمشروع (safe-cache-project) — Flash للاستكشاف الطويل (صفر سقوط كاش #200026) مع Hydrogen وArgon Medium للمراجعة والتنفيذ",
-        "label_en": "Cache-Shielded Hybrid for entire project (#200026 — 3.8 Flash on multi-turn Scout sweeps; Hydrogen + Argon Medium on T5 V2 Reviewers & paced Worker)",
-        "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
-    },
     "safe-cache-task": {
         "id": "safe-cache-task",
         "index": 24,
         "scope": "task",
         "preset": "safe-cache-hybrid",
-        "label_ar": "الهجين المحصن للكاش لهذه المهمة (safe-cache-task) — Flash للاستكشاف مع Hydrogen وArgon Medium للمراجعة والتنفيذ",
-        "label_en": "Cache-Shielded Hybrid (#200026 — 3.8 Flash Scout + Hydrogen/Argon Medium Reviewers & Worker) — for this task",
+        "label": "Cache-Safe Flash + Hydrogen — this task only",
+        "label_en": "Cache-Safe Flash + Hydrogen — this task only",
         "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
     },
     "safe-cache-once": {
@@ -325,8 +325,8 @@ ANTIGRAVITY_INTERACTIVE_CHOICES: dict[str, dict[str, Any]] = {
         "index": 25,
         "scope": "run",
         "preset": "safe-cache-hybrid",
-        "label_ar": "الهجين المحصن للكاش لهذه المرة فقط (safe-cache-once)",
-        "label_en": "Cache-Shielded Hybrid (#200026) — this review only",
+        "label": "Cache-Safe Flash + Hydrogen — this review only",
+        "label_en": "Cache-Safe Flash + Hydrogen — this review only",
         "policy": {"schema_version": 1, "default": "safe-cache-hybrid", "overrides": {}},
     },
 }
@@ -424,7 +424,7 @@ def resolve_interactive_choice(choice: str) -> tuple[dict, str]:
         entry = by_index[lower]
         return dict(entry["policy"]), str(entry["scope"])
     for entry in ANTIGRAVITY_INTERACTIVE_CHOICES.values():
-        if raw == entry["label_ar"] or lower == entry["label_en"].lower() or entry["id"] in lower:
+        if raw == entry.get("label", "") or lower == entry["label_en"].lower() or entry["id"] in lower:
             return dict(entry["policy"]), str(entry["scope"])
     raise ValidationError(
         f"unknown reviewer model choice '{choice}'; supported choices: "
@@ -487,17 +487,9 @@ def resolve_antigravity_model(
     is_deep = intent in ("DEEP", "MAX")
     if req == "inherit":
         return "inherit", "inherit"
-    if req in ("hydrogen-argon-hybrid", "safe-cache-hybrid"):
-        if tier == "CRITICAL" or intent == "MAX":
-            if role in CRITICAL_HYBRID_REVIEWERS or intent == "MAX":
-                return "gemini-4-argon-medium", "medium"
-            return "gemini-4-hydrogen-high", "high"
-        if tier == "COMPLEX" or intent == "DEEP":
-            if role in CRITICAL_HYBRID_REVIEWERS or intent == "DEEP":
-                return "gemini-4-hydrogen-high", "high"
-            return "gemini-4-hydrogen-medium", "medium"
-        return "gemini-4-hydrogen-medium", "medium"
-    if req == "hydrogen-dynamic":
+    if req in ("hydrogen-dynamic", "hydrogen-argon-hybrid", "safe-cache-hybrid"):
+        # Shared Gemini Pool Optimization (#196351): Argon carries a 3.00x ($6/$30) pool penalty while scoring 50
+        # vs Hydrogen High at 1.00x ($1.50/$7.50) scoring 51. Cap all automatic Gen-4 presets at Hydrogen High!
         if tier == "CRITICAL" or intent == "MAX":
             return "gemini-4-hydrogen-high", "high"
         if tier == "COMPLEX" or intent == "DEEP":
@@ -582,7 +574,7 @@ def host_capability(host: str) -> dict:
                     "id": item["id"],
                     "scope": item["scope"],
                     "preset": item["preset"],
-                    "label_ar": item["label_ar"],
+                    "label": item["label"],
                     "label_en": item["label_en"],
                 }
                 for item in sorted(ANTIGRAVITY_INTERACTIVE_CHOICES.values(), key=lambda x: int(x["index"]))
@@ -1484,16 +1476,16 @@ def build_antigravity_model_prompt(
         for role in reviewers
     }
     for key in (
-        "hydrogen-argon-project",
-        "hydrogen-argon-task",
         "hydrogen-dynamic-project",
+        "hydrogen-dynamic-task",
+        "safe-cache-project",
         "hydrogen-risk-project",
         "inherit-task",
     ):
         item = ANTIGRAVITY_INTERACTIVE_CHOICES[key]
         options.append({
             "id": item["id"],
-            "label_ar": item["label_ar"],
+            "label": item["label"],
             "label_en": item["label_en"],
             "scope": item["scope"],
             "command": (
@@ -1509,8 +1501,8 @@ def build_antigravity_model_prompt(
         "phase_id": phase_id,
         "complexity_tier": complexity_tier,
         "reviewers": list(reviewers),
-        "question_ar": "اختر موديل ومستوى تفكير المراجعين قبل بدء المراجعة:",
-        "question_en": "Choose the reviewer model and thinking level before launching reviewers:",
+        "question": "Which model policy should run code reviews?",
+        "question_en": "Which model policy should run code reviews?",
         "hydrogen_argon_resolution": hydrogen_argon_preview,
         "hydrogen_dynamic_resolution": hydrogen_dynamic_preview,
         "hydrogen_risk_resolution": hydrogen_risk_preview,

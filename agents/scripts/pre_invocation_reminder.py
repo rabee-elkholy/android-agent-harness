@@ -132,14 +132,26 @@ def _compact_message() -> str:
     except (ImportError, OSError, ValueError, KeyError, ValidationError):
         plan = {}
     notes_rem = _project_notes_reminder() + _developer_instructions_reminder(plan)
+    mode_tag = ""
+    try:
+        from execution_mode import resolve_effective_execution_mode
+        em = resolve_effective_execution_mode(REPO, plan=plan if isinstance(plan, dict) and plan else None)
+        if em.get("selection_required"):
+            mode_tag = " [Execution Mode: unset — ask via `ask_question` before starting a new task]"
+        elif em.get("configured_mode") == "auto":
+            mode_tag = f" [Execution Mode: auto->{em['mode']} ({em.get('effective_scope')})]"
+        elif em.get("mode") in {"normal", "web"}:
+            mode_tag = f" [Execution Mode: {em['mode']} ({em.get('effective_scope')})]"
+    except Exception:
+        mode_tag = ""
     if not plan:
         bridge_rem = _bridge_reminder()
-        return f"Android Harness: Idle (no active task). Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery, or run `python .agents/scripts/workflow.py draft` to begin a task.{notes_rem}{bridge_rem}"
+        return f"Android Harness: Idle (no active task).{mode_tag} Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery; ask execution mode if unset before starting an implementation task.{notes_rem}{bridge_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":
         return (
-            f"Harness [Task {task_id}: IMPLEMENTING]: Autonomous execution. Do not create new plans or ask for Proceed. "
+            f"Harness [Task {task_id}: IMPLEMENTING]{mode_tag}: Autonomous execution. Do not create new plans or ask for Proceed. "
             f"Record in-scope developer refinements via `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary>\" --source conversation --proof-reference \"<words>\"` before `prepare-verification`. "
             f"When a background command or subagent is still running, yield immediately with ZERO tool calls and never read `.system_generated/tasks/*.log` or emit '!]', '[Message]', '<SYSTEM_MESSAGE>'.{notes_rem}"
         )
@@ -155,7 +167,7 @@ def _compact_message() -> str:
         return f"Harness [Task {task_id}: BLOCKED{blocked_str}]: Resume before fixing issues: `python .agents/scripts/workflow.py resume --repo . --task-id {task_id}`{notes_rem}"
     if status == "READY_FOR_DELIVERY":
         return f"Harness [Task {task_id}: READY_FOR_DELIVERY]: Git actions belong to the developer. Invoke `ask_question` IMMEDIATELY as your first token (ZERO pre-tool chat prose) with the Commit & Delivery Card inside `question`.{notes_rem}"
-    return f"Harness [Task {task_id}: {status}]: Discovery uses `python .agents/harness.py graph`. Discuss edge cases in chat before planning; only cancel when explicitly asked (workflow.py cancel).{notes_rem}"
+    return f"Harness [Task {task_id}: {status}]{mode_tag}: Discovery uses `python .agents/harness.py graph`. Discuss edge cases in chat before planning; only cancel when explicitly asked (workflow.py cancel).{notes_rem}"
 
 
 def _current_task_state() -> tuple[str, str]:

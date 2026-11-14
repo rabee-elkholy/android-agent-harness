@@ -158,16 +158,22 @@ TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "a
 WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id"}
 
 
+def _split_command_tokens(command: str) -> list[str]:
+    """Tokenize a shell command while preserving Windows path backslashes (e.g. `.agents\\harness.py`)."""
+    normalized_cmd = re.sub(r'\\(?!["\'\\])', "/", str(command or ""))
+    try:
+        return shlex.split(normalized_cmd, posix=True)
+    except ValueError:
+        return normalized_cmd.split()
+
+
 def _lifecycle_calls(command: str) -> list[tuple[str, list[str]]]:
     """(subcommand, arguments) for each workflow.py / `harness.py task` call in the command.
 
     Read from the actual command tokens, never from free text such as an outcome
     ("Fix cancel button") or an approval quote.
     """
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        tokens = command.split()
+    tokens = _split_command_tokens(command)
     calls: list[tuple[str, list[str]]] = []
     for index, token in enumerate(tokens):
         name = token.strip(";&|").replace("\\", "/").rsplit("/", 1)[-1].lower()
@@ -213,10 +219,7 @@ def _developer_authority_violation(command: str) -> str:
         if subcommand in ("approve", "approve-sensitive"):
             if _flag(rest, "--source").lower() != "conversation":
                 return "approve"
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        tokens = command.split()
+    tokens = _split_command_tokens(command)
     for pos, token in enumerate(tokens):
         name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
         rest = tokens[pos + 1:]
@@ -224,6 +227,20 @@ def _developer_authority_violation(command: str) -> str:
         if is_models and "set" in rest and not any(flag in rest for flag in ("-h", "--help")):
             if _flag(rest, "--source") != "conversation" or not _flag(rest, "--proof-reference"):
                 return "review-models"
+        is_exec_mode = (
+            name == "execution_mode.py"
+            or (name in TASK_ENTRYPOINTS and rest[:1] == ["execution-mode"])
+        )
+        if is_exec_mode and "set" in rest and not any(flag in rest for flag in ("-h", "--help")):
+            if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):
+                return "execution-mode"
+        is_web_apply = (
+            (name == "web_relay.py" and rest[:1] == ["apply"])
+            or (name in TASK_ENTRYPOINTS and (rest[:1] == ["web-apply"] or rest[:2] == ["web-relay", "apply"]))
+        )
+        if is_web_apply and not any(flag in rest for flag in ("-h", "--help", "--dry-run")):
+            if _flag(rest, "--source").lower() != "conversation" or not _flag(rest, "--proof-reference"):
+                return "web-apply"
     return ""
 
 
@@ -237,8 +254,134 @@ def _flag(rest: list[str], name: str) -> str:
 
 
 AUDITED_HARNESS_ENTRY = re.compile(
-    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery)\.py\s", re.I,
+    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode)\.py\s", re.I,
 )
+
+
+
+def _is_live_interactive_antigravity_lead(conversation: str, transcript_hint: str = "") -> bool:
+    if os.environ.get("HARNESS_ENFORCE_EXECUTION_MODE_PROMPT") == "1":
+        return True
+    if os.environ.get("HARNESS_ENFORCE_EXECUTION_MODE_PROMPT") == "0":
+        return False
+    hook_host = os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() or "antigravity"
+    if hook_host != "antigravity":
+        return False
+    cid = str(conversation or "").strip()
+    if not cid or cid == "claude-session":
+        return False
+    try:
+        from antigravity_runtime import resolve_transcript
+        tp = resolve_transcript(cid)
+        if tp is None and transcript_hint:
+            cand_tp = Path(transcript_hint).expanduser()
+            if cand_tp.is_file():
+                tp = cand_tp
+        if tp and tp.is_file():
+            size = tp.stat().st_size
+            with tp.open("rb") as fh:
+                head_bytes = fh.read(16384)
+                tail_bytes = b""
+                if size > 16384:
+                    fh.seek(max(16384, size - 32768))
+                    tail_bytes = fh.read(32768)
+            head = head_bytes.decode("utf-8", errors="ignore")
+            combined = head + "\n" + tail_bytes.decode("utf-8", errors="ignore")
+            has_user_turn = (
+                "USER_EXPLICIT" in combined
+                or "USER_INPUT" in combined
+                or '"role": "user"' in combined
+                or '"role":"user"' in combined
+            )
+            if not has_user_turn:
+                return False
+            # Spawned subagent transcripts begin with SYSTEM / SYSTEM_SDK dispatch frames and have no real developer USER_EXPLICIT turn
+            first_chunk = head[:4096]
+            if ('"SYSTEM_SDK"' in first_chunk or '"source": "SYSTEM"' in first_chunk or '"source":"SYSTEM"' in first_chunk) and "USER_EXPLICIT" not in combined:
+                return False
+            return True
+    except (ImportError, OSError, ValueError):
+        return False
+    return False
+
+
+def _check_web_mode_direct_write_guard(
+    repo: Path,
+    targets: list[str],
+    *,
+    conversation: str = "",
+    transcript_hint: str = "",
+) -> tuple[bool, str, str]:
+    """Prevent Lead from writing production files locally before packing/applying in active `web` mode."""
+    if not _is_live_interactive_antigravity_lead(conversation, transcript_hint=transcript_hint):
+        return True, "", ""
+    try:
+        plan = active_plan(repo)
+    except ValidationError:
+        return True, "", ""
+    if not isinstance(plan, dict) or str(plan.get("status") or "").upper() != "IMPLEMENTING":
+        return True, "", ""
+    tid = str(plan.get("task_id") or "").strip()
+    if not tid:
+        return True, "", ""
+    try:
+        from delegation_policy import is_test_file
+        if targets and all(is_test_file(str(t)) for t in targets if str(t).strip()):
+            return True, "", ""
+        from execution_mode import inspect_web_phase_progress, resolve_effective_execution_mode
+        eff = resolve_effective_execution_mode(repo, task_id=tid, plan=plan, candidate_files=targets)
+        if eff.get("mode") != "web" or eff.get("conflict_auto_local_override"):
+            return True, "", ""
+        prog = inspect_web_phase_progress(repo, plan, target_files=targets)
+        if prog.get("has_applied_web_changes") or (prog.get("has_prior_web_round") and not prog.get("pending_continuation_pack_id")):
+            return True, "", ""
+        if prog.get("pending_continuation_pack_id"):
+            return (
+                False,
+                f"WEB_EXECUTION_MODE_PACK_FIRST: Continuation pack `{prog['pending_continuation_pack_id']}` "
+                f"(batch {prog.get('batch_index')}/{prog.get('total_batches')}) is awaiting Gemini Web reply on task `{tid}`. "
+                "Do NOT re-run `web-pack` or edit files directly — wait for the developer reply and run "
+                '`python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` '
+                "(or switch to local mode via `execution-mode set --choice normal-task --source conversation --proof-reference "<words>"`).",
+                "WEB_EXECUTION_MODE_PACK_FIRST",
+            )
+        if prog.get("has_staged_phase"):
+            return (
+                False,
+                f"WEB_EXECUTION_MODE_PACK_FIRST: Web mode (`{eff.get('choice')}`) has pre-staged changes for phase "
+                f"`{prog.get('phase_id')}` on task `{tid}`. Apply them via "
+                '`python .agents/harness.py web-apply --staged-phase --source conversation --proof-reference "<words>"` '
+                "before editing files directly.",
+                "WEB_EXECUTION_MODE_PACK_FIRST",
+            )
+        return (
+            False,
+            f"WEB_EXECUTION_MODE_PACK_FIRST: Web execution mode (`{eff.get('choice')}`) is active for task `{tid}`. "
+            f"Run `python .agents/harness.py web-pack --task-id {tid}` to copy the Context Pack for Gemini Web "
+            "(or if the developer asked to switch to local mode, run "
+            '`python .agents/harness.py execution-mode set --choice normal-task --source conversation --proof-reference "<words>"` first).',
+            "WEB_EXECUTION_MODE_PACK_FIRST",
+        )
+    except (ImportError, OSError, ValueError, ValidationError):
+        return True, "", ""
+
+
+def _extract_execution_mode_kickoff(command: str) -> tuple[str, str, str]:
+    """Return `(kickoff_kind, task_id, task_kind)` when `command` starts a new task (`draft` or `web-pack`), else `('', '', '')`."""
+    cmd = str(command or "").strip()
+    if not cmd or any(h in cmd for h in (" --help", " -h")):
+        return ("", "", "")
+    tokens = _split_command_tokens(cmd)
+    for pos, tok in enumerate(tokens):
+        base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        rest = tokens[pos + 1:]
+        if (base == "workflow.py" and rest[:1] == ["draft"]) or (base in TASK_ENTRYPOINTS and rest[:2] == ["task", "draft"]):
+            return ("draft", _flag(rest, "--task-id"), _flag(rest, "--kind").upper())
+        if (base == "web_relay.py" and rest[:1] == ["pack"]) or (
+            base in TASK_ENTRYPOINTS and (rest[:1] == ["web-pack"] or rest[:2] == ["web-relay", "pack"])
+        ):
+            return ("web-pack", _flag(rest, "--task-id"), _flag(rest, "--kind").upper())
+    return ("", "", "")
 
 
 def _audited_harness_command(command: str) -> bool:
@@ -468,7 +611,7 @@ def _model_exempt_from_hydrogen_burst_pacer(model_name: str) -> bool:
     m = str(model_name or "").strip().lower()
     if not m or "hydrogen" in m or "orchestrator" in m or "gemini-4-flash" in m:
         return False
-    return any(tok in m for tok in ("carbon", "argon", "claude", "3.1-pro", "gpt-oss"))
+    return any(tok in m for tok in ("carbon", "argon", "claude", "sonnet", "opus", "3.1-pro", "gpt-oss", "gpt-5", "gpt-6"))
 
 
 def check_and_apply_hydrogen_burst_pacer(
@@ -761,7 +904,7 @@ def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict) -> None
     an authorized edit prevents `target content not found` failures on Windows checkouts.
     """
     target_chunks: list[str] = []
-    for key in ("Target", "target", "TargetContent", "targetContent"):
+    for key in ("Target", "target", "TargetContent", "targetContent", "old_string", "OldString", "old_str", "OldStr"):
         val = args.get(key)
         if isinstance(val, str) and val:
             target_chunks.append(val)
@@ -770,7 +913,7 @@ def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict) -> None
         if isinstance(items, list):
             for item in items:
                 if isinstance(item, dict):
-                    for subkey in ("Target", "target", "TargetContent", "targetContent", "OldStr", "old_str"):
+                    for subkey in ("Target", "target", "TargetContent", "targetContent", "OldStr", "old_str", "old_string", "OldString"):
                         subval = item.get(subkey)
                         if isinstance(subval, str) and subval:
                             target_chunks.append(subval)
@@ -815,7 +958,7 @@ def _handle_stop() -> None:
     emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop", reason_code="STOP_ALLOWED")
 
 
-def _handle_command(command: str, *, conversation: str = '') -> None:
+def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '') -> None:
     # Bash (the Claude bridge) joins backslash-newline into one command, so pattern checks must see
     # the joined line. PowerShell and cmd have no such continuation: other hosts keep every line.
     if os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude":
@@ -906,6 +1049,12 @@ def _handle_command(command: str, *, conversation: str = '') -> None:
             emit("deny", _cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
             return
         sym_allowed, sym_reason, sym_code = file_mutation_allowed(REPO, targets=sym_write_targets)
+        if sym_allowed:
+            w_sym_ok, w_sym_reason, w_sym_code = _check_web_mode_direct_write_guard(
+                REPO, sym_write_targets, conversation=conversation, transcript_hint=transcript_hint,
+            )
+            if not w_sym_ok:
+                sym_allowed, sym_reason, sym_code = w_sym_ok, w_sym_reason, w_sym_code
         if not sym_allowed:
             emit("deny", sym_reason, tool="run_command", command=command, reason_code=sym_code, task_id=active_tid)
             return
@@ -915,6 +1064,27 @@ def _handle_command(command: str, *, conversation: str = '') -> None:
                 mark_lead_edit_or_transition(REPO, conversation)
             except (ImportError, OSError, ValueError):
                 pass
+    kickoff_kind, kickoff_tid, kickoff_task_kind = _extract_execution_mode_kickoff(command)
+    if kickoff_kind and kickoff_task_kind not in {"CONFLICT", "FIX_CONFLICT", "MERGE"} and _is_live_interactive_antigravity_lead(conversation, transcript_hint=transcript_hint):
+        try:
+            from execution_mode import build_execution_mode_prompt, resolve_effective_execution_mode
+            em_state = resolve_effective_execution_mode(REPO, task_id=kickoff_tid or None)
+            if em_state.get("selection_required"):
+                prompt_c = build_execution_mode_prompt(REPO, task_id=kickoff_tid)
+                opts_summary = " | ".join(f"`{o['id']}` ({o['label']})" for o in prompt_c["options"])
+                emit(
+                    "deny",
+                    f"SELECT_EXECUTION_MODE_REQUIRED: Before starting `{kickoff_kind}`, ask the developer via `ask_question` "
+                    f"({prompt_c['question']}) with options: {opts_summary}. "
+                    f"Then record their choice via `{prompt_c['command_template']}` and continue.",
+                    tool="run_command",
+                    command=command,
+                    reason_code="SELECT_EXECUTION_MODE_REQUIRED",
+                    task_id=kickoff_tid or active_tid,
+                )
+                return
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
     allowed, reason = command_allowed(REPO, command)
     if allowed and conversation and not is_sym_write:
         try:
@@ -1946,7 +2116,7 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
                 f"PM_PREVIEW_AND_APPROVAL_REQUIRED: Before calling '{tool_name}' on {display}, you MUST: "
                 f"(1) present the exact preview of the tracker changes (target item ID, fields/status/comment to be written) "
                 f"to the developer in chat and ask for their approval; "
-                f"(2) once the developer confirms (e.g. 'حدث التاسك' / 'update pm' / 'موافق حدث التاسك'), run "
+                f"(2) once the developer confirms (e.g. 'update pm' / 'update tracker'), run "
                 f"`{pm_authorize_command(provider_id.replace('_projects', '').replace('_sprints', ''))}` with their exact message; "
                 f"then retry '{tool_name}'.",
                 tool=tool_name,
@@ -2205,7 +2375,7 @@ def _enforce_lead_anti_reread(conversation: str, name: str, args: dict) -> bool:
     return False
 
 
-def _handle_list_dir(name: str, args: dict, *, conversation: str = "") -> None:
+def _handle_list_dir(name: str, args: dict, *, conversation: str = "", is_utility_subagent: bool = False) -> None:
     plan: dict = {}
     try:
         plan = active_plan(REPO)
@@ -2216,6 +2386,10 @@ def _handle_list_dir(name: str, args: dict, *, conversation: str = "") -> None:
     dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
     if not _is_within_repo(REPO, dir_target):
         emit("deny", "Directory target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
+        return
+
+    if is_utility_subagent:
+        emit("allow", "Bounded directory listing permitted inside isolated utility subagent.", tool=name, reason_code="LIST_DIR_ALLOWED")
         return
 
     if status in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"):
@@ -2285,7 +2459,7 @@ def _handle_list_dir(name: str, args: dict, *, conversation: str = "") -> None:
     emit("allow", "Minimal repository orientation directory listing permitted.", tool=name, reason_code="LIST_DIR_ALLOWED")
 
 
-def _handle_search(name: str, args: dict, *, conversation: str = "") -> None:
+def _handle_search(name: str, args: dict, *, conversation: str = "", is_utility_subagent: bool = False) -> None:
     plan: dict = {}
     try:
         plan = active_plan(REPO)
@@ -2304,6 +2478,10 @@ def _handle_search(name: str, args: dict, *, conversation: str = "") -> None:
 
     if target and not _is_within_repo(REPO, target):
         emit("deny", "Search target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
+        return
+
+    if is_utility_subagent:
+        emit("allow", "Bounded search permitted inside isolated utility subagent.", tool=name, reason_code="SEARCH_ALLOWED")
         return
 
     if status == "VERIFYING":
@@ -2562,6 +2740,7 @@ def _main() -> None:
         name, args = _tool_name_and_args(payload)
         reviewer = None
         conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "")
+        transcript_hint = str(payload.get("transcriptPath") or payload.get("transcript_path") or "")
         global _ACTIVE_HOOK_CONVERSATION_ID, _ACTIVE_HOOK_MODEL_NAME
         _ACTIVE_HOOK_CONVERSATION_ID = conversation.strip()
         _ACTIVE_HOOK_MODEL_NAME = str(payload.get("modelName") or payload.get("model_name") or "").strip()
@@ -2620,6 +2799,11 @@ def _main() -> None:
             u_type = str(utility_ctx.get("agent_type") or "")
             u_exec = str(utility_ctx.get("execution_id") or conversation or f"env-{u_type}")
             if u_type == SCOUT_AGENT:
+                try:
+                    import discovery_receipt
+                    discovery_receipt.RECEIPT_NOT_BEFORE = 0.0
+                except (ImportError, AttributeError):
+                    pass
                 if name == "run_command":
                     cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
                     cwd_p = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
@@ -2784,6 +2968,12 @@ def _main() -> None:
             if allowed and utility_ctx is not None and str(utility_ctx.get("agent_type") or "") == "harness-worker-agent":
                 from delegation_policy import worker_write_allowed
                 allowed, reason, code = worker_write_allowed(REPO, targets, utility_ctx)
+            if allowed and utility_ctx is None and not reviewer:
+                w_ok, w_reason, w_code = _check_web_mode_direct_write_guard(
+                    REPO, targets, conversation=conversation, transcript_hint=transcript_hint,
+                )
+                if not w_ok:
+                    allowed, reason, code = w_ok, w_reason, w_code
             if allowed and name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
                 _normalize_crlf_for_edit(REPO, targets, args)
             if allowed and conversation and not reviewer and utility_ctx is None:
@@ -2797,16 +2987,16 @@ def _main() -> None:
         lead_conv = conversation if (conversation and not reviewer and utility_ctx is None) else ""
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-            _handle_command(command, conversation=lead_conv)
+            _handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint)
             return
         if name in SUBAGENT_TOOLS or name.startswith("schedules:"):
             _handle_subagent(name, args, parent_conversation_id=conversation)
             return
         if name in SEARCH_TOOLS:
-            _handle_search(name, args, conversation=lead_conv)
+            _handle_search(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
             return
         if name == "list_dir":
-            _handle_list_dir(name, args, conversation=lead_conv)
+            _handle_list_dir(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
             return
         # Known read-only tools (checked before loading external integration registry)
         if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):

@@ -525,6 +525,12 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         "target_files": adv.get("target_files"),
                         "reason": adv.get("reason"),
                     }
+                    if adv.get("next_command"):
+                        adv_payload["next_command"] = adv["next_command"]
+                    if adv.get("execution_mode"):
+                        adv_payload["execution_mode"] = adv["execution_mode"]
+                    if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
+                        act_obj["reason"] += f" Web mode active: run `{adv['next_command']}`."
                     if adv.get("lead_owned_files"):
                         adv_payload["lead_owned_files"] = adv["lead_owned_files"]
                     if adv.get("lead_takeover_handoff"):

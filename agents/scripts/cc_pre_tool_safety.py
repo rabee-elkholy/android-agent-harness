@@ -65,10 +65,17 @@ def main() -> int:
     if tool_name in FILE_EDIT_TOOLS and isinstance(tool_input, dict):
         edit_target = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
     if edit_target:
-        # File edits are plan-scoped mutations; the engine checks them like any host write tool.
+        # File edits are plan-scoped mutations; forward Edit/MultiEdit payloads so CRLF->LF normalization runs.
+        mapped_tool = "edit_file" if tool_name == "Edit" else ("multi_replace_file_content" if tool_name == "MultiEdit" else "write_to_file")
+        mapped_args: dict = {"TargetFile": edit_target}
+        if isinstance(tool_input, dict):
+            if isinstance(tool_input.get("old_string"), str):
+                mapped_args["old_string"] = tool_input["old_string"]
+            if isinstance(tool_input.get("edits"), list):
+                mapped_args["edits"] = tool_input["edits"]
         inner = {
             "conversationId": session_id,
-            "toolCall": {"name": "write_to_file", "args": {"TargetFile": edit_target}},
+            "toolCall": {"name": mapped_tool, "args": mapped_args},
         }
     elif tool_name.lower() == "bash" and command.strip():
         inner = {

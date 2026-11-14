@@ -15,7 +15,7 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 |---|---|
 | Discovery | `{{PY}} .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` |
 | Status / Gates | `{{PY}} .agents/harness.py task status --task-id <id> --next` / `preflight` / `test` |
-| Reviews | `{{PY}} .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` -> `review finalize --task <id>` |
+| Reviews | `{{PY}} .agents/harness.py review complete-all --task <id>` (or `review complete --task <id> --reviewer <role> --execution-id <convId>` -> `review finalize --task <id>`) |
 | Device / Verify | `{{PY}} .agents/harness.py assemble` -> `device install-start` -> `verify --task-id <id>` |
 
 Python: `{{PY}}`. Device: {{DEVICE_POLICY}} {{GIT_POLICY}}

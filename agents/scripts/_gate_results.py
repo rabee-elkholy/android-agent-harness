@@ -160,7 +160,8 @@ def write_gate_result(
                         p_f = s_root / "tasks" / act_tid / "plan.json"
                         if p_f.is_file():
                             pl_doc = _rj(p_f)
-                            if str(pl_doc.get("status") or "").upper() == "IMPLEMENTING":
+                            pl_status = str(pl_doc.get("status") or "").upper()
+                            if pl_status == "IMPLEMENTING" or (pl_status == "VERIFYING" and st_up == "PASS"):
                                 repo_root = s_root.parent.parent
                                 from delegation_policy import (
                                     is_worker_verification_context_active,
@@ -169,7 +170,10 @@ def write_gate_result(
                                 phases = pl_doc.get("phases") or []
                                 pidx = int(pl_doc.get("active_phase_index") or 0)
                                 pid = str(phases[pidx].get("id") or "") if (phases and 0 <= pidx < len(phases)) else ""
-                                if is_worker_verification_context_active(repo_root, act_tid, pid) or (st_up == "PASS" and g_low == "unit_tests"):
+                                if (
+                                    (pl_status == "IMPLEMENTING" and (is_worker_verification_context_active(repo_root, act_tid, pid) or (st_up == "PASS" and g_low == "unit_tests")))
+                                    or (pl_status == "VERIFYING" and st_up == "PASS" and g_low == "unit_tests")
+                                ):
                                     record_worker_verification_outcome(
                                         repo_root,
                                         passed=(st_up == "PASS"),

@@ -28,7 +28,7 @@ never rerun preflight, tests, reviewers or assemble for it.**
    `ask_question` immediately (zero pre-tool prose) with the action inside `question` (`Done - continue` / `Skip this scenario` /
    `Stop E2E`), then `e2e resume --scenario S#` and retry. `ENV_BLOCKED` (locked
    screen, disconnected phone) is handled the same way: ask, then retry once.
-5. `e2e finish` writes an advisory report. Invoke `ask_question` immediately (zero pre-tool prose) with a compact table (failures first) inside `question`
+5. `e2e finish` writes an advisory report. Invoke `ask_question` immediately (zero pre-tool prose) with a concise numbered/bulleted summary (failures first, no Markdown pipe tables) inside `question`
    for sign-off; record it with `device signoff --source conversation`
    quoting the report hash. A FAIL scenario is reported as FAIL; resume the task
    to fix it. Sensitive approval stays human-owned.

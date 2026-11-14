@@ -1456,7 +1456,7 @@ def main() -> int:
                     "[!] CRITICAL: Do NOT write any chat text (`content`), horizontal rules (`---`), or parenthetical notes (`*(...)*`) before calling `ask_question`! "
                     "Emit the `ask_question` tool call immediately and place the entire 3-section walkthrough (using numbered lines for steps, NEVER a `| ... |` pipe table) inside the `question` field "
                     "(options: 'PASS - I tested manually', 'FAIL - Manual validation failed', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start` immediately, no revise; "
-                    "translate all lines, table headers, and options into the developer's language, and in an RTL language start every line and every option with a word in that language, e.g. 'ناجح (PASS) — ...', never starting with English 'PASS'/'FAIL').\n"
+                    "translate all lines, table headers, and options into the developer's language, and in an RTL language start every line and every option with a native word in that language, never starting with English 'PASS'/'FAIL').\n"
                 )
                 if (active.get("verification_contract") or {}).get("device_validation") == "manual_or_automatic":
                     live_print("[CHOICE] Present the complete approved executable walkthrough from task status --next, with manual PASS/FAIL and Run Automatically in `ask_question`. Wait for selection; automatic PASS replaces manual repetition. Sensitive approval remains separate.")

@@ -844,7 +844,8 @@ def cmd_passthrough_script(args: argparse.Namespace) -> int:
     forwarded = list(getattr(args, "extra_args", None) or [])
     if forwarded[:1] == ["--"]:
         forwarded = forwarded[1:]
-    return _dispatch_pipeline_script(args, args._target_script, forwarded)
+    prefix_args = list(getattr(args, "_prefix_args", None) or [])
+    return _dispatch_pipeline_script(args, args._target_script, [*prefix_args, *forwarded])
 
 def cmd_graph(args: argparse.Namespace) -> int:
     """Query the Universal Android Code & Architecture Graph."""
@@ -1170,6 +1171,8 @@ FULL_SELFTEST_SUITES = (
     "_task_isolation_selftest.py",
     "_external_write_policy_selftest.py",
     "_ecosystem_upgrades_selftest.py",
+    "_web_relay_selftest.py",
+    "_execution_mode_selftest.py",
 )
 
 QUICK_SELFTEST_SUITES = (
@@ -1189,6 +1192,8 @@ QUICK_SELFTEST_SUITES = (
     "_antigravity_stability_selftest.py",
     "_verification_value_selftest.py",
     "_ecosystem_upgrades_selftest.py",
+    "_web_relay_selftest.py",
+    "_execution_mode_selftest.py",
 )
 
 assert set(QUICK_SELFTEST_SUITES) < set(FULL_SELFTEST_SUITES)
@@ -1785,12 +1790,24 @@ def build_parser() -> argparse.ArgumentParser:
         ("roborazzi", "roborazzi_gate.py", "Roborazzi headless JVM UI verification and .uitree.json bounds audit."),
         ("maestro", "maestro_bridge.py", "Physical-device Maestro YAML execution and phone_e2e YAML exporter."),
         ("diagnose-session", "session_forensics.py", "Session hook-streak and token forensics with Zero-PII bundle export."),
+        ("web-relay", "web_relay.py", "Optional Manual Web-Relay Bridge (`pack`, `apply`, `status`)."),
+        ("execution-mode", "execution_mode.py", "Interactive execution mode selector (`show`, `set`: normal vs web)."),
     ):
         sp_ext = sub.add_parser(sub_name, help=help_txt)
         sp_ext.add_argument("--repo", help="Android project root.")
         sp_ext.add_argument("--kit", help="Kit checkout to use.")
         sp_ext.add_argument("extra_args", nargs=argparse.REMAINDER, help="Arguments forwarded to engine module.")
         sp_ext.set_defaults(func=cmd_passthrough_script, _target_script=script_file)
+
+    for alias_name, sub_op, alias_help in (
+        ("web-pack", "pack", "Build an AST-scoped, secret-scrubbed Context Pack for Gemini Web and copy to Clipboard."),
+        ("web-apply", "apply", "Apply a `HARNESS_WEB_MERGE_V1` payload from Clipboard, Downloads, or `--file` safely."),
+    ):
+        sp_alias = sub.add_parser(alias_name, help=alias_help)
+        sp_alias.add_argument("--repo", help="Android project root.")
+        sp_alias.add_argument("--kit", help="Kit checkout to use.")
+        sp_alias.add_argument("extra_args", nargs=argparse.REMAINDER, help="Arguments forwarded to web_relay.py.")
+        sp_alias.set_defaults(func=cmd_passthrough_script, _target_script="web_relay.py", _prefix_args=[sub_op])
 
     sp = sub.add_parser("task-context", help="Resolve bounded read-only context for one file or a batch of up to 8 targets.")
     target = sp.add_mutually_exclusive_group(required=True)

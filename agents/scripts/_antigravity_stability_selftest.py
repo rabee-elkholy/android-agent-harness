@@ -1473,7 +1473,7 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             p = self.repo / rel
             self.assertTrue(p.is_file(), f"Missing {rel}")
             txt = p.read_text(encoding="utf-8")
-            self.assertIn('model: "gemini-4-hydrogen-medium"', txt)
+            self.assertIn('model: "gemini-4-hydrogen-', txt)
             self.assertIn("subagent: true", txt)
             self.assertIn("mainAgent: false", txt)
             self.assertTrue(_antigravity_agent_matches_policy(self.repo, rel))
@@ -1608,17 +1608,33 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         self.assertIn(pol_t0["strategy"], ("TRIVIAL_INLINE_LEAD", "DELEGATE_WORKER_SLICE"))
         _cancel("t-trivial")
 
-        # --- Case B: Standard Multi-file FEATURE -> DELEGATE_WORKER_SLICE + Guards + CLI ---
+        # --- Case B0: Small 2-file FEATURE (<4 files) -> TRIVIAL_INLINE_LEAD (avoids cold Worker spawn tax!) ---
         _draft_and_begin([
-            "--outcome", "Add home state & test",
+            "--outcome", "Small 2-file state tweak",
             "--kind", "FEATURE",
             "--planning-depth", "BOUNDED",
             "--expected-surfaces", "BUSINESS_LOGIC",
             "--expected-modules", ":app",
             "--expected-files", "app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
+        ], "t-small-inline")
+        pol_small = evaluate_delegation_policy(self.repo)
+        self.assertEqual("TRIVIAL_INLINE_LEAD", pol_small["strategy"])
+        self.assertIsNone(pol_small["recommended_subagent"])
+        self.assertEqual("Gemini 4 Hydrogen (High)", pol_small["quota_strategy"]["fast_fallback_chat_model"])
+        _cancel("t-small-inline")
+
+        # --- Case B: 4+ file FEATURE -> DELEGATE_WORKER_SLICE (starts on Hydrogen High from Wave 1) + Guards + CLI ---
+        _draft_and_begin([
+            "--outcome", "Add home state, repo, screen & test",
+            "--kind", "FEATURE",
+            "--planning-depth", "BOUNDED",
+            "--expected-surfaces", "BUSINESS_LOGIC",
+            "--expected-modules", ":app",
+            "--expected-files", "app/src/main/kotlin/com/example/HomeUiState.kt,app/src/main/kotlin/com/example/HomeRepository.kt,app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-feat")
         pol_feat = evaluate_delegation_policy(self.repo)
         self.assertEqual("DELEGATE_WORKER_SLICE", pol_feat["strategy"])
+        self.assertEqual("gemini-4-hydrogen-high", pol_feat["worker_model"])
         self.assertEqual("FULL_SLICE", pol_feat["worker_mode"])
 
         # Public CLI `harness.py delegate-plan --json` works cleanly
@@ -1836,7 +1852,8 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         )
         act_phased = workflow.resolve_next_action(self.repo, "t-phased", host="antigravity")
         self.assertIn("delegation_advisory", act_phased)
-        self.assertEqual("DELEGATE_WORKER_SLICE", act_phased["delegation_advisory"]["strategy"])
+        # 2-file phase p1-state (<4 files) executes inline on warm Lead cache!
+        self.assertEqual("TRIVIAL_INLINE_LEAD", act_phased["delegation_advisory"]["strategy"])
         _cancel("t-phased")
 
 
@@ -3203,7 +3220,24 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertFalse(res_calm["applied"])
             self.assertEqual(1, res_calm["turns_in_window"])
 
-            # 2) Native Harness Orchestrator Two-Strike Friction Auto-Escalation
+            # 2) Native Harness Orchestrator Two-Strike `Hydrogen High` Friction Auto-Escalation (4+ files; <4 files inline!)
+            plan_3file_inline = {
+                "task_id": "t-inline-3",
+                "status": "IMPLEMENTING",
+                "kind": "FEATURE",
+                "risk_tier": "T1_LOW",
+                "expected_files": [
+                    "app/src/main/java/com/example/Feature.kt",
+                    "app/src/main/java/com/example/FeatureUiState.kt",
+                    "app/src/test/java/com/example/FeatureTest.kt",
+                ],
+                "expected_surfaces": ["UI"],
+                "review_rounds": 0,
+            }
+            pol_3file = dp.evaluate_delegation_policy(repo, task_id="t-inline-3", plan=plan_3file_inline, router_action="IMPLEMENT")
+            self.assertEqual("TRIVIAL_INLINE_LEAD", pol_3file["strategy"])
+            self.assertIsNone(pol_3file["recommended_subagent"])
+
             plan_simple = {
                 "task_id": "t-orch",
                 "status": "IMPLEMENTING",
@@ -3211,6 +3245,8 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 "risk_tier": "T1_LOW",
                 "expected_files": [
                     "app/src/main/java/com/example/Feature.kt",
+                    "app/src/main/java/com/example/FeatureUiState.kt",
+                    "app/src/main/java/com/example/FeatureMapper.kt",
                     "app/src/test/java/com/example/FeatureTest.kt",
                 ],
                 "expected_surfaces": ["UI"],
@@ -3225,10 +3261,10 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertFalse(res_frontier["applied"])
             self.assertEqual("exempt_frontier_model", res_frontier["mode"])
 
-            # Wave 1 initial state -> gemini-4-hydrogen-medium, DELEGATE_WORKER_SLICE
+            # Wave 1 initial state (4 files >= 4) -> starts directly on `gemini-4-hydrogen-high`, DELEGATE_WORKER_SLICE!
             pol0 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
             self.assertEqual("DELEGATE_WORKER_SLICE", pol0["strategy"])
-            self.assertEqual("gemini-4-hydrogen-medium", pol0["worker_model"])
+            self.assertEqual("gemini-4-hydrogen-high", pol0["worker_model"])
             self.assertEqual("NONE", pol0["friction_escalation"])
 
             # Intra-wave normal TDD compile/test iterations (`is_wave_boundary=False`) MUST NOT prematurely lock out Worker mid-wave!
@@ -3239,7 +3275,7 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 )
             pol_mid_wave = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
             self.assertEqual("DELEGATE_WORKER_SLICE", pol_mid_wave["strategy"])
-            self.assertEqual("gemini-4-hydrogen-medium", pol_mid_wave["worker_model"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_mid_wave["worker_model"])
             self.assertEqual(0, pol_mid_wave["friction_strikes"])
 
             # Intra-wave runaway cap triggers cleanly at 5 consecutive intra-wave gate failures
@@ -3253,20 +3289,23 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertFalse(ok_cap)
             self.assertIn("WORKER_INTRA_WAVE_RETRY_CAP", cap_msg)
 
-            # Wave 1 completes at PostToolUse WITHOUT green unit_tests.json -> Wave Failure #1 -> Wave 2 immediately escalates to `gemini-4-hydrogen-high`!
+            # Wave 1 (`gemini-4-hydrogen-high` #1) completes WITHOUT green unit_tests.json -> Wave Failure #1 (`high_friction_strikes == 1`) -> Wave 2 corrective `Hydrogen High`!
             dp.evaluate_completed_worker_wave(repo, {
                 "wave_id": "w-simple-1",
                 "task_id": "t-orch",
                 "phase_id": "",
                 "task_status": "IMPLEMENTING",
                 "worker_mode": "FULL_SLICE",
+                "worker_model": "gemini-4-hydrogen-high",
                 "dispatched_epoch": 500.0,
             })
             pol_w2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
             self.assertEqual("DELEGATE_WORKER_SLICE", pol_w2["strategy"])
             self.assertEqual("gemini-4-hydrogen-high", pol_w2["worker_model"])
             self.assertEqual(1, pol_w2["friction_strikes"])
+            self.assertEqual(1, pol_w2["high_friction_strikes"])
             self.assertEqual("ESCALATED_WORKER_MODEL", pol_w2["friction_escalation"])
+            self.assertTrue(pol_w2["previous_wave_handoff"])
 
             # Duplicate PostToolUse on the same wave_id is strictly idempotent (stays at 1 strike!)
             dp.evaluate_completed_worker_wave(repo, {
@@ -3275,11 +3314,12 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 "phase_id": "",
                 "task_status": "IMPLEMENTING",
                 "worker_mode": "FULL_SLICE",
+                "worker_model": "gemini-4-hydrogen-high",
                 "dispatched_epoch": 500.0,
             })
             self.assertEqual(1, dp.get_worker_friction_state(repo, "t-orch", plan_simple)["wave_failures"])
 
-            # Wave 2 (`gemini-4-hydrogen-high` attempt #1) fails -> Wave 3 gives `Hydrogen High` its 2nd full attempt before Lead Takeover!
+            # Wave 2 (`gemini-4-hydrogen-high` attempt #2) ALSO fails -> `high_friction_strikes == 2` triggers Native Orchestrator Lead Takeover (`Carbon`) without wasting a 3rd wave!
             dp.evaluate_completed_worker_wave(repo, {
                 "wave_id": "w-simple-2",
                 "task_id": "t-orch",
@@ -3289,29 +3329,20 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 "worker_model": "gemini-4-hydrogen-high",
                 "dispatched_epoch": 600.0,
             })
-            pol_w3_try2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_w3_try2["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_w3_try2["worker_model"])
-            self.assertEqual(1, pol_w3_try2["high_friction_strikes"])
-            self.assertTrue(pol_w3_try2["previous_wave_handoff"])
-
-            # Wave 3 (`gemini-4-hydrogen-high` attempt #2) ALSO fails -> `high_friction_strikes == 2` triggers Native Orchestrator Lead Takeover (`Carbon`)!
-            dp.evaluate_completed_worker_wave(repo, {
-                "wave_id": "w-simple-3",
-                "task_id": "t-orch",
-                "phase_id": "",
-                "task_status": "IMPLEMENTING",
-                "worker_mode": "FULL_SLICE",
-                "worker_model": "gemini-4-hydrogen-high",
-                "dispatched_epoch": 650.0,
-            })
             pol_w4 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
             self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_w4["strategy"])
             self.assertEqual("TESTS_AND_GATES_ONLY", pol_w4["worker_mode"])
             self.assertEqual("LEAD_TAKEOVER", pol_w4["friction_escalation"])
             self.assertEqual(2, pol_w4["high_friction_strikes"])
             self.assertEqual("TWO_HYDROGEN_HIGH_FAILURES", pol_w4["takeover_trigger"])
-            self.assertEqual(["app/src/main/java/com/example/Feature.kt"], pol_w4["lead_owned_files"])
+            self.assertEqual(
+                [
+                    "app/src/main/java/com/example/Feature.kt",
+                    "app/src/main/java/com/example/FeatureUiState.kt",
+                    "app/src/main/java/com/example/FeatureMapper.kt",
+                ],
+                pol_w4["lead_owned_files"],
+            )
 
             with patch("mutation_guard.active_plan", return_value=plan_simple), \
                  patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
@@ -3329,7 +3360,7 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             )
             pol_reset = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
             self.assertEqual("DELEGATE_WORKER_SLICE", pol_reset["strategy"])
-            self.assertEqual("gemini-4-hydrogen-medium", pol_reset["worker_model"])
+            self.assertEqual("gemini-4-hydrogen-high", pol_reset["worker_model"])
             self.assertEqual(0, pol_reset["friction_strikes"])
             self.assertEqual(0, pol_reset["high_friction_strikes"])
             self.assertIsNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
@@ -3345,6 +3376,7 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 "expected_files": [
                     "app/src/main/java/com/example/SyncWorker.kt",
                     "app/src/main/java/com/example/SyncRepository.kt",
+                    "app/src/main/java/com/example/SyncContract.kt",
                     "app/src/test/java/com/example/SyncWorkerTest.kt",
                 ],
                 "expected_surfaces": ["COROUTINES", "NETWORK"],
@@ -3518,11 +3550,11 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertEqual("safe-cache-hybrid", sc_pol["default"])
             self.assertEqual(("gemini-4-hydrogen-medium", "medium"), rm.resolve_antigravity_model("safe-cache-hybrid", "bug-test-reviewer-agent", "NORMAL", complexity_tier="SIMPLE"))
             self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "bug-test-reviewer-agent", "DEEP", complexity_tier="COMPLEX"))
-            self.assertEqual(("gemini-4-argon-medium", "medium"), rm.resolve_antigravity_model("safe-cache-hybrid", "security-perf-reviewer-agent", "MAX", complexity_tier="CRITICAL"))
+            self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "security-perf-reviewer-agent", "MAX", complexity_tier="CRITICAL"))
             self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "arch-regression-reviewer-agent", "NORMAL", complexity_tier="CRITICAL"))
             with patch.object(rm, "load_policy", return_value=(sc_pol, "project")):
                 self.assertEqual("gemini-3.8-flash-medium", dp.resolve_utility_scout_model(repo, "t-orch", plan_simple))
-                self.assertEqual(("gemini-4-hydrogen-medium", "SIMPLE"), dp.resolve_utility_worker_model(repo, "t-orch", plan_simple))
+                self.assertEqual(("gemini-4-hydrogen-high", "SIMPLE"), dp.resolve_utility_worker_model(repo, "t-orch", plan_simple))
 
             # 4) Forensics & Doctor (#200026, #200029/#199971, #200037)
             c_tos = ar.classify_antigravity_quota_or_capacity_error(
@@ -3569,6 +3601,40 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 installer_dirs=[repo / "EmptyDownloads"],
             )
             self.assertFalse(sac_clean["at_risk"])
+
+            # 5) VERIFYING-stage green unit_tests resolves worker-handoff.json after Carbon takeover
+            import _gate_results as gr
+            atomic_write_json(repo / ".agents" / "state" / "active-task.json", {"task_id": "t-orch"})
+            plan_ver = dict(plan_simple, status="VERIFYING", verification_run_id="run-v1")
+            atomic_write_json(repo / ".agents" / "state" / "tasks" / "t-orch" / "plan.json", plan_ver)
+            atomic_write_json(
+                repo / ".agents" / "state" / "tasks" / "t-orch" / "current-run.json",
+                {"run_id": "run-v1", "delivery_snapshot_sha256": "a" * 64, "change_set_sha256": "b" * 64},
+            )
+            dp.record_worker_verification_outcome(
+                repo, passed=False, gate_name="unit_tests", detail="fail 1",
+                task_id="t-orch", is_wave_boundary=True, wave_id="w-v1", worker_model_used="gemini-4-hydrogen-high",
+            )
+            dp.record_worker_verification_outcome(
+                repo, passed=False, gate_name="unit_tests", detail="fail 2",
+                task_id="t-orch", is_wave_boundary=True, wave_id="w-v2", worker_model_used="gemini-4-hydrogen-high",
+            )
+            self.assertIsNotNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
+            gr.write_gate_result(
+                "unit_tests",
+                {
+                    "status": "PASS",
+                    "exit_code": 0,
+                    "delivery_snapshot_sha256": "a" * 64,
+                    "change_set_sha256": "b" * 64,
+                    "external_inputs_sha256": "c" * 64,
+                },
+                results_dir_override=repo / ".agents" / "state" / "results",
+            )
+            self.assertIsNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
+            resolved_doc = dp.get_worker_handoff_capsule(repo, "t-orch", include_resolved=True)
+            self.assertIsNotNone(resolved_doc)
+            self.assertTrue(resolved_doc["resolved"])
 
 
 if __name__ == "__main__":

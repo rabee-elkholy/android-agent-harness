@@ -421,7 +421,7 @@ def diagnose_session(
             "code": "FLASH_503_CAPACITY_BACKOFF",
             "severity": "MEDIUM",
             "evidence": f"{transcript['http_503_retries']} silent Gemini 3.8 Flash HTTP 503 capacity retry event(s) detected (#198333).",
-            "remedy": "Upgrade subagent routing to `hydrogen-argon-project` (`Gemini 4 Hydrogen`) and batch 4-8 `view_file` reads in a single turn.",
+            "remedy": "Upgrade subagent routing to `hydrogen-dynamic-project` (`Gemini 4 Hydrogen`) and batch 4-8 `view_file` reads in a single turn.",
         })
     if not findings:
         findings.append({

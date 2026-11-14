@@ -1464,7 +1464,16 @@ class HarnessDoctor:
                     if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
                         agent_errors.append(f"{u_role}: invalid frontmatter")
                     allowed_u_models = (
-                        {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-high", "gemini-4-hydrogen-xhigh", "gemini-4-argon-low", "gemini-3.8-flash-medium"}
+                        {
+                            "gemini-4-hydrogen-low",
+                            "gemini-4-hydrogen-medium",
+                            "gemini-4-hydrogen-high",
+                            "gemini-4-hydrogen-xhigh",
+                            "gemini-4-argon-low",
+                            "gemini-4-argon-medium",
+                            "gemini-4-argon-high",
+                            "gemini-3.8-flash-medium",
+                        }
                         if u_role == "harness-worker-agent"
                         else {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"}
                     )
@@ -1486,6 +1495,13 @@ class HarnessDoctor:
                     continue
                 try:
                     sp_fm = _parse_frontmatter(sp_file.read_text(encoding="utf-8"))
+                    if sp_fm.get("name") != sp_role or sp_fm.get("mainAgent") is not False or sp_fm.get("subagent") is not True:
+                        agent_errors.append(f"{sp_role}: invalid frontmatter")
+                    sp_fm_model = sp_fm.get("model")
+                    if sp_fm_model is not None:
+                        from review_models import ANTIGRAVITY_META_PRESETS, ANTIGRAVITY_MODEL_CHOICES
+                        if str(sp_fm_model) not in ANTIGRAVITY_MODEL_CHOICES or str(sp_fm_model) in ANTIGRAVITY_META_PRESETS:
+                            agent_errors.append(f"{sp_role}: invalid frontmatter model ({sp_fm_model})")
                     sp_tools_set = set(sp_fm.get("tools") or [])
                     if sp_tools_set != set(ANTIGRAVITY_SCOUT_TOOLS):
                         agent_errors.append(f"{sp_role}: tools mismatch ({sp_tools_set})")
@@ -1508,6 +1524,16 @@ class HarnessDoctor:
             except (OSError, ValueError, ImportError):
                 pass
         self.log(cat, "Reviewer Execution Policy", "PASS", f"Reviewer Model Policy = INHERIT_PARENT_BY_OMISSION; Reviewer Reasoning Override = unavailable (inherits parent); Reviewer Call Safety Cap = {cap}")
+        try:
+            from execution_mode import resolve_effective_execution_mode, verify_execution_mode_integrity
+            em_ok, em_errs = verify_execution_mode_integrity(self.repo)
+            if not em_ok:
+                self.log(cat, "Execution Mode State", "FAIL", f"Execution mode state integrity check failed: {'; '.join(em_errs)}")
+            else:
+                eff_em = resolve_effective_execution_mode(self.repo)
+                self.log(cat, "Execution Mode State", "PASS", f"Execution Mode = {eff_em['mode']} (scope={eff_em['effective_scope']}, choice={eff_em['choice']})")
+        except Exception as exc:
+            self.log(cat, "Execution Mode State", "FAIL", f"Execution mode check failed: {exc}")
 
         # 7. Trusted transcript roots resolver = healthy
         try:

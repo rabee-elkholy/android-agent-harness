@@ -32,6 +32,8 @@ CORE_SCRIPTS = (
     "session_forensics.py",
     "static_health_bridge.py",
     "symbol_edit.py",
+    "web_relay.py",
+    "execution_mode.py",
     "delivery_manifest.py",
     "evidence_store.py",
     "final_verifier.py",
@@ -81,6 +83,7 @@ CORE_WORKFLOWS = (
     "check-strings.md",
     "test-quality-audit.md",
     "pm-tracker.md",
+    "web-relay.md",
 )
 
 CORE_REFERENCES = (

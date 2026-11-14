@@ -16,7 +16,7 @@ VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
     "room_guard", "perf_guard", "fast_kt_lint", "run_device", "capture_screen", "logcat_doctor",
-    "phase_review", "review_models", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps", "android_ui",
+    "phase_review", "review_models", "execution_mode", "task_git_lineage", "verification_contract", "journey_runner", "verification_steps", "android_ui",
     "phone_e2e",
     "roborazzi_gate",
     "maestro_bridge",
@@ -139,7 +139,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[3:]
         path = tokens[1].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "zoho_sync"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "zoho_sync", "web_relay"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -298,6 +298,10 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name in {"harness_cli", "android-harness"} and args[:2] == ["review", "models"] and (len(args) == 2 or args[2] == "show"):
         return True
+    if name == "execution_mode" and (not args or args[0] == "show"):
+        return True
+    if name in {"harness_cli", "android-harness"} and args[:1] == ["execution-mode"] and (len(args) == 1 or args[1] == "show"):
+        return True
     if name == "verification_contract" and args[:1] == ["coverage"]:
         return True
     if name == "journey_runner" and args[:1] in (["list"], ["validate"]):
@@ -384,7 +388,11 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return True
     if name == "maestro_bridge" and args[:1] in (["capabilities"], ["list"]):
         return True
+    if name == "web_relay" and (args[:1] in (["pack"], ["status"]) or (args[:1] == ["apply"] and "--dry-run" in args)):
+        return True
     if name in {"harness_cli", "android-harness"}:
+        if args[:1] == ["web-pack"] or args[:2] in (["web-relay", "pack"], ["web-relay", "status"]) or ((args[:1] == ["web-apply"] or args[:2] == ["web-relay", "apply"]) and "--dry-run" in args):
+            return True
         if args[:2] in (["debug", "status"], ["debug", "logs"]):
             return True
         if args[:2] in (
@@ -411,7 +419,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if args[:1] == ["graph"]:
             return not any(arg.startswith("--out") for arg in args)
     # Only known harness parsers implement help without running arbitrary code.
-    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
+    return name in INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "web_relay", "execution_mode", "harness_cli", "android-harness"} and bool(args) and args[-1] in {"--help", "-h"}
 
 
 def _is_harness_cache_path(raw: str) -> bool:
@@ -442,6 +450,8 @@ def _is_lifecycle_command(command: str, repo: Path | str = ".") -> bool:
         name in {"harness_cli", "android-harness"} and args[:1] in (["init"], ["update"], ["uninstall"], ["repair"], ["report-issue"])
         or name == "incident_reporter"
         or name in {"harness_cli", "android-harness"} and args[:2] in (["context", "note"], ["context", "instruct"])
+        or name in {"harness_cli", "android-harness"} and (args[:1] == ["web-apply"] or args[:2] == ["web-relay", "apply"])
+        or (name == "web_relay" and args[:1] == ["apply"])
         or name == "repair"
         or name == "setup_wizard" and args[:1] == ["write"]
         or name == "git" and args[:1] == ["clone"] and len(args) >= 3
@@ -1193,6 +1203,19 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         if "--source" in model_args and model_args[model_args.index("--source") + 1:model_args.index("--source") + 2] == ["conversation"] and "--proof-reference" in model_args:
             return True, "explicit developer reviewer resume; command validates native cancellation and execution"
         return False, "reviewer resume requires explicit conversation authority"
+    if entry in {"harness_cli", "android-harness"} and model_args[:1] == ["execution-mode"]:
+        entry, model_args = "execution_mode", model_args[1:]
+    if entry == "execution_mode" and model_args[:1] == ["set"]:
+        def _em_val(flag):
+            for index, arg in enumerate(model_args):
+                if arg.startswith(flag + "="):
+                    return arg.split("=", 1)[1]
+                if arg == flag and index + 1 < len(model_args):
+                    return model_args[index + 1]
+            return ""
+        if _em_val("--source").lower() == "conversation" and _em_val("--proof-reference").strip():
+            return True, "explicit developer execution-mode decision; command validates tamper-evident state"
+        return False, "execution-mode changes require `--source conversation` and a non-empty `--proof-reference`"
     if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "models"]:
         entry, model_args = "review_models", model_args[2:]
     if entry == "review_models" and model_args[:1] == ["set"]:
@@ -1303,7 +1326,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
             return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
         if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
             return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
-        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "harness_cli", "android-harness", "compileall"}
+        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "web_relay", "harness_cli", "android-harness", "compileall"}
         if entry not in allowed_implementing_entries:
             return False, "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host file-edit tools where protected roots are enforced."
         try:

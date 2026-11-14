@@ -40,6 +40,13 @@ def run_step(title: str, script_name: str, cwd: Path | None = None, *, diagnosti
 def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     args_list = sys.argv[1:] if argv is None else argv
+    if any(arg in {"-h", "--help"} for arg in args_list):
+        print(
+            "Usage: python .agents/harness.py preflight [--repo <path>] [--task-id <id>] [--diagnostic]\n\n"
+            "Run zero-token deterministic preflight verification (string parity, Room migrations,\n"
+            "plan authority, architecture drift, exported components, KMP expect/actual, and fast lint)."
+        )
+        return 0
     diagnostic = "--diagnostic" in args_list
     repo_target = REPO
     task_id_arg = ""

@@ -445,8 +445,8 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
             "issue": "Orchestrator+Harness",
             "remedy": (
                 "Antigravity built-in Orchestrator runs its own internal Carbon<->Hydrogen planning/handoff loop, "
-                "which conflicts with Harness PreToolUse gates. Select explicit 'Gemini 4 Carbon (Medium)' (or Argon/Claude 5.5) "
-                "on the main chat and let 'hydrogen-argon-project' govern subagents."
+                "which conflicts with Harness PreToolUse gates. Select explicit 'Gemini 4 Carbon (Medium)' (or Hydrogen High/Claude 5.5) "
+                "on the main chat and let 'hydrogen-dynamic-project' govern subagents."
             ),
         }
     if (
@@ -524,8 +524,8 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
             "remedy": (
                 "Regional capacity retries (4s-24s HTTP 503 backoff) detected (#198333). "
                 "Upgrade subagents from legacy 3.8 Flash to Gemini 4 Hydrogen via: "
-                "python .agents/harness.py review models set --choice hydrogen-argon-project --source conversation "
-                "--proof-reference \"Upgrade to Hydrogen+Argon (#198333)\" and batch 4-8 parallel view_file reads per turn."
+                "python .agents/harness.py review models set --choice hydrogen-dynamic-project --source conversation "
+                "--proof-reference \"Upgrade to Pure Hydrogen (#198333)\" and batch 4-8 parallel view_file reads per turn."
             ),
         }
     return None
@@ -597,8 +597,16 @@ def inspect_zombie_subagent_and_schedule_risks(repo: Path, env: dict[str, str] |
         for child_dir in entries[:16]:
             tx = prefer_full_transcript(child_dir / ".system_generated" / "logs" / "transcript.jsonl")
             if tx is None or not tx.is_file():
-                tx = child_dir / "transcript.jsonl"
-            if not tx.is_file():
+                tx = prefer_full_transcript(child_dir / "transcript.jsonl")
+            if tx is None or not tx.is_file():
+                for fb_tx in (
+                    child_dir / ".system_generated" / "logs" / "transcript_full.jsonl",
+                    child_dir / "transcript_full.jsonl",
+                ):
+                    if fb_tx.is_file() and not fb_tx.is_symlink():
+                        tx = fb_tx
+                        break
+            if tx is None or not tx.is_file():
                 continue
             try:
                 size = tx.stat().st_size

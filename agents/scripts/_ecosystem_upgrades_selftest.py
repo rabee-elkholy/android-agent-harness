@@ -1410,7 +1410,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertIn("symbol replace-body", worker_md)
         self.assertIn("roborazzi verify", worker_md)
         self.assertIn("gemini-4-hydrogen-medium", scout_md)
-        self.assertIn("gemini-4-hydrogen-medium", worker_md)
+        self.assertIn("gemini-4-hydrogen-high", worker_md)
 
         # 2. Verify T5_CRITICAL (`MANIFEST_PERMISSION`) locks production edits to Lead Architect while allowing Flash Worker on tests
         self._draft_approve_begin(
@@ -2135,6 +2135,152 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             htxt = (kit_root / "agents/tool-adapters" / host_tpl).read_text(encoding="utf-8")
             self.assertIn("--expected-files", htxt, f"{host_tpl} missing --expected-files")
             self.assertIn("--plan-hash <hash from PLAN_HASH>", htxt, f"{host_tpl} missing --plan-hash")
+
+        # 5. Scout & Specialist Turn-1 parallel search/list_dir allowed without DISCOVERY_ANCHOR_REQUIRED while Lead still requires anchor
+        env_scout = {**os.environ, "HARNESS_REPO": str(self.repo), "HARNESS_UTILITY_AGENT": "harness-scout-agent"}
+        for call in (
+            {"name": "grep_search", "args": {"SearchPath": "app/src", "Query": "FoodViewModel"}},
+            {"name": "find_by_name", "args": {"SearchDirectory": "app/src", "Pattern": "*.kt"}},
+            {"name": "list_dir", "args": {"DirectoryPath": "app/src/main"}},
+        ):
+            pr = subprocess.run(
+                [sys.executable, str(kit_root / "agents/scripts/pre_tool_safety.py")],
+                input=json.dumps({"conversationId": "scout-turn1-par", "toolCall": call}),
+                capture_output=True, text=True, env=env_scout, check=False,
+            )
+            self.assertEqual("allow", json.loads(pr.stdout)["decision"], f"Scout Turn-1 {call['name']} choked: {pr.stdout}")
+
+        # 6. Installed `harness.py repair --help` and `harness.py preflight --help` exit 0 cleanly, and `phone-e2e.md` has no pipe table inside ask_question
+        for help_args in (["repair", "--help"], ["preflight", "--help"]):
+            hp = subprocess.run([sys.executable, str(kit_root / "agents/harness.py"), *help_args], capture_output=True, text=True, check=False)
+            self.assertEqual(0, hp.returncode, f"harness.py {help_args} failed: {hp.stderr}")
+        phone_e2e_md = (kit_root / "agents/workflows/phone-e2e.md").read_text(encoding="utf-8")
+        self.assertNotIn("with a compact table (failures first) inside `question`", phone_e2e_md)
+
+        # 7. Round-3 parity: Windows `py -3` quoted scout commands + read-only `delegate-plan`/`task status`/`diagnose-session`,
+        #    Claude Windows CRLF edit normalization + real UUID session isolation, and `Argon Medium` doc parity.
+        from delegation_policy import scout_command_allowed
+        for win_ro_cmd in (
+            r'py -3 ".agents\harness.py" graph --arch',
+            r'python.exe ".agents\harness.py" delegate-plan --json',
+            r'python ".agents\harness.py" task status --json',
+            r'python3 .agents/harness.py diagnose-session --json',
+            r'python .agents/harness.py journey list',
+        ):
+            self.assertTrue(scout_command_allowed(win_ro_cmd), f"Expected scout_command_allowed for: {win_ro_cmd}")
+
+        # Verify Claude Edit normalizes CRLF -> LF on authorized target file during IMPLEMENTING (with real UUID session_id)
+        crlf_rel = "app/src/main/java/com/demo/FoodViewModel.kt"
+        crlf_target = self.repo / crlf_rel
+        crlf_target.parent.mkdir(parents=True, exist_ok=True)
+        crlf_target.write_bytes(b"package com.demo\r\nclass FoodViewModel {\r\n    fun load() = 1\r\n}\r\n")
+        t_cc_dir = self.repo / ".agents/state/tasks/t-cc-crlf"
+        t_cc_dir.mkdir(parents=True, exist_ok=True)
+        (t_cc_dir / "plan.json").write_text(
+            json.dumps({
+                "plan_id": "p-cc-crlf",
+                "task_id": "t-cc-crlf",
+                "status": "IMPLEMENTING",
+                "expected_files": [crlf_rel],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+                "execution_nonce": "n-cc",
+                "approval": {"single_use_nonce": "n-cc"},
+            }),
+            encoding="utf-8",
+        )
+        (self.repo / ".agents/state/active-task.json").write_text(
+            json.dumps({"task_id": "t-cc-crlf", "plan_path": ".agents/state/tasks/t-cc-crlf/plan.json"}),
+            encoding="utf-8",
+        )
+        cc_res = subprocess.run(
+            [sys.executable, str(kit_root / "agents/scripts/cc_pre_tool_safety.py")],
+            input=json.dumps({
+                "session_id": "ef41a2b0-1234-5678-9abc-def012345678",
+                "tool_name": "Edit",
+                "tool_input": {
+                    "file_path": str(crlf_target),
+                    "old_string": "class FoodViewModel {\n    fun load() = 1\n}",
+                    "new_string": "class FoodViewModel {\n    fun load() = 2\n}",
+                },
+            }),
+            capture_output=True, text=True, env={**os.environ, "HARNESS_REPO": str(self.repo)}, check=False,
+        )
+        cc_out = json.loads(cc_res.stdout)["hookSpecificOutput"]
+        self.assertEqual("allow", cc_out["permissionDecision"], cc_res.stdout)
+        self.assertNotIn(b"\r\n", crlf_target.read_bytes(), "Claude Edit should normalize CRLF -> LF on multi-line LF old_string")
+        (self.repo / ".agents/state/active-task.json").unlink(missing_ok=True)
+
+        rev_models_doc = (kit_root / "docs/reviewer-models.md").read_text(encoding="utf-8")
+        self.assertIn("Shared-Quota Optimal", rev_models_doc)
+        self.assertNotIn("Hydrogen + Argon Medium", rev_models_doc)
+        self.assertNotIn("Hydrogen + Argon Low", rev_models_doc)
+
+        # 8. Round-4 parity:
+        #    (a) Failed utility subagent launch (`not found` / `503`) clears ghost `is_worker_verification_context_active`
+        #        and never triggers false `POST_SCOUT_REREAD_CAP_REACHED` or burns `SCOUT_WAVE_CAP_PER_TURN`.
+        dp.record_utility_dispatch(
+            self.repo,
+            agent_type="harness-worker-agent",
+            role_label="harness-worker-agent",
+            prompt="Implement feature in FoodViewModel.kt with unit tests and compile verification.",
+            parent_conversation_id="conv-r4-ghost",
+            task_id="t-r4-ghost",
+            worker_mode="FULL_SLICE",
+            task_status="IMPLEMENTING",
+        )
+        self.assertTrue(dp.is_worker_verification_context_active(self.repo, "t-r4-ghost"))
+        subprocess.run(
+            [sys.executable, str(kit_root / "agents/scripts/post_tool_reconcile.py")],
+            input=json.dumps({
+                "conversationId": "conv-r4-ghost",
+                "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "harness-worker-agent", "Prompt": "..."}]}},
+                "error": "subagent harness-worker-agent not found",
+            }),
+            env={**os.environ, "HARNESS_REPO": str(self.repo)},
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        self.assertFalse(dp.is_worker_verification_context_active(self.repo, "t-r4-ghost"))
+
+        dp.record_utility_dispatch(
+            self.repo,
+            agent_type="harness-scout-agent",
+            role_label="harness-scout-agent",
+            prompt="Inspect FoodViewModel and repository architecture.",
+            parent_conversation_id="conv-r4-scout503",
+            task_id="",
+            worker_mode="READ_ONLY",
+            task_status="IDLE",
+        )
+        subprocess.run(
+            [sys.executable, str(kit_root / "agents/scripts/post_tool_reconcile.py")],
+            input=json.dumps({
+                "conversationId": "conv-r4-scout503",
+                "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "harness-scout-agent", "Prompt": "..."}]}},
+                "error": "503 Service Unavailable: capacity exhausted",
+            }),
+            env={**os.environ, "HARNESS_REPO": str(self.repo)},
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        # Lead must NOT be locked into anti-reread after a 503 failed Scout wave!
+        for _ in range(5):
+            ok_s503, _, _ = dp.check_and_record_lead_post_subagent_read(
+                self.repo, "conv-r4-scout503", tool_name="view_file", args={"AbsolutePath": str(crlf_target), "StartLine": 1, "EndLine": 10}
+            )
+            self.assertTrue(ok_s503)
+
+        #    (b) Non-ASCII / Arabic untracked & modified paths are preserved via `-c core.quotepath=false`
+        ar_doc = self.repo / "docs" / "تقرير_السعرات.md"
+        ar_doc.parent.mkdir(parents=True, exist_ok=True)
+        ar_doc.write_text("# تقرير السعرات\n", encoding="utf-8")
+        wt_ar = dp._collect_worktree_progress(self.repo, [])
+        self.assertTrue(any("تقرير_السعرات.md" in item.get("file", "") for item in wt_ar), f"Arabic path dropped: {wt_ar}")
+        ar_doc.unlink(missing_ok=True)
+
+        #    (c) `hooks.json` PreToolUse matcher covers delete_file, create_file, move_file, rename_file, apply_patch, mcp_.*, schedules:.*
+        hooks_doc = json.loads((kit_root / "agents/hooks.json").read_text(encoding="utf-8"))
+        pre_m = set(hooks_doc["adb-and-git-safety"]["PreToolUse"][0]["matcher"].split("|"))
+        for expected_tok in ("delete_file", "create_file", "move_file", "rename_file", "apply_patch", "mcp_.*", "schedules:.*"):
+            self.assertIn(expected_tok, pre_m)
 
 
 if __name__ == "__main__":

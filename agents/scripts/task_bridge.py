@@ -599,7 +599,59 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
     modified_files = _collect_task_modified_files(repo, task_id, plan)
     interface_delta = _extract_interface_delta(repo, modified_files)
 
-    return {
+    web_relay_meta: dict[str, Any] = {}
+    try:
+        staged_dir = tdir / "staged-web-phases"
+        staged_ids = sorted(p.stem for p in staged_dir.glob("*.json")) if staged_dir.is_dir() else []
+        has_receipt = (tdir / "web-relay-receipt.json").is_file()
+        t_pack_ptr = tdir / "latest-web-pack.json"
+        latest_pid = ""
+        unapplied_pid = ""
+        batch_idx_meta = 1
+        batch_tot_meta = 1
+        ptr_d: dict[str, Any] = {}
+        if t_pack_ptr.is_file():
+            loaded_ptr = read_json(t_pack_ptr)
+            if isinstance(loaded_ptr, dict):
+                ptr_d = loaded_ptr
+            latest_pid = str(ptr_d.get("pack_id") or "")
+            p_rec_f = state_root(repo) / "web-relay" / "packs" / f"{latest_pid}.json"
+            if latest_pid and p_rec_f.is_file():
+                p_rec = read_json(p_rec_f)
+                batch_idx_meta = int(p_rec.get("batch_index") or 1)
+                batch_tot_meta = int(p_rec.get("total_batches") or 1)
+                if not p_rec.get("applied"):
+                    unapplied_pid = latest_pid
+        if ptr_d.get("superseded_by_normal_mode"):
+            unapplied_pid = ""
+        if staged_ids or has_receipt or latest_pid:
+            web_relay_meta = {
+                "latest_pack_id": latest_pid,
+                "unapplied_pack_id": unapplied_pid,
+                "batch_index": batch_idx_meta,
+                "total_batches": batch_tot_meta,
+                "staged_phases": staged_ids,
+                "receipt_present": has_receipt,
+            }
+    except (OSError, ValueError, ValidationError):
+        web_relay_meta = {}
+
+    exec_mode_snap: dict[str, Any] = {}
+    try:
+        from execution_mode import resolve_effective_execution_mode, task_mode_file
+        eff_m = resolve_effective_execution_mode(repo, task_id=task_id, plan=plan)
+        exec_mode_snap = {
+            "mode": eff_m.get("mode"),
+            "choice": eff_m.get("choice"),
+            "scope": eff_m.get("effective_scope"),
+        }
+        tm_f = task_mode_file(repo, task_id)
+        if tm_f.is_file():
+            exec_mode_snap["task_record"] = read_json(tm_f)
+    except Exception:
+        exec_mode_snap = {}
+
+    snap_out: dict[str, Any] = {
         "task_id": task_id,
         "status": str(plan.get("status") or ""),
         "task_kind": str(plan.get("task_kind") or "AUTO"),
@@ -617,6 +669,11 @@ def _build_task_snapshot(repo: Path, task_id: str, plan: dict[str, Any] | None) 
         "delivery_commit_sha": str(plan.get("delivery_commit_sha") or ""),
         "plan_sha256": str(plan.get("plan_sha256") or ""),
     }
+    if web_relay_meta:
+        snap_out["web_relay"] = web_relay_meta
+    if exec_mode_snap:
+        snap_out["execution_mode"] = exec_mode_snap
+    return snap_out
 
 
 def _bridge_canonical_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1114,6 +1171,16 @@ def load_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
 
     snap = dict(bridge.get("task_snapshot") or {})
     task_id = str(snap.get("task_id") or "").strip()
+    if task_id and isinstance(snap.get("execution_mode"), dict):
+        t_rec_snap = snap["execution_mode"].get("task_record")
+        if isinstance(t_rec_snap, dict) and (state_root(repo) / "tasks" / task_id).is_dir():
+            try:
+                from execution_mode import task_mode_file
+                tm_dest = task_mode_file(repo, task_id)
+                if not tm_dest.is_file():
+                    atomic_write_json(tm_dest, t_rec_snap)
+            except (ImportError, OSError, ValueError, ValidationError):
+                tm_dest = None
     mode = str(bridge.get("mode") or "FOLLOW_UP_TASK").upper()
 
     from review_sources import detected_current_host

@@ -163,7 +163,7 @@ def _git_diff(repo: Path, paths: list[str]) -> str:
     chunks: list[str] = []
     for offset in range(0, len(paths), 100):
         proc = subprocess.run(
-            ["git", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=6", "HEAD", "--", *paths[offset:offset + 100]],
+            ["git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--full-index", "--find-renames", "--ignore-cr-at-eol", "--unified=6", "HEAD", "--", *paths[offset:offset + 100]],
             cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
         )
         if proc.returncode != 0:
@@ -227,24 +227,35 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
             lines.append(f"**Associated Features**: {', '.join(sorted(features))}")
 
         lines.append("\n### Touched Components & Architecture Layers:")
-        if touched_nodes:
-            for node in sorted(touched_nodes, key=lambda n: n.name):
+        sorted_touched = sorted(touched_nodes, key=lambda n: n.name)
+        if sorted_touched:
+            for node in sorted_touched[:40]:
                 targets = [graph.nodes[t].name for t in graph.get_targets(node.id) if t in graph.nodes][:5]
                 deps_str = f" -> [{', '.join(targets)}]" if targets else ""
                 lines.append(f"- **{node.name}** (`{node.type}`) [{node.file_path or 'unknown'}]{deps_str}")
+            if len(sorted_touched) > 40:
+                lines.append(f"- *(and {len(sorted_touched) - 40} additional touched components in this large change-set)*")
         else:
             lines.append("- *(No direct architectural nodes detected for changed paths; e.g. non-code or root config)*")
 
         lines.append("\n### Blast Radius (Immediate Callers & Upstream Consumers):")
         has_sources = False
-        for node in touched_nodes:
+        caller_groups_emitted = 0
+        caller_groups_skipped = 0
+        for node in sorted_touched:
             sources = [graph.nodes[s] for s in graph.get_sources(node.id) if s in graph.nodes]
             if sources:
                 has_sources = True
-                callers = [f"`{s.name}` (`{s.type}`, {s.file_path})" for s in sources[:6]]
-                lines.append(f"- **Callers of {node.name}** ({len(sources)} total):")
-                for c in callers:
-                    lines.append(f"  * {c}")
+                if caller_groups_emitted < 30:
+                    caller_groups_emitted += 1
+                    callers = [f"`{s.name}` (`{s.type}`, {s.file_path})" for s in sources[:6]]
+                    lines.append(f"- **Callers of {node.name}** ({len(sources)} total):")
+                    for c in callers:
+                        lines.append(f"  * {c}")
+                else:
+                    caller_groups_skipped += 1
+        if caller_groups_skipped > 0:
+            lines.append(f"- *(and {caller_groups_skipped} additional upstream caller groups omitted for large-diff readability)*")
         if not has_sources:
             lines.append("- Zero external callers detected in codebase graph (isolated leaf or new component).")
 
