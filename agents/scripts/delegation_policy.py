@@ -123,8 +123,7 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "or `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) before broad search. "
             "Honor any `project_notes` and `developer_instructions` returned in that JSON (and read `.agents/project-context/{architecture,conventions,persistence,ui}.md` only when relevant — never read raw `project-facts.json`).\n"
             "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file` or `grep_search` calls IN PARALLEL in a single turn — "
-            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (if `grep_search`/`run_command` are unavailable, "
-            "read `.agents/project-context/architecture.md` first and batch `6-8` large `350-500`-line `view_file` ranges per turn). "
+            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (if `grep_search`/`run_command`/`find_by_name` are unavailable under a constrained `read_file`-only subagent, read `.agents/cache/project_graph.json` and `.agents/project-context/architecture.md` in Turn 1 to obtain exact repository file paths without guessing, then batch `6-8` `350-500`-line `read_file`/`view_file` calls in Turn 2). "
             "On large `.kt`/`.java`/`.swift` files (>350 lines), run `python .agents/harness.py symbol outline --file <path>` and "
             "`python .agents/harness.py symbol read --file <path> --symbol <Class.method>` (or batch exact line ranges in parallel). "
             "Pack reads aggressively so exploration finishes within <=2 mega-batched tool turns (6-10 parallel calls/turn, completing at Turn 2 before Gemini 4's Turn-3 +701/cache=0 drop #200026; hard hook cap: 24 total tool calls).\n"
@@ -183,6 +182,18 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
+def canonical_utility_or_reviewer_role(raw_name: str) -> str:
+    """Normalize `<role>-live` / `<role>-r1..9` emergency registration aliases back to their canonical role."""
+    s = str(raw_name or "").strip()
+    m = re.fullmatch(r"([a-z0-9-]+-agent)-(?:live|r[1-9])", s)
+    if m:
+        base = m.group(1)
+        allowed = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
+        if base in allowed:
+            return base
+    return s
+
+
 def render_utility_agent_markdown(role: str, *, model: str | None = None) -> str:
     if role not in UTILITY_AGENT_SPECS:
         raise ValueError(f"Unknown utility subagent role: {role}")
@@ -190,18 +201,19 @@ def render_utility_agent_markdown(role: str, *, model: str | None = None) -> str
     resolved_model = str(model or spec["model"]).strip()
     name_yaml = json.dumps(spec["name"], ensure_ascii=False)
     desc_yaml = json.dumps(spec["description"], ensure_ascii=False)
-    model_yaml = json.dumps(resolved_model, ensure_ascii=False)
     tools_yaml = "\n".join(f"  - {tool}" for tool in spec["tools"])
+    # Omit `model:` from YAML frontmatter so Antigravity Desktop loads utility `.agents/agents/*/agent.md`
+    # natively at workspace startup with all tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`, `run_command`).
     return (
         f"---\n"
         f"name: {name_yaml}\n"
         f"description: {desc_yaml}\n"
         f"mainAgent: false\n"
         f"subagent: true\n"
-        f"model: {model_yaml}\n"
         f"tools:\n"
         f"{tools_yaml}\n"
-        f"---\n\n"
+        f"---\n"
+        f"<!-- harness-target-model: {resolved_model} -->\n\n"
         f"{spec['system_prompt'].strip()}\n"
     )
 
@@ -1310,7 +1322,7 @@ def resolve_utility_worker_model(
 
 def _sync_single_utility_agent_model(repo: Path, role: str, target_model: str) -> bool:
     dest = repo / ".agents" / "agents" / role / "agent.md"
-    if not dest.parent.is_dir():
+    if not dest.parent.is_dir() or dest.is_file():
         return False
     try:
         from install_tool_adapters import with_managed_marker
@@ -1318,12 +1330,6 @@ def _sync_single_utility_agent_model(repo: Path, role: str, target_model: str) -
     except ImportError:
         return False
     rendered_bytes = with_managed_marker(render_utility_agent_markdown(role, model=target_model)).encode("utf-8")
-    try:
-        current_bytes = dest.read_bytes() if dest.is_file() else None
-    except OSError:
-        current_bytes = None
-    if current_bytes == rendered_bytes:
-        return False
     dest.write_bytes(rendered_bytes)
     ownership_file = repo / ".harness-setup" / "ownership-v1.json"
     rel_path = f".agents/agents/{role}/agent.md"
@@ -1368,23 +1374,11 @@ def sync_utility_agent_models(
 
 
 def sync_utility_worker_model(repo: Path, target_model: str) -> bool:
-    """Synchronize `.agents/agents/harness-worker-agent/agent.md` to `target_model` and update ownership hash."""
-    dest = repo / ".agents" / "agents" / WORKER_AGENT / "agent.md"
-    if not dest.parent.is_dir():
-        return False
-    try:
-        from install_tool_adapters import with_managed_marker
-        from _vnext_common import canonical_sha256, sha256_file
-    except ImportError:
-        return False
-    rendered_bytes = with_managed_marker(render_utility_agent_markdown(WORKER_AGENT, model=target_model)).encode("utf-8")
-    try:
-        current_bytes = dest.read_bytes() if dest.is_file() else None
-    except OSError:
-        current_bytes = None
-    if current_bytes == rendered_bytes:
-        return False
-    dest.write_bytes(rendered_bytes)
+    """Ensure `.agents/agents/harness-worker-agent/agent.md` exists without rewriting it mid-session."""
+    return _sync_single_utility_agent_model(repo, WORKER_AGENT, target_model)
+
+
+def _unused_legacy_worker_sync_tail(repo: Path, dest: Path) -> bool:
     ownership_file = repo / ".harness-setup" / "ownership-v1.json"
     if ownership_file.is_file():
         try:
@@ -1830,10 +1824,12 @@ def utility_subagent_context(repo: Path, conversation_id: str, *, bind: bool = F
         if item.get("execution_id") == cid:
             return dict(item)
 
-    # 2. Match via native Antigravity SYSTEM_MESSAGE prompt hash
+    # 2. Match via native Antigravity SYSTEM_MESSAGE prompt hash (skipping dispatch_failed waves!)
     if prompt_hash:
         for idx in range(len(entries) - 1, -1, -1):
             item = entries[idx]
+            if item.get("dispatch_failed"):
+                continue
             if item.get("execution_id") not in ("", None, cid):
                 continue
             if item.get("prompt_sha256") != prompt_hash:
@@ -1850,7 +1846,11 @@ def utility_subagent_context(repo: Path, conversation_id: str, *, bind: bool = F
                     with StateLock(state_root(repo)):
                         live = _load_utility_ledger(repo)
                         for live_item in reversed(live.get("entries") or []):
-                            if live_item.get("prompt_sha256") == prompt_hash and live_item.get("execution_id") in ("", None, cid):
+                            if (
+                                not live_item.get("dispatch_failed")
+                                and live_item.get("prompt_sha256") == prompt_hash
+                                and live_item.get("execution_id") in ("", None, cid)
+                            ):
                                 live_item["execution_id"] = cid
                                 if sender_id and not live_item.get("parent_conversation_id"):
                                     live_item["parent_conversation_id"] = sender_id
@@ -1860,6 +1860,37 @@ def utility_subagent_context(repo: Path, conversation_id: str, *, bind: bool = F
                     pass
             return matched
     return None
+
+
+def _count_transcript_tool_calls(transcript: Path | None) -> int:
+    """Count executed tool calls recorded in a subagent transcript as a reliable ground-truth floor."""
+    read_path = prefer_full_transcript(transcript) or transcript
+    if read_path is None or not read_path.is_file():
+        return 0
+    try:
+        if read_path.stat().st_size > 32 * 1024 * 1024:
+            return 0
+        total = 0
+        with read_path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                rtype = str(row.get("type") or "").upper()
+                if rtype in {"TOOL_CALL", "TOOL_USE", "FUNCTION_CALL"}:
+                    total += 1
+                else:
+                    tcs = row.get("tool_calls") or row.get("toolCalls")
+                    if isinstance(tcs, list) and tcs:
+                        total += len(tcs)
+        return total
+    except OSError:
+        return 0
 
 
 def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str]:
@@ -1883,10 +1914,17 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
         from antigravity_runtime import candidate_brain_roots
         brain_dirs = [b for b in candidate_brain_roots() if b.is_dir()]
 
+    already_claimed_cids = {
+        str(e.get("execution_id") or "")
+        for e in entries
+        if e.get("execution_id")
+    }
     changed = False
-    if any(not e.get("execution_id") for e in entries):
+    if any(not e.get("execution_id") and not e.get("dispatch_failed") for e in entries):
         for brain in brain_dirs:
             for child_cid, _child_dir in iter_recent_brain_conversations(brain, limit=24):
+                if child_cid in already_claimed_cids:
+                    continue
                 tx = resolve_transcript(child_cid)
                 if tx is None:
                     continue
@@ -1894,35 +1932,50 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                 if has_user or not prompt_hash:
                     continue
                 for item in reversed(entries):
-                    if item.get("execution_id") or item.get("prompt_sha256") != prompt_hash:
+                    if item.get("dispatch_failed") or item.get("execution_id") or item.get("prompt_sha256") != prompt_hash:
                         continue
                     parent_expected = str(item.get("parent_conversation_id") or "")
                     if parent_expected and sender_id and parent_expected != sender_id:
                         continue
                     item["execution_id"] = child_cid
+                    already_claimed_cids.add(child_cid)
+                    tx_calls = _count_transcript_tool_calls(tx)
+                    if tx_calls > int(item.get("tool_calls_used") or 0):
+                        item["tool_calls_used"] = tx_calls
                     bound.append(child_cid)
                     changed = True
                     break
 
     newly_completed_workers: list[dict[str, Any]] = []
-    # Mark the latest wave dispatched by parent_cid (or bound child when parent_cid is blank) as completed now that PostToolUse returned
+    # Mark the latest non-failed wave dispatched by parent_cid (or bound child when parent_cid is blank) as completed
     target_wave_id = ""
     if parent_cid:
         for item in reversed(entries):
-            if str(item.get("parent_conversation_id") or "") == parent_cid:
+            if not item.get("dispatch_failed") and str(item.get("parent_conversation_id") or "") == parent_cid:
                 target_wave_id = str(item.get("wave_id") or "")
                 break
     elif bound:
         bound_set = set(bound)
         for item in reversed(entries):
-            if str(item.get("execution_id") or "") in bound_set:
+            if not item.get("dispatch_failed") and str(item.get("execution_id") or "") in bound_set:
                 target_wave_id = str(item.get("wave_id") or "")
                 break
     if target_wave_id:
         now_ts = time.time()
         cur_turns = _count_parent_user_turns(parent_cid) if parent_cid else 0
         for item in entries:
-            if str(item.get("wave_id") or "") == target_wave_id and (not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid):
+            if (
+                not item.get("dispatch_failed")
+                and str(item.get("wave_id") or "") == target_wave_id
+                and (not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid)
+            ):
+                cid_bound = str(item.get("execution_id") or "")
+                if cid_bound:
+                    tx_b = resolve_transcript(cid_bound)
+                    tx_calls = _count_transcript_tool_calls(tx_b)
+                    if tx_calls > int(item.get("tool_calls_used") or 0):
+                        item["tool_calls_used"] = tx_calls
+                        changed = True
                 if not item.get("wave_completed"):
                     item["wave_completed"] = True
                     item["completed_at_epoch"] = now_ts
@@ -1942,10 +1995,16 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     for e in entries
                 }
                 for le in live_entries:
+                    if le.get("dispatch_failed"):
+                        continue
                     src = bound_map.get((le.get("wave_id"), le.get("prompt_sha256")))
                     if src:
                         if src.get("execution_id") and not le.get("execution_id"):
                             le["execution_id"] = src["execution_id"]
+                        le["tool_calls_used"] = max(
+                            int(le.get("tool_calls_used") or 0),
+                            int(src.get("tool_calls_used") or 0),
+                        )
                         if src.get("wave_completed") and not le.get("wave_completed"):
                             le["wave_completed"] = True
                             le["completed_at_epoch"] = src.get("completed_at_epoch", time.time())
@@ -2146,6 +2205,16 @@ def check_and_record_subagent_step_budget(
             store[bucket_key] = rec
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_json(path, store)
+            if kind_up in {"SCOUT", "WORKER", "SPECIALIST"}:
+                u_ledger = _load_utility_ledger(repo)
+                u_changed = False
+                for u_ent in reversed(u_ledger.get("entries") or []):
+                    if not u_ent.get("dispatch_failed") and str(u_ent.get("execution_id") or "") == exec_key:
+                        u_ent["tool_calls_used"] = max(int(u_ent.get("tool_calls_used") or 0) + 1, int(rec["count"]))
+                        u_changed = True
+                        break
+                if u_changed:
+                    _save_utility_ledger(repo, u_ledger)
     except (OSError, ValidationError):
         return (True, "", "")
     return (True, "", "")
@@ -3215,16 +3284,16 @@ def validate_utility_dispatch(
     one entry in `raw_subs` targets `CORE_UTILITY_AGENTS`.
     """
     types_in_call = [
-        str(s.get("TypeName") or s.get("typeName") or "").strip()
+        canonical_utility_or_reviewer_role(str(s.get("TypeName") or s.get("typeName") or "").strip())
         for s in raw_subs if isinstance(s, dict)
     ]
     worker_items = [
         s for s in raw_subs
-        if isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() == WORKER_AGENT
+        if isinstance(s, dict) and canonical_utility_or_reviewer_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) == WORKER_AGENT
     ]
     scout_items = [
         s for s in raw_subs
-        if isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() == SCOUT_AGENT
+        if isinstance(s, dict) and canonical_utility_or_reviewer_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) == SCOUT_AGENT
     ]
 
     is_remote_m, rem_sigs = detect_antigravity_remote_mode()
@@ -3251,16 +3320,8 @@ def validate_utility_dispatch(
     expected_s_model = resolve_utility_scout_model(repo, plan=plan) if scout_items else ""
     if scout_items:
         sync_utility_scout_model(repo, expected_s_model)
-        if not expected_s_model.startswith("gemini-3.8-flash") and (repo / ".agents" / "agents").is_dir():
-            from review_models import _antigravity_frontmatter_model
-            pinned_s = _antigravity_frontmatter_model(repo, SCOUT_AGENT)
-            if not pinned_s or pinned_s == "inherit":
-                return (
-                    False,
-                    f"SUBAGENT_FRONTMATTER_UNPINNED_GUARD: `.agents/agents/{SCOUT_AGENT}/agent.md` is missing an explicit `model:` pin (`{expected_s_model}`), "
-                    "which would inherit the parent Carbon/Argon chat model and drain Frontier quota. Run `python .agents/harness.py repair` first.",
-                    "SUBAGENT_FRONTMATTER_UNPINNED_GUARD",
-                )
+        if (repo / ".agents" / "agents").is_dir() and not (repo / ".agents" / "agents" / SCOUT_AGENT / "agent.md").is_file():
+            sync_utility_scout_model(repo, expected_s_model)
         for item in scout_items:
             raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
             if expected_s_model.startswith("gemini-3.8-flash"):
@@ -3285,16 +3346,8 @@ def validate_utility_dispatch(
         active_w_mode = str(pre_policy_decision.get("worker_mode") or "FULL_SLICE")
         expected_w_model, _ = resolve_utility_worker_model(repo, plan=plan, worker_mode=active_w_mode)
         sync_utility_worker_model(repo, expected_w_model)
-        if not expected_w_model.startswith("gemini-3.8-flash") and (repo / ".agents" / "agents").is_dir():
-            from review_models import _antigravity_frontmatter_model
-            pinned_w = _antigravity_frontmatter_model(repo, WORKER_AGENT)
-            if not pinned_w or pinned_w == "inherit":
-                return (
-                    False,
-                    f"SUBAGENT_FRONTMATTER_UNPINNED_GUARD: `.agents/agents/{WORKER_AGENT}/agent.md` is missing an explicit `model:` pin (`{expected_w_model}`), "
-                    "which would inherit the parent Carbon/Argon chat model and drain Frontier quota. Run `python .agents/harness.py repair` first.",
-                    "SUBAGENT_FRONTMATTER_UNPINNED_GUARD",
-                )
+        if (repo / ".agents" / "agents").is_dir() and not (repo / ".agents" / "agents" / WORKER_AGENT / "agent.md").is_file():
+            sync_utility_worker_model(repo, expected_w_model)
         for item in worker_items:
             raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
             if expected_w_model == ADAPTIVE_WORKER_ARGON_MODEL:

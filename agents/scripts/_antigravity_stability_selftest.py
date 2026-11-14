@@ -1473,7 +1473,8 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             p = self.repo / rel
             self.assertTrue(p.is_file(), f"Missing {rel}")
             txt = p.read_text(encoding="utf-8")
-            self.assertIn('model: "gemini-4-hydrogen-', txt)
+            self.assertNotIn("\nmodel:", txt)
+            self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-", txt)
             self.assertIn("subagent: true", txt)
             self.assertIn("mainAgent: false", txt)
             self.assertTrue(_antigravity_agent_matches_policy(self.repo, rel))
@@ -2514,7 +2515,7 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
         dec_simple = dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
         self.assertEqual("SIMPLE", dec_simple["complexity_tier"])
         self.assertEqual("gemini-3.8-flash-medium", dec_simple["worker_model"])
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
 
         # 3b. COMPLEX multi-module slice -> Worker upgrades to gemini-4-argon-low, Scout stays Flash, Doctor & lifecycle pass!
         c_plan = {
@@ -2534,8 +2535,8 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
         self.assertEqual("COMPLEX", dec_complex["complexity_tier"])
         self.assertEqual("gemini-4-argon-low", dec_complex["worker_model"])
         self.assertIsNone(dec_complex["worker_invoke_model_arg"])
-        self.assertIn('model: "gemini-4-argon-low"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
         self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-worker-agent/agent.md"))
         doc_c = HarnessDoctor(self.repo, run_selftest=False)
         doc_c.check_antigravity_installation()
@@ -2559,9 +2560,9 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
         self.assertFalse(bad_w)
         self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_w)
 
-        # Switching back to SIMPLE restores harness-worker-agent/agent.md to gemini-3.8-flash-medium
+        # Switching back to SIMPLE keeps harness-worker-agent/agent.md stable and model-less on disk
         dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
 
     def test_rev_upg_3_4_5_6_inlined_package_pure_tools_turn_cap_and_gate_evidence(self):
         import argparse
@@ -3478,7 +3479,8 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertIn("SyncWorkerTest.kt:44", w_dir)
 
             w_agent_md = (repo / ".agents" / "agents" / dp.WORKER_AGENT / "agent.md").read_text(encoding="utf-8")
-            self.assertIn('model: "gemini-4-hydrogen-high"', w_agent_md)
+            self.assertNotIn("\nmodel:", w_agent_md)
+            self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-", w_agent_md)
             with patch("mutation_guard.active_plan", return_value=plan_complex), \
                  patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
                 ok_wc, _, code_wc = dp.worker_write_allowed(
@@ -3789,7 +3791,7 @@ class TestV139AuditFixes(unittest.TestCase):
             tst.parent.mkdir(parents=True)
             tst.write_text("package com.example\nclass CalcTest\n", encoding="utf-8")
             (repo / ".agents/state").mkdir(parents=True)
-            (repo / ".agents/VERSION").write_text("1.3.9\n", encoding="utf-8")
+            (repo / ".agents/VERSION").write_text("1.3.10\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
             subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True, capture_output=True)
 
@@ -3835,10 +3837,10 @@ class TestV139AuditFixes(unittest.TestCase):
             cset = crun["change_set_sha256"]
             run_id = crun["run_id"]
             for g_name, prod in (("preflight", "preflight_check"), ("unit_tests", "run_tests_gate")):
-                store.write(snapshot=snap, run_id=run_id, name=g_name, producer=prod, harness_version="1.3.9", change_set=cset, status="PASS", evidence={"passed": True})
+                store.write(snapshot=snap, run_id=run_id, name=g_name, producer=prod, harness_version="1.3.10", change_set=cset, status="PASS", evidence={"passed": True})
             store.write(
                 snapshot=snap, run_id=run_id, name="reviews", producer="review_orchestrator",
-                harness_version="1.3.9", change_set=cset, status="PASS",
+                harness_version="1.3.10", change_set=cset, status="PASS",
                 evidence={
                     "review_protocol_version": 2,
                     "reviewers": pol["reviewers"],
@@ -4169,6 +4171,206 @@ class TestV139AuditFixes(unittest.TestCase):
             pv_data = json.loads(pv_json_p.stdout)
             self.assertEqual(2, pv_data.get("review_protocol_version"))
             self.assertTrue(str(pv_data.get("run_id", "")).startswith("run-"))
+
+
+
+class TestV1310DesktopDrillFixes(unittest.TestCase):
+    """Regression coverage for the 4 live Windows Antigravity Desktop Rashaqa drill findings (v1.3.10)."""
+
+    def test_v1310_01_hydrogen_parent_tier_inheritance_passes_without_false_mismatch(self):
+        import review_models as rm
+
+        # Parent Desktop session running `gemini-4-hydrogen-high` while SIMPLE task resolved `gemini-4-hydrogen-medium`
+        self.assertTrue(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-4-hydrogen-high",
+                ["gemini-4-hydrogen"],
+            )
+        )
+        # Parent Desktop session running `gemini-4-hydrogen-medium` on COMPLEX `gemini-4-hydrogen-high`
+        self.assertTrue(
+            rm._matches_antigravity_native_model(
+                "gemini-4-hydrogen-high",
+                "high",
+                "gemini-4-hydrogen-medium",
+                ["gemini-4-hydrogen"],
+            )
+        )
+        # Cross-family leaks (`Carbon`, `Argon`, `3.8 Flash`) must STILL fail closed!
+        for bad_family in ("gemini-4-carbon-medium", "gemini-4-argon-low", "gemini-3.8-flash-medium"):
+            self.assertFalse(
+                rm._matches_antigravity_native_model(
+                    "gemini-4-hydrogen-medium",
+                    "medium",
+                    bad_family,
+                    [bad_family],
+                ),
+                bad_family,
+            )
+
+    def test_v1310_02_modelless_agent_md_no_live_rewrite_kill_all_guard_and_live_alias_escape(self):
+        import delegation_policy as dp
+        import install_tool_adapters as ita
+        import pre_tool_safety as pts
+        import review_models as rm
+        from _vnext_common import atomic_write_json, read_json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "drill-repo"
+            repo.mkdir()
+            kit_root = Path(__file__).resolve().parents[2]
+            shutil.copytree(kit_root / "agents" / "subagents", repo / ".agents" / "subagents")
+            ita.generate_antigravity_agents(repo, dry_run=False)
+
+            # 1) All 8 `.agents/agents/*/agent.md` files omit `model:` from YAML frontmatter so Desktop auto-loads them
+            for role_dir in sorted((repo / ".agents" / "agents").iterdir()):
+                md_txt = (role_dir / "agent.md").read_text(encoding="utf-8")
+                fm_part = md_txt.split("---", 2)[1]
+                self.assertNotIn("model:", fm_part, f"{role_dir.name} still has model: in YAML frontmatter")
+
+            # 2) `sync_antigravity_agent_models` never mutates existing `agent.md` mid-session
+            bug_md_path = repo / ".agents/agents/bug-test-reviewer-agent/agent.md"
+            before_bytes = bug_md_path.read_bytes()
+            updated = rm.sync_antigravity_agent_models(
+                repo,
+                {"bug-test-reviewer-agent": {"resolved_model": "gemini-4-hydrogen-medium", "agent_frontmatter_model": "gemini-4-hydrogen-medium"}},
+            )
+            self.assertEqual([], updated)
+            self.assertEqual(before_bytes, bug_md_path.read_bytes())
+
+            # 3) `_has_unfinalized_active_review_wave` blocks `kill_all` while VERIFYING review wave is unfinalized, then allows after reviews.json
+            tdir = repo / ".agents/state/tasks/T-DRILL"
+            (tdir / "review-execution/run-d1").mkdir(parents=True)
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": "T-DRILL"})
+            atomic_write_json(tdir / "plan.json", {"task_id": "T-DRILL", "status": "VERIFYING"})
+            atomic_write_json(tdir / "current-run.json", {
+                "task_id": "T-DRILL",
+                "run_id": "run-d1",
+                "delivery_snapshot_sha256": "s" * 64,
+            })
+            atomic_write_json(tdir / "review-execution/run-d1/ledger.json", {
+                "reviewers": {"bug-test-reviewer-agent": {"state": "ENV_BLOCKED"}},
+            })
+            blocked_k, detail_k = pts._has_unfinalized_active_review_wave(repo)
+            self.assertTrue(blocked_k)
+            self.assertIn("T-DRILL", detail_k)
+
+            rev_done = repo / ".agents/state/runs" / ("s" * 64) / "run-d1" / "reviews.json"
+            rev_done.parent.mkdir(parents=True)
+            atomic_write_json(rev_done, {"status": "PASS"})
+            blocked_after, _ = pts._has_unfinalized_active_review_wave(repo)
+            self.assertFalse(blocked_after)
+
+            # 4) Emergency `<role>-live` alias passes `_validate_define_subagent` (read-only enforced!)
+            with unittest.mock.patch.object(pts, "REPO", repo):
+                spec_bug = read_json(repo / ".agents/subagents/bug-test-reviewer-agent.json")
+                ok_live, _, code_live = pts._validate_define_subagent(
+                    {
+                        "Name": "bug-test-reviewer-agent-live",
+                        "SystemPrompt": spec_bug["system_prompt"],
+                        "EnableWriteTools": False,
+                        "EnableSubagentTools": False,
+                    },
+                    "define_subagent",
+                )
+                self.assertTrue(ok_live)
+                self.assertEqual("DEFINE_SUBAGENT_ALLOWED", code_live)
+
+                bad_live_w, _, code_bad_w = pts._validate_define_subagent(
+                    {
+                        "Name": "bug-test-reviewer-agent-live",
+                        "SystemPrompt": spec_bug["system_prompt"],
+                        "EnableWriteTools": True,
+                        "EnableSubagentTools": False,
+                    },
+                    "define_subagent",
+                )
+                self.assertFalse(bad_live_w)
+                self.assertEqual("READ_ONLY_SUBAGENT_WRITE_FORBIDDEN", code_bad_w)
+
+    def test_v1310_03_utility_ledger_skips_dispatch_failed_and_tracks_tool_calls_and_test_only_draft(self):
+        import delegation_policy as dp
+        from _workflow.engine import is_architecture_neutral_scope
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "app-repo"
+            ag_root = root / "ag-data"
+            (repo / ".agents/state").mkdir(parents=True)
+            parent_cid = "991ae0ad-8eea-4009-9111-5ecc043092ec"
+            scout_cid = "ec44e7c5-f055-4681-83b8-49aaa74bd7ad"
+            prompt = "Find FoodPlanViewModelTest conventions across :app"
+
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(ag_root)}, clear=False):
+                # Wave 1: failed initial invoke_subagent before define_subagent
+                dp.record_utility_dispatch(
+                    repo,
+                    agent_type=dp.SCOUT_AGENT,
+                    role_label=dp.SCOUT_AGENT,
+                    prompt=prompt,
+                    parent_conversation_id=parent_cid,
+                    wave_id="wave-failed-1",
+                )
+                dp.mark_utility_wave_completed(repo, parent_cid, wave_id="wave-failed-1", dispatch_failed=True)
+
+                # Wave 2: retried with identical prompt -> succeeds in `ec44e7c5` and runs 3 read_file calls
+                dp.record_utility_dispatch(
+                    repo,
+                    agent_type=dp.SCOUT_AGENT,
+                    role_label=dp.SCOUT_AGENT,
+                    prompt=prompt,
+                    parent_conversation_id=parent_cid,
+                    wave_id="wave-ok-2",
+                )
+                tx = ag_root / "brain" / scout_cid / ".system_generated" / "logs" / "transcript.jsonl"
+                tx.parent.mkdir(parents=True, exist_ok=True)
+                rows = [
+                    {
+                        "source": "SYSTEM",
+                        "type": "SYSTEM_MESSAGE",
+                        "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={prompt}\n</SYSTEM_MESSAGE>",
+                    },
+                    {"source": "MODEL", "type": "TOOL_CALL", "toolName": "read_file"},
+                    {"source": "MODEL", "type": "TOOL_CALL", "toolName": "read_file"},
+                ]
+                tx.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+                # Live step budget call increments tool_calls_used once bound, and post-tool syncs transcript floor
+                ctx = dp.utility_subagent_context(repo, scout_cid, bind=True)
+                self.assertIsNotNone(ctx)
+                self.assertEqual("wave-ok-2", ctx["wave_id"])
+                dp.check_and_record_subagent_step_budget(repo, scout_cid, kind="SCOUT", tool_name="read_file", role=dp.SCOUT_AGENT)
+                dp.bind_utility_from_post_tool(repo, {"conversationId": parent_cid})
+
+                entries = dp._load_utility_ledger(repo)["entries"]
+                w1 = next(e for e in entries if e["wave_id"] == "wave-failed-1")
+                w2 = next(e for e in entries if e["wave_id"] == "wave-ok-2")
+                self.assertEqual("", w1["execution_id"])
+                self.assertTrue(w1.get("dispatch_failed"))
+                self.assertEqual(scout_cid, w2["execution_id"])
+                self.assertGreaterEqual(int(w2["tool_calls_used"]), 2)
+
+            # Pure TEST_ONLY standalone test path is architecture-neutral (no ARCHITECTURE_DECISION_REQUIRED)
+            self.assertTrue(
+                is_architecture_neutral_scope(
+                    scope_files=["app/src/test/java/com/madarsoft/fitness/VerificationDrillTest.kt"],
+                    surfaces={"TEST_ONLY"},
+                    arch_intent="EXISTING_CHANGE",
+                )
+            )
+            # Mixed production + test path is NOT architecture-neutral
+            self.assertFalse(
+                is_architecture_neutral_scope(
+                    scope_files=[
+                        "app/src/main/java/com/madarsoft/fitness/FoodViewModel.kt",
+                        "app/src/test/java/com/madarsoft/fitness/VerificationDrillTest.kt",
+                    ],
+                    surfaces={"BUSINESS_LOGIC", "TEST_ONLY"},
+                    arch_intent="EXISTING_CHANGE",
+                )
+            )
 
 
 if __name__ == "__main__":

@@ -1466,22 +1466,23 @@ class HarnessDoctor:
                     u_fm = _parse_frontmatter(u_txt)
                     if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
                         agent_errors.append(f"{u_role}: invalid frontmatter")
-                    allowed_u_models = (
-                        {
-                            "gemini-4-hydrogen-low",
-                            "gemini-4-hydrogen-medium",
-                            "gemini-4-hydrogen-high",
-                            "gemini-4-hydrogen-xhigh",
-                            "gemini-4-argon-low",
-                            "gemini-4-argon-medium",
-                            "gemini-4-argon-high",
-                            "gemini-3.8-flash-medium",
-                        }
-                        if u_role == "harness-worker-agent"
-                        else {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"}
-                    )
-                    if str(u_fm.get("model") or "") not in allowed_u_models:
-                        agent_errors.append(f"{u_role}: unexpected model ({u_fm.get('model')})")
+                    if u_fm.get("model") is not None:
+                        allowed_u_models = (
+                            {
+                                "gemini-4-hydrogen-low",
+                                "gemini-4-hydrogen-medium",
+                                "gemini-4-hydrogen-high",
+                                "gemini-4-hydrogen-xhigh",
+                                "gemini-4-argon-low",
+                                "gemini-4-argon-medium",
+                                "gemini-4-argon-high",
+                                "gemini-3.8-flash-medium",
+                            }
+                            if u_role == "harness-worker-agent"
+                            else {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"}
+                        )
+                        if str(u_fm.get("model") or "") not in allowed_u_models:
+                            agent_errors.append(f"{u_role}: unexpected model ({u_fm.get('model')})")
                     if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
                         agent_errors.append(f"{u_role}: tools mismatch")
                     unmapped_ag_tools = set(u_fm.get("tools") or []) & {"read_file", "write_file", "edit_file", "schedule"}

@@ -1223,7 +1223,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             emit("deny", "Each entry in Subagents array must be an object.", tool=tool_name, reason_code="SUBAGENT_NOT_OBJECT")
             return
 
-        r_role_hint = str(item.get("Role") or item.get("TypeName") or "").strip()
+        r_role_hint = _canonical_subagent_role(str(item.get("Role") or item.get("TypeName") or "").strip())
         sel_info = phase_run_models.get(r_role_hint) if isinstance(phase_run_models, dict) else None
         resolved_m = str((sel_info or {}).get("resolved_model") or "")
         allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
@@ -1423,6 +1423,17 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
     elif name == "manage_subagents":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
         if act in {"kill_all", "kill"}:
+            unfinalized_rev, rev_detail = _has_unfinalized_active_review_wave(REPO)
+            if unfinalized_rev:
+                emit(
+                    "deny",
+                    f"ACTIVE_REVIEW_WAVE_KILL_ALL_BLOCKED: Do NOT call `manage_subagents(Action='{act}')` while {rev_detail} is still unfinalized. "
+                    "Killing subagents before `review complete-all` / `phase-review complete-all` corrupts Antigravity Desktop's subagent registry "
+                    "(`not found` + `already exists` deadlock). Run `review complete-all` (or `task heal` if `REVIEW_ENV_BLOCKED`) first, and reap subagents only AFTER reviews finalize.",
+                    tool=name,
+                    reason_code="ACTIVE_REVIEW_WAVE_KILL_ALL_BLOCKED",
+                )
+                return
             emit(
                 "allow",
                 "ZOMBIE_SUBAGENT_REAP_ALLOWED (#199713): Reaping finished/idle subagents via manage_subagents(kill_all/kill) is permitted across all task states to prevent 6-23h zombie sessions and 255m reactive wakeups.",
@@ -1492,7 +1503,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
     if name == "invoke_subagent" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         raw_subs, _ = _normalize_subagent_items(args)
         if raw_subs and any(
-            isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() in CORE_UTILITY_AGENTS
+            isinstance(s, dict) and _canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in CORE_UTILITY_AGENTS
             for s in raw_subs
         ):
             from delegation_policy import validate_utility_dispatch
@@ -1624,7 +1635,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 return
             norm_subs, _ = _normalize_subagent_items(args)
             if name == "invoke_subagent" and norm_subs and any(
-                isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip() in CORE_UTILITY_AGENTS
+                isinstance(s, dict) and _canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in CORE_UTILITY_AGENTS
                 for s in norm_subs
             ):
                 from delegation_policy import validate_utility_dispatch
@@ -1811,7 +1822,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
                 return
 
-            r_role_hint = str(item.get("Role") or item.get("TypeName") or item.get("role") or item.get("typeName") or "").strip()
+            r_role_hint = _canonical_subagent_role(str(item.get("Role") or item.get("TypeName") or item.get("role") or item.get("typeName") or "").strip())
             sel_info = final_run_models.get(r_role_hint) if isinstance(final_run_models, dict) else None
             resolved_m = str((sel_info or {}).get("resolved_model") or "")
             allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
@@ -1873,7 +1884,9 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     emit("deny", "Subagent entry TypeName is empty.", tool=name, reason_code="MISSING_SUBAGENT_TYPENAME")
                     return
 
-                if r_type != r_role:
+                canon_type = _canonical_subagent_role(r_type)
+                canon_role = _canonical_subagent_role(r_role)
+                if canon_type != canon_role:
                     emit(
                         "deny",
                         f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
@@ -1882,7 +1895,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     )
                     return
 
-                matched = r_role
+                matched = canon_role
                 if matched not in dispatchable:
                     emit(
                         "deny",
@@ -2689,13 +2702,67 @@ def _deny_engine_read(tool: str, command: str = "") -> None:
          tool=tool, command=command, reason_code="HARNESS_IMPLEMENTATION_BOUNDARY")
 
 
+def _canonical_subagent_role(raw_name: str) -> str:
+    s = str(raw_name or "").strip()
+    m = re.fullmatch(r"([a-z0-9-]+-agent)-(?:live|r[1-9])", s)
+    if m:
+        base = m.group(1)
+        allowed = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
+        if base in allowed:
+            return base
+    return s
+
+
+def _has_unfinalized_active_review_wave(repo: Path) -> tuple[bool, str]:
+    """Return (True, detail) if an active VERIFYING or PHASE_REVIEWING run has unfinalized reviewers."""
+    try:
+        state_dir = repo / ".agents/state" if (repo / ".agents").is_dir() else repo / "agents/state"
+        active_f = state_dir / "active-task.json"
+        if not active_f.is_file():
+            return (False, "")
+        tid = str(read_json(active_f).get("task_id") or "").strip()
+        if not tid:
+            return (False, "")
+        tdir = state_dir / "tasks" / tid
+        plan_f = tdir / "plan.json"
+        if not plan_f.is_file():
+            return (False, "")
+        plan = read_json(plan_f)
+        status = str(plan.get("status") or "")
+        if status == "VERIFYING":
+            crun_f = tdir / "current-run.json"
+            if crun_f.is_file():
+                crun = read_json(crun_f)
+                run_id = str(crun.get("run_id") or "")
+                snap = str(crun.get("delivery_snapshot_sha256") or "")
+                rev_ev = state_dir / "runs" / snap / run_id / "reviews.json"
+                if run_id and not rev_ev.is_file():
+                    ledger_f = tdir / "review-execution" / run_id / "ledger.json"
+                    if ledger_f.is_file():
+                        revs = (read_json(ledger_f).get("reviewers") or {})
+                        if any(isinstance(v, dict) and v.get("state") in {"DISPATCHED", "ENV_BLOCKED", "PROTOCOL_RETRY_REQUIRED"} for v in revs.values()):
+                            return (True, f"task `{tid}` final review `{run_id}`")
+        elif status == "IMPLEMENTING":
+            ps_f = tdir / "phase-state.json"
+            if ps_f.is_file():
+                ps = read_json(ps_f)
+                cur_p = str(ps.get("current_phase_id") or "")
+                p_map = ps.get("phases") or {}
+                if cur_p and isinstance(p_map.get(cur_p), dict) and p_map[cur_p].get("substate") == "PHASE_REVIEWING":
+                    return (True, f"task `{tid}` phase `{cur_p}` review")
+    except Exception:
+        return (False, "")
+    return (False, "")
+
+
 def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, str]:
-    sub_name = str(args.get("Name") or args.get("name") or "").strip()
+    raw_sub_name = str(args.get("Name") or args.get("name") or "").strip()
+    sub_name = _canonical_subagent_role(raw_sub_name)
     allowed_all = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
     if sub_name not in allowed_all:
         return (
             False,
-            f"Unsupported custom subagent definition '{sub_name}'. Only harness-governed subagents {sorted(allowed_all)} may be registered.",
+            f"Unsupported custom subagent definition '{raw_sub_name}'. Only harness-governed subagents {sorted(allowed_all)} (or `<role>-live` recovery aliases) may be registered.",
             "UNSUPPORTED_SUBAGENT_DEFINITION",
         )
     if bool(
@@ -2709,7 +2776,7 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
         or args.get("enableWriteTools")
         or args.get("enable_write_tools")
     ):
-        return (False, f"Subagent `{sub_name}` is strictly read-only (`EnableWriteTools` must be False).", "READ_ONLY_SUBAGENT_WRITE_FORBIDDEN")
+        return (False, f"Subagent `{raw_sub_name}` is strictly read-only (`EnableWriteTools` must be False).", "READ_ONLY_SUBAGENT_WRITE_FORBIDDEN")
     sys_prompt = str(args.get("SystemPrompt") or args.get("systemPrompt") or args.get("system_prompt") or "")
     json_spec = (REPO / ".agents" / "subagents" / f"{sub_name}.json")
     if not json_spec.is_file():

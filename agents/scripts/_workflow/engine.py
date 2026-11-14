@@ -668,6 +668,10 @@ def is_architecture_neutral_scope(
         return False
     if target_scope or target_family:
         return False
+    from _modules import is_kmp_or_android_test_path
+    if surfaces and (surfaces <= (NEUTRAL_ARCHITECTURE_SURFACES | {"TEST_ONLY"})):
+        if all(is_architecture_neutral_path(p) or is_kmp_or_android_test_path(p) for p in scope_files):
+            return True
     if surfaces and not (surfaces <= NEUTRAL_ARCHITECTURE_SURFACES):
         return False
     return all(is_architecture_neutral_path(p) for p in scope_files)

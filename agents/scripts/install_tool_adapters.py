@@ -404,17 +404,16 @@ def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
     name_yaml = json.dumps(name, ensure_ascii=False)
     description_yaml = json.dumps(description, ensure_ascii=False)
     tools_block = "\n".join(f"  - {t}" for t in ANTIGRAVITY_REVIEWER_TOOLS)
-    model_line = ""
-    if model and str(model).strip() and str(model).strip().lower() != "inherit":
-        model_line = f"model: {json.dumps(str(model).strip(), ensure_ascii=False)}\n"
-
+    # Omit `model:` from `.agents/agents/*/agent.md` YAML frontmatter: Antigravity Desktop's
+    # workspace subagent loader rejects non-enum `gemini-4-*` / `gemini-3.8-*` model slugs in
+    # YAML frontmatter (`not found or not allowed to be invoked`) and inherits parent/dispatch model.
+    _ = model
     return (
         f"---\n"
         f"name: {name_yaml}\n"
         f"description: {description_yaml}\n"
         f"mainAgent: false\n"
         f"subagent: true\n"
-        f"{model_line}"
         f"tools:\n"
         f"{tools_block}\n"
         f"---\n\n"
@@ -487,26 +486,9 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
             sp_desc = json.dumps(str(sp_data.get("description") or sp_role).strip(), ensure_ascii=False)
             sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
             sp_prompt = str(sp_data.get("system_prompt") or "").strip()
-            sp_model_line = ""
-            try:
-                from review_models import compute_task_complexity_tier, load_policy, resolve_antigravity_model
-                from workflow import state_root
-                from _vnext_common import read_json
-                active_f = state_root(repo) / "active-task.json"
-                active_tid = (str(read_json(active_f).get("task_id") or "").strip() or None) if active_f.is_file() else None
-                sp_pol, sp_scope = load_policy(repo, active_tid)
-                if sp_scope != "default":
-                    sp_req = sp_pol.get("overrides", {}).get(sp_role, sp_pol.get("default", "inherit"))
-                    if sp_req and sp_req != "inherit":
-                        sp_tier = compute_task_complexity_tier(repo, active_tid) if active_tid else "SIMPLE"
-                        sp_mod, _ = resolve_antigravity_model(sp_req, sp_role, "NORMAL", complexity_tier=sp_tier)
-                        if sp_mod and sp_mod != "inherit":
-                            sp_model_line = f"model: {json.dumps(sp_mod, ensure_ascii=False)}\n"
-            except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
-                sp_model_line = ""
             sp_md = (
                 f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
-                f"{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+                f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
             )
             logs.append(write_file(repo / ".agents" / "agents" / sp_role / "agent.md", sp_md, dry_run=dry_run, repo=repo, merge_existing=False))
     from delegation_policy import SCOUT_AGENT, WORKER_AGENT, render_utility_agent_markdown, resolve_utility_scout_model, resolve_utility_worker_model

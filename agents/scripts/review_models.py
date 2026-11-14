@@ -944,23 +944,19 @@ def sync_antigravity_agent_models(repo: Path, selections: dict[str, dict] | None
         dest = agents_base / role / "agent.md"
         if not json_path.is_file() or not dest.parent.is_dir():
             continue
+        # Never overwrite an already-installed `.agents/agents/<role>/agent.md` mid-session:
+        # Antigravity Desktop caches workspace subagents at startup and invalidates/locks
+        # the role (`not found` + `already exists` deadlock) if `agent.md` is rewritten live.
+        if dest.is_file():
+            continue
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
             continue
-        sel = selections[role]
-        fm_model = sel.get("agent_frontmatter_model") or sel.get("resolved_model")
-        if fm_model == "inherit":
-            fm_model = None
-        rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model))
+        rendered = with_managed_marker(antigravity_agent_markdown(data, model=None))
         rendered_bytes = rendered.encode("utf-8")
-        try:
-            current_bytes = dest.read_bytes() if dest.is_file() else None
-        except OSError:
-            current_bytes = None
-        if current_bytes != rendered_bytes:
-            dest.write_bytes(rendered_bytes)
-            updated.append(f".agents/agents/{role}/agent.md")
+        dest.write_bytes(rendered_bytes)
+        updated.append(f".agents/agents/{role}/agent.md")
 
     ownership_file = repo / ".harness-setup" / "ownership-v1.json"
     if updated and ownership_file.is_file():
@@ -1204,6 +1200,30 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
     }
 
 
+_THINKING_TIER_RANKS: dict[str, int] = {
+    "fast": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "xhigh": 4,
+    "extra": 4,
+}
+
+
+def _split_antigravity_family_and_tier(slug: str) -> tuple[str, str | None]:
+    clean = re.sub(r"^models/", "", str(slug or "").strip().lower())
+    m = re.match(r"^(.+?)-(fast|low|medium|high|xhigh|extra|tiered|n|[0-9]{3})$", clean)
+    if m:
+        fam, suf = m.group(1), m.group(2)
+        if fam == "gemini-4-flash":
+            fam = "gemini-4-hydrogen"
+        tier = suf if suf in _THINKING_TIER_RANKS else None
+        return fam, tier
+    if clean == "gemini-4-flash":
+        clean = "gemini-4-hydrogen"
+    return clean, None
+
+
 def _matches_antigravity_native_model(
     expected_resolved: str,
     thinking_level: object,
@@ -1212,34 +1232,41 @@ def _matches_antigravity_native_model(
 ) -> bool:
     """Validate observed Antigravity SQLite protobuf model metadata against the frozen reviewer selection.
 
-    Supports all four Gemini 4 Hydrogen thinking levels (`low`, `medium`, `high`, `xhigh`/`extra`)
-    and official Hydrogen backend/alias identifiers while strictly rejecting cross-family leaks
-    (such as a parent Carbon/Argon/Claude model or legacy 3.8 Flash running instead of Hydrogen).
+    Antigravity Desktop inherits the parent session's thinking tier when `Model` is omitted
+    (e.g. running `gemini-4-hydrogen-high` when `gemini-4-hydrogen-medium` was resolved on a `SIMPLE` task).
+    Within the `gemini-4-hydrogen` (`1.00x`) family, all valid Hydrogen thinking tiers and `gemini-4-flash*`
+    backend aliases are accepted; on other families (`argon`, `carbon`, `3.8-flash`), equal-or-higher
+    thinking tiers within the exact same family are accepted, while cross-family leaks (`Carbon`, `Argon`,
+    `Claude`, or `3.8 Flash` running instead of `Hydrogen`) fail closed with `REVIEW_MODEL_MISMATCH`.
     """
     if not expected_resolved or not isinstance(host_configured, str) or not isinstance(host_reported_models, list) or not host_reported_models:
         return False
-    family = re.sub(r"-(?:fast|low|medium|high|xhigh|extra|tiered)$", "", str(expected_resolved))
-    lvl = str(thinking_level or "").strip().lower()
-    valid_configured = {expected_resolved, family, f"{family}-tiered"}
-    if lvl == "xhigh":
-        valid_configured.add(f"{family}-extra")
-    if family == "gemini-4-hydrogen":
-        valid_configured.update({"gemini-4-flash", "gemini-4-flash-tiered"})
-        if lvl:
-            valid_configured.add(f"gemini-4-flash-{lvl}")
-        if lvl == "xhigh":
-            valid_configured.add("gemini-4-flash-extra")
+    exp_family, exp_suffix_tier = _split_antigravity_family_and_tier(expected_resolved)
+    obs_family, obs_tier = _split_antigravity_family_and_tier(host_configured)
+    if not exp_family or obs_family != exp_family:
+        return False
+
+    lvl_str = str(thinking_level or "").strip().lower()
+    exp_tier = lvl_str if lvl_str in _THINKING_TIER_RANKS else exp_suffix_tier
+
+    if exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
+        if _THINKING_TIER_RANKS[obs_tier] < _THINKING_TIER_RANKS[exp_tier]:
+            return False
+
+    if exp_family == "gemini-4-hydrogen":
         reported_re = re.compile(
-            r"(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     else:
         reported_re = re.compile(
-            re.escape(family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?" + re.escape(exp_family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
-    if host_configured not in valid_configured:
-        return False
+    exp_clean = re.sub(r"^models/", "", str(expected_resolved).strip().lower())
     for item in host_reported_models:
-        if not isinstance(item, str) or (not reported_re.fullmatch(item) and item != expected_resolved):
+        if not isinstance(item, str):
+            return False
+        item_clean = re.sub(r"^models/", "", item.strip().lower())
+        if not reported_re.fullmatch(item_clean) and item_clean != exp_clean:
             return False
     return True
 
@@ -1282,77 +1309,43 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen model evidence for {role}")
 
 
-def sync_specialist_agent_models(repo: Path, *, policy: dict | None = None, complexity_tier: str = "SIMPLE") -> list[str]:
-    """Synchronize ON_DEMAND_SPECIALIST_AGENTS (`qa-diagnostics-agent`, `android-ui-expert-agent`) frontmatter models while preserving pure Antigravity scout tools."""
+def sync_specialist_agent_models(
+    repo: Path,
+    *,
+    policy: dict | None = None,
+    complexity_tier: str = "SIMPLE",
+) -> list[str]:
+    """Ensure on-demand specialist `.agents/agents/<role>/agent.md` wrappers exist without live rewrites."""
+    from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, ON_DEMAND_SPECIALIST_AGENTS
     agents_base = repo / ".agents" / "agents"
     subagents_base = repo / ".agents" / "subagents"
     if not subagents_base.is_dir():
-        kit_subagents = Path(__file__).resolve().parents[1] / "subagents"
-        if kit_subagents.is_dir():
-            subagents_base = kit_subagents
+        kit_sub = Path(__file__).resolve().parents[1] / "subagents"
+        if kit_sub.is_dir():
+            subagents_base = kit_sub
     if not agents_base.is_dir() or not subagents_base.is_dir():
         return []
     try:
         from install_tool_adapters import with_managed_marker
-        from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, ON_DEMAND_SPECIALIST_AGENTS
     except ImportError:
         return []
-    pol = policy
-    if pol is None:
-        pol, src_scope = load_policy(repo, None)
-        if src_scope == "default":
-            pol = {"default": "inherit", "overrides": {}}
     updated: list[str] = []
     for sp_role in ON_DEMAND_SPECIALIST_AGENTS:
-        sp_json = subagents_base / f"{sp_role}.json"
         dest = agents_base / sp_role / "agent.md"
-        if not sp_json.is_file() or not dest.parent.is_dir():
+        src_json = subagents_base / f"{sp_role}.json"
+        if dest.is_file() or not dest.parent.is_dir() or not src_json.is_file():
             continue
         try:
-            sp_data = json.loads(sp_json.read_text(encoding="utf-8"))
-        except (OSError, ValueError, KeyError, TypeError):
+            sp_data = json.loads(src_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
             continue
-        req_m = (pol.get("overrides") or {}).get(sp_role, pol.get("default", "inherit"))
-        fm_model = None
-        if req_m and req_m != "inherit":
-            resolved_m, _ = resolve_antigravity_model(str(req_m), sp_role, "NORMAL", complexity_tier=complexity_tier)
-            if resolved_m and resolved_m != "inherit":
-                fm_model = resolved_m
         sp_name = json.dumps(sp_role, ensure_ascii=False)
         sp_desc = json.dumps(str(sp_data.get("description") or sp_role).strip(), ensure_ascii=False)
         sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
         sp_prompt = str(sp_data.get("system_prompt") or "").strip()
-        sp_model_line = f"model: {json.dumps(fm_model, ensure_ascii=False)}\n" if fm_model else ""
-        sp_md = (
-            f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\n"
-            f"{sp_model_line}tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
-        )
-        rendered_bytes = with_managed_marker(sp_md).encode("utf-8")
-        if not dest.is_file() or dest.read_bytes() != rendered_bytes:
-            from _vnext_common import atomic_write_bytes
-            atomic_write_bytes(dest, rendered_bytes)
-            updated.append(f".agents/agents/{sp_role}/agent.md")
-    ownership_file = repo / ".harness-setup" / "ownership-v1.json"
-    if updated and ownership_file.is_file():
-        try:
-            manifest = read_json(ownership_file)
-            entries = manifest.get("entries")
-            if isinstance(entries, list):
-                changed = False
-                updated_set = set(updated)
-                for entry in entries:
-                    if isinstance(entry, dict) and entry.get("path") in updated_set:
-                        target = repo / str(entry["path"])
-                        if target.is_file():
-                            entry["post_install_sha256"] = sha256_file(target)
-                            changed = True
-                if changed:
-                    manifest["ownership_sha256"] = canonical_sha256(
-                        {k: v for k, v in manifest.items() if k != "ownership_sha256"}
-                    )
-                    atomic_write_json(ownership_file, manifest)
-        except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
-            pass
+        sp_md = f"---\nname: {sp_name}\ndescription: {sp_desc}\nmainAgent: false\nsubagent: true\ntools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
+        dest.write_bytes(with_managed_marker(sp_md).encode("utf-8"))
+        updated.append(f".agents/agents/{sp_role}/agent.md")
     return updated
 
 
@@ -1564,7 +1557,8 @@ def assert_dispatch_ready(repo: Path, run: dict, roles: list[str]) -> None:
             selection = selections.get(role, {})
             expected = selection.get("agent_frontmatter_model") or selection.get("resolved_model")
             expected = None if expected == "inherit" else expected
-            if _antigravity_frontmatter_model(repo, role) != expected:
+            fm_observed = _antigravity_frontmatter_model(repo, role)
+            if fm_observed is not None and fm_observed != expected:
                 raise ValidationError(f"REVIEW_MODEL_CONFIGURATION_UNAVAILABLE: {role} native configuration is not synchronized")
 
 

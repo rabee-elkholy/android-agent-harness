@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.10] - 2026-11-14
+
+### Fixed & Improved
+- **Antigravity Desktop Parent-Inherited Hydrogen Model Verification (`agents/scripts/review_models.py`)**: Updated `_matches_antigravity_native_model()` to accept all valid `gemini-4-hydrogen-*` thinking tiers (`low`, `medium`, `high`, `xhigh`/`extra`) and `gemini-4-flash*` backend aliases when Desktop inherits the parent Hydrogen chat's thinking tier upon omitting `Model`, and equal-or-higher thinking tiers within non-Hydrogen families, while keeping strict fail-closed `REVIEW_MODEL_MISMATCH` rejection on cross-family leaks (`Carbon`, `Argon`, `Claude`, `3.8 Flash`).
+- **Auto-Loaded Model-Less `.agents/agents/*/agent.md` Frontmatter & Zero Live-Session Rewrites (`agents/scripts/install_tool_adapters.py`, `agents/scripts/delegation_policy.py`, `agents/scripts/review_models.py`, `agents/scripts/lifecycle.py`, `agents/scripts/repair.py`, `agents/scripts/doctor/engine.py`)**: Removed unsupported `model:` YAML frontmatter keys from `.agents/agents/*/agent.md` so Antigravity Desktop loads all 8 workspace subagents (`harness-scout-agent`, `harness-worker-agent`, reviewers, and specialists) natively at startup with their full `tools:` allowlist (`view_file`, `grep_search`, `find_by_name`, `list_dir`, `run_command`), and stopped mid-session `agent.md` rewrites that invalidated Desktop's subagent registry.
+- **Anti-Deadlock `kill_all` Guard & `<role>-live` Emergency Subagent Alias (`agents/scripts/pre_tool_safety.py`, `agents/scripts/post_tool_reconcile.py`, `agents/tool-adapters/GEMINI.md.template`)**: Blocked premature `manage_subagents(Action='kill_all'|'kill')` calls while an active `VERIFYING` or `PHASE_REVIEWING` wave still has unfinalized reviewers (`ACTIVE_REVIEW_WAVE_KILL_ALL_BLOCKED`), added `<role>-live` / `<role>-r1..9` recovery aliases across `define_subagent` and `invoke_subagent` if Desktop ever reports `not found` + `already exists`, and taught `harness-scout-agent` to read `.agents/cache/project_graph.json` first if constrained to `read_file`-only.
+- **Accurate `utility-subagents.json` Wave Binding, Tool-Call Accounting & Pure `TEST_ONLY` Draft Exemption (`agents/scripts/delegation_policy.py`, `agents/scripts/_workflow/engine.py`)**: Prevented `dispatch_failed` utility waves from claiming subsequent waves' `execution_id`, synchronized `tool_calls_used` in `utility-subagents.json` from both live `PreToolUse` step budgets and child transcripts, and exempted pure `TEST_ONLY` unit-test paths under `src/test` from `ARCHITECTURE_DECISION_REQUIRED`.
+
 ## [1.3.9] - 2026-11-14
 
 ### Fixed & Improved

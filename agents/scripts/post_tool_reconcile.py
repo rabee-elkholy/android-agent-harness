@@ -146,13 +146,13 @@ def main() -> int:
         if isinstance(subagents, list):
             for sa in subagents:
                 if isinstance(sa, dict):
-                    r = sa.get("TypeName") or sa.get("typeName") or sa.get("Role") or sa.get("role")
+                    r = sa.get("Role") or sa.get("role") or sa.get("TypeName") or sa.get("typeName")
                     if r:
-                        roles.append(str(r).strip())
+                        roles.append(re.sub(r"-(?:live|r[1-9])$", "", str(r).strip()))
         if not roles and isinstance(args, dict):
-            top_r = args.get("TypeName") or args.get("typeName") or args.get("Role") or args.get("role")
+            top_r = args.get("Role") or args.get("role") or args.get("TypeName") or args.get("typeName")
             if top_r:
-                roles.append(str(top_r).strip())
+                roles.append(re.sub(r"-(?:live|r[1-9])$", "", str(top_r).strip()))
 
         err_text = str(err or "").lower()
         if call_name_low == "invoke_subagent":

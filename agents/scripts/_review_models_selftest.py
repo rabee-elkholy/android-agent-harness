@@ -616,8 +616,8 @@ class ReviewerModelsTests(unittest.TestCase):
         # Check frontmatter synced on disk
         sec_md = (self.repo / ".agents" / "agents" / SECURITY / "agent.md").read_text(encoding="utf-8")
         conv_md = (self.repo / ".agents" / "agents" / conv / "agent.md").read_text(encoding="utf-8")
-        self.assertIn('model: "gemini-3.8-flash-high"', sec_md)
-        self.assertIn('model: "gemini-3.8-flash-medium"', conv_md)
+        self.assertNotIn("\nmodel:", sec_md)
+        self.assertNotIn("\nmodel:", conv_md)
 
         # Verify model_evidence and validate_model_evidence on Antigravity
         run_doc = {"review_host": "antigravity", "review_models": frozen}
@@ -645,8 +645,8 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("inherit", frozen_h["reviewers"][SECURITY]["requested_model"])
         sec_md_after = (self.repo / ".agents" / "agents" / SECURITY / "agent.md").read_text(encoding="utf-8")
         conv_md_after = (self.repo / ".agents" / "agents" / conv / "agent.md").read_text(encoding="utf-8")
-        self.assertNotIn("model:", sec_md_after)
-        self.assertIn('model: "gemini-3.8-flash-medium"', conv_md_after)
+        self.assertNotIn("\nmodel:", sec_md_after)
+        self.assertNotIn("\nmodel:", conv_md_after)
 
     def test_antigravity_run_scope_expires_on_next_run_and_refreshes_undispatched_run(self):
         from install_tool_adapters import generate_antigravity_agents
@@ -833,7 +833,7 @@ class ReviewerModelsTests(unittest.TestCase):
         run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
         agent_md = fixture.repo / ".agents" / "agents" / "bug-test-reviewer-agent" / "agent.md"
         expected_bytes = agent_md.read_bytes()
-        self.assertIn(b'model: "gemini-3.8-flash-high"', expected_bytes)
+        self.assertNotIn(b'\nmodel:', expected_bytes)
 
         # Adapter regeneration during active-task update preserves active task/run model frontmatter
         generate_antigravity_agents(fixture.repo, dry_run=False)
@@ -1199,7 +1199,7 @@ class ReviewerModelsTests(unittest.TestCase):
             self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan repo architecture"}]
         )
         self.assertTrue(ok_u_good)
-        self.assertIn('model: "gemini-4-hydrogen-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
 
         fixture, p_task, p_roster, _ = self.phase_fixture()
         p_plan = read_json(task_dir(fixture.repo, p_task) / "plan.json")
@@ -1260,10 +1260,18 @@ class ReviewerModelsTests(unittest.TestCase):
             self.repo, models.choice_to_policy("flash-project")[0],
             task_id=None, host="antigravity", source="conversation", proof_reference="Fallback to Flash", scope="project",
         )
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
-        repair_mod.main(["--repo", str(self.repo)])
-        self.assertIn('model: "gemini-3.8-flash-medium"', (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        # Mid-session set_policy must NOT overwrite installed agent.md (v1.3.10 Desktop anti-deadlock),
+        # while explicit repair re-renders the updated target-model comment without YAML model: frontmatter.
+        pre_repair_scout = (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8")
+        self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-medium -->", pre_repair_scout)
+        kit_root = Path(__file__).resolve().parents[2]
+        (self.repo / ".agents" / "VERSION").write_text((kit_root / "agents" / "VERSION").read_text(encoding="utf-8"), encoding="utf-8")
+        repair_mod.main(["--repo", str(self.repo), "--kit", str(kit_root), "--force"])
+        repaired_scout = (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8")
+        self.assertNotIn("\nmodel:", repaired_scout)
+        self.assertIn("<!-- harness-target-model: gemini-3.8-flash-medium -->", repaired_scout)
 
         # Edge Case 9: Platform hazard classifiers (Hydrogen rollout block, Orchestrator double-planning, Zero-quota 429)
         h_roll = ar.classify_antigravity_quota_or_capacity_error("PERMISSION_DENIED: model gemini-4-hydrogen is not available on your plan")
