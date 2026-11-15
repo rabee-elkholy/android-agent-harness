@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.3.16] - 2026-11-15
+
+### Fixed & Hardened
+- **Kotlin Raw-String & Template Lexical Brace Scanner in `web-apply` (`agents/scripts/web_relay.py`)**:
+  - Replaced the regex brace stripper in `_validate_code_integrity()` with a full lexical brace counter (`_count_structural_braces()`) supporting Kotlin/Swift triple-quoted raw strings (`\"\"\"...\"\"\"`), `${...}` string templates, single-line char literals (`'{'` / `'}'`), and nested block comments alongside a baseline-delta guard, eliminating false `UNBALANCED_BRACES_BLOCKED` rejections on Kotlin raw JSON test fixtures while still blocking newly introduced brace imbalances.
+- **Windows Repo-Relative Path Normalization in `inspect_web_phase_progress` & Interrogative Proof Guard (`agents/scripts/execution_mode.py`)**:
+  - Normalized Windows/POSIX absolute `target_files` (including lowercase drive letters such as `e:\\...`) to repo-relative paths inside `inspect_web_phase_progress()` so surgical post-`web-apply` lint/compile fixes on applied production files are never falsely blocked by `WEB_EXECUTION_MODE_PACK_FIRST`, and rejected unanswered developer questions (`?...`) passed verbatim as `--proof-reference` in `execution-mode set`.
+- **Single-Pass Finalization & Inline Blocking Findings in `review complete-all` (`agents/scripts/review_orchestrator.py`)**:
+  - Prevented a redundant unguarded `verification_freshness` check in `review complete-all` after the final reviewer's `_complete_review_core()` call already finalized `FINDINGS` and transitioned the plan to `BLOCKED`, eliminating false `STALE_VERIFICATION_RUN (NOT_VERIFYING)` crashes and printing structured `BLOCKING_FINDING` lines plus `NEXT_ACTION=RESUME_IMPLEMENTATION` directly to stdout.
+- **Safe Windows Gradle Daemon Job-Breakaway with Zero-Risk `OSError` Fallback (`agents/scripts/_live_process.py`)**:
+  - Added `_spawn_streaming_process()` on Windows daemon-enabled Gradle invocations to attempt `CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP` so warm Gradle Daemons survive background `run_command` Job closure, falling back transparently to `creationflags=0` whenever the host Job Object denies breakaway (`PermissionError`).
+- **Final-Review Step Budget Scaling on Large Multi-File Tasks (`agents/scripts/delegation_policy.py`)**:
+  - Updated the final-review `REVIEWER` step cap for tasks with `>8` modified files from `(slice_n // 2) + 8` to `min(36, slice_n + 6)` (giving `24` calls instead of `17` on `18`-file reviews so `arch-regression-reviewer-agent` can inspect every modified file plus callers), while preserving `MAX_REVIEWER_TOOL_CALLS = 12` on `<=8`-file tasks and `MAX_SCOUT_TOOL_CALLS = 24`.
+- **Post-Commit `task verify` Equivalence, `Smart Auto` Approval Summary, & `--export-chat-bundle` (`agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/router.py`, `agents/scripts/session_forensics.py`)**:
+  - Reconciled clean developer delivery commits in `verify_task` when `READY_FOR_DELIVERY` routes to `DELIVER`, surfaced the effective `execution_mode` line in `task draft` approval material, clarified post-commit `task deliver` instructions, fixed top-level Antigravity `input_tokens`/`cache_read_tokens` peak tracking in `diagnose-session`, and added `diagnose-session --export-chat-bundle` to package a parent brain session and all `.system_generated/subagents/*.json` child sessions into a `.zip` archive without reading raw `transcript.jsonl` into agent context.
+
+
 ## [1.3.15] - 2026-11-15
 
 ### Fixed & Hardened

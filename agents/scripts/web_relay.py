@@ -1415,6 +1415,111 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
     )
 
 
+def _count_structural_braces(text: str, *, nested_comments: bool = True) -> tuple[int, int]:
+    """Count structural `{` and `}` across Kotlin/Java/Swift while respecting raw `\"\"\"...\"\"\"` strings,
+    `${...}` string templates, char literals `'{'`, line comments, and (optionally nested) block comments.
+    """
+    n = len(text)
+    i = 0
+    opens = 0
+    closes = 0
+    mode = "CODE"
+    comment_depth = 0
+    interp_stack: list[tuple[str, int]] = []
+
+    while i < n:
+        ch = text[i]
+        if mode == "LINE_COMMENT":
+            if ch == "\n":
+                mode = "CODE"
+            i += 1
+        elif mode == "BLOCK_COMMENT":
+            if nested_comments and text.startswith("/*", i):
+                comment_depth += 1
+                i += 2
+            elif text.startswith("*/", i):
+                comment_depth -= 1
+                i += 2
+                if comment_depth <= 0:
+                    comment_depth = 0
+                    mode = "CODE"
+            else:
+                i += 1
+        elif mode == "RAW_STRING":
+            if text.startswith("${", i):
+                opens += 1
+                interp_stack.append(("RAW_STRING", 1))
+                mode = "CODE"
+                i += 2
+            elif text.startswith('"""', i):
+                while i + 3 < n and text[i + 3] == '"':
+                    i += 1
+                i += 3
+                mode = "CODE"
+            else:
+                i += 1
+        elif mode == "STRING":
+            if ch == "\\":
+                i += 2
+            elif text.startswith("${", i):
+                opens += 1
+                interp_stack.append(("STRING", 1))
+                mode = "CODE"
+                i += 2
+            elif ch in ('"', "\n"):
+                i += 1
+                mode = "CODE"
+            else:
+                i += 1
+        else:  # CODE
+            if text.startswith("//", i):
+                mode = "LINE_COMMENT"
+                i += 2
+            elif text.startswith("/*", i):
+                mode = "BLOCK_COMMENT"
+                comment_depth = 1
+                i += 2
+            elif text.startswith('"""', i):
+                mode = "RAW_STRING"
+                i += 3
+            elif ch == '"':
+                mode = "STRING"
+                i += 1
+            elif ch == "'":
+                # Single-line char literal (`'{'`, `'}'`, `'\''`, `'\u007b'`)
+                j = i + 1
+                limit = min(n, i + 12)
+                closed_at = -1
+                while j < limit and text[j] != "\n":
+                    if text[j] == "\\":
+                        j += 2
+                        continue
+                    if text[j] == "'":
+                        closed_at = j
+                        break
+                    j += 1
+                i = (closed_at + 1) if closed_at != -1 else (i + 1)
+            elif ch == "{":
+                opens += 1
+                if interp_stack:
+                    ret_m, depth = interp_stack[-1]
+                    interp_stack[-1] = (ret_m, depth + 1)
+                i += 1
+            elif ch == "}":
+                closes += 1
+                if interp_stack:
+                    ret_m, depth = interp_stack[-1]
+                    if depth <= 1:
+                        interp_stack.pop()
+                        mode = ret_m
+                    else:
+                        interp_stack[-1] = (ret_m, depth - 1)
+                i += 1
+            else:
+                i += 1
+    return opens, closes
+
+
 def _validate_code_integrity(rel_path: str, new_text: str, base_text: str = "") -> None:
     m_conf = CONFLICT_MARKER_RE.search(new_text)
     if m_conf:
@@ -1436,10 +1541,12 @@ def _validate_code_integrity(rel_path: str, new_text: str, base_text: str = "") 
                 "Use surgical `hunks` or pass explicit deletion if intentional."
             )
     if rel_path.endswith((".kt", ".java", ".swift")):
-        stripped = re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', "", new_text, flags=re.DOTALL)
-        opens = stripped.count("{")
-        closes = stripped.count("}")
-        if opens != closes:
+        nested_c = not rel_path.endswith(".java")
+        opens, closes = _count_structural_braces(new_text, nested_comments=nested_c)
+        base_opens, base_closes = (
+            _count_structural_braces(base_text, nested_comments=nested_c) if base_text else (0, 0)
+        )
+        if opens != closes and (not base_text or (opens - closes) != (base_opens - base_closes)):
             raise ValidationError(
                 f"UNBALANCED_BRACES_BLOCKED on '{rel_path}': `{opens}` '{{' vs `{closes}` '}}' after applying web changes."
             )

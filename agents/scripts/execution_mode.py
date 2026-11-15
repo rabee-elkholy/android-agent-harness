@@ -779,6 +779,16 @@ def set_execution_mode(
             "DEVELOPER_AUTHORITY_REQUIRED: `execution-mode set` requires `--source conversation` "
             "and a non-empty `--proof-reference \"<developer words>\"`."
         )
+    _confirm_tokens = (
+        "normal", "web", "auto", "local", "ask-every-task", "yes", "ok", "approve", "continue",
+        "\u0639\u0627\u062f\u064a", "\u0648\u064a\u0628", "\u062a\u0644\u0642\u0627\u0626\u064a",
+        "\u0645\u062d\u0644\u064a", "\u0646\u0639\u0645", "\u0627\u064a\u0648\u0629", "\u0623\u064a\u0648\u0629", "\u0645\u0648\u0627\u0641\u0642",
+    )
+    if norm_proof.rstrip().endswith(("?", "\u061f")) and not any(tok in norm_proof.lower() for tok in _confirm_tokens):
+        raise ValidationError(
+            "DEVELOPER_AUTHORITY_REQUIRED: `--proof-reference` appears to be an unanswered developer question. "
+            "Answer the developer's question first and wait for their explicit mode confirmation."
+        )
 
     canonical_choice, resolved_mode, resolved_scope = normalize_choice(choice=choice, mode=mode, scope=scope)
     explicit_tid = validate_id(task_id, "task id") if str(task_id or "").strip() else ""
@@ -1002,6 +1012,41 @@ def record_pending_pack_link(repo: Path, pack_id: str) -> None:
         atomic_write_json(pend_file, _sign_record(pend_rec))
 
 
+def _normalize_repo_rel_path(repo: Path, raw_path: str) -> str:
+    """Normalize `raw_path` to a repo-relative POSIX path across Windows drive-letter casing and POSIX roots."""
+    cleaned = str(raw_path or "").strip()
+    if not cleaned:
+        return ""
+    norm = cleaned.replace("\\", "/")
+    repo_posix = Path(repo).resolve().as_posix().rstrip("/")
+    if repo_posix:
+        if norm.lower() == repo_posix.lower():
+            return ""
+        if norm.lower().startswith(repo_posix.lower() + "/"):
+            return norm[len(repo_posix) + 1 :].lstrip("/")
+    try:
+        p_obj = Path(cleaned)
+        if p_obj.is_absolute():
+            return p_obj.resolve().relative_to(Path(repo).resolve()).as_posix()
+    except (OSError, ValueError):
+        pass
+    # Handle cross-platform Windows drive path (`e:/.../Fitness_Android/app/src/...`) when repo name matches
+    m_drive = re.match(r"^[a-zA-Z]:/(.+)$", norm)
+    if m_drive:
+        after_drive = m_drive.group(1)
+        repo_name = Path(repo).resolve().name
+        if repo_name:
+            marker = f"/{repo_name.lower()}/"
+            hay = f"/{after_drive.lower()}"
+            pos = hay.find(marker)
+            if pos != -1:
+                return after_drive[pos + len(marker) - 1 :].lstrip("/")
+        return after_drive.lstrip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm.lstrip("/")
+
+
 def inspect_web_phase_progress(
     repo: Path,
     plan: dict[str, Any] | None,
@@ -1061,11 +1106,13 @@ def inspect_web_phase_progress(
         if chosen_ph is not None:
             phase_id = str(chosen_ph.get("id") or chosen_ph.get("phase_id") or "").strip()
             raw_pf = chosen_ph.get("expected_files") or chosen_ph.get("files") or []
-            phase_files = [str(f).replace("\\", "/").lstrip("/") for f in raw_pf if str(f).strip()]
+            phase_files = [_normalize_repo_rel_path(repo, str(f)) for f in raw_pf if str(f).strip()]
+            phase_files = [f for f in phase_files if f]
 
     if not phase_files:
         src_list = target_files if target_files is not None else (plan.get("expected_files") or [])
-        phase_files = [str(f).replace("\\", "/").lstrip("/") for f in src_list if str(f).strip()]
+        phase_files = [_normalize_repo_rel_path(repo, str(f)) for f in src_list if str(f).strip()]
+        phase_files = [f for f in phase_files if f]
 
     has_staged = bool(phase_id and (tdir / "staged-web-phases" / f"{phase_id}.json").is_file())
     # If an unapplied continuation batch pack (`Batch 2/3` or `PARTIAL` open pack) is waiting on this task, stay in WEB_RELAY_ACTIVE!

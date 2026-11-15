@@ -137,6 +137,46 @@ def step_progress(name: str, step: int | None = None, total: int | None = None, 
         live_print(f"{prefix}[{status}] ({elapsed:.1f}s)")
 
 
+def _should_try_windows_gradle_breakaway(argv: Sequence[str], env: dict[str, str], label: str) -> bool:
+    """True when launching a daemon-enabled Gradle wrapper on Windows so the daemon survives Job close."""
+    if os.name != "nt" or str(label or "").strip().lower() != "gradle":
+        return False
+    if str(env.get("HARNESS_DISABLE_WINDOWS_DAEMON_BREAKAWAY") or "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return not any(str(a).strip() == "--no-daemon" for a in argv)
+
+
+def _spawn_streaming_process(
+    argv: list[str],
+    *,
+    cwd: str | None,
+    env: dict[str, str],
+    label: str,
+) -> subprocess.Popen[str]:
+    base_kwargs: dict[str, object] = {
+        "cwd": cwd,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "env": env,
+        "bufsize": 1,
+    }
+    if _should_try_windows_gradle_breakaway(argv, env, label):
+        breakaway_flags = (
+            int(getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000))
+            | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200))
+        )
+        try:
+            return subprocess.Popen(argv, creationflags=breakaway_flags, **base_kwargs)  # type: ignore[arg-type]
+        except OSError:
+            # Host Job Object disallows breakaway (e.g. WinError 5 Access Denied); fall back transparently.
+            pass
+    return subprocess.Popen(argv, **base_kwargs)  # type: ignore[arg-type]
+
+
 def run_streaming(
     argv: Sequence[str],
     *,
@@ -186,17 +226,11 @@ def run_streaming(
                 live_print(f"[*] still running ({elapsed}s) — {last_text}")
 
     try:
-        proc = subprocess.Popen(
+        proc = _spawn_streaming_process(
             list(argv),
             cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             env=merged_env,
-            bufsize=1,
+            label=label,
         )
     except Exception as exc:
         live_print(f"[!] Failed to launch {label}: {exc}", err=True)

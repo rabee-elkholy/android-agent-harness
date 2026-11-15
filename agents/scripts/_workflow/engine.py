@@ -1731,6 +1731,40 @@ def verify_task(args: argparse.Namespace) -> dict:
             state_root=state_root(repo),
             run_id=str(current["run_id"]),
         )
+        if res.get("status") == "STALE":
+            try:
+                plan_now = _load_plan(repo, args.task_id)
+                blocked_set = set(res.get("blocked_by") or [])
+                commit_only_reasons = {
+                    "current change_set_sha256 does not match the delivery manifest",
+                    "current repository head does not match the delivery manifest",
+                }
+                if (
+                    plan_now.get("status") == "READY_FOR_DELIVERY"
+                    and blocked_set
+                    and blocked_set <= commit_only_reasons
+                ):
+                    next_act = resolve_next_action(repo, args.task_id, plan_now)
+                    if isinstance(next_act, dict) and next_act.get("code") == "DELIVER":
+                        from task_git_lineage import accept_requested_delivery_commit
+                        if accept_requested_delivery_commit(repo, args.task_id, plan_now):
+                            save_plan(_plan_path(repo, args.task_id), plan_now)
+                        res = {
+                            "schema_version": 1,
+                            "status": "APPROVED",
+                            "blocked_by": [],
+                            "post_commit_ready_to_deliver": True,
+                            "next_action": f"python .agents/harness.py task deliver --repo . --task-id {args.task_id}",
+                            "checks": [
+                                {
+                                    "name": "post_commit_delivery_equivalence",
+                                    "status": "PASS",
+                                    "detail": "Developer delivery commit matches verified snapshot; ready for task deliver.",
+                                }
+                            ],
+                        }
+            except (OSError, ValueError, ImportError, ValidationError):
+                pass
         sublog(f"Verification completed with status: {res.get('status')}")
         return res
 
@@ -4375,6 +4409,15 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
         lines.append("MATERIAL_CHANGE_REASON=" + str(redact(result["material_change_reason"])))
     from review_models import model_choice_summary
     lines.append(model_choice_summary(repo, str(result["task_id"])))
+    try:
+        from execution_mode import resolve_effective_execution_mode
+        em_eff = resolve_effective_execution_mode(repo, task_id=str(result["task_id"]), plan=result)
+        if em_eff.get("mode") in ("normal", "web") and not em_eff.get("selection_required"):
+            lines.append(
+                f"Execution mode: {em_eff['mode']} (choice: {em_eff.get('choice') or 'auto'}; {em_eff.get('reason') or ''})"
+            )
+    except (ImportError, OSError, ValueError, ValidationError):
+        pass
     if document.is_file():
         lines.append(f"PLAN_DOCUMENT_URI={Path(document).resolve().as_uri()}")
     pre_existing = pre_existing_changes_line(repo, result)

@@ -5610,5 +5610,315 @@ class TestV1315LiveFitnessLifecycleFixes(unittest.TestCase):
             self.assertEqual("PASS", p2_ut.get("status"))
 
 
+class TestV1316LiveSessionHardening(unittest.TestCase):
+    """Regression suite for all 6 v1.3.16 live Fitness_Android session fixes."""
+
+    def test_1_web_relay_kotlin_raw_json_strings_and_real_brace_imbalance(self) -> None:
+        import web_relay
+        from _vnext_common import ValidationError
+
+        base_kt = (
+            "package com.demo\n"
+            "class FoodPlanViewModelTest {\n"
+            '    val jsonWithArray = """{"accountId": 42, "excludedFoodCatIds": [13, 19]}"""\n'
+            '    val oddQuotesRaw = """{"a":1,"b":"x","c":"y","d":true,"e":[]}"""\n'
+            '    val interp = "count=${listOf(1, 2).filter { it > 0 }.size}"\n'
+            "    val braceChar = '{'\n"
+            "    fun existing() {\n"
+            "        assert(true)\n"
+            "    }\n"
+            "}\n"
+        )
+        valid_new_kt = base_kt.replace(
+            "        assert(true)\n",
+            "        val reset = true\n        if (reset) {\n            assert(reset)\n        }\n",
+        )
+        # Must NOT raise UNBALANCED_BRACES_BLOCKED on triple-quoted JSON strings!
+        web_relay._validate_code_integrity("app/src/test/FoodPlanViewModelTest.kt", valid_new_kt, base_kt)
+
+        # Must STILL block when a real closing brace is dropped by Gemini Web!
+        broken_kt = valid_new_kt.rstrip().rsplit("}", 1)[0] + "\n"
+        with self.assertRaises(ValidationError) as ctx:
+            web_relay._validate_code_integrity("app/src/test/FoodPlanViewModelTest.kt", broken_kt, base_kt)
+        self.assertIn("UNBALANCED_BRACES_BLOCKED", str(ctx.exception))
+
+    def test_2_windows_drive_path_normalization_and_interrogative_proof_guard(self) -> None:
+        import execution_mode
+        from _vnext_common import ValidationError, atomic_write_json
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "Fitness_Android"
+            repo.mkdir()
+            for gcmd in (
+                ["git", "init", "-q"],
+                ["git", "config", "user.email", "t@example.com"],
+                ["git", "config", "user.name", "Test"],
+                ["git", "commit", "--allow-empty", "-qm", "init"],
+            ):
+                subprocess.run(gcmd, cwd=repo, check=True)
+            (repo / ".agents" / "state" / "tasks" / "t-web").mkdir(parents=True)
+            plan = {
+                "task_id": "t-web",
+                "status": "IMPLEMENTING",
+                "expected_files": ["app/src/main/java/com/demo/FoodPlansUseCases.kt"],
+                "phases": [
+                    {"id": "p1", "title": "Core", "status": "IN_PROGRESS"},
+                    {"id": "p2", "title": "Followup", "status": "PENDING"},
+                ],
+                "active_phase_index": 0,
+            }
+            atomic_write_json(repo / ".agents/state/tasks/t-web/plan.json", plan)
+            atomic_write_json(
+                repo / ".agents/state/tasks/t-web/web-relay-receipt.json",
+                {
+                    "schema_version": 1,
+                    "pack_id": "wpack-111122223333",
+                    "task_id": "t-web",
+                    "files_written": ["app/src/main/java/com/demo/FoodPlansUseCases.kt"],
+                    "files_deleted": [],
+                },
+            )
+            win_abs = r"e:\AndroidProjects\Fitness_Android\app\src\main\java\com\demo\FoodPlansUseCases.kt"
+            posix_abs = str(repo / "app/src/main/java/com/demo/FoodPlansUseCases.kt")
+            for cand in (win_abs, posix_abs):
+                prog = execution_mode.inspect_web_phase_progress(repo, plan, target_files=[cand])
+                self.assertTrue(prog["has_applied_web_changes"], f"Failed for {cand}: {prog}")
+
+            # Unapplied file must remain False so WEB_EXECUTION_MODE_PACK_FIRST still protects p2!
+            unapplied_win = r"e:\AndroidProjects\Fitness_Android\app\src\main\java\com\demo\Untouched.kt"
+            prog_unapplied = execution_mode.inspect_web_phase_progress(repo, plan, target_files=[unapplied_win])
+            self.assertFalse(prog_unapplied["has_applied_web_changes"])
+
+            # Interrogative unanswered question must be rejected as proof_reference!
+            with self.assertRaises(ValidationError) as q_ctx:
+                execution_mode.set_execution_mode(
+                    repo,
+                    choice="auto-project",
+                    source="conversation",
+                    proof_reference="Which mode is best for this task?",
+                )
+            self.assertIn("DEVELOPER_AUTHORITY_REQUIRED", str(q_ctx.exception))
+
+    def test_3_review_complete_all_with_findings_does_not_throw_false_stale_run(self) -> None:
+        # Authentic end-to-end Round-1 scenario: real draft -> approve -> prepare-verification -> 1 reviewer returns FINDINGS!
+        from _vnext_common import read_json, sha256_file
+        import review_models
+        from review_execution import resolve_execution_profile
+        from review_orchestrator import record_dispatch_batch
+        from review_package import build_package
+        import workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            ag_data = root / "ag_app_data"
+            repo.mkdir()
+            (repo / "app/src/main/kotlin/com/example").mkdir(parents=True)
+            (repo / "app/src/test/kotlin/com/example").mkdir(parents=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\nandroid { namespace = "com.example" }\n', encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "app/src/main/kotlin/com/example/HomeViewModel.kt").write_text(
+                "package com.example\nclass HomeViewModel { fun load() = 1 }\n", encoding="utf-8"
+            )
+            (repo / "app/src/test/kotlin/com/example/HomeViewModelTest.kt").write_text(
+                "package com.example\nclass HomeViewModelTest { fun testLoad() {} }\n", encoding="utf-8"
+            )
+            for cmd in (
+                ["git", "init", "-q"],
+                ["git", "config", "user.email", "t@example.com"],
+                ["git", "config", "user.name", "Test"],
+                ["git", "add", "."],
+                ["git", "commit", "-qm", "init"],
+            ):
+                subprocess.run(cmd, cwd=repo, check=True)
+
+            kit_agents = Path(__file__).resolve().parents[1]
+            shutil.copytree(kit_agents, repo / ".agents")
+
+            wf_parser = workflow.build_parser()
+            plan = workflow.draft(wf_parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", "t-rev-findings",
+                "--outcome", "Add resetData support",
+                "--kind", "FEATURE",
+                "--expected-files", "app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
+            ]))
+            workflow.record_approval(wf_parser.parse_args([
+                "approve", "--repo", str(repo), "--task-id", "t-rev-findings",
+                "--source", "conversation", "--proof-reference", "approved",
+                "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", plan["plan_sha256"][:12],
+            ]))
+            (repo / "app/src/main/kotlin/com/example/HomeViewModel.kt").write_text(
+                "package com.example\nclass HomeViewModel { fun load() = 2 }\n", encoding="utf-8"
+            )
+            (repo / "app/src/test/kotlin/com/example/HomeViewModelTest.kt").write_text(
+                "package com.example\nclass HomeViewModelTest { fun testLoad() { assert(true) } }\n", encoding="utf-8"
+            )
+            review_models.main(["set", "--repo", str(repo), "--task", "t-rev-findings", "--scope", "task", "--preset", "inherit", "--source", "conversation", "--proof-reference", "use inherit"])
+            workflow.main(["prepare-verification", "--repo", str(repo), "--task-id", "t-rev-findings", "--host", "antigravity"])
+            pkg_path, _ = build_package(repo, "t-rev-findings")
+
+            tdir = repo / ".agents/state/tasks/t-rev-findings"
+            current = read_json(tdir / "current-run.json")
+            run_id = current["run_id"]
+            policy = read_json(Path(current["policy"]))
+            revs = list(policy["reviewers"])
+            self.assertGreaterEqual(len(revs), 2)
+            pkg_sha = sha256_file(pkg_path)
+
+            record_dispatch_batch(repo, "t-rev-findings", revs, host="antigravity")
+            prof = resolve_execution_profile(repo, "t-rev-findings", host="antigravity")
+            for idx, r_role in enumerate(revs):
+                pointer = prof["reviewers"][r_role]["brief_pointer_prompt"]
+                cid = f"rev-find-child-{idx}"
+                tx = ag_data / "brain" / cid / ".system_generated/logs/transcript.jsonl"
+                tx.parent.mkdir(parents=True, exist_ok=True)
+                is_last = (idx == len(revs) - 1)
+                verdict = "FINDINGS" if is_last else "PASS"
+                findings_arr = [{
+                    "id": "sec-001",
+                    "severity": "MEDIUM",
+                    "title": "Duplicate network sync on reset cancellation",
+                    "message": "Track desiredResetData across CancellationException.",
+                    "file": "app/src/main/kotlin/com/example/HomeViewModel.kt",
+                    "line_start": 2,
+                    "line_end": 2,
+                    "evidence": "HomeViewModel.kt:2",
+                    "recommended_fix": "Preserve adopted resetData boolean.",
+                }] if is_last else []
+                rows = [
+                    {
+                        "source": "SYSTEM_SDK",
+                        "type": "SYSTEM_MESSAGE",
+                        "content": f"<SYSTEM_MESSAGE>\nsender=parent-lead priority=MESSAGE_PRIORITY_HIGH content={pointer}\n</SYSTEM_MESSAGE>",
+                    },
+                    {
+                        "source": "MODEL",
+                        "type": "PLANNER_RESPONSE",
+                        "content": "Review complete.\n```json\n" + json.dumps({
+                            "schema_version": 2,
+                            "task_id": "t-rev-findings",
+                            "run_id": run_id,
+                            "reviewer": r_role,
+                            "review_package_sha256": pkg_sha,
+                            "verdict": verdict,
+                            "findings": findings_arr,
+                        }, indent=2) + "\n```",
+                    },
+                ]
+                tx.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+            proc = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "review", "complete-all", "--task", "t-rev-findings"],
+                cwd=str(repo),
+                env={**os.environ, "ANTIGRAVITY_APP_DATA": str(ag_data)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+            self.assertNotIn("STALE_VERIFICATION_RUN", proc.stderr + proc.stdout)
+            self.assertIn("REVIEW_SUMMARY_TABLE_BEGIN", proc.stdout)
+            self.assertIn("BLOCKING_FINDING:", proc.stdout)
+            self.assertIn("Duplicate network sync on reset cancellation", proc.stdout)
+            self.assertEqual("BLOCKED", read_json(tdir / "plan.json")["status"])
+
+    def test_4_windows_gradle_breakaway_falls_back_cleanly_on_permission_error(self) -> None:
+        import _live_process
+        from unittest import mock
+
+        calls: list[dict] = []
+
+        def fake_popen(argv, **kwargs):
+            calls.append(dict(kwargs))
+            if kwargs.get("creationflags"):
+                raise PermissionError(5, "Access is denied")
+            m = mock.MagicMock()
+            m.returncode = 0
+            return m
+
+        with mock.patch.object(_live_process.os, "name", "nt"), mock.patch.object(_live_process.subprocess, "Popen", side_effect=fake_popen):
+            proc = _live_process._spawn_streaming_process(
+                ["gradlew.bat", ":app:testDebugUnitTest"],
+                cwd=".",
+                env={},
+                label="gradle",
+            )
+            self.assertIsNotNone(proc)
+            self.assertEqual(2, len(calls))
+            self.assertTrue(int(calls[0].get("creationflags") or 0) > 0)
+            self.assertNotIn("creationflags", calls[1])
+
+    def test_5_final_reviewer_step_budget_scales_to_24_for_18_files_preserving_small_caps(self) -> None:
+        import delegation_policy as dp
+        from _vnext_common import atomic_write_json
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents/state/tasks/t-18").mkdir(parents=True)
+            files_18 = [f"app/src/main/java/com/demo/F{i}.kt" for i in range(18)]
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": "t-18"})
+            atomic_write_json(repo / ".agents/state/tasks/t-18/plan.json", {
+                "task_id": "t-18",
+                "status": "VERIFYING",
+                "expected_files": files_18,
+            })
+            # 18-file final review gets 18 + 6 = 24 calls (calls 1..24 allowed, #25 denied)
+            for idx in range(24):
+                ok, reason, _ = dp.check_and_record_subagent_step_budget(
+                    repo, "exec-18", kind="REVIEWER", tool_name="read_file", run_id="run-final1", role="arch-regression-reviewer-agent"
+                )
+                self.assertTrue(ok, f"Call #{idx + 1} failed unexpectedly: {reason}")
+            ok25, reason25, _ = dp.check_and_record_subagent_step_budget(
+                repo, "exec-18", kind="REVIEWER", tool_name="read_file", run_id="run-final1", role="arch-regression-reviewer-agent"
+            )
+            self.assertFalse(ok25)
+            self.assertIn("24-call", reason25)
+
+    def test_6_export_related_chat_bundle_and_top_level_token_peak(self) -> None:
+        import session_forensics
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            repo.mkdir()
+            (repo / ".agents/state").mkdir(parents=True)
+            brain = root / "brain"
+            main_cid = "1cf1b031-bbe3-4e50-b76a-2fe4626bacd6"
+            sub_cid = "650a3494-e6a8-4061-ad6d-63d79b92c8de"
+
+            main_logs = brain / main_cid / ".system_generated/logs"
+            main_subs = brain / main_cid / ".system_generated/subagents"
+            sub_logs = brain / sub_cid / ".system_generated/logs"
+            main_logs.mkdir(parents=True)
+            main_subs.mkdir(parents=True)
+            sub_logs.mkdir(parents=True)
+
+            (main_logs / "transcript_full.jsonl").write_text(
+                json.dumps({"type": "PLANNER_RESPONSE", "step_index": 89, "input_tokens": 140997, "cache_read_tokens": 38948, "output_tokens": 1040}) + "\n",
+                encoding="utf-8",
+            )
+            (main_subs / f"{sub_cid}.json").write_text(
+                json.dumps({"conversationId": sub_cid, "subagentDescriptor": {"typeName": "security-perf-reviewer-agent"}}),
+                encoding="utf-8",
+            )
+            (sub_logs / "transcript_full.jsonl").write_text(
+                json.dumps({"type": "PLANNER_RESPONSE", "step_index": 5, "input_tokens": 30000, "cache_read_tokens": 50000, "output_tokens": 900}) + "\n",
+                encoding="utf-8",
+            )
+
+            out_zip = root / "exported_bundle.zip"
+            with mock.patch("antigravity_runtime.candidate_brain_roots", return_value=[brain]), \
+                 mock.patch("antigravity_runtime.resolve_transcript", return_value=main_logs / "transcript_full.jsonl"):
+                diag = session_forensics.diagnose_session(repo, conversation_id=main_cid)
+                self.assertEqual(140997 + 38948, diag["transcript"]["peak_context_tokens"])
+
+                bundle = session_forensics.export_related_chat_bundle(repo, conversation_id=main_cid, out_path=out_zip)
+                self.assertTrue(out_zip.is_file())
+                self.assertEqual(2, bundle["conversations_packed"])
+                self.assertEqual([sub_cid], bundle["subagent_conversation_ids"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

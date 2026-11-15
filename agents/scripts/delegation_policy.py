@@ -2158,18 +2158,42 @@ def mark_utility_wave_completed(
 
 
 def _adaptive_slice_file_count(repo: Path, *, full_task: bool = False) -> int:
-    """Return active phase/task planned file count for scale-adaptive subagent read caps."""
+    """Return active phase/task file count for scale-adaptive subagent read caps."""
+    plan: dict[str, Any] | None = None
     try:
         from mutation_guard import active_plan
-        plan = active_plan(repo, allow_missing=True)
-    except (ImportError, OSError, ValueError, ValidationError):
+        plan = active_plan(repo)
+    except (ImportError, OSError, ValueError, TypeError, ValidationError):
         plan = None
+    if not isinstance(plan, dict) or not plan:
+        try:
+            at_f = state_root(repo) / "active-task.json"
+            if at_f.is_file():
+                at_tid = str(read_json(at_f).get("task_id") or "").strip()
+                if at_tid and (task_dir(repo, at_tid) / "plan.json").is_file():
+                    plan = read_json(task_dir(repo, at_tid) / "plan.json")
+        except (OSError, ValueError, ValidationError):
+            plan = None
     if not isinstance(plan, dict) or not plan:
         return 0
     total_expected = len(plan.get("expected_files") or [])
     status_up = str(plan.get("status") or "").strip().upper()
     if full_task or status_up in {"VERIFYING", "READY_FOR_DELIVERY"}:
-        return total_expected
+        tid_cur = str(plan.get("task_id") or "").strip()
+        manifest_len = 0
+        if tid_cur:
+            try:
+                cr_f = task_dir(repo, tid_cur) / "current-run.json"
+                if cr_f.is_file():
+                    m_path = Path(str(read_json(cr_f).get("manifest") or ""))
+                    if m_path.is_file():
+                        m_doc = read_json(m_path)
+                        t_ch = m_doc.get("task_changes") if "task_changes" in m_doc else m_doc.get("changes")
+                        if isinstance(t_ch, (list, dict)):
+                            manifest_len = len(t_ch)
+            except (OSError, ValueError, ValidationError):
+                manifest_len = 0
+        return max(total_expected, manifest_len)
     phases = plan.get("phases")
     if isinstance(phases, list) and phases:
         tid = str(plan.get("task_id") or "").strip()
@@ -2265,7 +2289,11 @@ def check_and_record_subagent_step_budget(
             return (True, "", "")
         is_final_review = not str(run_id or "").strip().lower().startswith("phase-")
         slice_n = _adaptive_slice_file_count(repo, full_task=is_final_review)
-        cap = max(MAX_REVIEWER_TOOL_CALLS, min(48, (slice_n // 2) + 8)) if slice_n > 8 else MAX_REVIEWER_TOOL_CALLS
+        if slice_n > 8:
+            scaled_cap = (slice_n + 6) if is_final_review else ((slice_n // 2) + 8)
+            cap = max(MAX_REVIEWER_TOOL_CALLS, min(36 if is_final_review else 48, scaled_cap))
+        else:
+            cap = MAX_REVIEWER_TOOL_CALLS
         code = "REVIEWER_STEP_BUDGET_REACHED"
         label = role or "reviewer-subagent"
         guidance = (

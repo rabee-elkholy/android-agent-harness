@@ -1026,9 +1026,13 @@ def finalize_review_execution(
     task_id: str,
     run_id: str | None = None,
     ledger: dict[str, Any] | None = None,
+    *,
+    _freshness_checked: bool = False,
 ) -> dict[str, Any]:
     with StateLock(state_root(repo)):
-        return _finalize_review_execution_locked(repo, task_id, run_id, ledger)
+        return _finalize_review_execution_locked(
+            repo, task_id, run_id, ledger, _freshness_checked=_freshness_checked
+        )
 
 
 finalize_reviews = finalize_review_execution
@@ -1088,6 +1092,24 @@ def _print_finalized_review_summary(res: dict[str, Any]) -> None:
         f_cnt = findings_by_rev.get(r_name, 0)
         print(f"| `{r_name}` | `{m_name}` | `{v_name}` | `{f_cnt}` |")
     print("REVIEW_SUMMARY_TABLE_END")
+    blocking_items = list(res.get("blocking_findings") or [])
+    if blocking_items:
+        for bf in blocking_items:
+            if not isinstance(bf, dict):
+                continue
+            b_rev = str(bf.get("reviewer") or "reviewer")
+            b_sev = str(bf.get("severity") or "MEDIUM")
+            b_file = str(bf.get("file") or "")
+            b_line = bf.get("line_start") or bf.get("line") or ""
+            loc = f"{b_file}:{b_line}" if (b_file and b_line) else (b_file or "diff")
+            b_title = str(bf.get("title") or bf.get("id") or "Blocking finding").strip()
+            b_fix = str(bf.get("recommended_fix") or bf.get("message") or "").strip()
+            detail = f"{b_title} -- {b_fix}" if b_fix else b_title
+            print(f"BLOCKING_FINDING: [{b_sev}] {b_rev} ({loc}): {detail[:360]}")
+        t_id_out = str(res.get("task_id") or "").strip()
+        if t_id_out:
+            print(f"NEXT_ACTION=RESUME_IMPLEMENTATION: python .agents/harness.py task resume --repo . --task-id {t_id_out}")
+            print("NEXT_REASON=Resolve blocking reviewer finding(s) above and re-run verify-steps.")
     print(
         "[!] CRITICAL: Reviews are already finalized (do NOT run `review finalize`). "
         "Invoke `run_command` for NEXT_ACTION immediately in this turn, and NEVER write parenthetical "
@@ -1279,7 +1301,12 @@ def main(argv: list[str] | None = None) -> int:
             st_after = get_review_execution_status(repo, args.task)
             rev_states = st_after.get("reviewers") or {}
             if required_reviewers and all(rev_states.get(r, {}).get("state") in (REVIEW_COMPLETED, REVIEW_INGESTED) for r in required_reviewers):
-                final_res = finalize_review_execution(repo, args.task)
+                already_ingested_in_loop = bool(completed_items) and all(
+                    rev_states.get(r, {}).get("state") == REVIEW_INGESTED for r in required_reviewers
+                )
+                final_res = finalize_review_execution(
+                    repo, args.task, _freshness_checked=already_ingested_in_loop
+                )
                 if getattr(args, "json", False):
                     import io as _io, contextlib as _ctx
                     buf = _io.StringIO()

@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+import zipfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -192,8 +193,14 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             if t_name:
                 tool_counts[t_name] += 1
             compacted = "compaction" in low or "summariz" in low
+            usage_candidates: list[dict[str, Any]] = []
             for u_key in ("usage", "token_usage", "usageMetadata", "metadata"):
-                u = obj.get(u_key)
+                u_cand = obj.get(u_key)
+                if isinstance(u_cand, dict):
+                    usage_candidates.append(u_cand)
+            if "input_tokens" in obj or "cache_read_tokens" in obj or "promptTokenCount" in obj:
+                usage_candidates.append(obj)
+            for u in usage_candidates:
                 if isinstance(u, dict):
                     raw_prompt = int(u.get("promptTokenCount") or u.get("input_tokens") or u.get("prompt_tokens") or 0)
                     has_cache_field = "cachedContentTokenCount" in u or "cache_read_tokens" in u
@@ -467,6 +474,92 @@ def export_scrubbed_bundle(repo: Path, report: dict[str, Any]) -> Path:
     return out_path
 
 
+def export_related_chat_bundle(
+    repo: Path,
+    *,
+    conversation_id: str = "",
+    out_path: Path | None = None,
+) -> dict[str, Any]:
+    """Package the main Antigravity brain folder and all bound child subagent folders into a `.zip` archive
+    by reading `.system_generated/subagents/*.json` metadata directly (zero raw transcript context reads).
+    """
+    from antigravity_runtime import candidate_brain_roots
+
+    sroot = state_root(repo)
+    conv_id = conversation_id.strip() or os.environ.get("HARNESS_CONVERSATION_ID", "").strip()
+    if not conv_id:
+        active_conv = sroot / "active-conversation.json"
+        if active_conv.is_file():
+            try:
+                conv_id = str(read_json(active_conv).get("conversation_id") or "").strip()
+            except (OSError, ValueError, ValidationError):
+                conv_id = ""
+    if not conv_id:
+        raise ValidationError(
+            "CHAT_BUNDLE_CONVERSATION_REQUIRED: Pass `--conversation-id <uuid>` (or run inside an active Antigravity conversation)."
+        )
+
+    main_dir: Path | None = None
+    brain_root_found: Path | None = None
+    for b_root in candidate_brain_roots():
+        cand_dir = b_root / conv_id
+        if cand_dir.is_dir():
+            main_dir = cand_dir
+            brain_root_found = b_root
+            break
+    if main_dir is None or brain_root_found is None:
+        raise ValidationError(f"CHAT_BUNDLE_NOT_FOUND: Brain directory for conversation '{conv_id}' was not found.")
+
+    related_ids: list[str] = [conv_id]
+    sub_meta_dir = main_dir / ".system_generated" / "subagents"
+    if sub_meta_dir.is_dir():
+        for sf in sorted(sub_meta_dir.glob("*.json")):
+            try:
+                s_doc = json.loads(sf.read_text(encoding="utf-8", errors="replace"))
+                cid_sub = str(s_doc.get("conversationId") or sf.stem).strip()
+            except ValueError:
+                cid_sub = sf.stem.strip()
+            if cid_sub and cid_sub not in related_ids and (brain_root_found / cid_sub).is_dir():
+                related_ids.append(cid_sub)
+
+    short_id = conv_id.split("-", 1)[0]
+    archive_prefix = f"chat-{short_id}-all-related"
+    if out_path is not None:
+        target_zip = Path(out_path).expanduser().resolve()
+    else:
+        dl_dir = Path.home() / "Downloads"
+        base_out = dl_dir if dl_dir.is_dir() else (state_root(repo) / "incidents")
+        base_out.mkdir(parents=True, exist_ok=True)
+        target_zip = (base_out / f"{archive_prefix}.zip").resolve()
+
+    target_zip.parent.mkdir(parents=True, exist_ok=True)
+    entries_packed = 0
+    with zipfile.ZipFile(target_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for r_id in related_ids:
+            src_folder = brain_root_found / r_id
+            if not src_folder.is_dir():
+                continue
+            for root_d, dirs_d, files_d in os.walk(src_folder):
+                dirs_d.sort()
+                for fn in sorted(files_d):
+                    fp = Path(root_d) / fn
+                    if fp.resolve() == target_zip:
+                        continue
+                    rel_in_conv = fp.relative_to(src_folder).as_posix()
+                    arcname = f"{archive_prefix}/{r_id}/{rel_in_conv}"
+                    zf.write(fp, arcname)
+                    entries_packed += 1
+
+    return {
+        "bundle_path": str(target_zip),
+        "main_conversation_id": conv_id,
+        "subagent_conversation_ids": related_ids[1:],
+        "conversations_packed": len(related_ids),
+        "entries_packed": entries_packed,
+        "size_bytes": target_zip.stat().st_size if target_zip.is_file() else 0,
+    }
+
+
 def capture_auto_stall_summary(repo: Path, task_id: str = "") -> str:
     """Return a concise 1-line root-cause hint when consecutive hook denials or review caps occur."""
     try:
@@ -486,6 +579,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--conversation-id", dest="conversation_id", default="")
     parser.add_argument("--task-id", "--task", dest="task_id", default="")
     parser.add_argument("--export-bundle", action="store_true", help="Write Zero-PII scrubbed JSON bundle under .agents/state/incidents/")
+    parser.add_argument("--export-chat-bundle", action="store_true", help="Package main conversation and all bound subagent brain folders into a .zip archive")
+    parser.add_argument("--out", dest="out_path", type=Path, default=None, help="Optional destination .zip path for --export-chat-bundle")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -495,6 +590,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.export_bundle:
             bundle_path = export_scrubbed_bundle(repo, report)
             report["exported_bundle"] = str(bundle_path)
+        if args.export_chat_bundle:
+            report["chat_bundle"] = export_related_chat_bundle(
+                repo, conversation_id=args.conversation_id, out_path=args.out_path
+            )
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -509,6 +608,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  * [{f['severity']}] {f['code']}: {f['evidence']} -> {f['remedy']}")
             if report.get("exported_bundle"):
                 print(f"- Scrubbed Zero-PII Bundle: {report['exported_bundle']}")
+            if report.get("chat_bundle"):
+                cb = report["chat_bundle"]
+                print(f"- Related Chat Archive: {cb['bundle_path']} ({cb['conversations_packed']} conversations, {cb['entries_packed']} files)")
         return 0
     except (OSError, ValueError, ValidationError) as exc:
         print(json.dumps({"status": "ERROR", "reason": str(exc)}, ensure_ascii=False), file=sys.stderr)
