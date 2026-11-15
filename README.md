@@ -43,10 +43,10 @@ Prompt rules alone decay as conversations cross `50k+` tokens: agents start read
 
 ## Why Android Agent Harness?
 
-Host JVM unit tests (`./gradlew testDebugUnitTest`) catch logic assertions inside mocked classes, yet **silently pass** on many of the costliest Android and KMP production defects. Below is what happens on real multi-module repositories (`mustafaunlu/Ecommerce-Compose` & `joreilly/PeopleInSpace`) when the exact same seeded tasks run unassisted vs. governed by `v1.3.13`:
+Host JVM unit tests (`./gradlew testDebugUnitTest`) catch logic assertions inside mocked classes, yet **silently pass** on many of the costliest Android and KMP production defects. Below is what happens on real multi-module repositories (`mustafaunlu/Ecommerce-Compose` & `joreilly/PeopleInSpace`) when the exact same seeded tasks run unassisted vs. governed by `v1.3.14`:
 
 ```text
-WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNESS v1.3.13
+WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNESS v1.3.14
 ────────────────────────────────────────────────────   ───────────────────────────────────────────────────────────────────
 1. @Entity column added at @Database(version = 1)   -> BLOCKED in 22ms  [ROOM_SCHEMA_MIGRATION_MISSING] (0 tokens)
 2. import android.util.Log inside KMP commonMain    -> BLOCKED in 18ms  [KMP_COMMON_MAIN_PURITY_VIOLATION] (0 tokens)
@@ -80,7 +80,7 @@ WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNES
 Open your Android or KMM/KMP repository in **Google Antigravity** (or Claude Code) and paste this single pinned bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.13/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.14/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 What happens automatically and non-destructively:
@@ -106,7 +106,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or initialize directly from a pinned shallow tag clone with **zero global packages**:
 
 ```bash
-git clone --depth 1 --branch v1.3.13 --single-branch \
+git clone --depth 1 --branch v1.3.14 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -148,7 +148,7 @@ Updates synchronize `.agents/` in place without breaking open IDE file watchers,
 
 Every runtime subsystem is implemented in pure Python `3.10–3.14` standard library with content-addressed `blake2b` caching and in-process dispatch. All end-to-end metrics below were measured live against **`mustafaunlu/Ecommerce-Compose`** (`178` files) and **`joreilly/PeopleInSpace`** (`9`-module KMP + `SwiftUI`, `204` files):
 
-| Engineering Dimension | Baseline (`Without Harness` / `v1.3.4`) | Governed by Harness `v1.3.13` | Measured Engineering Gain |
+| Engineering Dimension | Baseline (`Without Harness` / `v1.3.4`) | Governed by Harness `v1.3.14` | Measured Engineering Gain |
 |---|---:|---:|---|
 | **Silent Defect Interception** (`18` Seeded Tasks) | `0 / 18` caught (`100%` escaped) | **`18 / 18` caught & delivered (`0%` escaped)** | **`100%` caught** (`14` by `0`-token Python gates in `<200 ms` + `4` by V2 review) |
 | **Lead-Chat Discovery Tokens** (`18` Tasks) | `112,097` tokens in Frontier chat | **`~8,640` tokens in Frontier chat** | **`-92.3%` Frontier Lead context** (`90,341` raw tokens isolated in Hydrogen `Scout`) |
@@ -269,7 +269,7 @@ Android Agent Harness is built primary-first for **Google Antigravity** with `HA
 
 ## Shared-Quota Hydrogen Orchestration & Frontier Quota Protection
 
-Version `1.3.13` ships the **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`hydrogen-dynamic` / `hydrogen-dynamic-project`)** as the recommended `#1` project-wide routing policy, calibrated to Antigravity's single shared Gemini quota pool (`Carbon` & `Argon` weighted at `3.00x` = `$6/$30` effective vs `Hydrogen` at `1.00x` = `$1.50/$7.50`). It pairs an explicit **`Gemini 4 Carbon (Medium)`** Lead Architect (or `Claude Sonnet/Opus 5.5` separate-pool rotation / `Web-Relay` external offload — never Antigravity's built-in `Orchestrator` dropdown) with warm-cache `<4`-file inline edits (`TRIVIAL_INLINE_LEAD`), Wave-1 `gemini-4-hydrogen-high` `4+`-file `Worker` execution, and zero `3x` `Argon` burn:
+Version `1.3.14` ships the **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`hydrogen-dynamic` / `hydrogen-dynamic-project`)** as the recommended `#1` project-wide routing policy, calibrated to Antigravity's single shared Gemini quota pool (`Carbon` & `Argon` weighted at `3.00x` = `$6/$30` effective vs `Hydrogen` at `1.00x` = `$1.50/$7.50`). It pairs an explicit **`Gemini 4 Carbon (Medium)`** Lead Architect (or `Claude Sonnet/Opus 5.5` separate-pool rotation / `Web-Relay` external offload — never Antigravity's built-in `Orchestrator` dropdown) with warm-cache `<4`-file inline edits (`TRIVIAL_INLINE_LEAD`), Wave-1 `gemini-4-hydrogen-high` `4+`-file `Worker` execution, and zero `3x` `Argon` burn:
 
 | Complexity Band | Automatic Task / Diff Trigger | Routed Execution & Reviewer Models (`hydrogen-dynamic`) | Shared-Pool Quota & Reasoning Profile |
 | :--- | :--- | :--- | :--- |
@@ -280,7 +280,7 @@ Version `1.3.13` ships the **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`h
 Additional enforced subagent guardrails across all waves:
 - **Scale-Adaptive Step Budgets**: `harness-scout-agent` capped at **`24` calls/instance** (blocking built-in unpinned `research`/`explore` via `USE_HARNESS_SCOUT_AGENT`); `harness-worker-agent` defaults to **`32` read/search calls** and scales automatically up to **`140` reads** (`slice_files + 16`) on `30–100+` file slices (edits & Gradle uncapped); specialists capped at **`24`**; reviewers default to **`12`** calls and scale automatically up to **`48` calls** on large diffs.
 - **Post-Wave Anti-Reread Guard**: Native hooks block bloated `> 220`-line Lead re-reads on `> 350`-line files already digested by subagents and cap post-wave surgical Lead reads at **`<= 3`**. See [Reviewer Model Configuration](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/reviewer-models.md).
-- **Interactive Execution Mode Selector (`execution-mode show|set`) & Large-Scale Stateless Web-Relay (`web-pack` / `web-apply`, `1–250` Files)**: Choose **Smart Auto** (`auto-project` / `auto-task` — runs `<12`-file single-module tasks locally in Antigravity and promotes `12+`-file, multi-module, `T5` critical, or `2-Strike` tasks automatically to Gemini Web), **Normal Mode** (`normal-task` / `normal-project`), or **Web-Relay Mode** (`web-task` / `web-project`, cutting **`-83.2%` Lead `Carbon` burn across `28` paired benchmark tasks**). Packs `1–40` files into **one** single `.md` bundle (handling routine `30`-file tasks in 1 pass) and auto-shards `41–250` file refactors in Clean Architecture DAG order (`Batch 1/N` + `"status": "PARTIAL"` continuation + `APPLIED_BATCH_NEXT_READY` auto-copy + multi-batch `staged-web-phases` accumulation); shields binary media/fonts (`.png`/`.webp`/`.ttf`) while indexing module `R.drawable.*`/`R.font.*`/`Res.drawable.*` IDs automatically; allows verified surgical `hunks` on neighbor callers; extracts replies via `JSONDecoder.raw_decode`; keeps read-only `IDLE` chats prompt-free; preserves `plan_sha256` across mid-task `normal <-> web` switches, `task bridge`, and `task switch`; and keeps all-secret scopes and Git `CONFLICT` markers (`<<<<<<<`) safely local.
+- **Interactive Execution Mode Selector (`execution-mode show|set`) & Large-Scale Stateless Web-Relay (`web-pack` / `web-apply`, `1–250` Files)**: Choose **Smart Auto** (`auto-project` / `auto-task` — runs compact `<10`-file, `<80 KB` single-module or small 2-module `<6`-file / `<48 KB` tasks locally in Antigravity and promotes `10+`-file, `80+ KB`, substantial multi-module (`3+` modules or `2` modules with `6+` files / `48+ KB`), multi-phase, `T5` critical, or `2-Strike` tasks automatically to Gemini Web), **Normal Mode** (`normal-task` / `normal-project`), or **Web-Relay Mode** (`web-task` / `web-project`, cutting **`-83.2%` Lead `Carbon` burn across `28` paired benchmark tasks**). Packs `1–40` files into **one** single `.md` bundle (handling routine `30`-file tasks in 1 pass) and auto-shards `41–250` file refactors in Clean Architecture DAG order (`Batch 1/N` + `"status": "PARTIAL"` continuation + `APPLIED_BATCH_NEXT_READY` auto-copy + multi-batch `staged-web-phases` accumulation); shields binary media/fonts (`.png`/`.webp`/`.ttf`) while indexing module `R.drawable.*`/`R.font.*`/`Res.drawable.*` IDs automatically; allows verified surgical `hunks` on neighbor callers; extracts replies via `JSONDecoder.raw_decode`; keeps read-only `IDLE` chats prompt-free; preserves `plan_sha256` across mid-task `normal <-> web` switches, `task bridge`, and `task switch`; and keeps all-secret scopes and Git `CONFLICT` markers (`<<<<<<<`) safely local.
 
 ---
 

@@ -13,7 +13,7 @@
 Open the Android project root in **Google Antigravity** (`antigravity` is selected automatically by default during setup) and paste:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.13/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.14/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 The agent interviews you in chat, preserves references, shows an explicit plan, provisions the pinned kit into `~/.android-harness/kit` (or `%USERPROFILE%\.android-harness\kit` on Windows), and runs Doctor verification (`doctor --install-check`).
@@ -92,7 +92,7 @@ Task A
 
 ## Execution Modes (`auto-project` & Stateless `Web-Relay`)
 
-Set Smart Auto once per project (`auto-project`) to keep `<12`-file single-module tasks local in Antigravity while automatically promoting `12+`-file refactors, multi-module changes, `T5` critical surfaces, or `2-Strike` escalations to your separate **Gemini Web (`gemini.google.com`)** quota:
+Set Smart Auto once per project (`auto-project`) to keep compact tasks (`<10` files, `<80 KB` non-test code mass, and single-module or small 2-module `<6` files / `<48 KB`) local in Antigravity while automatically promoting `10+`-file or `80+ KB` refactors, substantial multi-module (`3+` modules, or `2` modules with `6+` files / `48+ KB`), multi-phase, `T5` critical surfaces, or `2-Strike` escalations to your separate **Gemini Web (`gemini.google.com`)** quota:
 
 ```bash
 # 1. Enable Smart Auto project-wide (or choose normal-project / web-project)
