@@ -401,7 +401,10 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
     if _git("merge-base", "--is-ancestor", parent_head, current_head).returncode != 0:
         return None
     task_baseline = load_task_baseline(repo, task_id) or {}
-    baseline_changes = [c for c in (task_baseline.get("changes") or []) if isinstance(c, dict)]
+    baseline_changes = [
+        c for c in list(task_baseline.get("changes") or []) + list(plan.get("base_change_identities") or [])
+        if isinstance(c, dict)
+    ]
     baseline_dirty_paths = {
         str(c[key]).replace("\\", "/")
         for c in baseline_changes
@@ -442,14 +445,28 @@ def accept_requested_delivery_commit(repo: Path, task_id: str, plan: dict[str, A
     changes = frozen.get("task_changes") if "task_changes" in frozen else frozen.get("changes") or []
     verified_paths = {str(c[key]).replace("\\", "/") for c in changes if isinstance(c, dict)
                       and c.get("status") != "BASELINE_DIRTY_REMOVED" for key in ("path", "old_path") if c.get(key)}
+    from delivery_manifest import disjoint_sibling_file_sets
+    live_sibling_files, _ = disjoint_sibling_file_sets(repo, task_id, plan=plan)
+    safe_baseline_dirty_paths = {
+        p for p in baseline_dirty_paths
+        if p and p.strip("/") not in live_sibling_files and p not in live_sibling_files
+    }
+    planned_paths = {
+        str(p).replace("\\", "/").strip("/")
+        for p in (plan.get("expected_files") or [])
+        if str(p).strip() and str(p).replace("\\", "/").strip("/") not in live_sibling_files
+    }
     committed = subprocess.run(["git", "diff", "--no-renames", "--name-only", "-z", parent_head, current_head],
                                cwd=str(repo), capture_output=True, check=False)
     committed_paths = {path.decode("utf-8", errors="surrogateescape").replace("\\", "/")
                        for path in committed.stdout.split(b"\0") if path}
-    allowed_paths = (verified_paths | baseline_dirty_paths) if is_merge_delivery else verified_paths
+    allowed_paths = verified_paths | safe_baseline_dirty_paths
+    if is_merge_delivery:
+        allowed_paths |= baseline_dirty_paths
     if committed.returncode != 0 or not committed_paths or not committed_paths <= allowed_paths:
         return None
-    if verified_paths and not (committed_paths & verified_paths):
+    task_touch_set = verified_paths | (planned_paths & safe_baseline_dirty_paths)
+    if task_touch_set and not (committed_paths & task_touch_set):
         return None
 
     receipt_data = {

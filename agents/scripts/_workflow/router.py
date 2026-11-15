@@ -736,8 +736,8 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "reason": (
                 f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
                 "Human Git Authority requires the developer to review and commit changes before final delivery. "
-                "If the developer asks to install or test the APK on their phone before committing, run `python .agents/harness.py device install-start` directly (no `--reopen` needed). "
-                f"If the developer requests code changes instead, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
+                "If the developer asks to install/test the APK or inspect `logcat` on their phone before committing, run `python .agents/harness.py device install-start` or `python .agents/harness.py debug logs --lines 400 --filter \"<tag|url>\"` directly in `READY_FOR_DELIVERY` (no `--reopen` needed for read-only logcat/code diagnosis). "
+                f"Only once an actual code edit is confirmed for this task, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
             ),
             "suggested_commit": suggested_commit,
             "suggested_commit_block": suggested_commit_full,

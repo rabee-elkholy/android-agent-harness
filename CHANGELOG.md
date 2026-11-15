@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.15] - 2026-11-15
+
+### Fixed & Hardened
+- **Dirty-Baseline Delivery Commit Acceptance & Non-Destructive `--reconcile-lineage` (`agents/scripts/task_git_lineage.py`, `agents/scripts/change_decision.py`, `agents/scripts/_workflow/engine.py`)**:
+  - Updated `accept_requested_delivery_commit()` to accept non-sibling `baseline_dirty_paths` alongside `verified_paths` once `finalize_ready_delivery()` has verified bit-for-bit `delivery_snapshot_sha256` equivalence, eliminating `does not have a valid task checkpoint receipt` failures when committing a full working tree at delivery.
+  - Updated `change_decision.py --reconcile-lineage` (`not files`) to preserve `READY_FOR_DELIVERY` (`ready_delivery_snapshot_sha256` and `ready_run_id`) when the repository snapshot matches the verified ready snapshot, preventing redundant full verification loops after multi-commit developer deliveries.
+- **Logcat-First Phone Diagnosis in `READY_FOR_DELIVERY` & Zero-Edit `--reopen` Carry (`agents/scripts/run_device.py`, `agents/scripts/_workflow/router.py`, `agents/scripts/_workflow/engine.py`)**:
+  - Instructed agents to run read-only `debug logs` and code inspection while staying in `READY_FOR_DELIVERY` before invoking `task resume --reopen`, and added `reopen-carry.json` in `_carry_verification_run()` so premature `--reopen` calls with zero subsequent file edits restore verified runs instantly without re-running Gradle or reviewers.
+- **`task draft --adopt-dirty` WIP Continuation Support (`agents/scripts/_workflow/engine.py`, `agents/scripts/_workflow/planning.py`, `agents/tool-adapters/GEMINI.md.template`)**:
+  - Added `--adopt-dirty` to `task draft` so pre-existing uncommitted WIP edits in non-sibling `expected_files` can be adopted directly into `task_changes` from Round 1 (ensuring architectural reviewers inspect pre-modified production files immediately), plus added an explicit pre-existing dirty `expected_files` advisory when `--adopt-dirty` is omitted.
+- **Snapshot-Identical Consecutive Phase Gate Reuse (`agents/scripts/_workflow/engine.py`)**:
+  - Reuses verified `compile` and `unit_tests` receipts across consecutive phases in `checkpoint_phase` when `delivery_snapshot_sha256` is unchanged and target modules are already covered, eliminating duplicate Gradle runs on empty follow-up phases.
+- **Native `transcript.jsonl` Read Guard & Quick `debug logs` CLI Reference (`agents/scripts/pre_tool_safety.py`, `agents/tool-adapters/GEMINI.md.template`)**:
+  - Blocked raw Antigravity `transcript.jsonl` / `transcript_full.jsonl` reads via `NATIVE_TRANSCRIPT_READ_FORBIDDEN` (keeping IDE artifacts like `implementation_plan.md` readable) to prevent context bloat, and added `debug logs` directly to the `GEMINI.md` Canonical Command Catalog.
+
 ## [1.3.14] - 2026-11-15
 
 ### Improved & Calibrated

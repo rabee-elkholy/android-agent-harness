@@ -43,8 +43,9 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 | :--- | :--- |
 | **Discovery** | `{{PY}} .agents/harness.py task-context --file <path> --json` (or `graph --feature <name> --json`) |
 | **Exec Mode** | `{{PY}} .agents/harness.py execution-mode set --choice <auto-project\|normal-task\|normal-project\|web-task\|web-project\|ask-every-task> --source conversation --proof-reference "<phrase>"` |
-| **Draft Plan** | `{{PY}} .agents/harness.py task draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR\|CONFLICT> --expected-files <paths>` |
+| **Draft Plan** | `{{PY}} .agents/harness.py task draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR\|CONFLICT> --expected-files <paths>` (add `--adopt-dirty` when continuing uncommitted WIP edits) |
 | **Approve Task** | `{{PY}} .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>` |
 | **Verify Gates** | `{{PY}} .agents/harness.py verify-steps --task-id <id> --host antigravity` (or `compile` -> `prepare-verification --host antigravity` -> `preflight` -> `test`) |
 | **Reviews V2** | `{{PY}} .agents/harness.py review complete-all --task <id>` (or `review complete --task <id> --reviewer <role> --execution-id <convId>` -> `review finalize --task <id>`) |
+| **Debug Logs** | `{{PY}} .agents/harness.py debug logs --lines 400 --filter "<tag\|endpoint>"` (in `READY_FOR_DELIVERY`, diagnose `debug logs` BEFORE running `task resume --reopen`) |
 | **Device & Ship** | `{{PY}} .agents/harness.py assemble` -> `device install-start` -> `device signoff` -> `task verify --repo . --task-id <id>` -> `task complete` -> developer commit -> `task deliver` |

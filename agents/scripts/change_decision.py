@@ -238,8 +238,18 @@ def _record_locked(args):
     receipt = {**preview, "source": args.source, "proof_reference": args.proof_reference.strip(), "recorded_at": utc_now()}
     receipt["receipt_sha256"] = canonical_sha256(receipt)
     plan.setdefault("change_decisions", []).append(receipt)
-    # One atomic plan publication; no partial resume or approval rewrite.
-    if plan["status"] != "IMPLEMENTING":
+    # One atomic plan publication; when reconciling Git lineage alone (`not files`) on a
+    # `READY_FOR_DELIVERY` task whose verified `delivery_snapshot_sha256` is unchanged,
+    # preserve `READY_FOR_DELIVERY` so `task deliver` completes without a redundant verification loop.
+    ready_snap = str(plan.get("ready_delivery_snapshot_sha256") or "")
+    preserve_ready_state = (
+        reconcile_lineage
+        and not files
+        and plan.get("status") == "READY_FOR_DELIVERY"
+        and bool(ready_snap)
+        and str(manifest.get("delivery_snapshot_sha256") or "") == ready_snap
+    )
+    if plan["status"] != "IMPLEMENTING" and not preserve_ready_state:
         plan["status"] = "IMPLEMENTING"
         plan["resumed_at"] = utc_now()
         for key in ("ready_at", "ready_delivery_snapshot_sha256", "ready_change_set_sha256", "ready_run_id"):
@@ -248,5 +258,13 @@ def _record_locked(args):
     plan.pop("material_drift_causes", None)
     plan.pop("review_budget_blocked", None)  # Recompute demand from the fresh delta, never reset spending.
     save_plan(engine._plan_path(repo, args.task_id), plan)
+    if preserve_ready_state:
+        return {
+            "status": "READY_FOR_DELIVERY",
+            "task_id": args.task_id,
+            "decision": receipt,
+            "preserved_ready_for_delivery": True,
+            "next_command": f"python .agents/harness.py task deliver --task-id {args.task_id}",
+        }
     return {"status": "IMPLEMENTING", "task_id": args.task_id, "decision": receipt,
             "next_command": f"python .agents/harness.py task status --task-id {args.task_id} --next --brief"}

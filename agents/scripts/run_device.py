@@ -1440,14 +1440,14 @@ def main() -> int:
                 live_print("NEXT_ACTION=READY_FOR_DELIVERY_PHONE_CHECK: invoke ask_question tool in this turn (DEVELOPER_ACTION)")
                 live_print("TOOL_CALL_REQUIRED=ask_question")
                 live_print(
-                    "[!] CRITICAL: The task is ALREADY verified in `READY_FOR_DELIVERY` (do NOT run `device signoff` or `task resume --reopen` unless the developer asks for code changes). "
+                    "[!] CRITICAL: The task is ALREADY verified in `READY_FOR_DELIVERY` (do NOT run `device signoff`; if the developer reports unexpected phone behavior or asks to inspect `logcat`, run read-only `python .agents/harness.py debug logs --lines 400 --filter \"<tag|url>\"` and inspect source files FIRST while staying in `READY_FOR_DELIVERY`, and ONLY run `task resume --reopen` after confirming an actual code modification is needed in this task). "
                     "Invoke `ask_question` immediately with ZERO chat text before the tool call, placing the 3-section walkthrough above inside `question` "
                     "(options: 'Verified on phone & committed — finalize delivery' -> run `python .agents/harness.py task deliver --task-id "
                     + task_id
                     + "`, 'Verified on phone — show git commit card', 'Run phone E2E (agent tests on the phone)' -> run `python .agents/harness.py e2e start`, "
-                    "'Found an issue — request code changes' -> run `python .agents/harness.py task resume --task-id "
+                    "'Found an issue — inspect logcat or request code changes' -> inspect `debug logs` in `READY_FOR_DELIVERY` first, then run `python .agents/harness.py task resume --task-id "
                     + task_id
-                    + " --reopen`; translate all lines and options into the developer's language, starting every line and option with a word in that language).\n"
+                    + " --reopen` only when editing code; translate all lines and options into the developer's language, starting every line and option with a word in that language).\n"
                 )
             else:
                 live_print("NEXT_ACTION=DEVICE_SIGNOFF_REQUIRED: invoke ask_question tool in this turn (DEVELOPER_ACTION)")

@@ -732,7 +732,14 @@ def _build_and_save_plan(
     if activate:
         _engine.atomic_write_json(_engine.state_root(repo) / "active-task.json", {"task_id": task_id, "plan_path": str(directory / "plan.json"), "updated_at": _engine.utc_now()})
 
-    return _save_initial_baseline(repo, task_id, directory, plan, parsed_phases)
+    return _save_initial_baseline(
+        repo,
+        task_id,
+        directory,
+        plan,
+        parsed_phases,
+        adopt_dirty=bool(getattr(args, "adopt_dirty", False)),
+    )
 
 
 def _parse_plan_phases(repo, raw_phases):
@@ -906,7 +913,7 @@ def _resolve_plan_architecture(repo, args, is_revision, norm_expected_files, par
     return arch_intent, architecture_scope_files, inferred_target_scope, arch_contract, arch_brief
 
 
-def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases):
+def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases, *, adopt_dirty: bool = False):
     base_man = _engine.build_manifest(repo)
     sensitive_changes = []
     try:
@@ -941,16 +948,58 @@ def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases):
     except (OSError, ValueError, _engine.ValidationError):
         pass
 
+    secret_markers_adopt = (".env", "keystore", "jks", "secret", "token", "credentials", "local.properties")
+    planned_rel_norm = {
+        str(p).replace("\\", "/").strip("/")
+        for p in (plan.get("expected_files") or [])
+        if str(p).strip()
+    }
+    try:
+        live_sibs, _ = _engine.disjoint_sibling_file_sets(repo, task_id, plan=plan)
+    except Exception:
+        live_sibs = set()
+    adoptable_planned = planned_rel_norm - set(live_sibs)
+    raw_base_changes = list(base_man.get("changes") or [])
+    overlapping_dirty_planned = sorted({
+        str(c.get("path") or "").replace("\\", "/").strip("/")
+        for c in raw_base_changes
+        if isinstance(c, dict)
+        and str(c.get("path") or "").replace("\\", "/").strip("/") in adoptable_planned
+        and c.get("status") != "U"
+        and not any(m in str(c.get("path") or "").lower() for m in secret_markers_adopt)
+    })
+    if adopt_dirty and overlapping_dirty_planned:
+        adopt_set = set(overlapping_dirty_planned)
+        filtered_base_changes = [
+            c for c in raw_base_changes
+            if not (
+                isinstance(c, dict)
+                and str(c.get("path") or "").replace("\\", "/").strip("/") in adopt_set
+            )
+        ]
+        plan["adopted_dirty_files"] = overlapping_dirty_planned
+    else:
+        filtered_base_changes = raw_base_changes
+        if overlapping_dirty_planned:
+            plan["preexisting_dirty_expected_files"] = overlapping_dirty_planned
+            _engine.sublog(
+                f"NOTE: {len(overlapping_dirty_planned)} planned file(s) ({', '.join(overlapping_dirty_planned[:5])}) "
+                "already have uncommitted edits before draft and are isolated in task-baseline.json. "
+                "If continuing WIP edits across chats, pass --adopt-dirty on task draft."
+            )
+
     task_baseline = {
         "schema_version": 1,
         "task_id": task_id,
         "repository": plan.get("repository"),
         "base_delivery_snapshot_sha256": plan.get("base_delivery_snapshot_sha256"),
         "base_change_set_sha256": plan.get("base_change_set_sha256"),
-        "changes": base_man.get("changes") or [],
+        "changes": filtered_base_changes,
         "sensitive_changes": sensitive_changes,
         "git_merge_state": _engine.git_merge_in_progress(repo),
     }
+    if adopt_dirty and overlapping_dirty_planned:
+        task_baseline["adopted_dirty_files"] = overlapping_dirty_planned
     task_baseline["baseline_sha256"] = _engine.canonical_sha256({
         "schema_version": task_baseline["schema_version"],
         "task_id": task_baseline["task_id"],

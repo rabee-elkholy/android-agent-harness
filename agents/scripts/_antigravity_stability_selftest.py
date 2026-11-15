@@ -5304,5 +5304,311 @@ class TestV1314SmartAutoThresholdCalibration(unittest.TestCase):
             self.assertEqual(t_2p, "AUTO_WEB_MULTI_MODULE_OR_PHASE")
 
 
+
+
+class TestV1315LiveFitnessLifecycleFixes(unittest.TestCase):
+    """Regression suite for all 5 v1.3.15 live Fitness_Android lifecycle & delivery fixes."""
+
+    def test_01_delivery_commit_with_baseline_dirty_files_and_non_destructive_reconcile_lineage(self):
+        import argparse
+        from _daily_workflow_selftest import GitDeliveryTests, run_git, write_file
+        from _vnext_common import atomic_write_json, canonical_sha256, read_json
+        from delivery_manifest import build_manifest, build_task_manifest
+        from workflow import reconcile_delivery
+        import change_decision as cd
+
+        fixture = GitDeliveryTests("test_GIT_DELIVERY_003_developer_commit_with_identical_content_returns_deliver")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+
+        # 1) Exact Fitness_Android scenario: pre-existing dirty files recorded in `task-baseline.json`,
+        #    while `manifest-run-*.json` has ONLY `MainActivity.kt` in `task_changes`!
+        pre_dirty = "app/src/main/kotlin/com/example/PreExistingDirty.kt"
+        write_file(repo / pre_dirty, "package com.example\nclass PreExistingDirty { val v = 1 }\n")
+        base_man = build_manifest(repo)
+
+        plan, tdir = fixture._setup_ready_task("fitness-dirty-commit")
+        tb_doc = {
+            "schema_version": 1,
+            "task_id": "fitness-dirty-commit",
+            "repository": base_man["repository"],
+            "base_delivery_snapshot_sha256": base_man["delivery_snapshot_sha256"],
+            "base_change_set_sha256": base_man["change_set_sha256"],
+            "changes": base_man["changes"],
+        }
+        tb_doc["baseline_sha256"] = canonical_sha256({
+            k: tb_doc[k] for k in ("schema_version", "task_id", "repository", "base_delivery_snapshot_sha256", "base_change_set_sha256", "changes")
+        })
+        atomic_write_json(tdir / "task-baseline.json", tb_doc)
+        frozen_tm = build_task_manifest(repo, tb_doc, expected_files=plan["expected_files"])
+        # Confirm `task_changes` ONLY contains `MainActivity.kt` (NOT `PreExistingDirty.kt`)
+        self.assertEqual(["app/src/main/kotlin/com/example/MainActivity.kt"], [c["path"] for c in frozen_tm["task_changes"]])
+        atomic_write_json(tdir / "manifest-run-fitness-dirty-commit.json", frozen_tm)
+
+        # Developer commits ALL app files together (`PreExistingDirty.kt` + `MainActivity.kt`)
+        run_git(repo, "add", "app")
+        run_git(repo, "commit", "-qm", "feat: commit verified task and baseline WIP together")
+
+        # `reconcile_delivery` / `deliver` succeeds on the VERY FIRST TRY without lineage rejection!
+        delivered_plan, status_code = reconcile_delivery(repo, "fitness-dirty-commit")
+        self.assertEqual("DELIVERED", status_code)
+        self.assertEqual("DELIVERED", delivered_plan["status"])
+
+        # 2) Also verify `change-decision --reconcile-lineage` on a multi-commit READY_FOR_DELIVERY task
+        #    preserves `READY_FOR_DELIVERY` (never resets to `IMPLEMENTING`) when snapshot matches!
+        from _daily_workflow_selftest import RouterCompletionAndResumeRecoveryTests
+        from workflow import complete
+        fixture2 = RouterCompletionAndResumeRecoveryTests("test_RESUME_READY_008_developer_requested_change_reopens_unchanged_ready")
+        fixture2.setUp()
+        self.addCleanup(fixture2.tearDown)
+        repo2 = fixture2.repo
+        write_file(repo2 / pre_dirty, "package com.example\nclass PreExistingDirty { val v = 2 }\n")
+        _, tdir2 = fixture2._setup_verifying_task_ready_for_complete("fitness-two-commits")
+        complete(argparse.Namespace(repo=str(repo2), task_id="fitness-two-commits"))
+        from delivery_equivalence import snapshot_verified_files
+        snapshot_verified_files(repo2, "fitness-two-commits", read_json(tdir2 / "plan.json"), read_json(tdir2 / "plan.json")["ready_run_id"])
+        run_git(repo2, "add", pre_dirty)
+        run_git(repo2, "commit", "-qm", "chore: commit baseline file first")
+        run_git(repo2, "add", "app")
+        run_git(repo2, "commit", "-qm", "feat: commit verified task second")
+
+        rc_cd = cd.record_decision(
+            argparse.Namespace(
+                repo=str(repo2),
+                task_id="fitness-two-commits",
+                mode="accept-edits",
+                file=[],
+                reconcile_lineage=True,
+                reason="Confirm 2 developer commits with identical verified snapshot",
+                apply=True,
+                source="conversation",
+                proof_reference="Confirmed my two commits",
+                expect_preview=None,
+            )
+        )
+        self.assertEqual("READY_FOR_DELIVERY", rc_cd["status"])
+        self.assertTrue(rc_cd.get("preserved_ready_for_delivery"))
+        plan2_after = read_json(tdir2 / "plan.json")
+        self.assertEqual("READY_FOR_DELIVERY", plan2_after["status"])
+        self.assertTrue(plan2_after.get("ready_run_id"))
+        _, code2 = reconcile_delivery(repo2, "fitness-two-commits")
+        self.assertEqual("DELIVERED", code2)
+
+    def test_02_reopen_without_code_edits_reuses_verified_run_instantly(self):
+        import argparse
+        from _daily_workflow_selftest import RouterCompletionAndResumeRecoveryTests
+        from _vnext_common import read_json
+        from workflow import resume, prepare_verification, complete
+
+        fixture = RouterCompletionAndResumeRecoveryTests("test_RESUME_READY_008_developer_requested_change_reopens_unchanged_ready")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+
+        plan, tdir = fixture._setup_verifying_task_ready_for_complete("reopen-zero-edit")
+        ready_plan = complete(argparse.Namespace(repo=str(repo), task_id="reopen-zero-edit"))
+        self.assertEqual("READY_FOR_DELIVERY", ready_plan["status"])
+        orig_run_id = ready_plan["ready_run_id"]
+
+        # Premature `resume --reopen` followed by 0 file edits -> `prepare_verification` carries `orig_run_id` instantly!
+        resume(argparse.Namespace(repo=str(repo), task_id="reopen-zero-edit", reopen=True))
+        self.assertEqual("IMPLEMENTING", read_json(tdir / "plan.json")["status"])
+        self.assertTrue((tdir / "reopen-carry.json").is_file())
+
+        carried = prepare_verification(argparse.Namespace(repo=str(repo), task_id="reopen-zero-edit", force=False))
+        self.assertTrue(carried.get("verification_carried"))
+        self.assertEqual(orig_run_id, carried["run_id"])
+        completed = complete(argparse.Namespace(repo=str(repo), task_id="reopen-zero-edit"))
+        self.assertEqual("READY_FOR_DELIVERY", completed["status"])
+
+    def test_03_adopt_dirty_on_draft_includes_premodified_expected_files_in_task_changes(self):
+        import argparse
+        from _daily_workflow_selftest import GitDeliveryTests, write_file
+        from delivery_manifest import build_task_manifest, load_task_baseline
+        from workflow import draft
+
+        fixture = GitDeliveryTests("test_GIT_DELIVERY_003_developer_commit_with_identical_content_returns_deliver")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        repo = fixture.repo
+
+        vm_rel = "app/src/main/kotlin/com/example/MainActivity.kt"
+        bg_rel = "app/src/main/kotlin/com/example/UnrelatedDirty.kt"
+        write_file(repo / vm_rel, "package com.example\nclass MainActivity { fun wipFeature() = 42 }\n")
+        write_file(repo / bg_rel, "package com.example\nclass UnrelatedDirty\n")
+
+        plan = draft(
+            argparse.Namespace(
+                repo=str(repo),
+                task_id="adopt-wip-vm",
+                outcome="Adopt WIP MainActivity feature and add unit tests",
+                kind="FEATURE",
+                planning_depth="BOUNDED",
+                expected_surfaces="BUSINESS_LOGIC",
+                expected_modules=":app",
+                expected_files=vm_rel,
+                test_strategy="Unit tests",
+                device_strategy="None",
+                risks="None",
+                rollback="None",
+                external_write=[],
+                force=True,
+                adopt_dirty=True,
+            )
+        )
+        self.assertIn(vm_rel, plan.get("adopted_dirty_files") or [])
+        tb = load_task_baseline(repo, "adopt-wip-vm")
+        tb_paths = {c.get("path") for c in (tb.get("changes") or [])}
+        self.assertNotIn(vm_rel, tb_paths)
+        self.assertIn(bg_rel, tb_paths)
+
+        tm = build_task_manifest(repo, tb, expected_files=[vm_rel])
+        tc_paths = [c["path"] for c in tm["task_changes"]]
+        self.assertIn(vm_rel, tc_paths)
+        self.assertNotIn(bg_rel, tc_paths)
+
+    def test_04_checkpoint_phase_reuses_identical_snapshot_gates_and_blocks_raw_transcript_reads(self):
+        import argparse
+        import subprocess
+        import sys
+        import tempfile
+        from unittest import mock
+        from _daily_workflow_selftest import DailyWorkflowSelftest, write_file
+        from _vnext_common import atomic_write_json, read_json, task_dir
+        from phase_review import PHASE_COMPLETE, get_phase_substate, set_phase_substate
+        import _workflow.engine as wf_engine
+        from workflow import begin_next_phase, begin_task, checkpoint_phase, draft, record_approval
+
+        pts_script = Path(__file__).resolve().parent / "pre_tool_safety.py"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            repo.mkdir()
+            ag_data = root / "appdata"
+            tx = ag_data / "brain" / "conv-1" / ".system_generated" / "logs" / "transcript.jsonl"
+            tx.parent.mkdir(parents=True, exist_ok=True)
+            tx.write_text("{}\n", encoding="utf-8")
+            ide_plan = ag_data / "brain" / "conv-1" / "implementation_plan.md"
+            ide_plan.write_text("# Plan\n", encoding="utf-8")
+
+            env = {k: v for k, v in os.environ.items() if k != "HARNESS_HOOK_HOST"}
+            env["ANTIGRAVITY_APP_DATA"] = str(ag_data)
+
+            proc_tx = subprocess.run(
+                [sys.executable, str(pts_script)],
+                input=json.dumps({
+                    "toolName": "view_file",
+                    "toolArgs": {"AbsolutePath": str(tx)},
+                    "workspacePaths": [str(repo)],
+                }),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            resp_tx = json.loads(proc_tx.stdout.strip())
+            self.assertEqual("deny", resp_tx["decision"])
+            self.assertIn("NATIVE_TRANSCRIPT_READ_FORBIDDEN", resp_tx["reason"])
+
+            proc_plan = subprocess.run(
+                [sys.executable, str(pts_script)],
+                input=json.dumps({
+                    "toolName": "view_file",
+                    "toolArgs": {"AbsolutePath": str(ide_plan)},
+                    "workspacePaths": [str(repo)],
+                }),
+                capture_output=True,
+                text=True,
+                env=env,
+                check=False,
+            )
+            resp_plan = json.loads(proc_plan.stdout.strip())
+            self.assertEqual("allow", resp_plan["decision"])
+
+        fixture = DailyWorkflowSelftest("test_daily_14_multi_phase_feature")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        phase_repo = fixture.repo
+
+        task_id = "reuse-identical-phase-gates"
+        f1 = "app/src/main/kotlin/com/example/PhaseOneHelper.kt"
+        f2 = "app/src/main/kotlin/com/example/PhaseTwoHelper.kt"
+        phases_spec = [
+            {"id": "phase-1", "title": "Core implementation", "expected_files": [f1, f2]},
+            {"id": "phase-2", "title": "Empty follow-up phase", "expected_files": [f2]},
+        ]
+        draft(argparse.Namespace(
+            repo=str(phase_repo),
+            task_id=task_id,
+            outcome="Verify snapshot-identical consecutive phase gate reuse",
+            kind="FEATURE",
+            planning_depth="BOUNDED",
+            expected_surfaces="BUSINESS_LOGIC",
+            expected_modules=":app",
+            expected_files=f"{f1},{f2}",
+            phases=json.dumps(phases_spec),
+            test_strategy="Unit tests",
+            device_strategy="None",
+            risks="None",
+            rollback="None",
+            external_write=[],
+            force=True,
+        ))
+        record_approval(argparse.Namespace(
+            repo=str(phase_repo),
+            task_id=task_id,
+            source="conversation",
+            proof_reference="approve 2-phase reuse test",
+            enforcement_tier="RULE_ENFORCED",
+        ))
+        begin_task(argparse.Namespace(repo=str(phase_repo), task_id=task_id))
+
+        write_file(phase_repo / f1, "package com.example\n\nclass PhaseOneHelper {\n    fun value(): Int = 1\n}\n")
+        write_file(phase_repo / f2, "package com.example\n\nclass PhaseTwoHelper {\n    fun value(): Int = 2\n}\n")
+
+        compile_calls: list[list[str]] = []
+        tests_calls: list[str] = []
+
+        def fake_compile(_repo: Path, modules: list[str], phase_changes=None):
+            compile_calls.append(list(modules))
+            return True, "PASS"
+
+        def fake_tests(_repo: Path, pdir: Path, modules: list[str], needs_tests: bool, phase_changes=None):
+            tests_calls.append(pdir.name)
+            atomic_write_json(pdir / "unit_tests.json", {"status": "PASS", "modules": list(modules)})
+            return True, "PASS"
+
+        with (
+            mock.patch.object(wf_engine, "check_phase_compile", new=fake_compile),
+            mock.patch.object(wf_engine, "check_phase_tests", new=fake_tests),
+        ):
+            cp1 = checkpoint_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id, phase_id="phase-1"))
+            self.assertEqual("CHECKPOINT_PASS", cp1["status"])
+            self.assertEqual([[":app"]], compile_calls)
+            self.assertEqual(["phase-1"], tests_calls)
+
+            tdir = task_dir(phase_repo, task_id)
+            ps = read_json(tdir / "phase-state.json")
+            if get_phase_substate(ps, "phase-1") != PHASE_COMPLETE:
+                ps = set_phase_substate(tdir, "phase-1", PHASE_COMPLETE)
+                if "phase-1" not in ps.setdefault("completed_phases", []):
+                    ps["completed_phases"].append("phase-1")
+                atomic_write_json(tdir / "phase-state.json", ps)
+
+            begin_next_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id))
+
+            cp2 = checkpoint_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id, phase_id="phase-2"))
+            self.assertEqual("CHECKPOINT_PASS", cp2["status"])
+            self.assertEqual(1, len(compile_calls), "phase-2 should reuse phase-1 compile on identical snapshot")
+            self.assertEqual(1, len(tests_calls), "phase-2 should reuse phase-1 unit_tests on identical snapshot")
+            self.assertEqual("PASS", cp2["compile"]["status"])
+            self.assertEqual("phase-1", cp2["compile"].get("reused_from_phase"))
+            self.assertEqual("PASS", cp2["tests"]["status"])
+            p2_ut = read_json(tdir / "phases" / "phase-2" / "unit_tests.json")
+            self.assertEqual("phase-1", p2_ut.get("reused_from_phase"))
+            self.assertEqual("PASS", p2_ut.get("status"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

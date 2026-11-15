@@ -2734,6 +2734,28 @@ def _installed_engine_target(raw: str, *, recursive: bool = False) -> bool:
         return False
 
 
+def _is_native_transcript_read_target(raw_target: str) -> bool:
+    norm = str(raw_target or "").strip().replace("\\", "/")
+    if not norm:
+        return False
+    low = norm.lower()
+    base_name = low.rsplit("/", 1)[-1]
+    if base_name in {"transcript.jsonl", "transcript_full.jsonl"} or "/.system_generated/logs/" in low:
+        try:
+            raw_p = Path(raw_target).expanduser()
+            resolved = raw_p.resolve() if raw_p.is_absolute() else (REPO / raw_p).resolve()
+            if _is_ide_artifact(resolved):
+                return False
+            from antigravity_runtime import candidate_runtime_roots
+            if any(resolved == rt or rt in resolved.parents for rt in candidate_runtime_roots()):
+                return True
+        except OSError:
+            pass
+        if "/.system_generated/logs/" in low and base_name.endswith(".jsonl"):
+            return True
+    return False
+
+
 def _is_background_task_log_target(raw_target: str) -> bool:
     norm = str(raw_target or "").strip().replace("\\", "/")
     if not norm or not norm.lower().endswith(".log"):
@@ -3081,6 +3103,15 @@ def _main() -> None:
                     "Yield your turn with ZERO tool calls and wait for the host completion notification.",
                     tool=name,
                     reason_code="BACKGROUND_TASK_LOG_POLLING_FORBIDDEN",
+                )
+                return
+            if _is_native_transcript_read_target(target):
+                emit(
+                    "deny",
+                    "NATIVE_TRANSCRIPT_READ_FORBIDDEN: Never read raw Antigravity `transcript.jsonl` logs into agent context (causes severe token bloat). "
+                    "Run `python .agents/harness.py status`, `python .agents/harness.py task bridge --resume`, or `git diff --stat` instead.",
+                    tool=name,
+                    reason_code="NATIVE_TRANSCRIPT_READ_FORBIDDEN",
                 )
                 return
             if _installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
