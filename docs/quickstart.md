@@ -99,6 +99,7 @@ Set Smart Auto once per project (`auto-project`) to keep compact tasks (`<10` fi
 python .agents/harness.py execution-mode set --choice auto-project --source developer_terminal --proof-reference "Use Smart Auto"
 
 # 2. Pack modified/staged/untracked Android Studio files (or --feature <Name>) into 1 secret-scrubbed .md bundle
+#    (Then open a NEW Gemini Web chat, select Task mode, paste via Ctrl+V, and send)
 python .agents/harness.py web-pack --dirty --prompt "Complete refactor and unit tests"
 
 # 3. Preview Gemini Web's HARNESS_WEB_MERGE_V1 reply with zero disk writes, then apply

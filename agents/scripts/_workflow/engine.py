@@ -815,8 +815,13 @@ def revise(args: argparse.Namespace) -> dict:
         proposed["expected_files"] = normalize_expected_files(repo, args.expected_files)
     assert_disjoint_task_scope(repo, task_id, proposed)
     old_status = str(old_plan.get("status") or "")
-    if old_status not in ("AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
-        raise ValidationError(f"cannot revise task '{task_id}': task status is {old_status}, only active non-terminal tasks can be revised")
+    restore_cancelled = bool(getattr(args, "restore_cancelled", False))
+    allowed_revise_statuses = {"AWAITING_DEVELOPER_APPROVAL", "APPROVED", "IMPLEMENTING", "VERIFYING", "BLOCKED"}
+    if restore_cancelled:
+        allowed_revise_statuses.add("CANCELLED")
+    if old_status not in allowed_revise_statuses:
+        hint = " (pass --restore-cancelled to reactivate this cancelled plan losslessly)" if old_status == "CANCELLED" else ""
+        raise ValidationError(f"cannot revise task '{task_id}': task status is {old_status}, only active non-terminal tasks can be revised{hint}")
     from review_budget import settle_final_review_calls
     settle_final_review_calls(repo, old_plan)
 
@@ -2780,7 +2785,9 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
                         "detail": detail,
                         "evidence_identity_sha256": evidence_identity,
                     })
-                    return False, f"unit tests failed for module '{m}': {detail}"
+                    _exc_txt = _safe_phase_failure_excerpt(repo, _task)
+                    _sfx = f" | {_exc_txt}" if _exc_txt else ""
+                    return False, f"unit tests failed for module '{m}': {detail}{_sfx}"
 
     for m, task in runnable:
         reports_before = None if is_mock else report_signatures(repo, task)
@@ -2802,7 +2809,9 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
                 "detail": detail,
                 "evidence_identity_sha256": evidence_identity,
             })
-            return False, f"unit tests failed for module '{m}': {detail}"
+            _exc_txt = _safe_phase_failure_excerpt(repo, task)
+            _sfx = f" | {_exc_txt}" if _exc_txt else ""
+            return False, f"unit tests failed for module '{m}': {detail}{_sfx}"
 
         total_ignored += data.get("baseline_ignored", 0)
         total_failed += data.get("total_failed", 0)
@@ -2816,6 +2825,61 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
 
 
 
+
+
+def _safe_phase_failure_excerpt(repo: Path, task: str | list[str]) -> str:
+    """Extract compact actionable JUnit failure names + absolute report/source paths without raising."""
+    try:
+        from run_tests_gate import format_actionable_failure_excerpt
+        return format_actionable_failure_excerpt(repo, task, max_items=5)
+    except Exception:
+        return ""
+
+
+def _compact_plan_json_for_cli_stdout(payload: dict) -> dict:
+    """Compact bulky machine-only arrays in CLI `--json` stdout while preserving full `plan.json` on disk."""
+    out = dict(payload)
+    for _bf in ("base_file_identities", "base_change_identities"):
+        _items = out.get(_bf)
+        if isinstance(_items, list) and len(_items) > 20:
+            out[_bf] = [f"<{len(_items)} entries stored in plan.json>"]
+    tb = out.get("task_baseline")
+    if isinstance(tb, dict):
+        tb_copy = dict(tb)
+        tb_changes = tb_copy.get("changes")
+        if isinstance(tb_changes, list) and len(tb_changes) > 8:
+            tb_copy["changes"] = [
+                *tb_changes[:8],
+                f"<+{len(tb_changes) - 8} baseline entries stored in task-baseline.json>",
+            ]
+        out["task_baseline"] = tb_copy
+    vc = out.get("verification_contract")
+    if isinstance(vc, dict) and isinstance(vc.get("criteria"), list):
+        vc_copy = dict(vc)
+        compact_crit = []
+        for c in vc["criteria"]:
+            if isinstance(c, dict):
+                c_copy = dict(c)
+                syms = c_copy.get("referenced_symbols")
+                if isinstance(syms, list) and len(syms) > 6:
+                    c_copy["referenced_symbols"] = [
+                        *syms[:6],
+                        f"<+{len(syms) - 6} symbols stored in plan.json>",
+                    ]
+                compact_crit.append(c_copy)
+            else:
+                compact_crit.append(c)
+        vc_copy["criteria"] = compact_crit
+        out["verification_contract"] = vc_copy
+    ac = out.get("architecture_contract")
+    if isinstance(ac, dict):
+        ac_copy = dict(ac)
+        for heavy_k in ("family_evidence", "candidates", "exemplar_files", "detected_families"):
+            hv = ac_copy.get(heavy_k)
+            if isinstance(hv, list) and len(hv) > 5:
+                ac_copy[heavy_k] = [*hv[:5], f"<+{len(hv) - 5} items stored in plan.json>"]
+        out["architecture_contract"] = ac_copy
+    return out
 
 
 def checkpoint_phase(args: argparse.Namespace) -> dict:
@@ -3167,18 +3231,68 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     except (OSError, ValueError, ImportError, ValidationError):
         pass
 
-    return {
+    auto_advanced_phases: list[str] = []
+    if (
+        getattr(args, "advance_all_ready", False)
+        and not review_needed
+        and not bool(plan.get("scoped_phase_review_enabled"))
+        and curr_idx + 1 < len(phases)
+    ):
+        wr_deleted: set[str] = set()
+        wr_rec_p = directory / "web-relay-receipt.json"
+        if wr_rec_p.is_file():
+            try:
+                wr_doc = read_json(wr_rec_p)
+                if isinstance(wr_doc, dict):
+                    wr_deleted = {str(x).replace("\\", "/").strip("/") for x in (wr_doc.get("files_deleted") or []) if str(x).strip()}
+            except (OSError, ValueError, ValidationError):
+                wr_deleted = set()
+        for next_ph in phases[curr_idx + 1 :]:
+            next_pid = str(next_ph.get("id") or "").strip()
+            if not next_pid:
+                break
+            next_owned = normalize_expected_files(repo, next_ph.get("expected_files") or [])
+            if next_owned and not all((repo / rel_p).is_file() or rel_p in wr_deleted for rel_p in next_owned):
+                break
+            if next_owned and find_conflict_markers(repo, next_owned):
+                break
+            try:
+                begin_next_phase(argparse.Namespace(repo=str(repo), task_id=args.task_id, json=False))
+                sub_ckpt = checkpoint_phase(
+                    argparse.Namespace(
+                        repo=str(repo),
+                        task_id=args.task_id,
+                        phase_id=next_pid,
+                        advance_all_ready=False,
+                    )
+                )
+            except ValidationError:
+                break
+            auto_advanced_phases.append(next_pid)
+            completed = list(sub_ckpt.get("completed_phases") or completed)
+            phase_state = read_json(phase_state_file) if phase_state_file.is_file() else phase_state
+            if str((sub_ckpt.get("review") or {}).get("status") or "") == "REVIEW_PACKAGE_REQUIRED":
+                break
+
+    ret_payload = {
         "status": CheckpointStatus("CHECKPOINT_PASS"),
-        "phase_id": phase_id,
+        "phase_id": auto_advanced_phases[-1] if auto_advanced_phases else phase_id,
         "completed_phases": completed,
         "current_phase_id": phase_state.get("current_phase_id"),
-        "next_phase_index": curr_idx + 1 if curr_idx + 1 < len(phases) else curr_idx,
+        "next_phase_index": (
+            next((i for i, p in enumerate(phases) if p.get("id") == phase_state.get("current_phase_id")), curr_idx) + 1
+            if auto_advanced_phases
+            else (curr_idx + 1 if curr_idx + 1 < len(phases) else curr_idx)
+        ),
         "checkpoint": checkpoint_record,
         "preflight": preflight_status,
         "compile": compile_status,
         "tests": tests_status,
         "review": review_status,
     }
+    if auto_advanced_phases:
+        ret_payload["auto_advanced_phases"] = auto_advanced_phases
+    return ret_payload
 
 
 def validated_completed_phase_manifest(
@@ -3738,11 +3852,21 @@ def build_parser() -> argparse.ArgumentParser:
     revise_cmd = sub.add_parser("revise", parents=[common])
     _add_plan_arguments(revise_cmd, is_revision=True)
     revise_cmd.add_argument("--material-change-reason", help="Concrete requirement expansion when revising only approved plan prose")
+    revise_cmd.add_argument(
+        "--restore-cancelled",
+        action="store_true",
+        help="Reactivate a CANCELLED task's lossless plan.json back to AWAITING_DEVELOPER_APPROVAL with fresh baseline and hash",
+    )
     revise_cmd.set_defaults(handler=revise)
     from plan_notes import register_parser as register_plan_notes
     register_plan_notes(sub, common)
     command = sub.add_parser("checkpoint-phase", parents=[common])
     command.add_argument("--phase-id", default=None, help="Phase ID to checkpoint")
+    command.add_argument(
+        "--advance-all-ready",
+        action="store_true",
+        help="When subsequent phases already have all expected files materialized at the verified snapshot (and no phase review is required), advance and checkpoint them in one pass",
+    )
     command.set_defaults(handler=checkpoint_phase)
     bnp_cmd = sub.add_parser("begin-next-phase", parents=[common])
     bnp_cmd.set_defaults(handler=begin_next_phase)
@@ -4684,11 +4808,7 @@ def main(argv: list[str] | None = None) -> int:
             # A live run passed --json to draft and revise and got none of this, so the agent wrote the
             # approval question itself (no Cancel option, no files).
             lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
-            result = {**result, "approval_material": "\n".join(lines)}
-            for _bf in ("base_file_identities", "base_change_identities"):
-                _items = result.get(_bf)
-                if isinstance(_items, list) and len(_items) > 50:
-                    result[_bf] = [f"<{len(_items)} entries stored in plan.json>"]
+            result = _compact_plan_json_for_cli_stdout({**result, "approval_material": "\n".join(lines)})
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         if args.action == "merge" and not args.apply:
@@ -4703,6 +4823,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "approve":
             print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
         print(f"TASK_STATUS={result.get('status', 'READY')}")
+        if args.action == "checkpoint-phase" and result.get("auto_advanced_phases"):
+            print("AUTO_ADVANCED_PHASES=" + ",".join(str(x) for x in result["auto_advanced_phases"]))
+            try:
+                _nxt_cp = resolve_next_action(Path(args.repo).resolve(), str(args.task_id))
+                if _nxt_cp.get("code") and _nxt_cp.get("command"):
+                    print(f"NEXT_ACTION={_nxt_cp['code']}: {_nxt_cp['command']}")
+            except (OSError, ValueError, KeyError, TypeError, ValidationError):
+                _nxt_cp = {}
         if args.action == "approve" and result.get("task_id"):
             # Real app: approve printed only the status, the agent started editing, and the test record
             # the router asks for before the first edit never happened; an old failing test in another

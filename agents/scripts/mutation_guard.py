@@ -736,6 +736,27 @@ def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
         plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(task_directory),
     ):
         return ""
+    has_existing_prod = False
+    has_existing_test = False
+    has_web_receipt = (task_directory / "web-relay-receipt.json").is_file()
+    try:
+        from _modules import is_kmp_or_android_test_path as _is_test_p
+        from delivery_manifest import build_task_manifest, load_task_baseline
+        t_base = load_task_baseline(root, task_id)
+        t_man = build_task_manifest(root, t_base, expected_files=plan.get("expected_files"))
+        raw_changes = t_man.get("task_changes") if "task_changes" in t_man else t_man.get("changes")
+        for item in raw_changes or []:
+            c_path = str((item or {}).get("path") if isinstance(item, dict) else item or "").replace("\\", "/").strip("/")
+            if not c_path:
+                continue
+            if _is_production_code(c_path):
+                has_existing_prod = True
+            elif _is_test_p(c_path):
+                has_existing_test = True
+    except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+        has_existing_prod = has_existing_prod
+    if has_existing_prod and (has_existing_test or has_web_receipt):
+        return ""
     for target in targets:
         path = Path(str(target or "").strip())
         try:
@@ -743,6 +764,12 @@ def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
         except (ValueError, OSError):
             continue
         if _is_production_code(rel):
+            if has_existing_prod:
+                return (
+                    f"RED_EVIDENCE_REQUIRED: production source changes already exist on this BUG task ('{rel}') "
+                    "without `red-evidence.json`, so `--capture-red` can no longer run. Add or update a co-authored "
+                    "regression unit test file first (test files stay writable) to unlock production edits and satisfy final verification."
+                )
             return (
                 f"RED_EVIDENCE_REQUIRED: this BUG task must capture a failing test before changing production code "
                 f"('{rel}'). Write the failing test first (test files stay writable), then run "

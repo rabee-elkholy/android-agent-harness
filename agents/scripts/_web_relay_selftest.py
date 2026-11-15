@@ -2038,5 +2038,23 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertIn("VIP_GOLD", (self.repo / new_b).read_text(encoding="utf-8"))
         self.assertTrue((self.repo / "app/src/test/kotlin/com/demo/app/DirtyPromoBannerTest.kt").is_file())
 
+    def test_17_new_chat_and_task_mode_guidance(self) -> None:
+        """Initial web-pack recommends a NEW Gemini Web chat in Task mode; --retry keeps the SAME chat in Task mode."""
+        r_fresh_json = self._run_harness("web-pack", "--file", "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt", "--prompt", "Refactor fee calc", "--no-clipboard", "--json")
+        self.assertEqual(0, r_fresh_json.returncode, r_fresh_json.stderr)
+        doc_fresh = json.loads(r_fresh_json.stdout)
+        self.assertTrue(doc_fresh.get("new_chat_recommended"))
+        self.assertEqual("Task", doc_fresh.get("recommended_gemini_web_mode"))
+        self.assertIn("NEW Gemini Web chat", doc_fresh.get("gemini_web_instruction", ""))
+        self.assertIn("Task mode", doc_fresh.get("gemini_web_instruction", ""))
+
+        r_fresh_txt = self._run_harness("web-pack", "--file", "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt", "--prompt", "Refactor fee calc", "--no-clipboard")
+        self.assertEqual(0, r_fresh_txt.returncode, r_fresh_txt.stderr)
+        self.assertIn("Open a NEW Gemini Web chat (select `Task` mode)", r_fresh_txt.stdout)
+
+        r_retry_txt = self._run_harness("web-pack", "--retry", "--no-clipboard")
+        self.assertEqual(0, r_retry_txt.returncode, r_retry_txt.stderr)
+        self.assertIn("Stay in the SAME Gemini Web chat (keep `Task` mode selected)", r_retry_txt.stdout)
+
 if __name__ == "__main__":
     unittest.main()

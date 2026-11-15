@@ -1010,6 +1010,8 @@ def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases, *, ado
     })
     _engine.atomic_write_json(directory / "task-baseline.json", task_baseline)
     plan["task_baseline"] = task_baseline
+    plan.pop("cancelled_at", None)
+    plan.pop("cancellation", None)
     _engine.save_plan(directory / "plan.json", plan)
 
     # Snapshot pre-existing dirty files

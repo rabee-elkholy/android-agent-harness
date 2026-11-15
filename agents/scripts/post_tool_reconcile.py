@@ -115,10 +115,15 @@ def main() -> int:
                 reviewer_context(repo, execution_id, bind=True)
             if call_name_low in {"invoke_subagent", ""}:
                 try:
-                    from delegation_policy import bind_utility_from_post_tool, utility_subagent_context
+                    from delegation_policy import (
+                        bind_utility_from_post_tool,
+                        inspect_and_record_post_tool_subagent_bypass,
+                        utility_subagent_context,
+                    )
                     for execution_id in matched_ids:
                         utility_subagent_context(repo, execution_id, bind=True)
                     bind_utility_from_post_tool(repo, payload)
+                    inspect_and_record_post_tool_subagent_bypass(repo, payload, matched_ids=matched_ids)
                 except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
                     pass
             if not matched_ids and call_name_low in {"invoke_subagent", ""}:

@@ -29,10 +29,22 @@ except Exception:
 enable_line_buffered_stdio()
 
 FQCN_PATTERN = re.compile(
-    rf"\b(androidx\.[a-zA-Z0-9_.]+|{re.escape(PACKAGE_PREFIX)}\.[a-zA-Z0-9_.]+|android\.(view|widget|graphics|os|content)\.[a-zA-Z0-9_.]+|java\.util\.[a-zA-Z0-9_.]+)\b"
+    rf"\b("
+    rf"androidx\.[a-zA-Z0-9_.]+|"
+    rf"{re.escape(PACKAGE_PREFIX)}\.[a-zA-Z0-9_.]+|"
+    rf"android\.(?:view|widget|graphics|os|content)\.[a-zA-Z0-9_.]+|"
+    rf"kotlinx\.coroutines\.(?:[a-z0-9_]+\.)*[A-Z][a-zA-Z0-9_.]*|"
+    rf"java\.(?:util|io|time|net|math)\.(?:[a-z0-9_]+\.)*[A-Z][a-zA-Z0-9_.]*"
+    rf")\b"
 )
 FQCN_WHITELIST = re.compile(
-    r"^(?:android\.os\.Build(?:\.VERSION(?:\.SDK_INT|_CODES)?)?|java\.util\.(?:UUID|Locale|Date|Objects)|androidx\.annotation\.\w+|androidx\.compose\.\w+\.Experimental\w+)$"
+    r"^(?:"
+    r"android\.os\.Build(?:\.VERSION(?:\.SDK_INT|_CODES)?)?|"
+    r"java\.util\.(?:UUID|Locale|Date|Objects)|"
+    r"androidx\.annotation\.\w+|"
+    r"androidx\.compose\.\w+\.Experimental\w+|"
+    r"kotlinx\.coroutines\.(?:\w*Experimental\w*|FlowPreview|DelicateCoroutinesApi|InternalCoroutinesApi|ObsoleteCoroutinesApi)"
+    r")$"
 )
 
 WILDCARD_IMPORT_PATTERN = re.compile(r"^import\s+[a-zA-Z0-9_.]+\.\*")
@@ -388,6 +400,30 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
     except Exception as e:
         return [{"file": str(file_path), "line": 1, "type": "IO_ERROR", "msg": str(e)}]
 
+    _clean_kt = _strip_kotlin_comments_preserve_lines(text)
+    kt_imported: dict[str, str] = {}
+    for _imp_line in lines:
+        _m_imp = re.match(r"\s*import\s+([A-Za-z0-9_.]+)\s*$", _imp_line)
+        if _m_imp and not _m_imp.group(1).endswith(".*"):
+            _full_imp = _m_imp.group(1)
+            kt_imported[_full_imp.rsplit(".", 1)[-1]] = _full_imp
+    kt_declared = set(re.findall(r"\b(?:class|interface|object|typealias)\s+([A-Za-z_][A-Za-z0-9_]*)", _clean_kt))
+
+    def _unavoidable_kt_fqcn(qualified: str, full_line: str, match_end: int) -> bool:
+        if qualified.startswith(("dagger.Lazy", "android.R.", "android.Manifest.")):
+            return True
+        tail = full_line[match_end:].lstrip()
+        if tail.startswith("::class") and any(
+            tok in qualified for tok in ("Experimental", "Preview", "Delicate", "Internal", "Obsolete")
+        ):
+            return True
+        parts = qualified.split(".")
+        type_at = next((i for i, part in enumerate(parts) if part[:1].isupper()), None)
+        if type_at is None:
+            return False
+        simple, owner = parts[type_at], ".".join(parts[: type_at + 1])
+        return simple in kt_declared or (simple in kt_imported and kt_imported[simple] != owner)
+
     has_fragment_activity_in_diff = False
     has_android_entry_point = False
     has_compose_function_in_diff = False
@@ -486,7 +522,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
         ):
             for match in FQCN_PATTERN.finditer(line):
                 val = match.group(0)
-                if FQCN_WHITELIST.match(val):
+                if FQCN_WHITELIST.match(val) or _unavoidable_kt_fqcn(val, line, match.end()):
                     continue
                 if _in_string_or_comment(line, match.start()):
                     continue

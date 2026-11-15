@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 DEFAULT_HEARTBEAT_SEC = 10.0
 
@@ -137,6 +138,115 @@ def step_progress(name: str, step: int | None = None, total: int | None = None, 
         live_print(f"{prefix}[{status}] ({elapsed:.1f}s)")
 
 
+def _is_windows_pid_alive(pid: int) -> bool:
+    if pid <= 0 or os.name != "nt":
+        return False
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong(0)
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return int(exit_code.value) == STILL_ACTIVE
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def _has_explicit_gradle_java_home(prop_file: Path) -> bool:
+    if not prop_file.is_file():
+        return False
+    try:
+        for raw_ln in prop_file.read_text(encoding="utf-8", errors="ignore").splitlines():
+            ln = raw_ln.strip()
+            if not ln or ln.startswith(("#", "!")):
+                continue
+            if re.match(r"^org\.gradle\.java\.home\s*[:=]\s*\S+", ln):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def resolve_compatible_windows_daemon_java_home(
+    cwd: str | Path | None,
+    env: dict[str, str],
+    *,
+    os_name: str | None = None,
+    pid_alive_fn: Callable[[int], bool] | None = None,
+) -> str | None:
+    """Match `JAVA_HOME` to a live Gradle daemon of the exact project wrapper version on Windows.
+
+    When Android Studio already holds a warm out-of-job daemon (e.g. bundled JBR) and the project does not pin
+    `org.gradle.java.home`, aligning `JAVA_HOME` lets `gradlew.bat` attach over localhost TCP to that warm daemon
+    instead of spawning a cold disposable daemon inside Antigravity's `KILL_ON_JOB_CLOSE` Job Object.
+    """
+    eff_os = os_name if os_name is not None else os.name
+    if eff_os != "nt":
+        return None
+    if str(env.get("HARNESS_DISABLE_WINDOWS_DAEMON_JAVA_ALIGN") or "").strip().lower() in {"1", "true", "yes"}:
+        return None
+    try:
+        proj_dir = Path(cwd).resolve() if cwd else Path.cwd().resolve()
+        gradle_user_home = Path(
+            env.get("GRADLE_USER_HOME") or (Path.home() / ".gradle")
+        ).resolve()
+        if _has_explicit_gradle_java_home(proj_dir / "gradle.properties") or _has_explicit_gradle_java_home(
+            gradle_user_home / "gradle.properties"
+        ):
+            return None
+        wrapper_props = proj_dir / "gradle" / "wrapper" / "gradle-wrapper.properties"
+        if not wrapper_props.is_file():
+            return None
+        w_txt = wrapper_props.read_text(encoding="utf-8", errors="ignore")
+        m_ver = re.search(r"gradle-([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-rc-\d+)?)-(?:bin|all)\.zip", w_txt)
+        if not m_ver:
+            return None
+        gradle_ver = m_ver.group(1)
+        daemon_dir = gradle_user_home / "daemon" / gradle_ver
+        if not daemon_dir.is_dir():
+            return None
+        check_alive = pid_alive_fn or _is_windows_pid_alive
+        now = time.time()
+        logs = sorted(
+            (p for p in daemon_dir.glob("daemon-*.out.log") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )[:6]
+        live_homes: dict[str, str] = {}
+        java_bin_rel = Path("bin") / ("java.exe" if os.name == "nt" or eff_os == "nt" else "java")
+        for lg in logs:
+            try:
+                if (now - lg.stat().st_mtime) > 86400:
+                    continue
+                m_pid = re.match(r"^daemon-(\d+)\.out\.log$", lg.name)
+                if not m_pid or not check_alive(int(m_pid.group(1))):
+                    continue
+                with lg.open("r", encoding="utf-8", errors="ignore") as fh:
+                    head = fh.read(16384)
+                m_jh = re.search(r"DaemonContext\[[^\]]*?\bjavaHome=([^,\]\r\n]+)", head)
+                if not m_jh:
+                    continue
+                jh_path = Path(m_jh.group(1).strip())
+                if (jh_path / java_bin_rel).is_file() or (jh_path / "bin" / "java").is_file():
+                    norm_key = str(jh_path).replace("\\", "/").rstrip("/").lower()
+                    live_homes[norm_key] = str(jh_path)
+            except OSError:
+                continue
+        if len(live_homes) == 1:
+            return next(iter(live_homes.values()))
+    except Exception:
+        return None
+    return None
+
+
 def _should_try_windows_gradle_breakaway(argv: Sequence[str], env: dict[str, str], label: str) -> bool:
     """True when launching a daemon-enabled Gradle wrapper on Windows so the daemon survives Job close."""
     if os.name != "nt" or str(label or "").strip().lower() != "gradle":
@@ -153,6 +263,14 @@ def _spawn_streaming_process(
     env: dict[str, str],
     label: str,
 ) -> subprocess.Popen[str]:
+    eff_env = env
+    if (
+        str(label or "").strip().lower() == "gradle"
+        and not any(str(a).strip() == "--no-daemon" for a in argv)
+    ):
+        aligned_jh = resolve_compatible_windows_daemon_java_home(cwd, env)
+        if aligned_jh:
+            eff_env = {**env, "JAVA_HOME": aligned_jh}
     base_kwargs: dict[str, object] = {
         "cwd": cwd,
         "stdin": subprocess.DEVNULL,
@@ -161,10 +279,10 @@ def _spawn_streaming_process(
         "text": True,
         "encoding": "utf-8",
         "errors": "replace",
-        "env": env,
+        "env": eff_env,
         "bufsize": 1,
     }
-    if _should_try_windows_gradle_breakaway(argv, env, label):
+    if _should_try_windows_gradle_breakaway(argv, eff_env, label):
         breakaway_flags = (
             int(getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000))
             | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200))

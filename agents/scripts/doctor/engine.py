@@ -701,6 +701,49 @@ class HarnessDoctor:
         else:
             self.log(category, "Workflow Playbooks", "FAIL", f"Missing workflows: {', '.join(missing_wf)}")
 
+        # Guard against Antigravity /migrate-workflows renaming managed `.agents/workflows/*.md` -> `.md.bak`
+        # and creating shadowing `.agents/skills/<name>/SKILL.md` duplicates.
+        builtin_overlap = frozenset({"efficient-context", "phone-e2e", "pm-tracker"})
+        bak_files = sorted(p.name for p in workflows_dir.glob("*.md.bak")) if workflows_dir.is_dir() else []
+        wf_stems: set[str] = set()
+        if workflows_dir.is_dir():
+            wf_stems.update(p.stem for p in workflows_dir.glob("*.md"))
+            wf_stems.update(p.name[:-len(".md.bak")] for p in workflows_dir.glob("*.md.bak"))
+        skills_dir = self.agents_dir / "skills"
+        shadow_skills = (
+            sorted(
+                stem for stem in wf_stems
+                if stem not in builtin_overlap and (skills_dir / stem / "SKILL.md").is_file()
+            )
+            if skills_dir.is_dir()
+            else []
+        )
+        if bak_files or shadow_skills:
+            status = "FAIL" if missing_wf else "WARN"
+            parts: list[str] = []
+            details: list[str] = [
+                "Do NOT run Antigravity /migrate-workflows on harness-managed workflows.",
+                "Run `python ~/.android-harness/kit/harness_cli.py repair --repo .` and remove leftover `.md.bak` or shadowed skill directories.",
+            ]
+            if bak_files:
+                parts.append(f"{len(bak_files)} `.md.bak` backup(s) ({', '.join(bak_files[:5])})")
+            if shadow_skills:
+                parts.append(f"{len(shadow_skills)} skill shadow(s) ({', '.join(shadow_skills[:5])})")
+            self.log(
+                category,
+                "Workflow Migration & Skill Shadowing",
+                status,
+                "Detected Antigravity /migrate-workflows drift: " + "; ".join(parts) + ".",
+                details,
+            )
+        else:
+            self.log(
+                category,
+                "Workflow Migration & Skill Shadowing",
+                "PASS",
+                "Zero /migrate-workflows .md.bak backups and zero unintended workflow-to-skill shadowing detected.",
+            )
+
         ref_dir = self.agents_dir / "skills" / "android-harness" / "references"
         if not ref_dir.is_dir():
             self.log(category, "Domain References", "FAIL", f"Missing references directory at {ref_dir}")

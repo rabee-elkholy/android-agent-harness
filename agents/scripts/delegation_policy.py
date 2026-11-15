@@ -2118,6 +2118,167 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
     return bound
 
 
+def _latest_invoke_subagent_denial(repo: Path, parent_cid: str, *, max_age_seconds: float = 120.0) -> dict[str, Any] | None:
+    """Return latest PreToolUse `invoke_subagent` deny row if not superseded by a later allow (`#640`)."""
+    candidates: list[Path] = []
+    hook_state_env = os.environ.get("HARNESS_HOOK_STATE", "").strip()
+    if hook_state_env:
+        candidates.append(Path(hook_state_env).with_name("audit_log.jsonl"))
+    candidates.append(state_root(repo) / "audit_log.jsonl")
+    now = time.time()
+    for audit_path in candidates:
+        if not audit_path.is_file():
+            continue
+        try:
+            lines = audit_path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+        except OSError:
+            continue
+        for raw_line in reversed(lines):
+            if not raw_line.strip():
+                continue
+            try:
+                rec = json.loads(raw_line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or str(rec.get("tool") or "").lower() != "invoke_subagent":
+                continue
+            rec_conv = str(rec.get("conv_hint") or "").strip()
+            if parent_cid and rec_conv and rec_conv != parent_cid:
+                continue
+            ts = float(rec.get("ts") or 0.0)
+            if ts and (now - ts) > max_age_seconds:
+                return None
+            if str(rec.get("decision") or "").lower() == "deny":
+                return rec
+            return None
+    return None
+
+
+def inspect_and_record_post_tool_subagent_bypass(
+    repo: Path,
+    payload: dict[str, Any],
+    *,
+    matched_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Post-hoc audit for antigravity-cli#640 (`PreToolUse` block ignored on `invoke_subagent`).
+
+    Detects when an `invoke_subagent` call actually executed despite a recent PreToolUse denial
+    or directly violated active task policy (such as `research`/`explore` when `USE_HARNESS_SCOUT_AGENT`
+    applies, unauthorized `harness-worker-agent`, or any subagent in `T0_TRIVIAL`). Records durable
+    violations in `.agents/state/tasks/<task_id>/subagent-policy-violations.json` for `final_verifier`.
+    """
+    call = payload.get("toolCall") or payload.get("tool_call") or {}
+    args = call.get("args") or payload.get("toolArgs") or payload.get("tool_input") or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+
+    raw_subs = args.get("Subagents") or args.get("subagents") or []
+    sub_items: list[dict[str, Any]] = (
+        [s for s in raw_subs if isinstance(s, dict)]
+        if isinstance(raw_subs, list) and raw_subs
+        else ([args] if (args.get("TypeName") or args.get("typeName") or args.get("Role") or args.get("role")) else [])
+    )
+    raw_types = [str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip() for s in sub_items]
+    raw_types = [t for t in raw_types if t]
+    canonical_roles = [canonical_utility_or_reviewer_role(t) for t in raw_types]
+
+    parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+    active_tid = ""
+    plan: dict[str, Any] | None = None
+    active_f = state_root(repo) / "active-task.json"
+    if active_f.is_file():
+        try:
+            active_tid = str(read_json(active_f).get("task_id") or "").strip()
+            if active_tid and (task_dir(repo, active_tid) / "plan.json").is_file():
+                plan = read_json(task_dir(repo, active_tid) / "plan.json")
+        except (OSError, ValueError, ValidationError):
+            plan = None
+
+    violation_codes: list[str] = []
+    denial = _latest_invoke_subagent_denial(repo, parent_cid)
+    if denial is not None:
+        code = str(denial.get("reason_code") or "PRETOOL_DENY_IGNORED").strip()
+        violation_codes.append(f"PRETOOL_BYPASS:{code}")
+
+    if raw_types and any(t.lower() in {"research", "explore"} for t in raw_types):
+        if (repo / ".agents" / "agents" / SCOUT_AGENT / "agent.md").is_file() and not is_utility_agent_unloaded_in_session(repo, parent_cid, SCOUT_AGENT):
+            if not any("USE_HARNESS_SCOUT_AGENT" in c for c in violation_codes):
+                violation_codes.append("USE_HARNESS_SCOUT_AGENT_BYPASS")
+
+    if plan and active_tid:
+        status_up = str(plan.get("status") or "").strip().upper()
+        policy = _resolve_active_policy(repo, active_tid, plan)
+        risk_tier = str(policy.get("risk_tier") or plan.get("risk_tier") or "").strip().upper()
+        if WORKER_AGENT in canonical_roles:
+            ledger = _load_utility_ledger(repo)
+            has_worker_dispatch = any(
+                isinstance(e, dict)
+                and not bool(e.get("dispatch_failed"))
+                and str(e.get("agent_type") or "") == WORKER_AGENT
+                and str(e.get("task_id") or "") == active_tid
+                and (not parent_cid or not str(e.get("parent_conversation_id") or "") or str(e.get("parent_conversation_id") or "") == parent_cid)
+                for e in (ledger.get("entries") or [])
+            )
+            if status_up != "IMPLEMENTING" or risk_tier == "T0_TRIVIAL" or not has_worker_dispatch:
+                violation_codes.append("UNAUTHORIZED_WORKER_SPAWN")
+        routed_reviewers_in_call = [r for r in canonical_roles if r in CORE_ROUTED_REVIEWERS]
+        if routed_reviewers_in_call:
+            if risk_tier == "T0_TRIVIAL":
+                violation_codes.append("T0_TRIVIAL_REVIEWER_FORBIDDEN")
+            elif status_up == "VERIFYING":
+                cur_run_f = task_dir(repo, active_tid) / "current-run.json"
+                expected_revs: set[str] = set()
+                if cur_run_f.is_file():
+                    try:
+                        cur_run = read_json(cur_run_f)
+                        run_id_val = str(cur_run.get("run_id") or "")
+                        if run_id_val:
+                            from review_orchestrator import load_ledger as load_rev_ledger
+                            rev_ledger = load_rev_ledger(task_dir(repo, active_tid), run_id_val)
+                            expected_revs = {
+                                rn for rn, rd in (rev_ledger.get("reviewers") or {}).items()
+                                if isinstance(rd, dict)
+                            }
+                    except (ImportError, OSError, ValueError, ValidationError):
+                        expected_revs = set()
+                if any(r not in expected_revs for r in routed_reviewers_in_call):
+                    violation_codes.append("UNAUTHORIZED_REVIEWER_SPAWN")
+
+    if not violation_codes or not active_tid:
+        return []
+
+    dedup_codes = list(dict.fromkeys(violation_codes))
+    entry = {
+        "issue": "antigravity-cli#640",
+        "codes": dedup_codes,
+        "types": raw_types or canonical_roles,
+        "execution_ids": sorted(matched_ids or set()),
+        "parent_conversation_id": parent_cid,
+        "detected_at": utc_now(),
+    }
+    vpath = task_dir(repo, active_tid) / "subagent-policy-violations.json"
+    try:
+        with StateLock(state_root(repo)):
+            store: dict[str, Any] = {"schema_version": 1, "task_id": active_tid, "violations": []}
+            if vpath.is_file():
+                try:
+                    raw_store = read_json(vpath)
+                    if isinstance(raw_store, dict) and isinstance(raw_store.get("violations"), list):
+                        store = raw_store
+                except (OSError, ValueError, ValidationError):
+                    pass
+            store["violations"] = [*list(store.get("violations") or [])[-49:], entry]
+            atomic_write_json(vpath, store)
+    except (OSError, ValidationError):
+        return []
+    return [entry]
+
+
 def mark_utility_wave_completed(
     repo: Path,
     parent_conversation_id: str,
@@ -2347,6 +2508,112 @@ def check_and_record_subagent_step_budget(
     except (OSError, ValidationError):
         return (True, "", "")
     return (True, "", "")
+
+
+def _resolve_surgical_web_resume_files(repo: Path, task_id: str, plan: dict[str, Any]) -> list[str]:
+    """Return 1..3 normalized file paths when a resumed Web task has small surgical review findings (<48KB)."""
+    if not task_id:
+        return []
+    tdir = task_dir(repo, task_id)
+    candidates: list[str] = []
+    meta_f = tdir / "last-review-findings.json"
+    if meta_f.is_file():
+        try:
+            doc = read_json(meta_f)
+            if isinstance(doc, dict):
+                candidates = [
+                    _normalize_repo_rel(repo, str(x))
+                    for x in (doc.get("blocking_files") or [])
+                    if str(x).strip()
+                ]
+        except (OSError, ValueError, ValidationError):
+            candidates = []
+    if not candidates and isinstance(plan.get("blocking_findings"), list):
+        candidates = [
+            _normalize_repo_rel(repo, str(item.get("file") or ""))
+            for item in (plan.get("blocking_findings") or [])
+            if isinstance(item, dict) and str(item.get("file") or "").strip()
+        ]
+    if not candidates:
+        run_hist_dir = tdir / "run-history"
+        run_candidates = sorted(run_hist_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if run_hist_dir.is_dir() else []
+        cur_run_f = tdir / "current-run.json"
+        if cur_run_f.is_file():
+            run_candidates.insert(0, cur_run_f)
+        for rf in run_candidates[:3]:
+            try:
+                rdoc = read_json(rf)
+                snap = str(rdoc.get("delivery_snapshot_sha256") or "")
+                rid = str(rdoc.get("run_id") or "")
+                if snap and rid:
+                    from evidence_store import EvidenceStore
+                    rev_art = EvidenceStore(state_root(repo)).read(snap, rid, "reviews")
+                    bf_list = ((rev_art or {}).get("evidence") or {}).get("blocking_findings") or []
+                    if bf_list:
+                        candidates = [
+                            _normalize_repo_rel(repo, str(item.get("file") or ""))
+                            for item in bf_list
+                            if isinstance(item, dict) and str(item.get("file") or "").strip()
+                        ]
+                        if candidates:
+                            break
+            except Exception:
+                continue
+    unique_files = list(dict.fromkeys(f for f in candidates if f and f != "diff"))
+    if not (1 <= len(unique_files) <= 3):
+        return []
+    mass_bytes = 0
+    for rel_f in unique_files:
+        if is_test_file(rel_f):
+            continue
+        fp = repo / rel_f
+        try:
+            if fp.is_file() and not fp.is_symlink():
+                mass_bytes += fp.stat().st_size
+        except OSError:
+            pass
+    if mass_bytes >= 48 * 1024:
+        return []
+    return unique_files
+
+
+def get_subagent_budget_reminder(repo: Path, conversation_id: str, invocation: Any) -> str:
+    """Read-only late-turn step budget notice for `harness-scout-agent` (silent on Turn 0 and while >4 calls remain)."""
+    if not conversation_id or not (type(invocation) is int and invocation > 0):
+        return ""
+    try:
+        ctx = utility_subagent_context(repo, conversation_id, bind=False)
+    except Exception:
+        ctx = None
+    if not isinstance(ctx, dict) or str(ctx.get("agent_type") or "") != SCOUT_AGENT:
+        return ""
+    exec_key = str(ctx.get("execution_id") or conversation_id).strip()
+    if not exec_key:
+        return ""
+    used = int(ctx.get("tool_calls_used") or 0)
+    try:
+        sb_path = _step_budgets_path(repo)
+        if sb_path.is_file():
+            raw = read_json(sb_path)
+            if isinstance(raw, dict):
+                bucket_key = f"SCOUT::{SCOUT_AGENT}:{exec_key}"
+                rec = raw.get(bucket_key)
+                if isinstance(rec, dict):
+                    used = max(used, int(rec.get("count") or 0))
+    except (OSError, ValueError, KeyError, TypeError, ValidationError):
+        used = used
+    if used >= MAX_SCOUT_TOOL_CALLS:
+        return (
+            f"CRITICAL SCOUT_STEP_BUDGET_EXHAUSTED ({used}/{MAX_SCOUT_TOOL_CALLS} calls used, 0 remaining): "
+            "Emit ZERO tool calls in this turn. Synthesize and output your complete structured file:line architectural digest now as plain assistant text."
+        )
+    if used >= MAX_SCOUT_TOOL_CALLS - 4:
+        rem = MAX_SCOUT_TOOL_CALLS - used
+        return (
+            f"[Scout Budget Notice: {rem}/{MAX_SCOUT_TOOL_CALLS} tool call(s) remaining — "
+            "avoid large parallel batches and finish only essential surgical reads before emitting your digest.]"
+        )
+    return ""
 
 
 def mark_lead_edit_or_transition(repo: Path, parent_conversation_id: str) -> None:
@@ -3137,7 +3404,7 @@ def evaluate_delegation_policy(
                 web_reason = (
                     f"Web execution mode (`{eff_em.get('choice')}`) is awaiting Gemini Web reply for continuation pack "
                     f"`{wp_prog['pending_continuation_pack_id']}` (batch {wp_prog.get('batch_index')}/{wp_prog.get('total_batches')}) on task `{tid}`. "
-                    f"Once the developer pastes/copies the reply, apply via `{next_web_cmd}`."
+                    f"Ask the developer to stay in the SAME Gemini Web chat (keep `Task` mode selected), paste/send the continuation pack, copy the reply, and then apply via `{next_web_cmd}`."
                 )
             elif wp_prog.get("has_staged_phase"):
                 next_web_cmd = 'python .agents/harness.py web-apply --staged-phase --source conversation --proof-reference "<words>"'
@@ -3146,21 +3413,48 @@ def evaluate_delegation_policy(
                     f"Apply them directly via `{next_web_cmd}`."
                 )
             elif wp_prog.get("needs_retry_pack"):
+                surgical_files = _resolve_surgical_web_resume_files(repo, tid, plan)
+                if surgical_files:
+                    ver_after_fix = f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity"
+                    return {
+                        "status": status,
+                        "task_id": tid,
+                        "phase_id": phase_id,
+                        "risk_tier": risk_tier,
+                        "router_action": act_code,
+                        "execution_mode": "web",
+                        "execution_mode_choice": eff_em.get("choice"),
+                        "strategy": "TRIVIAL_INLINE_LEAD",
+                        "recommended_subagent": None,
+                        "worker_allowed": True,
+                        "worker_mode": "FULL_SLICE",
+                        "next_command": ver_after_fix,
+                        "target_files": surgical_files,
+                        "reason": (
+                            f"Task `{tid}` resumed in Web mode (`{eff_em.get('choice')}`) with surgical review findings in "
+                            f"{len(surgical_files)} file(s) (<=3 files and <48KB). Apply the fix directly via local `edit_file` "
+                            "to keep prompt cache warm and avoid a browser round-trip, then run "
+                            f"`{ver_after_fix}` (use `python .agents/harness.py web-pack --task-id {tid} --retry` only if 4+ files need heavy rework)."
+                        ),
+                        "project_context": ctx_handoff,
+                        "quota_strategy": quota_guide,
+                    }
                 next_web_cmd = f"python .agents/harness.py web-pack --task-id {tid} --retry"
                 web_reason = (
                     f"Task `{tid}` resumed after verification/review feedback in Web mode (`{eff_em.get('choice')}`). "
-                    f"Run `{next_web_cmd}` to pack failure diagnostics for Gemini Web, then apply via `web-apply` "
-                    "(or apply a surgical local fix if trivial)."
+                    f"Run `{next_web_cmd}` to pack failure diagnostics, instruct the developer to stay in the SAME Gemini Web chat (keep `Task` mode selected) and paste via `Ctrl+V`, then apply via `web-apply` "
+                    "(or apply a surgical local fix via `edit_file` if <=3 files are affected)."
                 )
             else:
                 next_web_cmd = f"python .agents/harness.py web-pack --task-id {tid}"
                 web_reason = (
                     f"Web execution mode (`{eff_em.get('choice')}`) is active for task `{tid}`"
                     + (f" (phase `{phase_id}`)" if phase_id else "")
-                    + f". Run `{next_web_cmd}` to copy the Context Pack for Gemini Web, then when the developer returns, run "
+                    + f". Run `{next_web_cmd}` to copy the Context Pack, and instruct the developer to open a NEW Gemini Web chat (`gemini.google.com`) for a new task (or reuse the SAME chat only if continuing this task) and select **`Task` mode** before pasting (`Ctrl+V`). When the developer returns, run "
                     '`python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` FIRST with NO `--file` flag '
                     "(auto-detects Clipboard, `Downloads`, and `.agents/state/web-relay/inbox/`; ONLY if raw JSON was pasted in chat and auto-detect finds no file, "
-                    "save it once with `write_file` to `.agents/state/web-relay/inbox/merge.json` — NEVER re-emit JSON via shell redirection or outside paths)."            )
+                    "save it once with `write_file` to `.agents/state/web-relay/inbox/merge.json` — NEVER re-emit JSON via shell redirection or outside paths)."
+                )
             return {
                 "status": status,
                 "task_id": tid,
@@ -3182,8 +3476,17 @@ def evaluate_delegation_policy(
         if act_code != "CAPTURE_RED_EVIDENCE":
             w_test_m, c_tier_w = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
             sync_utility_worker_model(repo, w_test_m)
+            _staged_dir = task_dir(repo, tid) / "staged-web-phases"
+            _has_staged_any = _staged_dir.is_dir() and any(_staged_dir.glob("*.json"))
+            _can_cascade = (
+                bool(phase_id)
+                and len(plan.get("phases") or []) > 1
+                and not bool(plan.get("scoped_phase_review_enabled"))
+                and not _has_staged_any
+            )
+            _cascade_flag = " --advance-all-ready" if _can_cascade else ""
             ver_cmd = (
-                f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{phase_id}"'
+                f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{phase_id}"{_cascade_flag}'
                 if phase_id
                 else f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity"
             )
@@ -3207,7 +3510,7 @@ def evaluate_delegation_policy(
                     f"Web-Relay changes are already applied on disk for task `{tid}`"
                     + (f" (phase `{phase_id}`)" if phase_id else "")
                     + f". Proceed directly to `{ver_cmd}` without re-reading applied files unless a gate fails "
-                    f"(if a gate fails, run `python .agents/harness.py web-pack --task-id {tid} --retry` or fix minor nits locally)."
+                    f"(if a gate fails on <=3 files, fix directly via local `edit_file` to preserve warm cache; use `python .agents/harness.py web-pack --task-id {tid} --retry` only for 4+ file reworks)."
                 ),
                 "project_context": ctx_handoff,
                 "quota_strategy": quota_guide,

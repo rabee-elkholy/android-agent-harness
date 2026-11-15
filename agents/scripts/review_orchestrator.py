@@ -1009,11 +1009,28 @@ def _finalize_review_execution_locked(
 
     if plan is not None:
         plan["review_rounds"] = round_number
+        findings_meta_f = directory / "last-review-findings.json"
         if blocking:
             plan["status"] = "BLOCKED"
             plan["blocked_reviewers"] = sorted({str(item.get("reviewer") or "") for item in blocking})
+            try:
+                blocking_files = sorted({
+                    str(item.get("file") or "").replace("\\", "/").strip("/")
+                    for item in blocking
+                    if isinstance(item, dict) and str(item.get("file") or "").strip()
+                })
+                atomic_write_json(findings_meta_f, {
+                    "schema_version": 1,
+                    "round": round_number,
+                    "run_id": run_id,
+                    "blocking_count": len(blocking),
+                    "blocking_files": blocking_files,
+                })
+            except OSError:
+                pass
         else:
             plan.pop("blocked_reviewers", None)
+            findings_meta_f.unlink(missing_ok=True)
         from plan_authority import save_plan
         save_plan(directory / "plan.json", plan)
 

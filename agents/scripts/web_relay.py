@@ -888,7 +888,8 @@ def build_web_pack(
     prev_pack: dict[str, Any] | None = None
     latest_ptr = _web_relay_state_dir(repo) / "latest-pack.json"
     task_ptr = (task_dir(repo, eff_tid) / "latest-web-pack.json") if eff_tid and (state_root(repo) / "tasks" / eff_tid).is_dir() else None
-    chosen_ptr = task_ptr if (task_ptr is not None and task_ptr.is_file()) else latest_ptr
+    had_prior_task_pack = bool(task_ptr is not None and task_ptr.is_file())
+    chosen_ptr = task_ptr if had_prior_task_pack else latest_ptr
     if (retry or add_files) and chosen_ptr.is_file():
         try:
             ptr = read_json(chosen_ptr)
@@ -1229,6 +1230,12 @@ def build_web_pack(
         pass
 
     clip_info = {"copied": False, "mode": "skipped"} if no_clipboard else _copy_to_clipboard(bundle_file, bundle_text)
+    new_chat_recommended = not bool(retry or add_files or cur_batch_num > 1 or had_prior_task_pack)
+    gemini_web_instruction = (
+        "Open a NEW Gemini Web chat (gemini.google.com), select Task mode, paste (Ctrl+V), and send."
+        if new_chat_recommended
+        else "Stay in the SAME Gemini Web chat (keep Task mode selected), paste (Ctrl+V), and send (open a NEW chat in Task mode only for a new task)."
+    )
     return {
         "status": "OK",
         "pack_id": pack_id,
@@ -1247,6 +1254,9 @@ def build_web_pack(
         "bundle_file": str(bundle_file),
         "bundle_bytes": len(bundle_text.encode("utf-8")),
         "clipboard": clip_info,
+        "new_chat_recommended": new_chat_recommended,
+        "recommended_gemini_web_mode": "Task",
+        "gemini_web_instruction": gemini_web_instruction,
     }
 
 
@@ -2629,15 +2639,22 @@ def apply_web_merge(
     phases_now = active_doc.get("phases") or []
     p_idx_now = int(active_doc.get("active_phase_index") or 0)
     if is_partial_reply:
-        next_cmd = 'Ask Gemini Web `Continue remaining files for this pack_id` and run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"`.'
+        next_cmd = 'Stay in the SAME Gemini Web chat (keep `Task` mode selected), ask Gemini Web `Continue remaining files for this pack_id`, and run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"`.'
     elif next_batch_pack_info is not None:
         next_cmd = (
             f"Batch {next_batch_pack_info['batch_index']}/{next_batch_pack_info['total_batches']} "
-            f"(`{next_batch_pack_info['pack_id']}`) is now copied to Clipboard — paste into Gemini Web and run `web-apply`."
+            f"(`{next_batch_pack_info['pack_id']}`) is now copied to Clipboard — stay in the SAME Gemini Web chat (keep `Task` mode selected), paste into Gemini Web, and run `web-apply`."
         )
     elif phases_now and 0 <= p_idx_now < len(phases_now):
         cur_pid = str(phases_now[p_idx_now].get("id") or "p1")
-        next_cmd = f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity  # (checkpoints {cur_pid} & runs verification gates)"
+        if (
+            len(phases_now) - p_idx_now > 1
+            and not staged_phases_summary
+            and not bool(active_doc.get("scoped_phase_review_enabled"))
+        ):
+            next_cmd = f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}" --advance-all-ready'
+        else:
+            next_cmd = f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}"'
     else:
         next_cmd = f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity"
 
@@ -2745,11 +2762,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(res, indent=2, ensure_ascii=False))
             else:
                 clip_mode = (res.get("clipboard") or {}).get("mode", "none")
+                chat_step = (
+                    "Open a NEW Gemini Web chat (select `Task` mode)"
+                    if res.get("new_chat_recommended", True)
+                    else "Stay in the SAME Gemini Web chat (keep `Task` mode selected)"
+                )
                 print(
                     f"[WEB-PACK READY] pack_id={res['pack_id']} | files={len(res['editable_files'])} | "
                     f"neighbors={res['neighbor_signatures_count']} | size={res['bundle_bytes']:,} B | clipboard={clip_mode}\n"
                     f"  Bundle file: {res['bundle_file']}\n"
-                    f"  Next: Paste (`Ctrl+V`) into Gemini Web (`Carbon`), then copy/download its reply and run `web-apply`."
+                    f"  Next: {chat_step}, paste (`Ctrl+V`), then copy/download its reply and run `web-apply`."
                 )
             return 0
 
@@ -2779,7 +2801,7 @@ def main(argv: list[str] | None = None) -> int:
                 np_info = res["new_pack"]
                 print(
                     f"[WEB-PACK EXPANDED] Added requested files {res['added_files']} -> new pack_id={np_info['pack_id']} "
-                    f"({np_info['bundle_bytes']:,} B, clipboard={np_info['clipboard'].get('mode')}). Paste into Gemini Web."
+                    f"({np_info['bundle_bytes']:,} B, clipboard={np_info['clipboard'].get('mode')}). Stay in the SAME Gemini Web chat (keep `Task` mode selected) and paste into Gemini Web."
                 )
             else:
                 print(

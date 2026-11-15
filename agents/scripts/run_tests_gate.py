@@ -654,6 +654,43 @@ def _compact_failure_cause(raw_msg: str) -> str:
     return summary[:220]
 
 
+def format_actionable_failure_excerpt(repo: Path, task: str | list[str], *, max_items: int = 5) -> str:
+    """Return a compact, single-line summary of up to `max_items` JUnit XML failures with absolute report paths."""
+    try:
+        items: list[str] = []
+        seen_reports: list[str] = []
+        for report in report_paths(repo, task):
+            try:
+                root = ET.fromstring(report.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                continue
+            rep_abs = report.resolve().as_posix()
+            for case in root.iter("testcase"):
+                f_el = case.find("failure")
+                if f_el is None:
+                    f_el = case.find("error")
+                if f_el is None:
+                    continue
+                if rep_abs not in seen_reports:
+                    seen_reports.append(rep_abs)
+                cls_name = str(case.get("classname") or "").strip()
+                meth_name = str(case.get("name") or "").strip()
+                short_cls = cls_name.rsplit(".", 1)[-1] if cls_name else "Test"
+                combined = f"{f_el.get('message') or f_el.get('type') or ''}\n{f_el.text or ''}"
+                cause = _compact_failure_cause(combined)
+                items.append(f"{short_cls}.{meth_name}: {cause}")
+                if len(items) >= max_items:
+                    break
+            if len(items) >= max_items:
+                break
+        if not items:
+            return ""
+        rep_hint = f" (JUnit XML: {seen_reports[0]})" if seen_reports else ""
+        return "Failing test(s): " + "; ".join(items) + rep_hint
+    except Exception:
+        return ""
+
+
 def _filter_tasks_for_test_patterns(repo: Path, tasks: list[str], patterns: list[str]) -> list[str]:
     if not patterns or len(tasks) <= 1:
         return tasks

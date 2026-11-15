@@ -1107,10 +1107,14 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 return
         except (ImportError, OSError, ValueError, ValidationError):
             pass
-    if hook_host == "antigravity" and re.search(r"(?:^|[;&|\r\n]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b", command, re.I | re.M):
+    if hook_host == "antigravity" and re.search(
+        r"(?:^|[;&|\r\n]\s*)(?:(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b|(?:powershell|pwsh)(?:\.exe)?\s+(?:-\S+\s+)*(?:-c|-command)\b)",
+        command,
+        re.I | re.M,
+    ):
         emit(
             "deny",
-            "WINDOWS_TURBO_SHELL_HYGIENE (#200632): Inline `python -c` / `py -c` snippets inside `run_command` break "
+            "WINDOWS_TURBO_SHELL_HYGIENE (#200632): Inline `python -c` / `py -c` / `powershell -Command` snippets inside `run_command` break "
             "Antigravity Turbo Mode auto-approval on Windows PowerShell and bypass standalone CLI auditing. "
             "Run a single-line `python .agents/harness.py <subcommand>` or use native `view_file`/`grep_search` tools instead.",
             tool="run_command",
@@ -2734,6 +2738,25 @@ def _installed_engine_target(raw: str, *, recursive: bool = False) -> bool:
         return False
 
 
+def _is_raw_graph_cache_read_target(raw_target: str) -> bool:
+    norm = str(raw_target or "").strip().strip('"').strip("'").replace("\\", "/").lower()
+    if not norm:
+        return False
+    return any(
+        norm.endswith(suffix)
+        for suffix in (
+            "/.agents/cache/project_graph.json",
+            ".agents/cache/project_graph.json",
+            "/agents/cache/project_graph.json",
+            "agents/cache/project_graph.json",
+            "/.agents/cache/type_index.json",
+            ".agents/cache/type_index.json",
+            "/.agents/cache/graph-cache.json",
+            ".agents/cache/graph-cache.json",
+        )
+    )
+
+
 def _is_native_transcript_read_target(raw_target: str) -> bool:
     norm = str(raw_target or "").strip().replace("\\", "/")
     if not norm:
@@ -2984,9 +3007,19 @@ def _main() -> None:
                     if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
                         emit(
                             "deny",
-                            "Scout subagent run_command permits only read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log inspection.",
+                            "Scout subagent run_command permits only read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log inspection. Use native `grep_search` or `find_by_name` tools instead of shell `findstr`/`rg`.",
                             tool=name,
                             reason_code="SCOUT_READ_ONLY_BOUNDARY",
+                        )
+                        return
+                elif name in {"view_file", "read_file", "read"}:
+                    _sc_tgt = str(args.get("AbsolutePath") or args.get("absolutePath") or _target(args) or "")
+                    if _is_raw_graph_cache_read_target(_sc_tgt):
+                        emit(
+                            "deny",
+                            "RAW_GRAPH_CACHE_READ_BLOCKED: Never read raw machine cache `.agents/cache/project_graph.json` directly with `read_file`/`view_file` (causes massive token bloat). Query indexed symbols/features compactly via `python .agents/harness.py graph --find <Symbol>` or native `grep_search`.",
+                            tool=name,
+                            reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
                         )
                         return
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
@@ -3103,6 +3136,15 @@ def _main() -> None:
                     "Yield your turn with ZERO tool calls and wait for the host completion notification.",
                     tool=name,
                     reason_code="BACKGROUND_TASK_LOG_POLLING_FORBIDDEN",
+                )
+                return
+            if name in {"view_file", "read_file", "read"} and _is_raw_graph_cache_read_target(target):
+                emit(
+                    "deny",
+                    "RAW_GRAPH_CACHE_READ_BLOCKED: Never read raw machine cache `.agents/cache/project_graph.json` directly with `read_file`/`view_file` (causes massive token bloat). "
+                    "Use `python .agents/harness.py graph --find <Symbol>` or native `grep_search` instead.",
+                    tool=name,
+                    reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
                 )
                 return
             if _is_native_transcript_read_target(target):

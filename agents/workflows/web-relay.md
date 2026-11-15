@@ -38,7 +38,7 @@ What `web-pack` guarantees automatically:
 
 ## Step 2: Developer Interaction on Gemini Web (`gemini.google.com`)
 
-1. Open `gemini.google.com` (`Gemini 4 Carbon`), press `Ctrl+V` to attach/paste the Context Pack (plus attach 1–5 relevant Figma/UI screenshots if implementing a visual mockup — avoid 40+ bulk image dumps in a single session), and send.
+1. **For a new task**, open a **NEW** `gemini.google.com` chat, select **`Task` mode**, press `Ctrl+V` to attach/paste the Context Pack (plus attach 1–5 relevant Figma/UI screenshots if implementing a visual mockup — avoid 40+ bulk image dumps in a single session), and send. *(Only stay in the **SAME** Gemini Web chat when continuing a `--retry`, `PARTIAL`, `NEED_FILES`, or `Batch 2+` pack of the same task.)*
 2. Copy Gemini Web's `HARNESS_WEB_MERGE_V1` JSON block (or save it to `~/Downloads`).
 
 ## Step 3: Verify & Apply Locally (`web-apply`)

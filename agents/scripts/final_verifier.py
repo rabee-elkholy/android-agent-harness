@@ -1164,6 +1164,18 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                 reasons.append("selected journey evidence missing or invalid")
         except ValidationError as exc:
             reasons.append("invalid acceptance coverage: " + str(exc))
+    violations_file = task_directory / "subagent-policy-violations.json"
+    if violations_file.is_file():
+        try:
+            v_doc = read_json(violations_file)
+            v_rows = [v for v in (v_doc.get("violations") or []) if isinstance(v, dict) and not v.get("waived")]
+        except Exception as exc:
+            v_rows = [{"codes": [f"CORRUPTED_VIOLATIONS_FILE:{exc}"]}]
+        if v_rows:
+            all_codes = sorted({str(c) for row in v_rows for c in (row.get("codes") or []) if c})
+            detail_msg = f"unauthorized subagent dispatch bypassed PreToolUse (#640): {', '.join(all_codes) or 'UNKNOWN'}"
+            checks.append({"name": "subagent_policy_audit", "status": "FAIL", "detail": detail_msg})
+            reasons.append(detail_msg)
     if reasons:
         status = "ENV_BLOCKED" if all(reason.startswith("ENV:") for reason in reasons) else "BLOCKED"
         return _blocked(status, reasons, checks)

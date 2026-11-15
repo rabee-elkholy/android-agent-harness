@@ -275,6 +275,15 @@ def main() -> None:
             if isinstance(payload, dict) else ""
         ).strip()
         if conversation_id and _is_reviewer_conversation(REPO, conversation_id):
+            if type(invocation) is int and invocation > 0:
+                try:
+                    from delegation_policy import get_subagent_budget_reminder
+                    sub_rem = get_subagent_budget_reminder(REPO, conversation_id, invocation)
+                    if sub_rem:
+                        print(json.dumps({"injectSteps": [{"ephemeralMessage": sub_rem}]}))
+                        return
+                except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+                    sub_rem = ""
             print("{}")
             return
         model_hazard_prefix = ""

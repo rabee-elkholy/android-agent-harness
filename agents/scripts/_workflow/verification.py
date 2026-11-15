@@ -820,6 +820,7 @@ def build_device_action(context: VerificationContext) -> dict | None:
                         "(1) Navigation & Preconditions (bullets), (2) Verification Steps (1-5 numbered lines `1. **<Action>**: <Expected result>` — NEVER use a Markdown pipe table `| ... |` inside `ask_question`), "
                         "and (3) Edge Cases (bullets) — with NO file-change summary wall, NO `---` dividers, and NO `*(...)*` status narration. "
                         "Translate all options into the developer's language; in an RTL language, start every line, bullet, and option with a word in that language (never start an option with English 'PASS' or 'FAIL'). "
+                        "Keep verdict options strictly neutral: NEVER prefix '(Recommended)' (or translated equivalent) on PASS/FAIL choices. "
                         "Do not run automatic validation before selection."
                     ),
                     "accepted_responses": accepted_responses,
@@ -853,7 +854,7 @@ def completion_action(context: VerificationContext) -> dict | None:
             "blocking": True,
             "reason": (
                 f"This change touches {', '.join(sensitive_touched) or 'sensitive code'}: ask the developer with "
-                "ask_question for the final approval of those changes (options 'Approve' / 'Request changes'), "
+                "ask_question for the final approval of those changes (neutral options 'Approve' / 'Request changes', without '(Recommended)' prefix), "
                 "then run the command with their answer as --proof-reference."
             ),
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},

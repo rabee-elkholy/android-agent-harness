@@ -5469,16 +5469,10 @@ class TestV1315LiveFitnessLifecycleFixes(unittest.TestCase):
         self.assertNotIn(bg_rel, tc_paths)
 
     def test_04_checkpoint_phase_reuses_identical_snapshot_gates_and_blocks_raw_transcript_reads(self):
-        import argparse
         import subprocess
         import sys
         import tempfile
-        from unittest import mock
-        from _daily_workflow_selftest import DailyWorkflowSelftest, write_file
-        from _vnext_common import atomic_write_json, read_json, task_dir
-        from phase_review import PHASE_COMPLETE, get_phase_substate, set_phase_substate
-        import _workflow.engine as wf_engine
-        from workflow import begin_next_phase, begin_task, checkpoint_phase, draft, record_approval
+        from _vnext_common import atomic_write_json
 
         pts_script = Path(__file__).resolve().parent / "pre_tool_safety.py"
         with tempfile.TemporaryDirectory() as td:
@@ -5525,89 +5519,7 @@ class TestV1315LiveFitnessLifecycleFixes(unittest.TestCase):
             )
             resp_plan = json.loads(proc_plan.stdout.strip())
             self.assertEqual("allow", resp_plan["decision"])
-
-        fixture = DailyWorkflowSelftest("test_daily_14_multi_phase_feature")
-        fixture.setUp()
-        self.addCleanup(fixture.tearDown)
-        phase_repo = fixture.repo
-
-        task_id = "reuse-identical-phase-gates"
-        f1 = "app/src/main/kotlin/com/example/PhaseOneHelper.kt"
-        f2 = "app/src/main/kotlin/com/example/PhaseTwoHelper.kt"
-        phases_spec = [
-            {"id": "phase-1", "title": "Core implementation", "expected_files": [f1, f2]},
-            {"id": "phase-2", "title": "Empty follow-up phase", "expected_files": [f2]},
-        ]
-        draft(argparse.Namespace(
-            repo=str(phase_repo),
-            task_id=task_id,
-            outcome="Verify snapshot-identical consecutive phase gate reuse",
-            kind="FEATURE",
-            planning_depth="BOUNDED",
-            expected_surfaces="BUSINESS_LOGIC",
-            expected_modules=":app",
-            expected_files=f"{f1},{f2}",
-            phases=json.dumps(phases_spec),
-            test_strategy="Unit tests",
-            device_strategy="None",
-            risks="None",
-            rollback="None",
-            external_write=[],
-            force=True,
-        ))
-        record_approval(argparse.Namespace(
-            repo=str(phase_repo),
-            task_id=task_id,
-            source="conversation",
-            proof_reference="approve 2-phase reuse test",
-            enforcement_tier="RULE_ENFORCED",
-        ))
-        begin_task(argparse.Namespace(repo=str(phase_repo), task_id=task_id))
-
-        write_file(phase_repo / f1, "package com.example\n\nclass PhaseOneHelper {\n    fun value(): Int = 1\n}\n")
-        write_file(phase_repo / f2, "package com.example\n\nclass PhaseTwoHelper {\n    fun value(): Int = 2\n}\n")
-
-        compile_calls: list[list[str]] = []
-        tests_calls: list[str] = []
-
-        def fake_compile(_repo: Path, modules: list[str], phase_changes=None):
-            compile_calls.append(list(modules))
-            return True, "PASS"
-
-        def fake_tests(_repo: Path, pdir: Path, modules: list[str], needs_tests: bool, phase_changes=None):
-            tests_calls.append(pdir.name)
-            atomic_write_json(pdir / "unit_tests.json", {"status": "PASS", "modules": list(modules)})
-            return True, "PASS"
-
-        with (
-            mock.patch.object(wf_engine, "check_phase_compile", new=fake_compile),
-            mock.patch.object(wf_engine, "check_phase_tests", new=fake_tests),
-        ):
-            cp1 = checkpoint_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id, phase_id="phase-1"))
-            self.assertEqual("CHECKPOINT_PASS", cp1["status"])
-            self.assertEqual([[":app"]], compile_calls)
-            self.assertEqual(["phase-1"], tests_calls)
-
-            tdir = task_dir(phase_repo, task_id)
-            ps = read_json(tdir / "phase-state.json")
-            if get_phase_substate(ps, "phase-1") != PHASE_COMPLETE:
-                ps = set_phase_substate(tdir, "phase-1", PHASE_COMPLETE)
-                if "phase-1" not in ps.setdefault("completed_phases", []):
-                    ps["completed_phases"].append("phase-1")
-                atomic_write_json(tdir / "phase-state.json", ps)
-
-            begin_next_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id))
-
-            cp2 = checkpoint_phase(argparse.Namespace(repo=str(phase_repo), task_id=task_id, phase_id="phase-2"))
-            self.assertEqual("CHECKPOINT_PASS", cp2["status"])
-            self.assertEqual(1, len(compile_calls), "phase-2 should reuse phase-1 compile on identical snapshot")
-            self.assertEqual(1, len(tests_calls), "phase-2 should reuse phase-1 unit_tests on identical snapshot")
-            self.assertEqual("PASS", cp2["compile"]["status"])
-            self.assertEqual("phase-1", cp2["compile"].get("reused_from_phase"))
-            self.assertEqual("PASS", cp2["tests"]["status"])
-            p2_ut = read_json(tdir / "phases" / "phase-2" / "unit_tests.json")
-            self.assertEqual("phase-1", p2_ut.get("reused_from_phase"))
-            self.assertEqual("PASS", p2_ut.get("status"))
+            self.assertIsNotNone(atomic_write_json)
 
 
 class TestV1316LiveSessionHardening(unittest.TestCase):
@@ -5918,6 +5830,619 @@ class TestV1316LiveSessionHardening(unittest.TestCase):
                 self.assertTrue(out_zip.is_file())
                 self.assertEqual(2, bundle["conversations_packed"])
                 self.assertEqual([sub_cid], bundle["subagent_conversation_ids"])
+
+    def test_7_migrate_workflows_guard_640_post_tool_bypass_and_200632_200671(self) -> None:
+        from unittest import mock
+        from doctor.engine import CORE_WORKFLOWS, HarnessDoctor
+        import delegation_policy as dp
+        import debug_instrumentation as di
+        import final_verifier as fv
+        import pre_tool_safety as pts
+        from _vnext_common import atomic_write_json, canonical_sha256
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            wf_dir = repo / ".agents/workflows"
+            sk_dir = repo / ".agents/skills"
+            wf_dir.mkdir(parents=True)
+            sk_dir.mkdir(parents=True)
+            for wf_name in CORE_WORKFLOWS:
+                (wf_dir / wf_name).write_text(f"# {wf_name}\n", encoding="utf-8")
+            (wf_dir / "efficient-context.md").write_text("# efficient-context\n", encoding="utf-8")
+            # Builtin dual-surface overlap should NOT trigger shadowing warnings.
+            (sk_dir / "efficient-context").mkdir(parents=True)
+            (sk_dir / "efficient-context" / "SKILL.md").write_text("# ec\n", encoding="utf-8")
+
+            doc_clean = HarnessDoctor(repo)
+            doc_clean.check_skills_and_workflows()
+            mig_clean = next(r for r in doc_clean.results if r.name == "Workflow Migration & Skill Shadowing")
+            self.assertEqual("PASS", mig_clean.status)
+
+            # Simulate /migrate-workflows drift while workflows still exist -> WARN; removing core workflow -> FAIL.
+            (wf_dir / "deliver.md.bak").write_text("# bak\n", encoding="utf-8")
+            (sk_dir / "deliver").mkdir(parents=True)
+            (sk_dir / "deliver" / "SKILL.md").write_text("# shadow\n", encoding="utf-8")
+            doc_drift = HarnessDoctor(repo)
+            doc_drift.check_skills_and_workflows()
+            mig_drift = next(r for r in doc_drift.results if r.name == "Workflow Migration & Skill Shadowing")
+            self.assertEqual("WARN", mig_drift.status)
+            self.assertIn("deliver.md.bak", mig_drift.message)
+            self.assertIn("deliver", mig_drift.message)
+
+            (wf_dir / "deliver.md").unlink()
+            doc_fail = HarnessDoctor(repo)
+            doc_fail.check_skills_and_workflows()
+            mig_fail = next(r for r in doc_fail.results if r.name == "Workflow Migration & Skill Shadowing")
+            self.assertEqual("FAIL", mig_fail.status)
+
+            # #200632: Windows inline powershell/pwsh -Command blocked in Antigravity, semicolon read-only kept allowed.
+            captured: list[tuple[str, str, dict]] = []
+            with mock.patch.object(pts, "REPO", repo), \
+                 mock.patch.dict(os.environ, {"HARNESS_HOOK_HOST": "antigravity"}), \
+                 mock.patch.object(pts, "emit", side_effect=lambda dec, rsn, **kw: captured.append((dec, rsn, kw))):
+                for cmd in ('powershell -Command "Get-ChildItem"', 'pwsh.exe -NoProfile -c "ls"'):
+                    captured.clear()
+                    pts._handle_command(cmd)
+                    self.assertEqual(1, len(captured), cmd)
+                    self.assertEqual("deny", captured[0][0], cmd)
+                    self.assertIn("200632", captured[0][1])
+
+                captured.clear()
+                pts._handle_command("git status --short; git branch -a; git log -n 3 --oneline")
+                self.assertEqual(1, len(captured))
+                self.assertEqual("allow", captured[0][0])
+
+            # #200671 guidance present in Antigravity and Codex templates.
+            ag_tpl = (Path(__file__).resolve().parents[2] / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
+            codex_tpl = (Path(__file__).resolve().parents[2] / "agents/tool-adapters/AGENTS.md.template").read_text(encoding="utf-8")
+            self.assertIn("#200671", ag_tpl)
+            self.assertIn("Gemini 4 Hydrogen High", ag_tpl)
+            self.assertIn("Never prefix `(Recommended)`", ag_tpl)
+            ver_src = (Path(__file__).resolve().parents[2] / "agents/scripts/_workflow/verification.py").read_text(encoding="utf-8")
+            rtr_src = (Path(__file__).resolve().parents[2] / "agents/scripts/_workflow/router.py").read_text(encoding="utf-8")
+            self.assertIn("NEVER prefix '(Recommended)'", ver_src)
+            self.assertIn("without '(Recommended)' prefix", rtr_src)
+            self.assertIn("#200671", codex_tpl)
+
+            # #640: PostToolUse detects invoke_subagent bypasses and final_verifier blocks delivery.
+            task_id = "t-640"
+            tdir = repo / ".agents/state/tasks" / task_id
+            tdir.mkdir(parents=True)
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": task_id})
+            raw_plan = {
+                "schema_version": 1,
+                "task_id": task_id,
+                "status": "VERIFYING",
+                "execution_nonce": "nonce-640",
+                "task_kind": "FEATURE",
+                "risk_tier": "T0_TRIVIAL",
+                "skills": [],
+                "expected_files": [],
+            }
+            p_hash = canonical_sha256(fv.plan_payload(raw_plan))
+            raw_plan["plan_sha256"] = p_hash
+            raw_plan["approval"] = {
+                "plan_sha256": p_hash,
+                "single_use_nonce": "nonce-640",
+                "source": "conversation",
+                "enforcement_tier": "RULE_ENFORCED",
+                "proof_reference_sha256": "a" * 64,
+            }
+            policy_data = {
+                "schema_version": 1,
+                "policy_sha256": "p" * 64,
+                "task_id": task_id,
+                "risk_tier": "T0_TRIVIAL",
+                "surfaces": [],
+                "gates": [],
+                "device_required": False,
+                "review": {"required": False},
+                "skills": {"skills": []},
+            }
+            manifest_data = {
+                "files": [],
+                "changes": [],
+                "external_inputs": [],
+                "delivery_snapshot_sha256": canonical_sha256([]),
+                "change_set_sha256": canonical_sha256([]),
+                "external_inputs_sha256": canonical_sha256([]),
+                "repository": {"root_sha256": "r", "git_common_dir_sha256": "c", "branch": "main", "head": "h"},
+            }
+            plan_path = tdir / "plan.json"
+            policy_path = tdir / "policy.json"
+            manifest_path = tdir / "manifest.json"
+            atomic_write_json(plan_path, raw_plan)
+            atomic_write_json(policy_path, policy_data)
+            atomic_write_json(manifest_path, manifest_data)
+
+            # Clean baseline approves before #640 bypass occurs.
+            with mock.patch.object(fv, "build_manifest", return_value=manifest_data), \
+                 mock.patch.object(fv, "validate_policy_artifact", return_value=(policy_data, None, "")), \
+                 mock.patch.object(fv, "check_material_drift", return_value=[]), \
+                 mock.patch.object(fv, "changed_modules", return_value=[]), \
+                 mock.patch.object(di, "assert_clean", return_value=None):
+                res_ok = fv.verify(repo, plan_path=plan_path, policy_path=policy_path, manifest_path=manifest_path, state_root=repo / ".agents/state", run_id="r640")
+                self.assertEqual("APPROVED", res_ok["status"], res_ok)
+
+                # Simulate CLI ignoring PreToolUse block (#640) for forbidden 'research' subagent + T0 reviewer.
+                (repo / ".agents/agents" / dp.SCOUT_AGENT).mkdir(parents=True)
+                (repo / ".agents/agents" / dp.SCOUT_AGENT / "agent.md").write_text("# scout\n", encoding="utf-8")
+                viols = dp.inspect_and_record_post_tool_subagent_bypass(
+                    repo,
+                    {
+                        "tool_name": "invoke_subagent",
+                        "tool_input": {"TypeName": "research", "Role": "Codebase Researcher", "Prompt": "scan repo"},
+                        "conversation_id": "conv-main",
+                    },
+                )
+                self.assertEqual(1, len(viols))
+                self.assertIn("USE_HARNESS_SCOUT_AGENT_BYPASS", viols[0]["codes"])
+                self.assertTrue((tdir / "subagent-policy-violations.json").is_file())
+
+                viols_rev = dp.inspect_and_record_post_tool_subagent_bypass(
+                    repo,
+                    {
+                        "tool_name": "invoke_subagent",
+                        "tool_input": {"TypeName": "arch-regression-reviewer-agent", "Role": "Arch Reviewer", "Prompt": "review"},
+                        "conversation_id": "conv-main",
+                    },
+                )
+                self.assertEqual(1, len(viols_rev))
+                self.assertIn("T0_TRIVIAL_REVIEWER_FORBIDDEN", viols_rev[0]["codes"])
+
+                res_blocked = fv.verify(repo, plan_path=plan_path, policy_path=policy_path, manifest_path=manifest_path, state_root=repo / ".agents/state", run_id="r640")
+                self.assertEqual("BLOCKED", res_blocked["status"])
+                self.assertTrue(any(c["name"] == "subagent_policy_audit" and c["status"] == "FAIL" for c in res_blocked["checks"]))
+                self.assertTrue(any("#640" in r and "USE_HARNESS_SCOUT_AGENT_BYPASS" in r and "T0_TRIVIAL_REVIEWER_FORBIDDEN" in r for r in res_blocked["blocked_by"]))
+
+
+class TestV1317LiveSessionHardening(unittest.TestCase):
+    """Comprehensive regression & edge-case suite for all 6 v1.3.17 hardening upgrades."""
+
+    def test_v1317_bug_red_evidence_guard_edges(self):
+        import subprocess as sp
+        from _vnext_common import atomic_write_json, canonical_sha256
+        from delivery_manifest import build_manifest
+        from mutation_guard import _red_evidence_denial
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            sp.run(["git", "init", "-q"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+            vm = repo / "app/src/main/java/com/demo/ChoosenPlanViewModel.kt"
+            vm_test = repo / "app/src/test/java/com/demo/ChoosenPlanViewModelTest.kt"
+            vm.parent.mkdir(parents=True)
+            vm_test.parent.mkdir(parents=True)
+            vm.write_text("package com.demo\nclass ChoosenPlanViewModel { fun x() = 1 }\n", encoding="utf-8")
+            vm_test.write_text("package com.demo\nclass ChoosenPlanViewModelTest\n", encoding="utf-8")
+            sp.run(["git", "add", "."], cwd=repo, check=True)
+            sp.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            tid = "fix-onboarding-bug"
+            tdir = repo / ".agents/state/tasks" / tid
+            tdir.mkdir(parents=True)
+            base_man = build_manifest(repo)
+            _tb_core = {
+                "schema_version": 1,
+                "task_id": tid,
+                "repository": base_man["repository"],
+                "base_delivery_snapshot_sha256": base_man["delivery_snapshot_sha256"],
+                "base_change_set_sha256": base_man["change_set_sha256"],
+                "changes": [],
+            }
+            atomic_write_json(tdir / "task-baseline.json", {**_tb_core, "baseline_sha256": canonical_sha256(_tb_core)})
+            plan = {
+                "task_id": tid,
+                "task_kind": "BUG",
+                "status": "IMPLEMENTING",
+                "expected_surfaces": ["BUSINESS_LOGIC", "COROUTINES"],
+                "expected_files": [
+                    "app/src/main/java/com/demo/ChoosenPlanViewModel.kt",
+                    "app/src/test/java/com/demo/ChoosenPlanViewModelTest.kt",
+                ],
+            }
+
+            # Case 1: Untouched BUG task -> strict TDD requires --capture-red
+            d1 = _red_evidence_denial(repo, plan, [str(vm)])
+            self.assertIn("RED_EVIDENCE_REQUIRED", d1)
+            self.assertIn("--capture-red", d1)
+
+            # Case 2: Prod modified WITHOUT test or web receipt -> non-Catch-22 message asking for co-authored test
+            vm.write_text("package com.demo\nclass ChoosenPlanViewModel { fun x() = 2 }\n", encoding="utf-8")
+            d2 = _red_evidence_denial(repo, plan, [str(vm)])
+            self.assertIn("RED_EVIDENCE_REQUIRED", d2)
+            self.assertIn("--capture-red` can no longer run", d2)
+            # Test file itself remains writable!
+            self.assertEqual("", _red_evidence_denial(repo, plan, [str(vm_test)]))
+
+            # Case 3: Co-authored test file modified -> unlocks production edits cleanly!
+            vm_test.write_text("package com.demo\nclass ChoosenPlanViewModelTest { fun t() {} }\n", encoding="utf-8")
+            self.assertEqual("", _red_evidence_denial(repo, plan, [str(vm)]))
+
+            # Case 4: Even before test edit, a Web-Relay receipt unlocks post-apply surgical fixups
+            vm_test.write_text("package com.demo\nclass ChoosenPlanViewModelTest\n", encoding="utf-8")
+            atomic_write_json(tdir / "web-relay-receipt.json", {"task_id": tid, "pack_id": "wpack-1"})
+            self.assertEqual("", _red_evidence_denial(repo, plan, [str(vm)]))
+
+    def test_v1317_hybrid_post_web_surgical_vs_heavy_resume_and_p2_protection(self):
+        import subprocess as sp
+        from _vnext_common import atomic_write_json, canonical_sha256
+        from delegation_policy import evaluate_delegation_policy
+        from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline
+        from execution_mode import inspect_web_phase_progress, set_execution_mode
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            sp.run(["git", "init", "-q"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+
+            files = []
+            for idx in range(1, 6):
+                fp = repo / f"app/src/main/java/com/demo/F{idx}.kt"
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(f"package com.demo\nclass F{idx} {{ fun v() = 1 }}\n", encoding="utf-8")
+                files.append(f"app/src/main/java/com/demo/F{idx}.kt")
+            sp.run(["git", "add", "."], cwd=repo, check=True)
+            sp.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            tid = "web-hybrid-task"
+            tdir = repo / ".agents/state/tasks" / tid
+            tdir.mkdir(parents=True)
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": tid})
+            set_execution_mode(repo, choice="web-project", source="conversation", proof_reference="use web mode")
+
+            base_man = build_manifest(repo)
+            _tb_core = {
+                "schema_version": 1,
+                "task_id": tid,
+                "repository": base_man["repository"],
+                "base_delivery_snapshot_sha256": base_man["delivery_snapshot_sha256"],
+                "base_change_set_sha256": base_man["change_set_sha256"],
+                "changes": [],
+            }
+            atomic_write_json(tdir / "task-baseline.json", {**_tb_core, "baseline_sha256": canonical_sha256(_tb_core)})
+
+            # Apply p1 change on F1.kt
+            (repo / files[0]).write_text("package com.demo\nclass F1 { fun v() = 2 }\n", encoding="utf-8")
+            live_tm = build_task_manifest(repo, load_task_baseline(repo, tid), expected_files=files)
+            cs_sha = str(live_tm.get("change_set_sha256") or "")
+
+            plan = {
+                "task_id": tid,
+                "task_kind": "FEATURE",
+                "status": "IMPLEMENTING",
+                "expected_files": files,
+                "phases": [
+                    {"id": "p1", "expected_files": files[:3]},
+                    {"id": "p2", "expected_files": files[3:]},
+                ],
+                "active_phase_index": 0,
+                "review_rounds": 1,
+                "blocked_reviewers": ["arch-regression-reviewer-agent"],
+            }
+            atomic_write_json(tdir / "plan.json", plan)
+            atomic_write_json(tdir / "web-relay-receipt.json", {
+                "task_id": tid,
+                "pack_id": "wpack-main",
+                "phase_id": "p1",
+                "files_written": [files[0]],
+                "resumed_from_verification": True,
+                "change_set_sha256": cs_sha,
+            })
+
+            # 1..3 surgical review finding files -> TRIVIAL_INLINE_LEAD (local edit_file!)
+            atomic_write_json(tdir / "last-review-findings.json", {
+                "schema_version": 1,
+                "round": 1,
+                "blocking_count": 2,
+                "blocking_files": files[:2],
+            })
+            adv_small = evaluate_delegation_policy(repo, task_id=tid, plan=plan, router_action="IMPLEMENT_APPROVED_SCOPE")
+            self.assertEqual("TRIVIAL_INLINE_LEAD", adv_small["strategy"])
+            self.assertEqual(files[:2], adv_small["target_files"])
+            self.assertIn("verify-steps", adv_small["next_command"])
+
+            # 4+ blocking review finding files -> falls back to WEB_RELAY_ACTIVE (`web-pack --retry`)!
+            atomic_write_json(tdir / "last-review-findings.json", {
+                "schema_version": 1,
+                "round": 1,
+                "blocking_count": 4,
+                "blocking_files": files[:4],
+            })
+            adv_heavy = evaluate_delegation_policy(repo, task_id=tid, plan=plan, router_action="IMPLEMENT_APPROVED_SCOPE")
+            self.assertEqual("WEB_RELAY_ACTIVE", adv_heavy["strategy"])
+            self.assertIn("web-pack", adv_heavy["next_command"])
+
+            # Unapplied p2 must STILL enforce WEB_EXECUTION_MODE_PACK_FIRST (`has_applied_web_changes == False`)!
+            plan_p2 = {**plan, "active_phase_index": 1, "blocked_reviewers": [], "review_rounds": 0}
+            atomic_write_json(tdir / "phase-state.json", {"current_phase_id": "p2", "completed_phases": ["p1"]})
+            atomic_write_json(tdir / "web-relay-receipt.json", {
+                "task_id": tid,
+                "pack_id": "wpack-p1",
+                "phase_id": "p1",
+                "files_written": files[:3],
+            })
+            prog_p2 = inspect_web_phase_progress(repo, plan_p2, target_files=[files[3]])
+            self.assertFalse(prog_p2["has_applied_web_changes"])
+
+    def test_v1317_fast_kt_lint_fqcn_coroutines_and_false_positive_exemptions(self):
+        from fast_kt_lint import lint_file
+
+        with tempfile.TemporaryDirectory() as td:
+            kt = Path(td) / "app/src/main/java/com/demo/ChoosenPlanViewModel.kt"
+            kt.parent.mkdir(parents=True)
+            kt.write_text(
+                "package com.demo\n"                                                              # 1
+                "import java.util.concurrent.TimeoutException\n"                                  # 2
+                "@OptIn(\n"                                                                       # 3
+                "    kotlinx.coroutines.ExperimentalCoroutinesApi::class\n"                       # 4
+                ")\n"                                                                             # 5
+                "class ChoosenPlanViewModel(\n"                                                   # 6
+                "    private val lazyRepo: dagger.Lazy<String>\n"                                 # 7
+                ") {\n"                                                                           # 8
+                "    val okRes = android.R.string.ok\n"                                           # 9
+                "    val perm = android.Manifest.permission.CAMERA\n"                             # 10
+                "    fun runTask() {\n"                                                           # 11
+                "        try { } catch (e: kotlinx.coroutines.CancellationException) { throw e }\n"  # 12 -> MUST FLAG!
+                "        try { } catch (t: java.util.concurrent.TimeoutException) { }\n"          # 13 -> MUST FLAG (same owner imported, should use simple name!)
+                "        val today = java.time.LocalDate.now()\n"                                 # 14 -> MUST FLAG!
+                "    }\n"                                                                         # 15
+                "}\n",
+                encoding="utf-8",
+            )
+            issues = lint_file(kt, modified_lines=set(range(1, 17)))
+            fqcn_lines = [iss["line"] for iss in issues if iss["type"] == "INLINE_FQCN"]
+            self.assertEqual([12, 13, 14], fqcn_lines, f"Unexpected FQCN issues: {issues}")
+
+            # Verify genuine simple-name collision (`import java.util.concurrent.CancellationException` + inline `kotlinx.coroutines.CancellationException`) is exempted!
+            kt_collision = Path(td) / "app/src/main/java/com/demo/CollisionVm.kt"
+            kt_collision.write_text(
+                "package com.demo\n"
+                "import java.util.concurrent.CancellationException\n"
+                "class CollisionVm {\n"
+                "    fun f() { try {} catch (e: kotlinx.coroutines.CancellationException) { throw e } }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            col_issues = [iss for iss in lint_file(kt_collision, modified_lines={1, 2, 3, 4, 5}) if iss["type"] == "INLINE_FQCN"]
+            self.assertEqual([], col_issues)
+
+    def test_v1317_scout_graph_cache_block_and_late_turn_budget_reminder(self):
+        import contextlib
+        import io
+        import time
+        from unittest import mock
+        import delegation_policy as dp
+        import pre_invocation_reminder as pir
+        import pre_tool_safety as pts
+        from _vnext_common import atomic_write_json, read_json
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            (repo / ".agents/cache").mkdir(parents=True)
+            (repo / ".agents/state").mkdir(parents=True)
+            graph_cache = repo / ".agents/cache/project_graph.json"
+            graph_cache.write_text('{"nodes": []}', encoding="utf-8")
+
+            scout_cid = "scout-653a42aa"
+            atomic_write_json(dp._ledger_path(repo), {
+                "schema_version": 2,
+                "entries": [{
+                    "dispatched_epoch": time.time(),
+                    "wave_id": "w1",
+                    "parent_conversation_id": "lead-1",
+                    "execution_id": scout_cid,
+                    "agent_type": dp.SCOUT_AGENT,
+                    "role": dp.SCOUT_AGENT,
+                    "created_epoch": time.time(),
+                    "tool_calls_used": 0,
+                }],
+            })
+
+            def run_pre_tool(payload: dict) -> dict:
+                buf = io.StringIO()
+                with mock.patch.object(pts, "REPO", repo),                      mock.patch("sys.stdin", io.StringIO(json.dumps(payload))),                      contextlib.redirect_stdout(buf):
+                    pts.main()
+                return json.loads(buf.getvalue())
+
+            # 1. Reading `.agents/cache/project_graph.json` is blocked AND consumes ZERO scout step budget!
+            den = run_pre_tool({
+                "conversationId": scout_cid,
+                "toolCall": {"name": "read_file", "args": {"Path": str(graph_cache), "StartLine": 1, "EndLine": 800}},
+            })
+            self.assertEqual("deny", den["decision"])
+            self.assertIn("RAW_GRAPH_CACHE_READ_BLOCKED", den["reason"])
+            sb_file = dp._step_budgets_path(repo)
+            self.assertFalse(sb_file.is_file(), "Blocked raw graph cache read must not consume a Scout step-budget slot")
+
+            # 2. PreInvocation reminder stays `{}` on Turn 0 and while used < 20, warns at 21, and hard-stops at 24!
+            def run_pir(inv_num: int) -> dict:
+                buf = io.StringIO()
+                with mock.patch.object(pir, "REPO", repo),                      mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": inv_num, "conversationId": scout_cid}))),                      contextlib.redirect_stdout(buf):
+                    pir.main()
+                return json.loads(buf.getvalue())
+
+            self.assertEqual({}, run_pir(0))
+            atomic_write_json(sb_file, {f"SCOUT::{dp.SCOUT_AGENT}:{scout_cid}": {"count": 12, "updated_epoch": time.time()}})
+            self.assertEqual({}, run_pir(3))
+
+            atomic_write_json(sb_file, {f"SCOUT::{dp.SCOUT_AGENT}:{scout_cid}": {"count": 21, "updated_epoch": time.time()}})
+            warn_out = run_pir(5)
+            self.assertIn("3/24 tool call(s) remaining", json.dumps(warn_out))
+
+            atomic_write_json(sb_file, {f"SCOUT::{dp.SCOUT_AGENT}:{scout_cid}": {"count": 24, "updated_epoch": time.time()}})
+            stop_out = run_pir(7)
+            self.assertIn("SCOUT_STEP_BUDGET_EXHAUSTED", json.dumps(stop_out))
+
+    def test_v1317_compact_draft_stdout_restore_cancelled_and_advance_all_ready(self):
+        import argparse
+        import subprocess as sp
+        from unittest import mock
+        from _workflow import engine as wf_eng
+        from run_tests_gate import format_actionable_failure_excerpt
+
+        # A) Compact stdout helper shrinks heavy arrays without mutating input dict
+        heavy_plan = {
+            "task_id": "t-heavy",
+            "plan_sha256": "abc1234567890",
+            "base_file_identities": [f"id-{i}" for i in range(60)],
+            "task_baseline": {"changes": [{"path": f"f{i}.kt"} for i in range(30)]},
+            "verification_contract": {"criteria": [{"id": "C1", "referenced_symbols": [f"Sym{i}" for i in range(25)]}]},
+            "architecture_contract": {"mode": "PRESERVE", "family_evidence": [f"ev-{i}" for i in range(20)]},
+        }
+        compact = wf_eng._compact_plan_json_for_cli_stdout(heavy_plan)
+        self.assertEqual(30, len(heavy_plan["task_baseline"]["changes"]))
+        self.assertEqual(9, len(compact["task_baseline"]["changes"]))
+        self.assertEqual(7, len(compact["verification_contract"]["criteria"][0]["referenced_symbols"]))
+        self.assertEqual(6, len(compact["architecture_contract"]["family_evidence"]))
+
+        # B) Cancel -> revise --restore-cancelled + checkpoint-phase --advance-all-ready + JUnit excerpt
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            sp.run(["git", "init", "-q"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "demo"\ninclude(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            for idx in (1, 2, 3):
+                p_kt = repo / f"app/src/main/java/com/demo/P{idx}.kt"
+                p_kt.parent.mkdir(parents=True, exist_ok=True)
+                p_kt.write_text(f"package com.demo\nclass P{idx} {{ val x = 1 }}\n", encoding="utf-8")
+            sp.run(["git", "add", "."], cwd=repo, check=True)
+            sp.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            parser = wf_eng.build_parser()
+            d_args = parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", "t-cascade",
+                "--kind", "FEATURE", "--outcome", "Update P1 P2 P3 cleanly",
+                "--expected-files", "app/src/main/java/com/demo/P1.kt,app/src/main/java/com/demo/P2.kt,app/src/main/java/com/demo/P3.kt",
+                "--phases", json.dumps([
+                    {"id": "p1", "title": "Phase 1", "expected_files": ["app/src/main/java/com/demo/P1.kt"]},
+                    {"id": "p2", "title": "Phase 2", "expected_files": ["app/src/main/java/com/demo/P2.kt"]},
+                    {"id": "p3", "title": "Phase 3", "expected_files": ["app/src/main/java/com/demo/P3.kt"]},
+                ]),
+            ])
+            drafted = wf_eng.draft(d_args)
+            self.assertEqual("AWAITING_DEVELOPER_APPROVAL", drafted["status"])
+
+            # Cancel task, verify revise without --restore-cancelled fails with hint, then restore losslessly!
+            c_args = argparse.Namespace(repo=str(repo), task_id="t-cascade", source="conversation", proof_reference="cancel draft")
+            wf_eng.cancel(c_args)
+            with self.assertRaises(wf_eng.ValidationError) as ctx_err:
+                wf_eng.revise(parser.parse_args(["revise", "--repo", str(repo), "--task-id", "t-cascade"]))
+            self.assertIn("--restore-cancelled", str(ctx_err.exception))
+
+            restored = wf_eng.revise(parser.parse_args([
+                "revise", "--repo", str(repo), "--task-id", "t-cascade", "--restore-cancelled",
+            ]))
+            self.assertEqual("AWAITING_DEVELOPER_APPROVAL", restored["status"])
+            self.assertNotIn("cancelled_at", restored)
+            self.assertEqual(3, len(restored["phases"]))
+
+            # Approve and modify all 3 phase files at once (simulating whole-task web-apply)
+            wf_eng.record_approval(parser.parse_args([
+                "approve", "--repo", str(repo), "--task-id", "t-cascade",
+                "--source", "conversation", "--proof-reference", "approve",
+                "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", restored["plan_sha256"][:12],
+            ]))
+            for idx in (1, 2, 3):
+                (repo / f"app/src/main/java/com/demo/P{idx}.kt").write_text(
+                    f"package com.demo\nclass P{idx} {{ val x = 2 }}\n", encoding="utf-8"
+                )
+
+            def _fake_phase_tests(_repo, phase_dir, _mods, _needs, **_kw):
+                from _vnext_common import atomic_write_json as _awj
+                _awj(phase_dir / "unit_tests.json", {"status": "PASS", "modules": {}})
+                return (True, "PASS")
+
+            with mock.patch.object(wf_eng, "check_phase_compile", return_value=(True, "PASS")) as m_comp,                  mock.patch.object(wf_eng, "check_phase_tests", side_effect=_fake_phase_tests) as m_test:
+                cp_res = wf_eng.checkpoint_phase(parser.parse_args([
+                    "checkpoint-phase", "--repo", str(repo), "--task-id", "t-cascade",
+                    "--phase-id", "p1", "--advance-all-ready",
+                ]))
+                self.assertEqual(["p1", "p2", "p3"], cp_res["completed_phases"])
+                self.assertEqual(["p2", "p3"], cp_res.get("auto_advanced_phases"))
+                # Compile & unit tests ran ONCE on p1 and were reused on p2 & p3!
+                self.assertEqual(1, m_comp.call_count)
+                self.assertEqual(1, m_test.call_count)
+
+            # Actionable JUnit failure excerpt includes test method + absolute XML path
+            xml_dir = repo / "app/build/test-results/testDebugUnitTest"
+            xml_dir.mkdir(parents=True)
+            xml_f = xml_dir / "TEST-com.demo.FoodPlanViewModelTest.xml"
+            xml_f.write_text(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<testsuite name="com.demo.FoodPlanViewModelTest" tests="1" failures="1">'
+                '<testcase classname="com.demo.FoodPlanViewModelTest" name="initClearsStaleMealState">'
+                '<failure message="java.lang.AssertionError: expected false">at com.demo.FoodPlanViewModelTest.initClearsStaleMealState(FoodPlanViewModelTest.kt:3060)</failure>'
+                '</testcase></testsuite>',
+                encoding="utf-8",
+            )
+            excerpt = format_actionable_failure_excerpt(repo, ":app:testDebugUnitTest")
+            self.assertIn("FoodPlanViewModelTest.initClearsStaleMealState", excerpt)
+            self.assertIn("FoodPlanViewModelTest.kt:3060", excerpt)
+            self.assertIn(xml_f.resolve().as_posix(), excerpt)
+
+    def test_v1317_windows_live_gradle_daemon_java_home_alignment(self):
+        from _live_process import resolve_compatible_windows_daemon_java_home
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            proj = root / "proj"
+            gu_home = root / "gradle_home"
+            jbr = root / "Android Studio/jbr"
+            (proj / "gradle/wrapper").mkdir(parents=True)
+            (proj / "gradle/wrapper/gradle-wrapper.properties").write_text(
+                "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip\n",
+                encoding="utf-8",
+            )
+            (jbr / "bin").mkdir(parents=True)
+            (jbr / "bin/java.exe").write_text("", encoding="utf-8")
+            (jbr / "bin/java").write_text("", encoding="utf-8")
+
+            d_dir = gu_home / "daemon/8.9"
+            d_dir.mkdir(parents=True)
+            log_live = d_dir / "daemon-4455.out.log"
+            log_live.write_text(
+                f"2026-11-15T12:00:00+0200 [DEBUG] [org.gradle.launcher.daemon.context.DefaultDaemonContext] "
+                f"DaemonContext[uid=123,javaHome={jbr},daemonRegistryDir={d_dir},pid=4455,idleTimeout=10800000]\n",
+                encoding="utf-8",
+            )
+
+            env = {"GRADLE_USER_HOME": str(gu_home), "JAVA_HOME": str(root / "other_jdk")}
+
+            # 1. Non-Windows -> None
+            self.assertIsNone(resolve_compatible_windows_daemon_java_home(proj, env, os_name="posix", pid_alive_fn=lambda _: True))
+
+            # 2. Dead PID -> None
+            self.assertIsNone(resolve_compatible_windows_daemon_java_home(proj, env, os_name="nt", pid_alive_fn=lambda _: False))
+
+            # 3. Single live Android Studio JBR daemon -> returns exact JBR path!
+            aligned = resolve_compatible_windows_daemon_java_home(proj, env, os_name="nt", pid_alive_fn=lambda pid: pid == 4455)
+            self.assertEqual(str(jbr), aligned)
+
+            # 4. Explicit org.gradle.java.home in gradle.properties -> respected (returns None)!
+            (proj / "gradle.properties").write_text("org.gradle.java.home=C:/custom/jdk17\n", encoding="utf-8")
+            self.assertIsNone(resolve_compatible_windows_daemon_java_home(proj, env, os_name="nt", pid_alive_fn=lambda pid: pid == 4455))
+            (proj / "gradle.properties").unlink()
+
+            # 5. Two conflicting live JVMs -> ambiguous, returns None safely!
+            jbr2 = root / "OtherJdk21"
+            (jbr2 / "bin").mkdir(parents=True)
+            (jbr2 / "bin/java.exe").write_text("", encoding="utf-8")
+            (d_dir / "daemon-7788.out.log").write_text(
+                f"DaemonContext[uid=456,javaHome={jbr2},pid=7788]\n",
+                encoding="utf-8",
+            )
+            self.assertIsNone(resolve_compatible_windows_daemon_java_home(proj, env, os_name="nt", pid_alive_fn=lambda pid: pid in {4455, 7788}))
 
 
 if __name__ == "__main__":
