@@ -723,6 +723,7 @@ def _red_evidence_denial(root: Path, plan: dict, targets: list[str]) -> str:
     the final verifier's own (bug_requires_executable_red), so the router, the write guard and the
     verifier agree.
     """
+    root = root.resolve()
     if str(plan.get("task_kind") or plan.get("kind") or "").upper() != "BUG":
         return ""
     task_id = str(plan.get("task_id") or "")
