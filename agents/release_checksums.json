@@ -150,7 +150,7 @@
     "agents/scripts/lifecycle.py": "a268f5e8c38dfa861b4935f1f400d92c139a8739ac61d12850f942950acfa594",
     "agents/scripts/logcat_doctor.py": "373989ffa15ddebf7867b38410b88f4b856c2d2288256d14fb3fed56cae83a35",
     "agents/scripts/maestro_bridge.py": "dea5b19e1b2493404fb209180cc60be0984d12a253aa675b5b83186f6719a0b7",
-    "agents/scripts/mutation_guard.py": "4629663ab77866d99c126a1d8f4c2daceb51c3206c45aa42fea3e53ba62eeb9e",
+    "agents/scripts/mutation_guard.py": "79c19f85aed43d74422e8361af1f49c0c55575b0b5bd5dda344d855bb1b62f62",
     "agents/scripts/new_feature_scaffold.py": "804c8b1195e83030e7cc167ec140870a76bd2ca7cf2dbd8566b7b3a3124fa7fb",
     "agents/scripts/perf_guard.py": "a815547016f7a5c7c462dc6a2d1936106b81b9c959f30b0166ba2b0f4817d06f",
     "agents/scripts/phase_review.py": "e85c2b6aab471fcca975416ee84a0ace539102dfa880a4c50323877d2af5a1a8",
