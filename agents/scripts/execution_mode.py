@@ -47,7 +47,13 @@ TERMINAL_TASK_STATES = frozenset({"DELIVERED", "CANCELLED"})
 _MODE_THREAD_LOCK = threading.RLock()
 CONFLICT_TASK_KINDS = frozenset({"CONFLICT", "FIX_CONFLICT", "MERGE"})
 _CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}\s|={7}\s*$|>{7}\s)", re.MULTILINE)
-AUTO_WEB_FILE_THRESHOLD = 12
+AUTO_WEB_FILE_THRESHOLD = 10
+AUTO_WEB_CODE_MASS_KB = 80
+AUTO_WEB_CODE_MASS_BYTES = AUTO_WEB_CODE_MASS_KB * 1024
+AUTO_WEB_MULTI_MODULE_UNCONDITIONAL = 3
+AUTO_WEB_TWO_MODULE_MIN_FILES = 6
+AUTO_WEB_TWO_MODULE_MIN_MASS_KB = 48
+AUTO_WEB_TWO_MODULE_MIN_MASS_BYTES = AUTO_WEB_TWO_MODULE_MIN_MASS_KB * 1024
 AUTO_CRITICAL_SURFACES = frozenset({"AUTH", "BILLING", "CRYPTO", "SECURITY", "SENSITIVE_DATA", "MANIFEST_PERMISSION"})
 
 EXECUTION_MODE_CHOICES: dict[str, dict[str, str]] = {
@@ -56,7 +62,7 @@ EXECUTION_MODE_CHOICES: dict[str, dict[str, str]] = {
         "scope": "project",
         "label": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
         "label_en": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
-        "description": "Save Smart Auto routing project-wide: small single-module tasks (<12 files) run locally in Antigravity; large (12+ files), multi-module, T5 critical, or 2-Strike tasks route to Gemini Web.",
+        "description": "Save Smart Auto routing project-wide: compact tasks (<10 files, <80 KB non-test code mass, and single-module or small 2-module <6 files / <48 KB) run locally in Antigravity; large (10+ files or 80+ KB), substantial multi-module (3+ modules, or 2 modules with 6+ files / 48+ KB), multi-phase, T5 critical, or 2-Strike tasks route to Gemini Web.",
     },
     "auto-task": {
         "mode": "auto",
@@ -451,17 +457,23 @@ def evaluate_smart_auto_routing(
         ra_tier = str((plan.get("readiness_assessment") or {}).get("risk_tier") or "").strip().upper()
         if (surfs & AUTO_CRITICAL_SURFACES) or ra_tier == "T5_CRITICAL":
             return ("web", "AUTO_WEB_CRITICAL_T5_SURFACE", False)
-        # 4. Multi-phase (`p1 -> p2`) or multi-module (`>= 2` non-root modules)
+        # 4. Multi-phase (`p1 -> p2`) or substantial multi-module (`>= 3` non-root modules, OR `2` modules with `>= 6` files or `>= 48 KB` non-test code mass)
         phases = [p for p in (plan.get("phases") or []) if isinstance(p, dict)]
         mods = [str(m).strip() for m in (plan.get("expected_modules") or []) if str(m).strip() and str(m).strip() != ":"]
-        if len(phases) >= 2 or len(set(mods)) >= 2:
-            return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
-        # 5. Large file scope (`>= 12` planned files) OR heavy non-test code mass (`>= 96 KB`, e.g. 120 KB monolithic ViewModels)
         exp_files = [str(f).strip() for f in (plan.get("expected_files") or []) if str(f).strip()]
+        mass_bytes = _measure_non_test_code_mass_bytes(repo, exp_files)
+        distinct_mods = len(set(mods))
+        if len(phases) >= 2:
+            return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
+        if distinct_mods >= AUTO_WEB_MULTI_MODULE_UNCONDITIONAL or (
+            distinct_mods >= 2
+            and (len(exp_files) >= AUTO_WEB_TWO_MODULE_MIN_FILES or mass_bytes >= AUTO_WEB_TWO_MODULE_MIN_MASS_BYTES)
+        ):
+            return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
+        # 5. Large file scope (`>= 10` planned files) OR heavy non-test code mass (`>= 80 KB`, e.g. heavy multi-ViewModel or 120 KB monolithic ViewModels)
         if len(exp_files) >= AUTO_WEB_FILE_THRESHOLD:
             return ("web", f"AUTO_WEB_LARGE_SCOPE_{len(exp_files)}_FILES", False)
-        mass_bytes = _measure_non_test_code_mass_bytes(repo, exp_files)
-        if mass_bytes >= 96 * 1024:
+        if mass_bytes >= AUTO_WEB_CODE_MASS_BYTES:
             return ("web", f"AUTO_WEB_HEAVY_CODE_MASS_{mass_bytes // 1024}KB", False)
         return ("normal", f"AUTO_NORMAL_COMPACT_SCOPE_{len(exp_files)}_FILES", False)
 
@@ -470,7 +482,7 @@ def evaluate_smart_auto_routing(
     if len(cands) >= AUTO_WEB_FILE_THRESHOLD:
         return ("web", f"AUTO_WEB_LARGE_CANDIDATE_SCOPE_{len(cands)}_FILES", False)
     cand_mass_bytes = _measure_non_test_code_mass_bytes(repo, cands)
-    if cand_mass_bytes >= 96 * 1024:
+    if cand_mass_bytes >= AUTO_WEB_CODE_MASS_BYTES:
         return ("web", f"AUTO_WEB_HEAVY_CANDIDATE_CODE_MASS_{cand_mass_bytes // 1024}KB", False)
     return ("normal", "AUTO_IDLE_EVALUATES_ON_PLAN", False)
 

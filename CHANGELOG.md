@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.14] - 2026-11-15
+
+### Improved & Calibrated
+- **Empirically Calibrated `Smart Auto` (`auto-project` / `auto-task`) Value-vs-Savings Thresholds (`agents/scripts/execution_mode.py`, `docs/quickstart.md`, `README.md`)**:
+  - Lowered single-module Web-Relay promotion thresholds from `12` files / `96 KB` to **`10` files** (`AUTO_WEB_FILE_THRESHOLD = 10`) and **`80 KB` non-test code mass** (`AUTO_WEB_CODE_MASS_KB = 80`) to capture multi-ViewModel and medium-large refactors right at the `Gemini 4 Hydrogen High (1x)` warm-cache ROI inflection point.
+  - Scoped 2-module `AUTO_WEB_MULTI_MODULE_OR_PHASE` promotion to **`6+` files** (`AUTO_WEB_TWO_MODULE_MIN_FILES = 6`) or **`48+ KB` non-test code mass** (`AUTO_WEB_TWO_MODULE_MIN_MASS_KB = 48`) while keeping **`3+` modules** and **`2+` execution phases** unconditionally routed to Web-Relay, preventing false-positive manual copy-paste round-trips on compact 2-module edits.
+
 ## [1.3.13] - 2026-11-15
 
 ### Fixed & Hardened

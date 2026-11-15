@@ -5104,5 +5104,205 @@ class TestV1313AuditAndForumGuards(unittest.TestCase):
                     os.environ["ANTIGRAVITY_APP_DATA"] = old_ad
 
 
+
+
+class TestV1314SmartAutoThresholdCalibration(unittest.TestCase):
+    """Regression suite for v1.3.14 Smart Auto threshold calibration (10 files, 80 KB, and smart 2-module 6 files / 48 KB / 3+ modules)."""
+
+    def test_smart_auto_v1314_exact_boundaries(self):
+        import tempfile
+        import execution_mode as em
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+
+            # 1) File count boundary on single module: 9 files -> normal; 10 files -> web
+            for count, expected_mode, expected_prefix in (
+                (9, "normal", "AUTO_NORMAL_COMPACT_SCOPE_9_FILES"),
+                (10, "web", "AUTO_WEB_LARGE_SCOPE_10_FILES"),
+            ):
+                files = [f"app/src/main/kotlin/com/demo/F{i}.kt" for i in range(count)]
+                for rel in files:
+                    fp = repo / rel
+                    fp.parent.mkdir(parents=True, exist_ok=True)
+                    fp.write_text("package com.demo\nclass X\n", encoding="utf-8")
+                plan = {
+                    "task_id": f"t-files-{count}",
+                    "status": "IMPLEMENTING",
+                    "task_kind": "FEATURE",
+                    "expected_files": files,
+                    "expected_modules": [":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                }
+                mode, trig, _ = em.evaluate_smart_auto_routing(repo, plan["task_id"], plan)
+                self.assertEqual(mode, expected_mode)
+                self.assertEqual(trig, expected_prefix)
+
+                # Pre-plan candidate_files parity
+                c_mode, c_trig, _ = em.evaluate_smart_auto_routing(repo, "", None, candidate_files=files)
+                self.assertEqual(c_mode, expected_mode)
+                if count >= 10:
+                    self.assertEqual(c_trig, "AUTO_WEB_LARGE_CANDIDATE_SCOPE_10_FILES")
+
+            # 2) Non-test code mass boundary on single module: 79 KB -> normal; 80 KB -> web
+            f_79 = repo / "app/src/main/kotlin/com/demo/Heavy79.kt"
+            f_79.write_bytes(b"a" * (79 * 1024))
+            m79, t79, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-mass-79",
+                {
+                    "task_id": "t-mass-79",
+                    "status": "IMPLEMENTING",
+                    "task_kind": "FEATURE",
+                    "expected_files": ["app/src/main/kotlin/com/demo/Heavy79.kt"],
+                    "expected_modules": [":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m79, "normal")
+            self.assertEqual(t79, "AUTO_NORMAL_COMPACT_SCOPE_1_FILES")
+
+            f_80 = repo / "app/src/main/kotlin/com/demo/Heavy80.kt"
+            f_80.write_bytes(b"a" * (80 * 1024))
+            m80, t80, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-mass-80",
+                {
+                    "task_id": "t-mass-80",
+                    "status": "IMPLEMENTING",
+                    "task_kind": "FEATURE",
+                    "expected_files": ["app/src/main/kotlin/com/demo/Heavy80.kt"],
+                    "expected_modules": [":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m80, "web")
+            self.assertEqual(t80, "AUTO_WEB_HEAVY_CODE_MASS_80KB")
+
+            cm80, ct80, _ = em.evaluate_smart_auto_routing(
+                repo, "", None, candidate_files=["app/src/main/kotlin/com/demo/Heavy80.kt"]
+            )
+            self.assertEqual(cm80, "web")
+            self.assertEqual(ct80, "AUTO_WEB_HEAVY_CANDIDATE_CODE_MASS_80KB")
+
+            # 3) Smart 2-module rules:
+            #    - 2 modules with 5 small files (<48 KB) -> normal
+            #    - 2 modules with 6 small files -> web
+            #    - 2 modules with 2 files totaling 47 KB -> normal
+            #    - 2 modules with 2 files totaling 48 KB -> web
+            #    - 3 modules with 3 small files -> web
+            #    - 2 phases on 1 module with 2 small files -> web
+            small_5 = [f"core/src/main/kotlin/com/demo/C{i}.kt" for i in range(3)] + [
+                f"app/src/main/kotlin/com/demo/A{i}.kt" for i in range(2)
+            ]
+            for rel in small_5 + ["app/src/main/kotlin/com/demo/A2.kt", "data/src/main/kotlin/com/demo/D0.kt"]:
+                fp = repo / rel
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text("package com.demo\nclass S\n", encoding="utf-8")
+
+            m_2m5f, t_2m5f, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-2m-5f",
+                {
+                    "task_id": "t-2m-5f",
+                    "status": "IMPLEMENTING",
+                    "expected_files": small_5,
+                    "expected_modules": [":core", ":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_2m5f, "normal")
+            self.assertEqual(t_2m5f, "AUTO_NORMAL_COMPACT_SCOPE_5_FILES")
+
+            m_2m6f, t_2m6f, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-2m-6f",
+                {
+                    "task_id": "t-2m-6f",
+                    "status": "IMPLEMENTING",
+                    "expected_files": small_5 + ["app/src/main/kotlin/com/demo/A2.kt"],
+                    "expected_modules": [":core", ":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_2m6f, "web")
+            self.assertEqual(t_2m6f, "AUTO_WEB_MULTI_MODULE_OR_PHASE")
+
+            f_c24 = repo / "core/src/main/kotlin/com/demo/CoreHeavy.kt"
+            f_a23 = repo / "app/src/main/kotlin/com/demo/AppMed.kt"
+            f_c24.write_bytes(b"k" * (24 * 1024))
+            f_a23.write_bytes(b"k" * (23 * 1024))
+            m_2m47k, _, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-2m-47k",
+                {
+                    "task_id": "t-2m-47k",
+                    "status": "IMPLEMENTING",
+                    "expected_files": [
+                        "core/src/main/kotlin/com/demo/CoreHeavy.kt",
+                        "app/src/main/kotlin/com/demo/AppMed.kt",
+                    ],
+                    "expected_modules": [":core", ":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_2m47k, "normal")
+
+            f_a23.write_bytes(b"k" * (24 * 1024))
+            m_2m48k, t_2m48k, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-2m-48k",
+                {
+                    "task_id": "t-2m-48k",
+                    "status": "IMPLEMENTING",
+                    "expected_files": [
+                        "core/src/main/kotlin/com/demo/CoreHeavy.kt",
+                        "app/src/main/kotlin/com/demo/AppMed.kt",
+                    ],
+                    "expected_modules": [":core", ":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_2m48k, "web")
+            self.assertEqual(t_2m48k, "AUTO_WEB_MULTI_MODULE_OR_PHASE")
+
+            m_3m3f, t_3m3f, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-3m-3f",
+                {
+                    "task_id": "t-3m-3f",
+                    "status": "IMPLEMENTING",
+                    "expected_files": [
+                        "core/src/main/kotlin/com/demo/C0.kt",
+                        "data/src/main/kotlin/com/demo/D0.kt",
+                        "app/src/main/kotlin/com/demo/A0.kt",
+                    ],
+                    "expected_modules": [":core", ":data", ":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_3m3f, "web")
+            self.assertEqual(t_3m3f, "AUTO_WEB_MULTI_MODULE_OR_PHASE")
+
+            m_2p, t_2p, _ = em.evaluate_smart_auto_routing(
+                repo,
+                "t-2p",
+                {
+                    "task_id": "t-2p",
+                    "status": "IMPLEMENTING",
+                    "phases": [{"id": "p1"}, {"id": "p2"}],
+                    "expected_files": [
+                        "app/src/main/kotlin/com/demo/A0.kt",
+                        "app/src/main/kotlin/com/demo/A1.kt",
+                    ],
+                    "expected_modules": [":app"],
+                    "expected_surfaces": ["BUSINESS_LOGIC"],
+                },
+            )
+            self.assertEqual(m_2p, "web")
+            self.assertEqual(t_2p, "AUTO_WEB_MULTI_MODULE_OR_PHASE")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

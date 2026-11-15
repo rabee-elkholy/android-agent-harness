@@ -771,18 +771,34 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         dp_large = delegation_policy.evaluate_delegation_policy(repo, task_id="auto-large-15", plan=large_plan)
         self.assertEqual(dp_large["strategy"], "WEB_RELAY_ACTIVE")
 
-        # 4) Multi-module (`:core` + `:app`) and Critical `T5` (`AUTH`) plans -> both promote to `web`!
-        mm_plan = {
-            "task_id": "auto-mm",
+        # 4) Compact 2-module (`<6` files & `<48 KB`) stays `normal`; substantial 2-module (`6+` files / `48+ KB`), 3-module, and `T5` promote to `web`!
+        mm_small_plan = {
+            "task_id": "auto-mm-small",
             "status": "IMPLEMENTING",
             "task_kind": "FEATURE",
             "expected_files": ["core/src/main/Core.kt", "app/src/main/App.kt"],
             "expected_modules": [":core", ":app"],
             "expected_surfaces": ["BUSINESS_LOGIC"],
         }
+        (repo / ".agents/state/tasks/auto-mm-small").mkdir(parents=True, exist_ok=True)
+        atomic_write_json(repo / ".agents/state/tasks/auto-mm-small/plan.json", mm_small_plan)
+        eff_mm_small = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-mm-small", plan=mm_small_plan)
+        self.assertEqual(eff_mm_small["mode"], "normal")
+        self.assertEqual(eff_mm_small["auto_route_trigger"], "AUTO_NORMAL_COMPACT_SCOPE_2_FILES")
+
+        mm_plan = {
+            "task_id": "auto-mm",
+            "status": "IMPLEMENTING",
+            "task_kind": "FEATURE",
+            "expected_files": [f"core/src/main/Core{i}.kt" for i in range(1, 4)] + [f"app/src/main/App{i}.kt" for i in range(1, 4)],
+            "expected_modules": [":core", ":app"],
+            "expected_surfaces": ["BUSINESS_LOGIC"],
+        }
         (repo / ".agents/state/tasks/auto-mm").mkdir(parents=True, exist_ok=True)
         atomic_write_json(repo / ".agents/state/tasks/auto-mm/plan.json", mm_plan)
-        self.assertEqual(execution_mode.resolve_effective_execution_mode(repo, task_id="auto-mm", plan=mm_plan)["mode"], "web")
+        eff_mm = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-mm", plan=mm_plan)
+        self.assertEqual(eff_mm["mode"], "web")
+        self.assertEqual(eff_mm["auto_route_trigger"], "AUTO_WEB_MULTI_MODULE_OR_PHASE")
 
         t5_plan = {
             "task_id": "auto-t5",
