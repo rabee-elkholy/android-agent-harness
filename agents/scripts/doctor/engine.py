@@ -1751,6 +1751,41 @@ class HarnessDoctor:
                 "HYDROGEN_ANTI_BURST_PACER (#200029/#199971), Turn-0 KV-prefix lock (#200026), and Win11 v2.7.0 Error 4551 guard (#200037) active.",
             )
 
+        # 9e. Nov 15 Runtime Guards: Hydrogen Extra -> Argon Quota Leak (#200467), Turbo Shell (#200632) & Inline Diff / autoAcceptOnChat (#200619)
+        if is_ag and not self.is_raw_kit:
+            try:
+                from antigravity_runtime import inspect_nov15_antigravity_hazards
+                nov15_rep = inspect_nov15_antigravity_hazards(self.repo)
+                warns_15: list[str] = []
+                rems_15: list[str] = []
+                if nov15_rep.get("hydrogen_extra_leak_active"):
+                    warns_15.append(
+                        f"Active Lead chat is set to {nov15_rep.get('active_lead_model')} (Hydrogen Extra / xhigh), which silently drains 3x Gemini 4 Argon weekly quota (#200467)."
+                    )
+                    rems_15.append("Switch Antigravity model selector from 'Gemini 4 Hydrogen Extra' down to 'Gemini 4 Hydrogen High' (1x) or 'Gemini 4 Carbon (Medium)'.")
+                if nov15_rep.get("auto_accept_at_risk"):
+                    warns_15.append(
+                        ".vscode/settings.json sets 'antigravity.autoAcceptOnChat': true, which silently merges unreviewed agent Inline Diffs on follow-up chat messages (#200619)."
+                    )
+                    rems_15.append('Set "antigravity.autoAcceptOnChat": false in .vscode/settings.json (and Antigravity IDE User Settings).')
+                if warns_15:
+                    self.log(category, "Nov 15 Quota & Diff Guard", "WARN", " ".join(warns_15), rems_15)
+                else:
+                    aa_state = str(nov15_rep.get("auto_accept_on_chat_state") or "")
+                    aa_note = (
+                        "antigravity.autoAcceptOnChat=false verified"
+                        if aa_state == "explicit_false"
+                        else 'tip: set "antigravity.autoAcceptOnChat": false in Antigravity IDE / .vscode/settings.json (#200619)'
+                    )
+                    self.log(
+                        category,
+                        "Nov 15 Quota & Diff Guard",
+                        "PASS",
+                        f"Zero #200467 Hydrogen Extra Argon quota leak, #200632 PowerShell Turbo single-line command hygiene active, and #200619 Inline Diff guard ready ({aa_note}).",
+                    )
+            except Exception as exc:
+                self.log(category, "Nov 15 Quota & Diff Guard", "WARN", f"Could not complete Nov 15 hazard check: {exc}")
+
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""
         try:

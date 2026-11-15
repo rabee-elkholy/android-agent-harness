@@ -614,7 +614,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_rep = sub.add_parser("prepare-report", help="Prepare a structured QA handoff report for any PM tracker")
     p_rep.add_argument("--repo", default=".")
-    p_rep.add_argument("--task-id", required=True)
+    p_rep.add_argument("--task-id", "--task", dest="task_id", required=True)
+    p_rep.add_argument("--json", action="store_true")
     p_rep.add_argument("--objective", required=True)
     p_rep.add_argument("--changes", required=True)
     p_rep.add_argument("--impact", action="append", help="Impact item (repeat once per item)")

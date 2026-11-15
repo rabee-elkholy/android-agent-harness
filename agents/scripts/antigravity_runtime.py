@@ -789,3 +789,165 @@ def inspect_windows_smart_app_control_4551_risk(
         "flagged_artifacts": flagged[:8],
         "ide_version": ide_ver,
     }
+
+
+def extract_lead_candidates_from_state(state_dir: Path) -> list[str]:
+    """Return ordered candidate parent/Lead conversation IDs from active-conversation and hook-conversations files.
+
+    Supports both `active-conversation.json` (`{"conversation_id": ...}`) and `cache/hook-conversations.json`
+    (flat `{cid: epoch_float}` written by `pre_tool_safety.py`, as well as legacy `{"last_lead_conversation_id": ..., "conversations": {...}}`).
+    """
+    import json as _json
+    candidates: list[str] = []
+    if not isinstance(state_dir, Path) or not state_dir.is_dir():
+        return candidates
+
+    active_conv = state_dir / "active-conversation.json"
+    if active_conv.is_file():
+        try:
+            doc = _json.loads(active_conv.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(doc, dict):
+                cid = str(doc.get("conversation_id") or "").strip()
+                if cid and not _is_invalid_conversation_id(cid) and cid not in candidates:
+                    candidates.append(cid)
+        except (OSError, ValueError):
+            pass
+
+    for hc_path in (state_dir / "cache" / "hook-conversations.json", state_dir / "hook-conversations.json"):
+        if not hc_path.is_file():
+            continue
+        try:
+            doc = _json.loads(hc_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        explicit_last = str(doc.get("last_lead_conversation_id") or "").strip()
+        if explicit_last and not _is_invalid_conversation_id(explicit_last) and explicit_last not in candidates:
+            candidates.append(explicit_last)
+        nested = doc.get("conversations")
+        if isinstance(nested, dict):
+            ranked_nested: list[tuple[float, str]] = []
+            for k, v in nested.items():
+                ks = str(k).strip()
+                if not ks or _is_invalid_conversation_id(ks):
+                    continue
+                ts = float(v) if isinstance(v, (int, float)) else 0.0
+                ranked_nested.append((ts, ks))
+            for _, ks in sorted(ranked_nested, key=lambda item: item[0], reverse=True):
+                if ks not in candidates:
+                    candidates.append(ks)
+        ranked_flat: list[tuple[float, str]] = []
+        for k, v in doc.items():
+            if k in {"last_lead_conversation_id", "conversations", "schema_version"}:
+                continue
+            ks = str(k).strip()
+            if not ks or _is_invalid_conversation_id(ks):
+                continue
+            if isinstance(v, (int, float)):
+                ranked_flat.append((float(v), ks))
+        for _, ks in sorted(ranked_flat, key=lambda item: item[0], reverse=True):
+            if ks not in candidates:
+                candidates.append(ks)
+    return candidates
+
+
+def is_likely_subagent_transcript(transcript: Path | None) -> bool:
+    """Return True if bounded transcript head shows subagent dispatch markers without USER_EXPLICIT input."""
+    read_p = prefer_full_transcript(transcript) or transcript
+    if read_p is None or not read_p.is_file():
+        return False
+    try:
+        head = read_p.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return False
+    if '"USER_EXPLICIT"' in head:
+        return False
+    return (
+        "MESSAGE_PRIORITY_HIGH" in head
+        or "HARNESS_SCOUT_FINGERPRINT=" in head
+        or "HARNESS_WORKER_FINGERPRINT=" in head
+        or "REVIEWER_FINGERPRINT=" in head
+    )
+
+
+def inspect_nov15_antigravity_hazards(
+    repo: Path,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Inspect Nov 15, 2026 Antigravity hazards (#200467 Hydrogen Extra Argon quota leak & #200619 autoAcceptOnChat / Inline Diff)."""
+    import json as _json
+    environ = env if env is not None else os.environ
+    state_dir = (repo / ".agents" / "state") if (repo / ".agents" / "state").is_dir() else (repo / "agents" / "state")
+
+    cand_cids: list[str] = []
+    env_cid = str(environ.get("HARNESS_CONVERSATION_ID") or "").strip()
+    if env_cid and not _is_invalid_conversation_id(env_cid):
+        cand_cids.append(env_cid)
+    for scid in extract_lead_candidates_from_state(state_dir):
+        if scid not in cand_cids:
+            cand_cids.append(scid)
+
+    active_lead_cid = ""
+    active_lead_model = str(environ.get("ANTIGRAVITY_ACTIVE_MODEL") or "").strip()
+    for cid in cand_cids[:6]:
+        tx = resolve_transcript(cid)
+        if tx is None or is_likely_subagent_transcript(tx):
+            continue
+        try:
+            meta = native_model_metadata(tx)
+        except Exception:
+            continue
+        if isinstance(meta, dict):
+            cfg = str(meta.get("host_configured_model") or "").strip()
+            rep_list = [str(m).strip() for m in (meta.get("host_reported_models") or []) if str(m).strip()]
+            chosen = cfg or (rep_list[-1] if rep_list else "")
+            if chosen:
+                active_lead_cid = cid
+                active_lead_model = chosen
+                break
+
+    norm_model = active_lead_model.lower().removeprefix("models/")
+    hydrogen_extra_leak_active = bool(
+        re.search(r"gemini-4-hydrogen-(?:extra|xhigh)\b|hydrogen@(?:extra|xhigh)\b", norm_model)
+    )
+
+    auto_accept_state = "no_vscode_settings"
+    auto_accept_at_risk = False
+    vscode_settings = repo / ".vscode" / "settings.json"
+    user_settings_raw = str(environ.get("ANTIGRAVITY_USER_SETTINGS_PATH") or "").strip()
+    settings_files: list[Path] = []
+    if vscode_settings.is_file():
+        settings_files.append(vscode_settings)
+    if user_settings_raw:
+        up = Path(user_settings_raw).expanduser()
+        if up.is_file():
+            settings_files.append(up)
+
+    for sf in settings_files:
+        try:
+            raw = sf.read_text(encoding="utf-8", errors="ignore")
+            cleaned = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+            parsed = _json.loads(cleaned)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            if "antigravity.autoAcceptOnChat" in parsed:
+                val = parsed["antigravity.autoAcceptOnChat"]
+                if val is True:
+                    auto_accept_state = "explicit_true"
+                    auto_accept_at_risk = True
+                    break
+                if val is False:
+                    auto_accept_state = "explicit_false"
+            elif auto_accept_state == "no_vscode_settings":
+                auto_accept_state = "unset_default_true"
+
+    return {
+        "hydrogen_extra_leak_active": hydrogen_extra_leak_active,
+        "active_lead_model": active_lead_model,
+        "active_lead_conversation_id": active_lead_cid,
+        "auto_accept_on_chat_state": auto_accept_state,
+        "auto_accept_at_risk": auto_accept_at_risk,
+    }

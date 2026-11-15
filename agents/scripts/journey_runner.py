@@ -435,7 +435,7 @@ def main(argv=None):
     parser.add_argument("action", choices=("validate", "list", "run"))
     parser.add_argument("--repo", default=".")
     parser.add_argument("--file")
-    parser.add_argument("--task-id")
+    parser.add_argument("--task-id", "--task", dest="task_id")
     parser.add_argument("--id")
     parser.add_argument("--serial")
     parser.add_argument("--json", action="store_true")

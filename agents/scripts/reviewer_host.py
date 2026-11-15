@@ -211,7 +211,15 @@ def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> di
                     continue
                 prompt = message[2].replace("\r\n", "\n").strip()
                 for run, ledger_path, role, entry, brief_path, expected in candidates:
-                    alt_paths = [str(task_dir(repo, str(run["task_id"])) / "active-briefs" / f"brief-{role}.md")] if run.get("task_id") else []
+                    alt_paths: list[str] = []
+                    if run.get("task_id"):
+                        _td_r = task_dir(repo, str(run["task_id"]))
+                        alt_paths.append(str(_td_r / "active-briefs" / f"brief-{role}.md"))
+                        if run.get("phase_id"):
+                            alt_paths.append(str(_td_r / "active-briefs" / f"phase-brief-{run['phase_id']}-{role}.md"))
+                    _sb_r = str(((run.get("short_briefs") or {}).get(role)) or "")
+                    if _sb_r and _sb_r not in alt_paths:
+                        alt_paths.append(_sb_r)
                     prior_digs = list((run.get("accepted_prior_brief_digests") or {}).get(role) or [])
                     if prompt != expected and not pointer_matches(prompt, role, str(brief_path), expected, alternate_paths=alt_paths, accepted_digests=prior_digs):
                         continue

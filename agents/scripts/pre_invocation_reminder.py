@@ -144,6 +144,16 @@ def _compact_message() -> str:
             mode_tag = f" [Execution Mode: {em['mode']} ({em.get('effective_scope')})]"
     except Exception:
         mode_tag = ""
+    try:
+        from antigravity_runtime import inspect_nov15_antigravity_hazards
+        nov15 = inspect_nov15_antigravity_hazards(REPO)
+        if nov15.get("hydrogen_extra_leak_active"):
+            mode_tag += (
+                f" [QUOTA-LEAK GUARD #200467: Active model `{nov15.get('active_lead_model')}` (`Hydrogen Extra` / `xhigh`) "
+                "silently drains 3x Gemini 4 Argon weekly quota — switch model selector down to `Gemini 4 Hydrogen High` (1x) or `Carbon Medium`]"
+            )
+    except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+        nov15 = {}
     if not plan:
         bridge_rem = _bridge_reminder()
         return f"Android Harness: Idle (no active task).{mode_tag} Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery; ask execution mode if unset before starting an implementation task.{notes_rem}{bridge_rem}"

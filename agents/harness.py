@@ -54,9 +54,9 @@ def _run(script: str, args: list[str]) -> int:
         active = AGENTS_ROOT / "state/active-task.json"
         task_id = ""
         for index, argument in enumerate(args):
-            if argument == "--task-id" and index + 1 < len(args):
+            if argument in {"--task-id", "--task"} and index + 1 < len(args):
                 task_id = args[index + 1]
-            elif argument.startswith("--task-id="):
+            elif argument.startswith("--task-id=") or argument.startswith("--task="):
                 task_id = argument.split("=", 1)[1]
         if not task_id and active.exists():
             task_id = str(read_json(active).get("task_id") or "")

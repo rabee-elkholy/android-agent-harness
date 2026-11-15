@@ -42,12 +42,13 @@ def main(argv: list[str] | None = None) -> int:
     args_list = sys.argv[1:] if argv is None else argv
     if any(arg in {"-h", "--help"} for arg in args_list):
         print(
-            "Usage: python .agents/harness.py preflight [--repo <path>] [--task-id <id>] [--diagnostic]\n\n"
+            "Usage: python .agents/harness.py preflight [--repo <path>] [--task-id|--task <id>] [--diagnostic] [--json]\n\n"
             "Run zero-token deterministic preflight verification (string parity, Room migrations,\n"
             "plan authority, architecture drift, exported components, KMP expect/actual, and fast lint)."
         )
         return 0
     diagnostic = "--diagnostic" in args_list
+    json_output = "--json" in args_list
     repo_target = REPO
     task_id_arg = ""
     for idx, arg in enumerate(args_list):
@@ -56,8 +57,30 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["HARNESS_REPO"] = str(repo_target)
             import _repo_files
             _repo_files.REPO = repo_target
-        elif arg == "--task-id" and idx + 1 < len(args_list):
+        elif arg.startswith("--repo="):
+            repo_target = Path(arg.split("=", 1)[1]).resolve()
+            os.environ["HARNESS_REPO"] = str(repo_target)
+            import _repo_files
+            _repo_files.REPO = repo_target
+        elif arg in {"--task-id", "--task"} and idx + 1 < len(args_list):
             task_id_arg = args_list[idx + 1]
+        elif arg.startswith("--task-id=") or arg.startswith("--task="):
+            task_id_arg = arg.split("=", 1)[1]
+    if json_output:
+        import contextlib
+        import io
+        import json as _json
+        _buf = io.StringIO()
+        with contextlib.redirect_stdout(_buf), contextlib.redirect_stderr(_buf):
+            _rc = main([a for a in args_list if a != "--json"])
+        from _gate_results import GATE_RESULTS_DIR
+        _gr = repo_target / ".agents" / "state" / "gate-results" / "preflight.json"
+        _payload = read_json(_gr) if _gr.is_file() else {"status": "PASS" if _rc == 0 else "FAIL", "exit_code": _rc}
+        _payload = dict(_payload, exit_code=_rc)
+        if _rc != 0:
+            _payload["log_tail"] = "\n".join(_buf.getvalue().splitlines()[-25:])
+        print(_json.dumps(_payload, ensure_ascii=False, indent=2))
+        return _rc
 
     live_print("==================================================")
     live_print("[Preflight] Harness preflight verification")

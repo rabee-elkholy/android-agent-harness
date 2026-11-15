@@ -150,6 +150,7 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     hydrogen_entitlement_blocks = 0
     orchestrator_handoff_hits = 0
     tos_violation_403_hits = 0
+    hydrogen_extra_leak_hits = 0
     turn3_cache_drop_hits = 0
     cache_regression_hits = 0
     prev_cached_tokens = 0
@@ -173,6 +174,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 zero_quota_429_hits += 1
             if "effort isn't adjustable for orchestrator" in low or ("orchestrator" in low and "handing control back to gemini 4 carbon" in low):
                 orchestrator_handoff_hits += 1
+            if "gemini-4-hydrogen-extra" in low or "gemini-4-hydrogen-xhigh" in low:
+                hydrogen_extra_leak_hits += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -237,6 +240,7 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "hydrogen_entitlement_blocks": hydrogen_entitlement_blocks,
         "orchestrator_handoff_hits": orchestrator_handoff_hits,
         "tos_violation_403_hits": tos_violation_403_hits,
+        "hydrogen_extra_leak_hits": hydrogen_extra_leak_hits,
         "turn3_cache_drop_hits": turn3_cache_drop_hits,
         "cache_regression_hits": cache_regression_hits,
         "top_tools": dict(tool_counts.most_common(8)),
@@ -358,6 +362,13 @@ def diagnose_session(
         except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
             worker_friction = worker_friction
 
+    if transcript.get("hydrogen_extra_leak_hits", 0) > 0:
+        findings.append({
+            "code": "HYDROGEN_EXTRA_ARGON_QUOTA_LEAK",
+            "severity": "HIGH",
+            "evidence": f"{transcript['hydrogen_extra_leak_hits']} reference(s) to `gemini-4-hydrogen-extra` / `xhigh` detected (#200467).",
+            "remedy": "Switch Antigravity model selector from `Gemini 4 Hydrogen Extra` down to `Gemini 4 Hydrogen High` (1x) or `Carbon Medium` to stop silent 3x Argon weekly quota drain.",
+        })
     if transcript.get("tos_violation_403_hits", 0) > 0:
         findings.append({
             "code": "HYDROGEN_403_TOS_FALSE_POSITIVE",

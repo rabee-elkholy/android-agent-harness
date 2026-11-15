@@ -208,7 +208,7 @@ def generate_review_topology(repo: Path, changed_paths: list[str]) -> str:
 
         lines = [
             "## ARCHITECTURAL GRAPH & BLAST RADIUS TOPOLOGY",
-            "*(Pre-computed architectural graph context extracted by GraphEngine)*",
+            f"*(Pre-computed architectural graph context extracted by GraphEngine — Repository root for file tools: `{repo.resolve().as_posix()}`)*",
             "",
         ]
 

@@ -132,8 +132,8 @@ EPHEMERAL_GENERATED_RE = re.compile(
 DENY_HINTS = {
     "draft_force": "To correct a plan that awaits approval, run `python .agents/scripts/workflow.py revise --repo . --task-id <id>` "
                    "with the corrected arguments. To replace a different live task, ask the developer to cancel it.",
-    "raw_adb": "To read logcat, pass -d or -t <lines> so adb logcat dumps and exits (e.g. `adb logcat -d -t 500` or "
-               "`adb logcat -d -t 500 | Select-String -Pattern \"...\"`). For device status or app install/launch, use "
+    "raw_adb": "To read logcat without breaking Windows PowerShell Turbo Mode (#200632 — never use PowerShell pipes), run "
+               "`python .agents/harness.py debug logs` or standalone `adb logcat -d -t 500`. For device status or app install/launch, use "
                "`python .agents/harness.py device status` or `python .agents/harness.py device install-start`.",
     "agy_headless_loop_tos_guard": "Unattended `agy -p` / `--headless` CLI loops and programmatic UI keystroke injection trigger automated Google 403 PERMISSION_DENIED anti-abuse suspension (#199748/#199756). Prepare artifacts locally and invoke via an interactive Skill instead.",
 }
@@ -1107,7 +1107,30 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 return
         except (ImportError, OSError, ValueError, ValidationError):
             pass
+    if hook_host == "antigravity" and re.search(r"(?:^|[;&|\r\n]\s*)(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b", command, re.I | re.M):
+        emit(
+            "deny",
+            "WINDOWS_TURBO_SHELL_HYGIENE (#200632): Inline `python -c` / `py -c` snippets inside `run_command` break "
+            "Antigravity Turbo Mode auto-approval on Windows PowerShell and bypass standalone CLI auditing. "
+            "Run a single-line `python .agents/harness.py <subcommand>` or use native `view_file`/`grep_search` tools instead.",
+            tool="run_command",
+            command=command,
+            reason_code="COMMAND_MUTATION_GUARD",
+            task_id=active_tid,
+        )
+        return
     allowed, reason = command_allowed(REPO, command)
+    if not allowed and hook_host == "antigravity" and (
+        "2>&1" in command
+        or "|" in command
+        or "\n" in command.strip()
+        or re.search(r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b", command)
+    ):
+        reason = (
+            f"{reason} [WINDOWS_TURBO_SHELL_HYGIENE #200632: Never use pipes (`|`), `2>&1` stream redirections, multi-line scripts, "
+            "or inline `python -c` in `run_command` on Antigravity — they force Windows PowerShell out of Turbo Mode into manual approval stalls; "
+            "run standalone single-line `python .agents/harness.py` commands or native `view_file`/`grep_search` tools instead.]"
+        )
     if allowed and conversation and not is_sym_write:
         try:
             from delegation_policy import check_and_record_lead_post_subagent_read, check_post_reviewer_reread_guard
@@ -1353,8 +1376,31 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             return
 
         from review_execution import pointer_matches
+        phase_alt_paths: list[str] = []
+        phase_prior_digs: list[str] = []
+        try:
+            from phase_review import phase_run_file as _prf
+            from _vnext_common import task_dir as _ptd
+            _t_id = str(plan.get("task_id") or "")
+            if _t_id and phase_id:
+                _tdir = _ptd(REPO, _t_id)
+                phase_alt_paths.append(str(_tdir / "active-briefs" / f"phase-brief-{phase_id}-{r_role}.md"))
+                _pr_f = _prf(_tdir, phase_id)
+                if _pr_f.is_file():
+                    _pr_doc = read_json(_pr_f)
+                    _sb = str(((_pr_doc.get("short_briefs") or {}).get(r_role)) or "")
+                    if _sb and _sb not in phase_alt_paths:
+                        phase_alt_paths.append(_sb)
+                    phase_prior_digs = list(((_pr_doc.get("accepted_prior_brief_digests") or {}).get(r_role)) or [])
+        except (ImportError, OSError, ValueError, ValidationError):
+            pass
         if supplied_prompt != expected_prompt and not pointer_matches(
-            supplied_prompt, r_role, str(brief_val), expected_prompt,
+            supplied_prompt,
+            r_role,
+            str(brief_val),
+            expected_prompt,
+            alternate_paths=phase_alt_paths,
+            accepted_digests=phase_prior_digs,
         ):
             emit(
                 "deny",
@@ -3059,6 +3105,16 @@ def _main() -> None:
                 emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if all_temp:
+                if (utility_ctx is not None or reviewer) and any(
+                    ".agents/state/web-relay/inbox/" in str(t).replace("\\", "/") for t in targets
+                ):
+                    emit(
+                        "deny",
+                        "WORKER_INBOX_WRITE_FORBIDDEN: `.agents/state/web-relay/inbox/` is reserved exclusively for the Lead session when staging incoming Web-Relay JSON payloads.",
+                        tool=name,
+                        reason_code="WORKER_INBOX_WRITE_FORBIDDEN",
+                    )
+                    return
                 if name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
                     _normalize_crlf_for_edit(REPO, targets, args)
                 emit("allow", "Temporary setup answers, IDE artifact, or external user document write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")

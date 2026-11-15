@@ -1327,13 +1327,13 @@ def classify(
     return result
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     enable_line_buffered_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--task-id", default=None, help="Task ID for baseline-scoped classification")
+    parser.add_argument("--task-id", "--task", dest="task_id", default=None, help="Task ID for baseline-scoped classification")
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.json:
         result = classify(Path(args.repo), task_id=args.task_id, progress=False)
         print(json.dumps(result, ensure_ascii=False, indent=2))

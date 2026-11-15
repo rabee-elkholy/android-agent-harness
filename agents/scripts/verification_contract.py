@@ -470,7 +470,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("coverage", "bind-evidence"))
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--task-id", "--task", dest="task_id", required=True)
     parser.add_argument("--criterion")
     parser.add_argument("--artifact")
     parser.add_argument("--case", default="")

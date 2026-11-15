@@ -469,7 +469,7 @@ def heal_task_state(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Self-heal stuck or stale task state back to the nearest stable checkpoint.")
     parser.add_argument("--repo", default=".", help="Repository root")
-    parser.add_argument("--task-id", default=None, help="Task ID (defaults to active task)")
+    parser.add_argument("--task-id", "--task", dest="task_id", default=None, help="Task ID (defaults to active task)")
     parser.add_argument("--host", default=None, help="Host identifier")
     parser.add_argument("--prepare-fresh-run", action="store_true", help="Automatically prepare a fresh verification run after stepping back")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")

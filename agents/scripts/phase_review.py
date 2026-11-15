@@ -824,7 +824,12 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
     selected_reviewers = metadata["selected_reviewers"]
     package_path = rdir / "phase-review-package.md"
     # Derived fields are never embedded in the content whose digest they identify.
-    metadata = {k: v for k, v in metadata.items() if k not in ("briefs", "package_path", "package_sha256")}
+    prior_phase_digests = dict(metadata.get("accepted_prior_brief_digests") or {})
+    metadata = {
+        k: v
+        for k, v in metadata.items()
+        if k not in ("briefs", "short_briefs", "accepted_prior_brief_digests", "package_path", "package_sha256")
+    }
     fh_obj = metadata.get("phase_file_hashes")
     ps_obj = metadata.get("phase_path_states")
     candidate_phase_paths = (
@@ -909,6 +914,7 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
 
     # Generate lean briefs with Zero-Hop parity (<=24 KB / 520 lines) and pre-verified checkpoint gate summary
     briefs: dict[str, str] = {}
+    short_briefs: dict[str, str] = {}
     from review_package import (
         MAX_INLINE_PACKAGE_BYTES,
         MAX_INLINE_PACKAGE_LINES,
@@ -939,6 +945,16 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             f"- **Phase**: {phase_label}",
             f"- **Description**: {target_phase.get('description', '')}",
             f"- **Focus**: {r_info['focus']}",
+            f"- **Repository Root (Mandatory Absolute Paths for File Tools)**: `{repo.resolve().as_posix()}` — Antigravity `read_file`/`view_file` tools REQUIRE full absolute paths (never pass repo-relative paths like `app/src/...`).",
+            *(
+                [
+                    "- **Target Phase Delta Paths (Use Full Absolute Path in `read_file`/`view_file`)**:",
+                    *(f"  * `{(repo / pp).resolve().as_posix()}` (`{pp}`)" for pp in raw_phase_paths[:20]),
+                    *([f"  * *(and {len(raw_phase_paths) - 20} more files; see phase package)*"] if len(raw_phase_paths) > 20 else []),
+                ]
+                if raw_phase_paths
+                else []
+            ),
             *phase_note_lines,
             "- **Shared/Reused Screen Back & Navigation Audit**: When any touched screen, Fragment, Activity, Dialog, or route is reachable from multiple entry points/flows (e.g. wizard/onboarding vs edit/settings/home), verify that system back (`BackHandler` / `OnBackPressedCallback`), UI back/close actions, and exit navigation (`popBackStack`, `popUpTo`, `navigateUp`, `finish`) work for every caller without hardcoded single-flow destinations.",
             "- **Goldfish Epistemic Independence**: Treat implementer descriptions and phase claims as untrusted hypotheses; judge the phase delta diff strictly on objective code evidence and architectural contracts.",
@@ -985,10 +1001,23 @@ def _publish_phase_package(repo: Path, metadata: dict, target_phase: dict, diff:
             "```",
         ]
         b_path = rdir / f"phase-brief-{rev}.md"
-        atomic_write_bytes(b_path, "\n".join(b_lines).encode("utf-8"))
+        rendered_phase_brief = "\n".join(b_lines).encode("utf-8")
+        atomic_write_bytes(b_path, rendered_phase_brief)
         briefs[rev] = str(b_path)
+        try:
+            short_dir = tdir / "active-briefs"
+            short_dir.mkdir(parents=True, exist_ok=True)
+            short_p = short_dir / f"phase-brief-{phase_id}-{rev}.md"
+            atomic_write_bytes(short_p, rendered_phase_brief)
+            short_briefs[rev] = str(short_p)
+        except OSError:
+            pass
 
     metadata["briefs"] = briefs
+    if short_briefs:
+        metadata["short_briefs"] = short_briefs
+    if prior_phase_digests:
+        metadata["accepted_prior_brief_digests"] = prior_phase_digests
 
     atomic_write_json(prun_file, metadata)
 
@@ -1008,6 +1037,21 @@ def refresh_undispatched_phase_models(repo: Path, task_id: str, phase_id: str) -
         raise ValidationError(f"PHASE_REVIEW_STALE: {reason}")
     plan = _load_plan(repo, task_id)
     phase = next(p for p in plan["phases"] if p["id"] == phase_id)
+    prior_digests: dict[str, list[str]] = dict(run.get("accepted_prior_brief_digests") or {})
+    for role_name, b_raw in (run.get("briefs") or {}).items():
+        try:
+            bp = Path(str(b_raw))
+            if bp.is_file():
+                b_norm = bp.read_text(encoding="utf-8").replace("\r\n", "\n").strip()
+                d16 = hashlib.sha256(b_norm.encode("utf-8")).hexdigest()[:16]
+                bucket = list(prior_digests.get(role_name) or [])
+                if d16 not in bucket:
+                    bucket.append(d16)
+                prior_digests[role_name] = bucket[-4:]
+        except OSError:
+            pass
+    if prior_digests:
+        run["accepted_prior_brief_digests"] = prior_digests
     run["review_models"] = freeze_models(repo, task_id, run["review_host"], run["selected_reviewers"],
                                          run_id=run["phase_review_run_id"], plan=plan)
     checkpoint = read_json(phase_dir(tdir, phase_id) / "checkpoint.json")
@@ -1806,8 +1850,16 @@ def _main(argv: list[str] | None = None) -> int:
     assert_execution_session(repo, args.task_id)
     if args.subcommand == "package":
         pkg_path, meta = build_phase_package(repo, args.task_id, args.phase_id, host=args.host)
-        print(f"PHASE_REVIEW_PACKAGE={pkg_path}")
-        print(f"PACKAGE_SHA256={meta['package_sha256']}")
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "task_id": args.task_id,
+                "phase_id": args.phase_id,
+                "phase_review_package": str(pkg_path),
+                "package_sha256": meta["package_sha256"],
+            }, indent=2, ensure_ascii=False))
+        else:
+            print(f"PHASE_REVIEW_PACKAGE={pkg_path}")
+            print(f"PACKAGE_SHA256={meta['package_sha256']}")
         return 0
     elif args.subcommand == "dispatch":
         run_file = phase_run_file(task_dir(repo, args.task_id), args.phase_id)
@@ -1820,8 +1872,16 @@ def _main(argv: list[str] | None = None) -> int:
                 "phase reviewers with invoke_subagent instead of recording dispatch manually"
             )
         ledger = record_phase_dispatch_batch(repo, args.task_id, args.phase_id, args.reviewer, host=args.host)
-        print(f"PHASE_REVIEW_DISPATCH_RECORDED={ledger['run_id']}")
-        print("INDEPENDENT_EXECUTION_VERIFIED=false")
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "task_id": args.task_id,
+                "phase_id": args.phase_id,
+                "phase_review_dispatch_recorded": ledger["run_id"],
+                "independent_execution_verified": False,
+            }, indent=2, ensure_ascii=False))
+        else:
+            print(f"PHASE_REVIEW_DISPATCH_RECORDED={ledger['run_id']}")
+            print("INDEPENDENT_EXECUTION_VERIFIED=false")
         return 0
     elif args.subcommand == "complete":
         revs = list(args.reviewer) if isinstance(args.reviewer, list) else [args.reviewer]

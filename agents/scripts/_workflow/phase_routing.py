@@ -301,21 +301,33 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                         f"--phase-id {phase_id} --host {phase_host} {roster_args}"
                     )
                 from review_execution import brief_pointer_prompt
+                short_briefs_map = run_meta.get("short_briefs") if isinstance(run_meta.get("short_briefs"), dict) else {}
+                prior_digests_map = run_meta.get("accepted_prior_brief_digests") if isinstance(run_meta.get("accepted_prior_brief_digests"), dict) else {}
                 phase_reviewer_entries: dict[str, dict[str, Any]] = {}
                 for r in not_dispatched:
                     b_file = str(briefs.get(r, "") or "")
+                    short_b = str(short_briefs_map.get(r, "") or "")
                     b_text = ""
                     if b_file and Path(b_file).is_file():
                         try:
                             b_text = Path(b_file).read_text(encoding="utf-8")
                         except OSError:
                             b_text = ""
+                    if short_b:
+                        try:
+                            if not Path(short_b).is_file() or Path(short_b).read_text(encoding="utf-8") != b_text:
+                                short_b = ""
+                        except OSError:
+                            short_b = ""
+                    ptr_target = short_b or b_file
                     phase_reviewer_entries[r] = {
                         "role": r,
                         "type_name": r,
                         "brief_path": b_file,
+                        "short_brief_path": short_b,
+                        "accepted_prior_brief_digests": list(prior_digests_map.get(r) or []),
                         "brief_content": b_text,
-                        **({"brief_pointer_prompt": brief_pointer_prompt(r, b_file, b_text)} if b_text and b_file else {}),
+                        **({"brief_pointer_prompt": brief_pointer_prompt(r, ptr_target, b_text)} if b_text and ptr_target else {}),
                     }
                 exec_profile = {
                     "model_policy": "INHERIT_PARENT_BY_OMISSION" if _engine.has_trusted_review_source(str(run_meta.get("review_host") or "")) else "HOST_MANAGED_UNVERIFIED",
@@ -404,13 +416,16 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 unbound_prompts: dict[str, str] = {}
                 if unbound:
                     wait_briefs = run_meta_wait.get("briefs") or {}
+                    wait_short = run_meta_wait.get("short_briefs") or {}
                     for r in unbound:
                         b_file = str(wait_briefs.get(r, "") or "")
+                        short_b = str(wait_short.get(r, "") or "")
                         if b_file and Path(b_file).is_file():
                             try:
                                 b_text = Path(b_file).read_text(encoding="utf-8")
                                 if b_text:
-                                    unbound_prompts[r] = brief_pointer_prompt(r, b_file, b_text)
+                                    use_short = short_b if (short_b and Path(short_b).is_file()) else b_file
+                                    unbound_prompts[r] = brief_pointer_prompt(r, use_short, b_text)
                             except OSError:
                                 pass
                 unbound_hint = (

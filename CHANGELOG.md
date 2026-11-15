@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.3.13] - 2026-11-15
+
+### Fixed & Hardened
+- **Unit-Test Gate CLI Disambiguation & Pure `--json` / `--repo` Support (`run_tests_gate.py`)**: Disambiguates `--task :module:testDebugUnitTest` (Gradle task) vs `--task T-...` (harness task ID), honors `--repo` cleanly, and emits pure parseable JSON on stdout when `--json` is passed.
+- **Cold-Repo `hook-conversations.json` Flat-Schema & `cache/` Path Parity (`antigravity_runtime.py`, `review_models.py`, `delegation_policy.py`)**: Reads both `.agents/state/cache/hook-conversations.json` and `.agents/state/hook-conversations.json` across flat `{conversation_id: epoch}` and structured schemas while filtering subagent transcripts.
+- **Exact ISO `completed_at` Wave Timestamps & Pure `--json` Phase-Review Subcommands (`delegation_policy.py`, `phase_review.py`)**: Records `completed_at` alongside `completed_at_epoch` for exact `web-apply` anti-reread window comparisons, aligns modelless `agent.md` dispatch hints, and emits structured JSON on `phase-review package --json` and `phase-review dispatch --json`.
+- **Nov 15, 2026 Antigravity Forum Protections (`#200467`, `#200632`, `#200619`, & 403 ToS)**:
+  - **`#200467` (`Hydrogen Extra` -> `3x Argon` Weekly Quota Leak Guard)**: Detects active Lead sessions running on `gemini-4-hydrogen-extra` / `gemini-4-hydrogen-xhigh` across `antigravity_runtime.py`, `pre_invocation_reminder.py`, `doctor`, and `session_forensics.py`.
+  - **`#200632` (Windows PowerShell Turbo-Mode `run_command` Hygiene)**: Removes `| Select-String` from `raw_adb` hints and enforces/documents single-line standalone `run_command` execution without `|`, `2>&1`, multi-line scripts, or inline `python -c` on Antigravity.
+  - **`#200619` (`antigravity.autoAcceptOnChat` & Inline Diff Phantom `Duplicate symbol` Guard)**: Adds `.vscode/settings.json` `antigravity.autoAcceptOnChat` diagnostics in `doctor` and instructs Lead/Worker agents to trust on-disk `compile` / `fast_kt_lint.py` over transient Inline Diff duplicate-declaration LSP squiggles, alongside steady single-account / bounded-image (`<=5`) 403 ToS hygiene.
+
+## [1.3.12] - 2026-11-15
+
+### Fixed & Improved
+- **Phase-Review Full Parity (`phase_review.py`, `_workflow/phase_routing.py`, `review_models.py`, `review_execution.py`, `pre_tool_safety.py`, `reviewer_host.py`, `review_package.py`)**: Extended mandatory absolute file paths, `.agents/state/tasks/<task_id>/active-briefs/phase-brief-<phase_id>-<role>.md` short mirrors, `accepted_prior_brief_digests` survival across `review models set`, and refreshed `reviewer_prompts` output to multi-phase reviews (`DISPATCH_PHASE_REVIEWERS`), plus added explicit repository-root path reminders to `GraphEngine` blast-radius topology headers.
+- **Phase-Review Upward Parent Inheritance Lookup (`review_models.py`)**: Updated `_is_proven_upward_parent_inheritance()` to resolve `.agents/state` directly from `transcript_identity["repo"]` and `package_path` in addition to `run["policy"]`, ensuring `Gemini 4 Carbon` / `Argon` Lead sessions running `hydrogen-dynamic` pass native SQLite model verification during phase reviews as well as final reviews.
+- **Windows Quoted-Path & Case-Insensitive Drive Normalization (`delegation_policy.py`)**: Hardened `_normalize_repo_rel()` and `_extract_transcript_read_files()` to strip embedded outer quotes (`""E:\\...""`) and normalize Windows drive-letter casing (`E:/` vs `e:/`) observed in real Antigravity `transcript.jsonl` logs.
+- **Post-Worker / Post-Specialist Unread-File Allowance & Subagent Tool Contracts (`delegation_policy.py`, `agents/subagents/*.json`)**: Extended unread-file post-subagent read allowance (`MAX_LEAD_UNREAD_POST_SCOUT_READS = 8`) to `harness-worker-agent` and specialist waves during `Lead Takeover`, and added explicit absolute-path and no-shell-chaining directives across all 8 subagent specifications.
+- **Code-Mass-Aware Complexity, Worker Slice & Smart Auto Routing (`execution_mode.py`, `review_models.py`, `delegation_policy.py`, `GEMINI.md.template`, `harness-rules.md`)**: Weighted non-test source file byte mass alongside raw file count so monolithic files (`>=36 KB` single file / `>=48 KB` slice / `>=96 KB` Smart-Auto Web threshold, such as `120 KB` ViewModels) upgrade task complexity to `COMPLEX`, avoid trapping `3x` `Carbon` Leads on `TRIVIAL_INLINE_LEAD`, and route `auto-project` accurately while keeping `HYDROGEN_LEAD_WARM_CACHE_DIRECT` fast on `1x` `Hydrogen` Leads.
+- **Universal `--task` / `--task-id` & `--json` CLI Parity (`agents/harness.py`, `task_metrics.py`, `preflight_check.py`, `final_verdict.py`, and 10 sibling CLIs)**: Fixed execution-lease and metrics task resolution in `agents/harness.py` and `task_metrics.py` when `--task` is passed instead of `--task-id`, added `--json` output mode to `preflight_check.py` and `architecture_drift.py`, and unified `--task` / `--task-id` aliases across all task-scoped CLI entrypoints.
+- **Phase Checkpoint Multi-Module Gradle `--continue` (`_workflow/engine.py`)**: Added `--continue` and single-pass failure attribution to `check_phase_compile()` and `check_phase_unit_tests()` during `checkpoint-phase`, eliminating redundant sequential per-module Gradle daemon spawns on multi-module failures.
+- **Lead-Only Web-Relay Inbox Boundary & Always-On Rule Guidance (`pre_tool_safety.py`, `GEMINI.md.template`, `harness-rules.md`)**: Restricted `.agents/state/web-relay/inbox/` writes strictly to the Lead session (`WORKER_INBOX_WRITE_FORBIDDEN` for subagents) and surfaced zero-flag `web-apply` + `.agents/state/web-relay/inbox/merge.json` directly in always-loaded `GEMINI.md` and `harness-rules.md`.
+
 ## [1.3.11] - 2026-11-14
 
 ### Fixed & Improved

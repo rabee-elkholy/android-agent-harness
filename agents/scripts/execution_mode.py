@@ -385,6 +385,32 @@ def _resolve_target_task_and_plan(
     return "", None
 
 
+def _measure_non_test_code_mass_bytes(repo: Path, rel_paths: list[str]) -> int:
+    """Sum byte size of existing non-test code/XML files in `rel_paths` so 100KB+ monoliths are weighted accurately."""
+    total = 0
+    seen: set[str] = set()
+    for raw in rel_paths or []:
+        rel = str(raw or "").replace("\\", "/").strip().lstrip("./")
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        low = rel.lower()
+        if any(seg in low for seg in ("/src/test/", "/src/androidtest/", "/src/commontest/", "/src/jvmtest/", "/src/iostest/")):
+            continue
+        stem = Path(rel).stem
+        if stem.endswith(("Test", "Tests", "Spec")) and ("test" in low or "spec" in low):
+            continue
+        if Path(rel).suffix.lower() not in {".kt", ".java", ".kts", ".swift", ".xml", ".sql", ".sq", ".graphql"}:
+            continue
+        fp = repo / rel
+        try:
+            if fp.is_file() and not fp.is_symlink():
+                total += fp.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def evaluate_smart_auto_routing(
     repo: Path,
     tid: str,
@@ -430,16 +456,22 @@ def evaluate_smart_auto_routing(
         mods = [str(m).strip() for m in (plan.get("expected_modules") or []) if str(m).strip() and str(m).strip() != ":"]
         if len(phases) >= 2 or len(set(mods)) >= 2:
             return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
-        # 5. Large file scope (`>= 12` planned files)
+        # 5. Large file scope (`>= 12` planned files) OR heavy non-test code mass (`>= 96 KB`, e.g. 120 KB monolithic ViewModels)
         exp_files = [str(f).strip() for f in (plan.get("expected_files") or []) if str(f).strip()]
         if len(exp_files) >= AUTO_WEB_FILE_THRESHOLD:
             return ("web", f"AUTO_WEB_LARGE_SCOPE_{len(exp_files)}_FILES", False)
+        mass_bytes = _measure_non_test_code_mass_bytes(repo, exp_files)
+        if mass_bytes >= 96 * 1024:
+            return ("web", f"AUTO_WEB_HEAVY_CODE_MASS_{mass_bytes // 1024}KB", False)
         return ("normal", f"AUTO_NORMAL_COMPACT_SCOPE_{len(exp_files)}_FILES", False)
 
     # Pre-plan / IDLE evaluation
     cands = [str(f).strip() for f in (candidate_files or []) if str(f).strip()]
     if len(cands) >= AUTO_WEB_FILE_THRESHOLD:
         return ("web", f"AUTO_WEB_LARGE_CANDIDATE_SCOPE_{len(cands)}_FILES", False)
+    cand_mass_bytes = _measure_non_test_code_mass_bytes(repo, cands)
+    if cand_mass_bytes >= 96 * 1024:
+        return ("web", f"AUTO_WEB_HEAVY_CANDIDATE_CODE_MASS_{cand_mass_bytes // 1024}KB", False)
     return ("normal", "AUTO_IDLE_EVALUATES_ON_PLAN", False)
 
 
@@ -1142,19 +1174,19 @@ def build_parser() -> argparse.ArgumentParser:
         description="Show or persist per-task / per-project execution mode (`normal` vs `web`).",
     )
     parser.add_argument("--repo", default=".", help="Repository root.")
-    parser.add_argument("--task-id", default="", help="Optional task identifier.")
+    parser.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task identifier.")
     parser.add_argument("--json", action="store_true", help="Emit JSON output.")
 
     sub = parser.add_subparsers(dest="subcommand")
 
     p_show = sub.add_parser("show", help="Resolve and show the effective execution mode (read-only).")
     p_show.add_argument("--repo", default=".", help="Repository root.")
-    p_show.add_argument("--task-id", default="", help="Optional task identifier.")
+    p_show.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task identifier.")
     p_show.add_argument("--json", action="store_true", help="Emit JSON output.")
 
     p_set = sub.add_parser("set", help="Record developer's execution-mode choice (`--source conversation` required).")
     p_set.add_argument("--repo", default=".", help="Repository root.")
-    p_set.add_argument("--task-id", default="", help="Optional task identifier.")
+    p_set.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task identifier.")
     p_set.add_argument(
         "--new-task",
         action="store_true",

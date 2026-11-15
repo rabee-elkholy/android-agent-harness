@@ -2579,7 +2579,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_pack = sub.add_parser("pack", help="Build an AST-scoped, secret-scrubbed Context Pack for Gemini Web and copy to Clipboard.")
     p_pack.add_argument("--repo", default=None, help="Android/KMP project root.")
-    p_pack.add_argument("--task-id", default="", help="Optional active task ID.")
+    p_pack.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional active task ID.")
     p_pack.add_argument("--prompt", default="", help="Task goal or bug description.")
     p_pack.add_argument("--kind", default="", choices=("", "FEATURE", "BUG", "REFACTOR", "CONFLICT"), help="Optional task kind override.")
     p_pack.add_argument("--file", "--files", dest="file", action="append", default=[], help="Explicit scope file(s); repeatable or comma-separated.")
@@ -2596,6 +2596,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_apply = sub.add_parser("apply", help="Apply a `HARNESS_WEB_MERGE_V1` payload from Clipboard, Downloads, or `--file` safely.")
     p_apply.add_argument("--repo", default=None, help="Android/KMP project root.")
+    p_apply.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task ID hint.")
     p_apply.add_argument("--file", default="", help="Explicit path to `harness-merge-*.json` / `.md` / `.zip`.")
     p_apply.add_argument("--stdin", action="store_true", help="Read merge payload from stdin.")
     p_apply.add_argument("--source", default="", choices=("", "conversation", "developer_terminal", "host_native"), help="Approval authority source (optional when `--dry-run` is passed).")
@@ -2609,6 +2610,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_status = sub.add_parser("status", help="Inspect Web-Relay outbox and latest pack status.")
     p_status.add_argument("--repo", default=None, help="Android/KMP project root.")
+    p_status.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task ID hint.")
     p_status.add_argument("--json", action="store_true", help="Emit pure JSON output.")
 
     ns = parser.parse_args(argv)

@@ -393,7 +393,8 @@ def check_architecture_drift(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="Repository root path")
-    parser.add_argument("--task-id", default="", help="Task ID (defaults to active task)")
+    parser.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active task)")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
     task_id = args.task_id
@@ -416,9 +417,15 @@ def main(argv: list[str] | None = None) -> int:
                 pass
     contract = plan.get("architecture_contract") if plan else None
     if not contract:
-        print("[OK] Architecture drift check exempted (legacy plan or no contract bound).")
+        if args.json:
+            print(json.dumps({"status": "PASS", "exempted": True, "detail": "Architecture drift check exempted (legacy plan or no contract bound).", "violations": []}, indent=2))
+        else:
+            print("[OK] Architecture drift check exempted (legacy plan or no contract bound).")
         return 0
     passed, msg, viols = check_architecture_drift(repo, contract, task_id=task_id)
+    if args.json:
+        print(json.dumps({"status": "PASS" if passed else "FAIL", "exempted": False, "detail": msg, "violations": list(viols or [])}, indent=2))
+        return 0 if passed else 1
     if passed:
         print(f"[PASS] {msg}")
         return 0

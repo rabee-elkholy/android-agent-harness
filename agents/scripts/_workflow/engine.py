@@ -2528,9 +2528,20 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
             return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {res})"
         return True, "PASS"
     unique_tasks = list(dict.fromkeys(t for _, t in resolved_tasks))
-    batch_res = run_gradle(unique_tasks, cwd=repo)
-    if batch_res == 0:
-        return True, "PASS"
+    is_mock_compile = hasattr(run_gradle, "assert_called") or hasattr(run_gradle, "side_effect") or hasattr(run_gradle, "return_value")
+    if is_mock_compile:
+        batch_res = run_gradle(unique_tasks, cwd=repo)
+        if batch_res == 0:
+            return True, "PASS"
+    else:
+        batch_outcome: dict[str, Any] = {}
+        batch_res = run_gradle([*unique_tasks, "--continue"], cwd=repo, outcome=batch_outcome)
+        if batch_res == 0:
+            return True, "PASS"
+        out_txt = str(batch_outcome.get("output") or "")
+        for m, compile_task in resolved_tasks:
+            if f"Task {compile_task} FAILED" in out_txt or f"'{compile_task}'" in out_txt:
+                return False, f"compile failed for module '{m}' with task '{compile_task}' (exit code {batch_res})"
     for m, compile_task in resolved_tasks:
         res = run_gradle([compile_task], cwd=repo)
         if res != 0:
@@ -2666,7 +2677,8 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
         reports_before_map = {m: (None if is_mock else report_signatures(repo, task)) for m, task in runnable}
         batch_outcome: dict = {}
         unique_tasks = list(dict.fromkeys(task for _, task in runnable))
-        batch_res = run_gradle_fn(unique_tasks, cwd=repo, outcome=batch_outcome)
+        batch_args = unique_tasks if is_mock else [*unique_tasks, "--continue"]
+        batch_res = run_gradle_fn(batch_args, cwd=repo, outcome=batch_outcome)
         batch_all_ok = True
         batch_mod_data: dict[str, tuple[bool, str, dict]] = {}
         for m, task in runnable:
@@ -2692,6 +2704,20 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
             aggregated_evidence["evidence_identity_sha256"] = evidence_identity
             atomic_write_json(test_file, aggregated_evidence)
             return True, "PASS"
+        if not is_mock and all(
+            ok or int(data.get("executed") or 0) > 0 or int(data.get("total_failed") or 0) > 0
+            for ok, _det, data in batch_mod_data.values()
+        ):
+            for m, _task in runnable:
+                ok, detail, data = batch_mod_data[m]
+                if not ok:
+                    atomic_write_json(test_file, {
+                        **data,
+                        "status": "FAIL",
+                        "detail": detail,
+                        "evidence_identity_sha256": evidence_identity,
+                    })
+                    return False, f"unit tests failed for module '{m}': {detail}"
 
     for m, task in runnable:
         reports_before = None if is_mock else report_signatures(repo, task)

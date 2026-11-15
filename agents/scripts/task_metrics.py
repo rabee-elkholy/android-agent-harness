@@ -150,7 +150,7 @@ def metrics_report(repo, task_id):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
-    parser.add_argument("--task-id", required=True)
+    parser.add_argument("--task-id", "--task", dest="task_id", required=True)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -171,9 +171,9 @@ def metric_task_id(repo, args):
     if os.environ.get("HARNESS_LOCAL_METRICS") != "1":
         return ""
     for i, arg in enumerate(args):
-        if arg == "--task-id" and i + 1 < len(args):
+        if arg in {"--task-id", "--task"} and i + 1 < len(args):
             return args[i + 1]
-        if arg.startswith("--task-id="):
+        if arg.startswith("--task-id=") or arg.startswith("--task="):
             return arg.split("=", 1)[1]
     try:
         path = Path(repo) / ".agents/state/active-task.json"

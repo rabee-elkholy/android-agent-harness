@@ -873,12 +873,28 @@ def compute_task_complexity_tier(
     elif isinstance(pl.get("expected_files"), list):
         candidate_files = [str(p) for p in pl["expected_files"] if p]
 
+    non_test_mass_bytes = 0
+    max_single_file_bytes = 0
     if candidate_files:
-        non_test_file_count = sum(1 for p in candidate_files if not _is_test_path(p))
+        non_test_file_count = 0
+        for p in candidate_files:
+            if _is_test_path(p):
+                continue
+            non_test_file_count += 1
+            fp = repo / str(p).replace("\\", "/").lstrip("./")
+            try:
+                if fp.is_file() and not fp.is_symlink():
+                    sz = fp.stat().st_size
+                    non_test_mass_bytes += sz
+                    if sz > max_single_file_bytes:
+                        max_single_file_bytes = sz
+            except OSError:
+                pass
     else:
         non_test_file_count = int(pol.get("changed_files") or cls_doc.get("changed_files") or 0)
 
     changed_lines = int(pol.get("changed_lines") or cls_doc.get("changed_lines") or 0)
+    heavy_code_mass = non_test_mass_bytes >= 48 * 1024 or max_single_file_bytes >= 36 * 1024
 
     # Band 3: CRITICAL
     if (
@@ -898,6 +914,7 @@ def compute_task_complexity_tier(
         or modules_count >= 2
         or risk_tier in {"T3_SUBSYSTEM", "T4_DATA_DEVICE"}
         or non_test_file_count >= 4
+        or heavy_code_mass
         or changed_lines > 90
         or bool(surfaces_set & _COMPLEX_TECHNICAL_SURFACES)
         or ("NAVIGATION" in surfaces_set and non_test_file_count >= 2)
@@ -1257,31 +1274,47 @@ def _is_proven_upward_parent_inheritance(run: dict, identity: dict, observed: di
                                 parent_cids.append(scid)
         except OSError:
             pass
-    pol_raw = str(run.get("policy") or "").strip()
-    if pol_raw:
+    cand_state_dirs: list[Path] = []
+    repo_hint = str(identity.get("repo") or "").strip()
+    if repo_hint:
         try:
-            pol_p = Path(pol_raw).resolve()
-            # `<state_root>/tasks/<tid>/policy-*.json` -> `parents[2]` is `<state_root>`
-            st_dir = pol_p.parents[2] if len(pol_p.parents) >= 3 else None
-            if st_dir and st_dir.is_dir():
-                for fname, key in (("active-conversation.json", "conversation_id"), ("hook-conversations.json", "last_lead_conversation_id")):
-                    cf = st_dir / fname
-                    if cf.is_file():
-                        doc = read_json(cf)
-                        val = str(doc.get(key) or "").strip()
-                        if val and val not in parent_cids:
-                            parent_cids.append(val)
-        except (OSError, ValueError, KeyError, TypeError, ValidationError):
+            cand_state_dirs.append(state_root(Path(repo_hint).resolve()))
+        except (OSError, RuntimeError, ValueError):
             pass
+    for path_key in ("policy", "package_path", "review_package"):
+        raw_p = str(run.get(path_key) or "").strip()
+        if raw_p:
+            try:
+                rp = Path(raw_p).resolve()
+                for anc in rp.parents:
+                    if anc.name == "state" and anc.parent.name in {".agents", "agents"}:
+                        if anc not in cand_state_dirs:
+                            cand_state_dirs.append(anc)
+                        break
+            except (OSError, RuntimeError, ValueError):
+                pass
+    try:
+        from antigravity_runtime import extract_lead_candidates_from_state, is_likely_subagent_transcript, native_model_metadata, resolve_transcript
+    except ImportError:
+        return False
+    explicit_parent_cid = str(parent_cids[0]) if parent_cids else ""
+    for st_dir in cand_state_dirs:
+        for scid in extract_lead_candidates_from_state(st_dir):
+            if scid not in parent_cids:
+                parent_cids.append(scid)
     if not parent_cids:
         return False
     try:
-        from antigravity_runtime import native_model_metadata
-        for pcid in parent_cids[:4]:
+        for pcid in parent_cids[:6]:
             if pcid == str(observed.get("execution_id") or ""):
                 continue
             try:
-                p_meta = native_model_metadata(pcid)
+                ptx = resolve_transcript(pcid)
+                if ptx is None:
+                    continue
+                if pcid != explicit_parent_cid and is_likely_subagent_transcript(ptx):
+                    continue
+                p_meta = native_model_metadata(ptx)
             except Exception:
                 continue
             if isinstance(p_meta, dict) and p_meta.get("host_configured_model"):
@@ -1679,9 +1712,25 @@ def _refresh_undispatched_runs(repo: Path, task_id: str, host: str) -> dict[str,
         ok_phase, prun_f = _is_undispatched_phase_run(tdir, phase_id)
         if ok_phase and prun_f:
             from phase_review import refresh_undispatched_phase_models
+            from review_execution import brief_pointer_prompt
             run_meta = refresh_undispatched_phase_models(repo, task_id, phase_id)
             refreshed["phase_review_run_id"] = run_meta["phase_review_run_id"]
             refreshed["active_run_models"] = run_meta["review_models"]["reviewers"]
+            phase_prompts: dict[str, str] = {}
+            p_briefs = run_meta.get("briefs") or {}
+            p_short = run_meta.get("short_briefs") or {}
+            for r_name, b_raw in p_briefs.items():
+                try:
+                    bp = Path(str(b_raw))
+                    if bp.is_file():
+                        bt = bp.read_text(encoding="utf-8")
+                        sp = str(p_short.get(r_name) or "")
+                        ptr_p = sp if (sp and Path(sp).is_file()) else str(bp)
+                        phase_prompts[r_name] = brief_pointer_prompt(r_name, ptr_p, bt)
+                except OSError:
+                    pass
+            if phase_prompts:
+                refreshed["reviewer_prompts"] = phase_prompts
 
     # 2. Check active final verification run if in VERIFYING
     crun_f = tdir / "current-run.json"

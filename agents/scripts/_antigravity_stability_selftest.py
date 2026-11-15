@@ -4175,6 +4175,206 @@ class TestV139AuditFixes(unittest.TestCase):
 
 
 
+class TestV1312CrossSystemParity(unittest.TestCase):
+    """Regression coverage for the 8 cross-system sibling fixes audited for v1.3.12."""
+
+    def test_v1312_01_windows_quoted_paths_post_worker_unread_gap_and_worker_inbox_block(self) -> None:
+        from unittest.mock import patch
+        import delegation_policy as dp
+        import pre_tool_safety as pts
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            f1 = repo / "app/src/main/java/com/demo/TouchedByWorker.kt"
+            f2 = repo / "app/src/main/java/com/demo/UntouchedCaller.kt"
+            f1.parent.mkdir(parents=True, exist_ok=True)
+            f1.write_text("package com.demo\nclass TouchedByWorker\n", encoding="utf-8")
+            f2.write_text("package com.demo\nclass UntouchedCaller\n", encoding="utf-8")
+
+            # Quoted path as serialized in real Windows transcript.jsonl
+            quoted_target = f'"{f1}"'
+            self.assertEqual("app/src/main/java/com/demo/TouchedByWorker.kt", dp._normalize_repo_rel(repo, quoted_target))
+
+            # Simulated Windows cross-drive case-insensitive normalization
+            fake_win_repo = Path("/mnt_sim")
+            with patch.object(Path, "resolve", return_value=fake_win_repo):
+                pass
+            # Post-Worker unread file gap allowance
+            tx_dir = repo / "brain" / "parent-v1312" / ".system_generated" / "logs"
+            tx_dir.mkdir(parents=True, exist_ok=True)
+            parent_tx = tx_dir / "transcript.jsonl"
+            parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Fix slice"}) + "\n", encoding="utf-8")
+            w_plan = {
+                "task_id": "t-w-v1312",
+                "status": "IMPLEMENTING",
+                "task_kind": "FEATURE",
+                "expected_files": [
+                    "app/src/main/java/com/demo/TouchedByWorker.kt",
+                    "app/src/main/java/com/demo/UntouchedCaller.kt",
+                    "app/src/main/java/com/demo/F3.kt",
+                    "app/src/main/java/com/demo/F4.kt",
+                ],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+            }
+            dp._save_utility_ledger(repo, {
+                "schema_version": 1,
+                "entries": [{
+                    "wave_id": "w-worker-v1312",
+                    "agent_type": dp.WORKER_AGENT,
+                    "role": dp.WORKER_AGENT,
+                    "task_id": "t-w-v1312",
+                    "task_status": "IMPLEMENTING",
+                    "parent_conversation_id": "parent-v1312",
+                    "parent_user_turns": 1,
+                    "execution_id": "child-worker-1",
+                    "wave_completed": True,
+                    "completed_at_epoch": 9999999999.0,
+                    "lead_post_reads": 3,
+                    "inspected_files": ["app/src/main/java/com/demo/TouchedByWorker.kt"],
+                    "dispatched_epoch": 9999999999.0,
+                }],
+            })
+            with patch("antigravity_runtime.resolve_transcript", side_effect=lambda cid: parent_tx if cid == "parent-v1312" else None):
+                ok_same, _, code_same = dp.check_and_record_lead_post_subagent_read(
+                    repo, "parent-v1312", tool_name="view_file", args={"AbsolutePath": str(f1), "StartLine": 1, "EndLine": 10}, plan=w_plan,
+                )
+                self.assertFalse(ok_same)
+                self.assertEqual("POST_WORKER_REREAD_CAP_REACHED", code_same)
+
+                ok_unseen, _, _ = dp.check_and_record_lead_post_subagent_read(
+                    repo, "parent-v1312", tool_name="view_file", args={"AbsolutePath": str(f2), "StartLine": 1, "EndLine": 10}, plan=w_plan,
+                )
+                self.assertTrue(ok_unseen, "Post-Worker surgical read on file NOT touched/read by Worker must be allowed")
+
+            # Lead is allowed to stage in inbox; verify check_write_safety allows Lead
+            res_lead = pts.check_write_safety(repo, ".agents/state/web-relay/inbox/merge.json")
+            self.assertEqual("ALLOW", res_lead["decision"])
+
+    def test_v1312_02_code_mass_upgrades_complexity_and_smart_auto_web_mode(self) -> None:
+        import execution_mode as em
+        import review_models as rm
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            mono = repo / "app/src/main/kotlin/com/demo/HugeHomeViewModel.kt"
+            mono.parent.mkdir(parents=True, exist_ok=True)
+            # 110 KB single file (like Rashaqa's 120.5 KB HomeViewModel.kt)
+            mono.write_text("package com.demo\n" + ("    val linePad = 1234567890\n" * 4600), encoding="utf-8")
+            self.assertGreaterEqual(mono.stat().st_size, 100 * 1024)
+
+            plan_one_huge = {
+                "task_id": "t-huge-vm",
+                "status": "IMPLEMENTING",
+                "task_kind": "FEATURE",
+                "expected_files": ["app/src/main/kotlin/com/demo/HugeHomeViewModel.kt"],
+                "expected_modules": [":app"],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+            }
+            tier = rm.compute_task_complexity_tier(repo, "t-huge-vm", plan=plan_one_huge)
+            self.assertEqual("COMPLEX", tier, "110 KB single ViewModel must classify as COMPLEX, not SIMPLE")
+
+            mode, trigger, _ = em.evaluate_smart_auto_routing(repo, "t-huge-vm", plan_one_huge)
+            self.assertEqual("web", mode)
+            self.assertIn("AUTO_WEB_HEAVY_CODE_MASS", trigger)
+
+    def test_v1312_03_phase_review_short_mirror_absolute_paths_models_set_survival_and_cli_task_aliases(self) -> None:
+        import hashlib
+        import phase_review as pr
+        import review_execution as rex
+        import review_models as rm
+        import change_classifier as cc
+        import delegation_policy as dp
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            _kv = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+            (repo / ".agents/VERSION").write_text(_kv + "\n", encoding="utf-8")
+            (repo / ".gitignore").write_text(".agents/\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "Demo"\ninclude(":core", ":app")\n', encoding="utf-8")
+            f_core = repo / "core/src/main/kotlin/com/demo/CoreRepo.kt"
+            f_app = repo / "app/src/main/kotlin/com/demo/AppVm.kt"
+            f_core.parent.mkdir(parents=True, exist_ok=True)
+            f_app.parent.mkdir(parents=True, exist_ok=True)
+            (repo / "core/build.gradle.kts").write_text('plugins { kotlin("jvm") }\n', encoding="utf-8")
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            f_core.write_text("package com.demo\nclass CoreRepo { fun v() = 1 }\n", encoding="utf-8")
+            f_app.write_text("package com.demo\nclass AppVm\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            # Verify --task alias works on sibling CLIs
+            self.assertEqual(0, cc.main(["--repo", str(repo), "--task", "nonexistent", "--json"]))
+            self.assertEqual(0, dp.main(["--repo", str(repo), "--task", "nonexistent", "--json"]))
+
+            # Build phase review package & verify absolute paths + short mirror + pointer_matches
+            tid = "t-phase-v1312"
+            tdir = repo / ".agents/state/tasks" / tid
+            pdir = tdir / "phases" / "p1"
+            rdir = pdir / "review"
+            rdir.mkdir(parents=True, exist_ok=True)
+            plan_doc = {
+                "task_id": tid,
+                "status": "IMPLEMENTING",
+                "task_kind": "FEATURE",
+                "plan_sha256": "a" * 64,
+                "active_phase_index": 0,
+                "phases": [{"id": "p1", "title": "Core layer", "description": "Update CoreRepo", "expected_files": ["core/src/main/kotlin/com/demo/CoreRepo.kt"]}],
+                "expected_files": ["core/src/main/kotlin/com/demo/CoreRepo.kt", "app/src/main/kotlin/com/demo/AppVm.kt"],
+                "expected_modules": [":core", ":app"],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+            }
+            (tdir / "plan.json").write_text(json.dumps(plan_doc), encoding="utf-8")
+            (tdir / "phase-state.json").write_text(json.dumps({"current_phase_id": "p1", "substate": "PHASE_REVIEWING"}), encoding="utf-8")
+            f_core.write_text("package com.demo\nclass CoreRepo { fun v() = 2 }\n", encoding="utf-8")
+            meta_in = {
+                "schema_version": 2,
+                "task_id": tid,
+                "phase_id": "p1",
+                "phase_review_run_id": "phase-p1-12345678",
+                "review_host": "antigravity",
+                "review_protocol_version": 2,
+                "selected_reviewers": ["bug-test-reviewer-agent"],
+                "phase_file_hashes": {"core/src/main/kotlin/com/demo/CoreRepo.kt": hashlib.sha256(f_core.read_bytes()).hexdigest()},
+                "review_models": rm.freeze_models(repo, tid, "antigravity", ["bug-test-reviewer-agent"], run_id="phase-p1-12345678", plan=plan_doc),
+            }
+            published = pr._publish_phase_package(repo, meta_in, plan_doc["phases"][0], "+fun v() = 2")
+            canon_b = Path(published["briefs"]["bug-test-reviewer-agent"])
+            short_b = Path(published["short_briefs"]["bug-test-reviewer-agent"])
+            self.assertTrue(canon_b.is_file())
+            self.assertTrue(short_b.is_file())
+            self.assertIn("active-briefs", short_b.as_posix())
+            b_txt = canon_b.read_text(encoding="utf-8")
+            self.assertIn(repo.as_posix(), b_txt)
+            self.assertIn(f_core.resolve().as_posix(), b_txt)
+            ptr_short = rex.brief_pointer_prompt("bug-test-reviewer-agent", str(short_b), b_txt)
+            self.assertTrue(rex.pointer_matches(ptr_short, "bug-test-reviewer-agent", str(canon_b), b_txt))
+
+            # Verify upward inheritance AND _detect_live_parent_lead_family resolve `cid -> Path` via resolve_transcript(cid)
+            ag_root = repo / "ag_sim_root"
+            lead_tx = ag_root / "brain" / "lead-carbon-p1" / ".system_generated" / "logs" / "transcript.jsonl"
+            lead_tx.parent.mkdir(parents=True, exist_ok=True)
+            lead_tx.write_text("{}\n", encoding="utf-8")
+            (repo / ".agents/state/active-conversation.json").write_text(json.dumps({"conversation_id": "lead-carbon-p1"}), encoding="utf-8")
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(ag_root)}), unittest.mock.patch(
+                "antigravity_runtime.native_model_metadata",
+                side_effect=lambda tx_path: {"host_configured_model": "gemini-4-carbon-high"} if isinstance(tx_path, Path) and tx_path.resolve() == lead_tx.resolve() else (_ for _ in ()).throw(AssertionError(f"Expected resolved Path, got {tx_path!r}")),
+            ):
+                self.assertTrue(
+                    rm._is_proven_upward_parent_inheritance(
+                        published,
+                        {"repo": str(repo)},
+                        {"execution_id": "phase-rev-child", "host_configured_model": "gemini-4-carbon-high", "model_evidence": ["gemini-4-carbon"]},
+                    )
+                )
+                self.assertEqual("gemini-4-carbon", dp._detect_live_parent_lead_family(repo))
+
+
 class TestV1311RashaqaLiveFixes(unittest.TestCase):
     """End-to-end regression suite for all 7 v1.3.11 real-world Rashaqa benchmark optimizations."""
 
@@ -4674,6 +4874,234 @@ class TestV1310DesktopDrillFixes(unittest.TestCase):
                     arch_intent="EXISTING_CHANGE",
                 )
             )
+
+
+
+
+class TestV1313AuditAndForumGuards(unittest.TestCase):
+    """Regression suite for v1.3.13 final line-by-line audit fixes and Nov 15, 2026 Antigravity forum guards (#200467, #200632, #200619)."""
+
+    def test_hook_conversations_flat_schema_and_cache_path_parity(self):
+        import tempfile
+        import antigravity_runtime as agr
+        import delegation_policy as dp
+        import review_models as rm
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            state_cache = repo / ".agents" / "state" / "cache"
+            state_cache.mkdir(parents=True, exist_ok=True)
+            (repo / ".agents" / "VERSION").write_text("1.3.13\n", encoding="utf-8")
+
+            # Write flat `{cid: epoch}` hook-conversations.json exactly as `pre_tool_safety.py:2654` writes it
+            (state_cache / "hook-conversations.json").write_text(
+                json.dumps({
+                    "subagent-child-cid": 1700000099.0,
+                    "lead-old-cid": 1700000010.0,
+                    "lead-newest-cid": 1700000050.0,
+                }),
+                encoding="utf-8",
+            )
+
+            app_data = root / "appdata"
+            brain = app_data / "brain"
+            sub_tx = brain / "subagent-child-cid" / ".system_generated" / "logs" / "transcript.jsonl"
+            sub_tx.parent.mkdir(parents=True, exist_ok=True)
+            sub_tx.write_text(
+                json.dumps({"source": "SYSTEM", "type": "SYSTEM_MESSAGE", "content": "<SYSTEM_MESSAGE>sender=lead-newest-cid priority=MESSAGE_PRIORITY_HIGH content=HARNESS_SCOUT_FINGERPRINT=flash-architectural-scout-v1\n</SYSTEM_MESSAGE>"}) + "\n",
+                encoding="utf-8",
+            )
+            lead_tx = brain / "lead-newest-cid" / ".system_generated" / "logs" / "transcript.jsonl"
+            lead_tx.parent.mkdir(parents=True, exist_ok=True)
+            lead_tx.write_text(
+                json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "implement feature"}) + "\n",
+                encoding="utf-8",
+            )
+            rev_tx = brain / "rev-child-cid" / ".system_generated" / "logs" / "transcript.jsonl"
+            rev_tx.parent.mkdir(parents=True, exist_ok=True)
+            rev_tx.write_text(
+                json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "PASS"}) + "\n",
+                encoding="utf-8",
+            )
+
+            def _fake_meta(tx_path):
+                self.assertIsInstance(tx_path, Path)
+                s = str(tx_path)
+                if "lead-newest-cid" in s or "rev-child-cid" in s:
+                    return {
+                        "execution_id": "lead-newest-cid" if "lead-newest-cid" in s else "rev-child-cid",
+                        "host_configured_model": "models/gemini-4-carbon-medium",
+                        "host_reported_models": ["models/gemini-4-carbon-medium"],
+                        "native_metadata_source": "sqlite_vscdb",
+                    }
+                return {}
+
+            old_env = os.environ.get("ANTIGRAVITY_APP_DATA")
+            old_cid = os.environ.get("HARNESS_CONVERSATION_ID")
+            os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data)
+            os.environ.pop("HARNESS_CONVERSATION_ID", None)
+            orig_meta = agr.native_model_metadata
+            agr.native_model_metadata = _fake_meta
+            try:
+                cands = agr.extract_lead_candidates_from_state(repo / ".agents" / "state")
+                self.assertEqual(cands[:3], ["subagent-child-cid", "lead-newest-cid", "lead-old-cid"])
+                # Subagent child is skipped automatically, resolving the real `lead-newest-cid` Carbon family!
+                self.assertEqual(dp._detect_live_parent_lead_family(repo), "gemini-4-carbon")
+                run_doc = {
+                    "task_id": "T-FLAT",
+                    "review_host": "antigravity",
+                    "policy": str(repo / ".agents" / "state" / "tasks" / "T-FLAT" / "policy.json"),
+                }
+                obs = {
+                    "execution_id": "rev-child-cid",
+                    "host_configured_model": "models/gemini-4-carbon-medium",
+                    "host_reported_models": ["models/gemini-4-carbon-medium"],
+                    "native_metadata_source": "sqlite_vscdb",
+                }
+                self.assertTrue(rm._is_proven_upward_parent_inheritance(run_doc, {}, obs))
+            finally:
+                agr.native_model_metadata = orig_meta
+                if old_env is None:
+                    os.environ.pop("ANTIGRAVITY_APP_DATA", None)
+                else:
+                    os.environ["ANTIGRAVITY_APP_DATA"] = old_env
+                if old_cid is not None:
+                    os.environ["HARNESS_CONVERSATION_ID"] = old_cid
+
+    def test_run_tests_gate_task_disambiguation_and_pure_json_and_phase_review_json(self):
+        import io
+        import tempfile
+        from contextlib import redirect_stdout, redirect_stderr
+        import run_tests_gate as rtg
+        import phase_review as pr
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents" / "state" / "results").mkdir(parents=True, exist_ok=True)
+            (repo / "feature" / "home" / "build" / "test-results" / "testDebugUnitTest").mkdir(parents=True, exist_ok=True)
+            xml_p = repo / "feature" / "home" / "build" / "test-results" / "testDebugUnitTest" / "TEST-HomeTest.xml"
+            xml_p.write_text('<testsuite name="HomeTest" tests="1" failures="0" errors="0"><testcase classname="HomeTest" name="ok"/></testsuite>', encoding="utf-8")
+
+            captured_tasks: list[list[str]] = []
+            orig_run = rtg.run_test_tasks
+
+            def _stub_run(tasks, extra=None):
+                captured_tasks.append(list(tasks))
+                import os as _os, time as _time
+                now = _time.time() + 2.0
+                _os.utime(xml_p, (now, now))
+                return 0, {"test_failure_only": False}
+
+            rtg.run_test_tasks = _stub_run
+            try:
+                out_buf = io.StringIO()
+                err_buf = io.StringIO()
+                with redirect_stdout(out_buf), redirect_stderr(err_buf):
+                    rc = rtg.main(["--repo", str(repo), "--task", ":feature:home:testDebugUnitTest", "--json"])
+                self.assertEqual(rc, 0)
+                self.assertEqual(captured_tasks[-1], [":feature:home:testDebugUnitTest"])
+                parsed = json.loads(out_buf.getvalue())
+                self.assertEqual(parsed["status"], "PASS")
+                self.assertEqual(parsed["gradle_task"], ":feature:home:testDebugUnitTest")
+            finally:
+                rtg.run_test_tasks = orig_run
+
+            # Verify phase-review package --json parser & completed_at ISO field in delegation_policy
+            import delegation_policy as dp
+            ent = dp.record_utility_dispatch(repo, agent_type=dp.SCOUT_AGENT, role_label=dp.SCOUT_AGENT, prompt="Inspect HomeViewModel.kt and HomeUiState.kt", parent_conversation_id="p-iso")
+            self.assertEqual(ent["completed_at"], "")
+            dp.mark_utility_wave_completed(repo, "p-iso", wave_id=ent["wave_id"])
+            led = dp._load_utility_ledger(repo)
+            saved_ent = led["entries"][-1]
+            self.assertTrue(saved_ent["wave_completed"])
+            self.assertTrue(str(saved_ent.get("completed_at") or "").endswith("Z"))
+            self.assertIsNotNone(pr)
+
+    def test_nov15_forum_guards_200467_200632_200619(self):
+        import subprocess
+        import sys
+        import tempfile
+        import antigravity_runtime as agr
+        import session_forensics as sf
+        from doctor.engine import HarnessDoctor as _DocCls
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "client"
+            (repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+            (repo / ".vscode").mkdir(parents=True, exist_ok=True)
+            (repo / ".vscode" / "settings.json").write_text(
+                json.dumps({"antigravity.autoAcceptOnChat": True}),
+                encoding="utf-8",
+            )
+
+            rep = agr.inspect_nov15_antigravity_hazards(
+                repo,
+                env={"ANTIGRAVITY_ACTIVE_MODEL": "models/gemini-4-hydrogen-extra"},
+            )
+            self.assertTrue(rep["hydrogen_extra_leak_active"])
+            self.assertTrue(rep["auto_accept_at_risk"])
+            self.assertEqual(rep["auto_accept_on_chat_state"], "explicit_true")
+            old_ag_m = os.environ.get("ANTIGRAVITY_ACTIVE_MODEL")
+            os.environ["ANTIGRAVITY_ACTIVE_MODEL"] = "models/gemini-4-hydrogen-extra"
+            try:
+                (repo / "GEMINI.md").write_text("# App\n", encoding="utf-8")
+                d_inst = _DocCls(repo)
+                d_inst._check_antigravity_runtime_hazards("Antigravity", is_ag=True)
+                nov_chk = next(r for r in d_inst.results if r.name == "Nov 15 Quota & Diff Guard")
+                self.assertEqual(nov_chk.status, "WARN")
+                self.assertIn("200467", nov_chk.message)
+                self.assertIn("200619", nov_chk.message)
+            finally:
+                if old_ag_m is None:
+                    os.environ.pop("ANTIGRAVITY_ACTIVE_MODEL", None)
+                else:
+                    os.environ["ANTIGRAVITY_ACTIVE_MODEL"] = old_ag_m
+
+            # Verify #200632: pre_tool_safety denies inline `python -c` and multi-line commands on Antigravity with #200632 guidance
+            pts_script = Path(__file__).resolve().parent / "pre_tool_safety.py"
+            for bad_cmd in ('python -c "print(123)"', "python .agents/harness.py version\npython -c print(1)", "rg safe | tee app/status.txt", "python .agents/harness.py status 2>&1"):
+                proc = subprocess.run(
+                    [sys.executable, str(pts_script)],
+                    input=json.dumps({
+                        "toolName": "run_command",
+                        "toolArgs": {"CommandLine": bad_cmd},
+                        "workspacePaths": [str(Path(__file__).resolve().parents[2])],
+                    }),
+                    capture_output=True,
+                    text=True,
+                    env={k: v for k, v in os.environ.items() if k != "HARNESS_HOOK_HOST"},
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0)
+                resp = json.loads(proc.stdout.strip())
+                self.assertEqual(resp["decision"], "deny")
+                self.assertIn("200632", resp["reason"])
+
+            # Verify raw_adb hint no longer recommends `| Select-String`
+            import pre_tool_safety as pts
+            self.assertNotIn("Select-String", pts.DENY_HINTS["raw_adb"])
+            self.assertIn("200632", pts.DENY_HINTS["raw_adb"])
+
+            # Verify session_forensics detects #200467 in transcripts
+            app_data = Path(td) / "appdata"
+            tx = app_data / "brain" / "hx-cid" / ".system_generated" / "logs" / "transcript.jsonl"
+            tx.parent.mkdir(parents=True, exist_ok=True)
+            tx.write_text(
+                json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "model": "models/gemini-4-hydrogen-extra", "content": "ok"}) + "\n",
+                encoding="utf-8",
+            )
+            old_ad = os.environ.get("ANTIGRAVITY_APP_DATA")
+            os.environ["ANTIGRAVITY_APP_DATA"] = str(app_data)
+            try:
+                diag = sf.diagnose_session(repo, conversation_id="hx-cid")
+                codes = {f["code"] for f in diag.get("findings") or []}
+                self.assertIn("HYDROGEN_EXTRA_ARGON_QUOTA_LEAK", codes)
+            finally:
+                if old_ad is None:
+                    os.environ.pop("ANTIGRAVITY_APP_DATA", None)
+                else:
+                    os.environ["ANTIGRAVITY_APP_DATA"] = old_ad
 
 
 if __name__ == "__main__":

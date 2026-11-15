@@ -19,6 +19,7 @@ Gradle run fails environmentally, the exit-30 protocol applies unchanged.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -1061,18 +1062,53 @@ def main(argv=None) -> int:
         "--diagnose-flaky", action="store_true",
         help="Force a second --rerun-tasks --no-build-cache diagnostic retry even during IMPLEMENTING",
     )
+    parser.add_argument("--repo", default=None, help="Optional repository root override")
+    parser.add_argument("--task-id", "--task", dest="task_id_opt", default="", help="Optional task ID")
+    parser.add_argument("--json", action="store_true", help="Emit JSON gate summary")
     args = parser.parse_args(argv)
+    json_mode = bool(getattr(args, "json", False))
+
+    def _emit_human(text: str, *, err: bool = False) -> None:
+        live_print(text, err=(True if json_mode else err))
+
+    def _emit_json_summary(payload: dict) -> None:
+        if json_mode:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+    global REPO
+    _saved_repo = REPO
+    if getattr(args, "repo", None):
+        REPO = Path(args.repo).resolve()
+    try:
+        return _run_tests_gate_impl(args, json_mode=json_mode, _emit_human=_emit_human, _emit_json_summary=_emit_json_summary)
+    finally:
+        REPO = _saved_repo
+
+
+def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summary) -> int:
     if args.record_unrelated and not args.proof_reference.strip():
-        live_print("[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation.", err=True)
+        msg = "[FAIL] --record-unrelated needs --proof-reference with the developer's confirmation."
+        _emit_human(msg, err=True)
+        _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
         return 1
     test_filters = [str(p or "").strip() for p in (args.tests or []) if str(p or "").strip()]
     for pat in test_filters:
         if not _SAFE_TEST_FILTER_RE.fullmatch(pat) or pat.startswith("-"):
-            live_print(f"[FAIL] Invalid --tests filter pattern: {pat!r}", err=True)
+            msg = f"[FAIL] Invalid --tests filter pattern: {pat!r}"
+            _emit_human(msg, err=True)
+            _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
             return 1
     if test_filters and (args.capture_red or args.record_start or args.record_unrelated):
-        live_print("[FAIL] --tests cannot be combined with --capture-red, --record-start, or --record-unrelated.", err=True)
+        msg = "[FAIL] --tests cannot be combined with --capture-red, --record-start, or --record-unrelated."
+        _emit_human(msg, err=True)
+        _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
         return 1
+
+    raw_task_opt = str(getattr(args, "task_id_opt", "") or "").strip()
+    gradle_task_arg = args.task
+    if gradle_task_arg is None and raw_task_opt and not raw_task_opt.upper().startswith("T-"):
+        if raw_task_opt.startswith(":") or ":" in raw_task_opt or re.search(r"(?:UnitTest|Tests|check)$", raw_task_opt):
+            gradle_task_arg = raw_task_opt
 
     from mutation_guard import active_plan
     try:
@@ -1081,30 +1117,33 @@ def main(argv=None) -> int:
         coverage_plan = {}
     capture_cases = "verification_contract" in coverage_plan and not test_filters
     extra_gradle = ["--rerun-tasks"] if args.rerun_tests else []
-    tasks = resolve_target_tasks(REPO, args.task)
+    tasks = resolve_target_tasks(REPO, gradle_task_arg)
     if test_filters:
-        if args.task is None:
+        if gradle_task_arg is None:
             tasks = _filter_tasks_for_test_patterns(REPO, tasks, test_filters)
         for pat in test_filters:
             extra_gradle.extend(["--tests", pat.replace("#", ".")])
     task: str | list[str] = tasks[0] if len(tasks) == 1 else tasks
     task_label = " ".join(tasks)
-    live_print(f"[*] Unit-test gate: {task_label}")
+    _emit_human(f"[*] Unit-test gate: {task_label}")
     reports_before = report_signatures(REPO, task)
     diagnostic_mode = not (args.capture_red or args.record_start or args.record_unrelated)
     identity = execution_identity(REPO) if diagnostic_mode else {}
     code, outcome = run_test_tasks(tasks, extra_gradle)
     if code == EXIT_ENV:
-        write_gate_result("unit_tests", {
+        env_payload = {
             "schema_version": 2,
             "producer": "run_tests_gate",
             "status": "ENV",
             "exit_code": code,
             "env_class": "ENV",
             "git_sha": current_head_sha(),
+            "gradle_task": task_label,
             "detail": "unit-test Gradle run failed environmentally; see gradle log",
-        })
-        live_print(f"[FAIL] Unit-test gate blocked: gradle exited {code} (ENV).", err=True)
+        }
+        write_gate_result("unit_tests", env_payload)
+        _emit_human(f"[FAIL] Unit-test gate blocked: gradle exited {code} (ENV).", err=True)
+        _emit_json_summary(env_payload)
         return code
 
     head = current_head_sha()
@@ -1115,10 +1154,14 @@ def main(argv=None) -> int:
 
     failed = collect_task_failures(REPO, task)
     if getattr(args, "record_start", False):
-        return _record_task_start(task_label, failed, baseline, code, outcome, reports_before, task)
+        rc_s = _record_task_start(task_label, failed, baseline, code, outcome, reports_before, task)
+        _emit_json_summary({"status": "PASS" if rc_s == 0 else "FAIL", "mode": "record_start", "gradle_task": task_label, "exit_code": rc_s})
+        return rc_s
     if getattr(args, "record_unrelated", False):
         remaining, _known, _size = classify_failures(failed, baseline)
-        return _record_unrelated(remaining, code, outcome, reports_before, task, args.proof_reference)
+        rc_u = _record_unrelated(remaining, code, outcome, reports_before, task, args.proof_reference)
+        _emit_json_summary({"status": "PASS" if rc_u == 0 else "FAIL", "mode": "record_unrelated", "gradle_task": task_label, "exit_code": rc_u})
+        return rc_u
     if getattr(args, "capture_red", False):
         if not failed:
             live_print("[FAIL] --capture-red requested but no failing tests were detected.", err=True)
@@ -1266,10 +1309,12 @@ def main(argv=None) -> int:
                         "red_payload": red_payload,
                     },
                 )
-            live_print(f"[+] Recorded {len(repro_entries)} RED test reproduction entries (schema 3).")
+            _emit_human(f"[+] Recorded {len(repro_entries)} RED test reproduction entries (schema 3).")
+            _emit_json_summary({"status": "PASS", "mode": "capture_red", "task_id": task_id, "recorded_failures": len(repro_entries), "gradle_task": task_label, "exit_code": 0})
             return 0
         except Exception as exc:
-            live_print(f"[FAIL] Could not record RED evidence: {exc}", err=True)
+            _emit_human(f"[FAIL] Could not record RED evidence: {exc}", err=True)
+            _emit_json_summary({"status": "FAIL", "mode": "capture_red", "detail": str(exc), "exit_code": 1})
             return 1
 
     task_start = load_task_start_failures(REPO)
@@ -1304,11 +1349,20 @@ def main(argv=None) -> int:
         ok, detail, code, data.get("new_regressions", []), data.get("task_start_ignored"),
         failure_causes=failure_causes, extra_hints=scope_hints,
     ):
-        live_print(text, err=is_error)
+        _emit_human(text, err=is_error)
 
+    gate_summary = {
+        "schema_version": 2,
+        "producer": "run_tests_gate",
+        "git_sha": head,
+        "gradle_task": task_label,
+        "scoped_test_filters": list(test_filters),
+        "detail": detail,
+        **data,
+    }
     if test_filters:
         if ok:
-            live_print(
+            _emit_human(
                 "[FAST-ITERATION] Scoped --tests filter passed. Run full `python .agents/harness.py test` "
                 "(without --tests) before checkpoint-phase or prepare-verification to record delivery gate evidence."
             )
@@ -1327,11 +1381,15 @@ def main(argv=None) -> int:
             live_surfaces = _cls_ui(REPO, include_type_index=False).get("surfaces") or []
             rb_res = auto_collect_after_unit_tests(REPO, live_surfaces)
             if isinstance(rb_res, dict) and rb_res.get("status") == "FAIL":
-                live_print(f"[FAIL] Roborazzi UI bounds check failed: {rb_res.get('detail')}", err=True)
+                rb_msg = f"[FAIL] Roborazzi UI bounds check failed: {rb_res.get('detail')}"
+                _emit_human(rb_msg, err=True)
+                _emit_json_summary({**gate_summary, "status": "FAIL", "exit_code": 1, "detail": rb_msg})
                 return 1
         except (ImportError, OSError, ValueError, ValidationError):
             pass
-    return 0 if ok else int(data.get('exit_code') or code or 1)
+    final_code = 0 if ok else int(data.get('exit_code') or code or 1)
+    _emit_json_summary({**gate_summary, "status": "PASS" if ok else str(data.get("status") or "FAIL"), "exit_code": final_code})
+    return final_code
 
 
 if __name__ == "__main__":

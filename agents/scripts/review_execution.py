@@ -108,14 +108,16 @@ def pointer_matches(
         is_same_state_mirror = False
         try:
             canon_res = Path(brief_path).resolve()
-            # `<state>/runs/<snap>/<run_id>/brief-<role>.md` -> parents[3] == `<state>`
-            # `<state>/tasks/<tid>/active-briefs/brief-<role>.md` -> parents[3] == `<state>`
+            canon_state = next((a for a in canon_res.parents if a.name == "state"), None)
+            supp_state = next((a for a in supplied_resolved.parents if a.name == "state"), None)
             if (
-                len(canon_res.parents) >= 4
-                and len(supplied_resolved.parents) >= 4
-                and canon_res.parents[3] == supplied_resolved.parents[3]
+                canon_state is not None
+                and canon_state == supp_state
                 and supplied_resolved.parent.name == "active-briefs"
-                and supplied_resolved.name == f"brief-{role}.md"
+                and (
+                    supplied_resolved.name == f"brief-{role}.md"
+                    or (supplied_resolved.name.startswith("phase-brief-") and supplied_resolved.name.endswith(f"-{role}.md"))
+                )
                 and supplied_resolved.is_file()
             ):
                 is_same_state_mirror = True
