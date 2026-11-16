@@ -1933,13 +1933,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValidationError as exc:
         if args.json:
-            print(json.dumps({"status": "ERROR", "error": str(exc)}, ensure_ascii=False))
+            print(json.dumps({"status": "ERROR", "error": str(exc)}, ensure_ascii=True))
         else:
             print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
 
     if args.json:
-        print(json.dumps(res, indent=2, ensure_ascii=False))
+        print(json.dumps(res, indent=2, ensure_ascii=True))
     else:
         print(f"HUMAN_REVIEW_COCKPIT={res['html_path']}")
         print(f"HUMAN_REVIEW_URI={res['file_uri']}")
