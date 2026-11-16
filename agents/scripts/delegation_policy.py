@@ -122,10 +122,10 @@ UTILITY_AGENT_SPECS: dict[str, dict[str, Any]] = {
             "## Mandatory Speed & Accuracy Contract\n"
             "1. **Turn 1 Graph Anchor, Standalone CLI & Absolute File Paths**: Anchor discovery first using standalone `python .agents/harness.py graph --feature <name> --json` "
             "or `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) before broad search. "
-            "NEVER chain shell commands (`;`, `&&`, `|`, `2>&1`, multi-line scripts, `python -c`, `Get-ChildItem`, `rg`, `dir`, `ls`) inside `run_command` (breaks Windows PowerShell Turbo Mode #200632 and blocked by `pre_tool_safety`); use native `grep_search`, `find_by_name`, `list_dir`, and `view_file`/`read_file` with full absolute file paths instead. "
+            "NEVER chain shell commands (`;`, `&&`, `|`, `2>&1`, multi-line scripts, `python -c`, `Get-ChildItem`, `dir`, `ls`) inside `run_command` (breaks Windows PowerShell Turbo Mode #200632 and blocked by `pre_tool_safety`); use native `grep_search`, `find_by_name`, `list_dir`, and `view_file`/`read_file` with full absolute file paths instead. "
             "Honor any `project_notes` and `developer_instructions` returned in that JSON (and read `.agents/project-context/{architecture,conventions,persistence,ui}.md` only when relevant — never read raw `project-facts.json`).\n"
             "2. **Parallel Batching & Hard 24-Call Cap**: Issue `4-8` `view_file` or `grep_search` calls IN PARALLEL in a single turn — "
-            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (if `grep_search`/`run_command`/`find_by_name` are unavailable under a constrained `read_file`-only subagent, read `.agents/cache/project_graph.json` and `.agents/project-context/architecture.md` in Turn 1 to obtain exact repository file paths without guessing, then batch `6-8` `350-500`-line `read_file`/`view_file` calls in Turn 2). "
+            "NEVER read files sequentially 1-by-1 and NEVER slice a large file into 50-100 line sequential reads (when native `grep_search`/`find_by_name` are unavailable in the subagent host, use standalone `git grep -n \"<pattern>\"` or `git ls-files` in `run_command` alongside `python .agents/harness.py graph --find <Symbol> --json` and `.agents/project-context/architecture.md`; NEVER read `.agents/cache/project_graph.json` directly and NEVER pass `ByteOffset` to `read_file` unless the previous read explicitly reported byte truncation). "
             "On large `.kt`/`.java`/`.swift` files (>350 lines), run `python .agents/harness.py symbol outline --file <path>` and "
             "`python .agents/harness.py symbol read --file <path> --symbol <Class.method>` (or batch exact line ranges in parallel). "
             "Pack reads aggressively so exploration finishes within <=2 mega-batched tool turns (6-10 parallel calls/turn, completing at Turn 2 before Gemini 4's Turn-3 +701/cache=0 drop #200026; hard hook cap: 24 total tool calls).\n"
@@ -1607,7 +1607,49 @@ def _prompt_sha256(prompt: str) -> str:
 
 
 def _count_parent_user_turns(parent_conversation_id: str) -> int:
-    """Count explicit developer messages in parent transcript to detect brand-new chat turns reliably."""
+    """Count explicit developer messages and completed `ask_question` answers in parent transcript."""
+    cid = str(parent_conversation_id or "").strip()
+    if not cid or cid == "claude-session":
+        return 0
+    tx = prefer_full_transcript(resolve_transcript(cid))
+    if tx is None or not tx.is_file():
+        return 0
+    try:
+        if tx.stat().st_size > 32 * 1024 * 1024:
+            return 0
+        count = 0
+        pending_ask = False
+        with tx.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if not pending_ask and '"USER_INPUT"' not in line and '"ask_question"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                rtype = str(row.get("type") or "")
+                if row.get("source") == "USER_EXPLICIT" and rtype == "USER_INPUT":
+                    count += 1
+                    pending_ask = False
+                elif rtype == "PLANNER_RESPONSE":
+                    tcs = row.get("tool_calls") or []
+                    pending_ask = any(
+                        isinstance(tc, dict) and str(tc.get("name") or "") == "ask_question"
+                        for tc in tcs
+                    )
+                elif pending_ask and rtype in {"GENERIC", "TOOL_RESULT"}:
+                    if not row.get("error") and str(row.get("status") or "DONE").upper() != "ERROR":
+                        count += 1
+                    pending_ask = False
+        return count
+    except OSError:
+        return 0
+
+
+def _count_parent_planner_turns(parent_conversation_id: str) -> int:
+    """Count PLANNER_RESPONSE events in parent transcript so parallel single-subagent calls share one wave_id."""
     cid = str(parent_conversation_id or "").strip()
     if not cid or cid == "claude-session":
         return 0
@@ -1620,6 +1662,34 @@ def _count_parent_user_turns(parent_conversation_id: str) -> int:
         count = 0
         with tx.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
+                if '"PLANNER_RESPONSE"' not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("type") == "PLANNER_RESPONSE":
+                    count += 1
+        return count
+    except OSError:
+        return 0
+
+
+def _parent_has_user_input_after(parent_conversation_id: str, min_iso_timestamp: str) -> bool:
+    """True when parent transcript contains an explicit USER_INPUT timestamp strictly newer than `min_iso_timestamp`."""
+    cid = str(parent_conversation_id or "").strip()
+    baseline_ts = str(min_iso_timestamp or "").strip()
+    if not cid or cid == "claude-session" or not baseline_ts:
+        return False
+    tx = prefer_full_transcript(resolve_transcript(cid))
+    if tx is None or not tx.is_file():
+        return False
+    try:
+        if tx.stat().st_size > 32 * 1024 * 1024:
+            return False
+        latest_user_ts = ""
+        with tx.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
                 if '"USER_INPUT"' not in line:
                     continue
                 try:
@@ -1627,24 +1697,26 @@ def _count_parent_user_turns(parent_conversation_id: str) -> int:
                 except ValueError:
                     continue
                 if isinstance(row, dict) and row.get("source") == "USER_EXPLICIT" and row.get("type") == "USER_INPUT":
-                    count += 1
-        return count
+                    ts = str(row.get("created_at") or row.get("timestamp") or "").strip()
+                    if ts > latest_user_ts:
+                        latest_user_ts = ts
+        return bool(latest_user_ts and latest_user_ts > baseline_ts)
     except OSError:
-        return 0
+        return False
 
 
-def _child_transcript_completed(execution_id: str) -> bool:
-    """Return True if bound child transcript contains a completed terminal model response."""
+def _child_transcript_terminal_state(execution_id: str) -> str:
+    """Classify child transcript tail: COMPLETED_DONE | EMPTY_DONE | ACTIVE | HEADER_ONLY."""
     cid = str(execution_id or "").strip()
     if not cid:
-        return False
+        return "HEADER_ONLY"
     tx = prefer_full_transcript(resolve_transcript(cid))
     if tx is None or not tx.is_file():
-        return False
+        return "HEADER_ONLY"
     try:
         size = tx.stat().st_size
         if size == 0 or size > 32 * 1024 * 1024:
-            return False
+            return "HEADER_ONLY"
         with tx.open("rb") as fh:
             fh.seek(max(0, size - 32768))
             if size > 32768:
@@ -1659,13 +1731,25 @@ def _child_transcript_completed(execution_id: str) -> bool:
                 continue
             if not isinstance(row, dict):
                 continue
-            if row.get("source") == "MODEL" and row.get("type") == "PLANNER_RESPONSE":
-                if row.get("status") == "DONE" and not row.get("tool_calls") and not row.get("toolCalls"):
-                    return True
-                return False
-        return False
+            src = str(row.get("source") or "").upper()
+            rtype = str(row.get("type") or "").upper()
+            if src == "MODEL" and rtype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE"):
+                has_tools = bool(row.get("tool_calls") or row.get("toolCalls"))
+                status = str(row.get("status") or "").upper()
+                if status == "DONE" and not has_tools:
+                    txt = str(row.get("content") or "").strip()
+                    if not txt or len(txt) < 16:
+                        return "EMPTY_DONE"
+                    return "COMPLETED_DONE"
+                return "ACTIVE"
+        return "HEADER_ONLY"
     except OSError:
-        return False
+        return "HEADER_ONLY"
+
+
+def _child_transcript_completed(execution_id: str) -> bool:
+    """Return True if bound child transcript contains a non-empty completed terminal model response."""
+    return _child_transcript_terminal_state(execution_id) == "COMPLETED_DONE"
 
 
 def _current_task_phase_and_status(repo: Path, plan: dict[str, Any] | None = None) -> tuple[str, str, str]:
@@ -1717,6 +1801,7 @@ def record_utility_dispatch(
     resolved_pid = str(phase_id or pid_cur).strip()
     resolved_wave = str(wave_id or uuid.uuid4().hex[:10]).strip()
     user_turns = _count_parent_user_turns(parent_cid)
+    planner_turns = _count_parent_planner_turns(parent_cid)
     entry = {
         "wave_id": resolved_wave,
         "agent_type": agent_type,
@@ -1724,6 +1809,7 @@ def record_utility_dispatch(
         "prompt_sha256": _prompt_sha256(prompt),
         "parent_conversation_id": parent_cid,
         "parent_user_turns": user_turns,
+        "parent_planner_turns": planner_turns,
         "execution_id": "",
         "task_id": resolved_tid,
         "task_status": resolved_status,
@@ -2051,7 +2137,26 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
             if not item.get("dispatch_failed") and str(item.get("execution_id") or "") in bound_set:
                 target_wave_id = str(item.get("wave_id") or "")
                 break
+    returned_cids: set[str] = set()
+    tool_res = payload.get("toolResult") or payload.get("tool_result") or {}
+    if isinstance(tool_res, dict):
+        top_cid = str(tool_res.get("conversationId") or tool_res.get("conversation_id") or tool_res.get("id") or "").strip()
+        if top_cid:
+            returned_cids.add(top_cid)
+        for sub_item in (tool_res.get("subagents") or []):
+            if isinstance(sub_item, dict):
+                scid = str(sub_item.get("conversationId") or sub_item.get("conversation_id") or sub_item.get("id") or "").strip()
+                if scid:
+                    returned_cids.add(scid)
+
     if target_wave_id:
+        wave_size = sum(
+            1
+            for e in entries
+            if not e.get("dispatch_failed")
+            and str(e.get("wave_id") or "") == target_wave_id
+            and (not parent_cid or str(e.get("parent_conversation_id") or "") == parent_cid)
+        )
         now_ts = time.time()
         cur_turns = _count_parent_user_turns(parent_cid) if parent_cid else 0
         for item in entries:
@@ -2061,8 +2166,8 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                 and (not parent_cid or str(item.get("parent_conversation_id") or "") == parent_cid)
             ):
                 cid_bound = str(item.get("execution_id") or "")
-                if cid_bound:
-                    tx_b = resolve_transcript(cid_bound)
+                tx_b = resolve_transcript(cid_bound) if cid_bound else None
+                if cid_bound and tx_b is not None:
                     tx_calls = _count_transcript_tool_calls(tx_b)
                     if tx_calls > int(item.get("tool_calls_used") or 0):
                         item["tool_calls_used"] = tx_calls
@@ -2071,7 +2176,21 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     if tx_files and tx_files != list(item.get("inspected_files") or []):
                         item["inspected_files"] = tx_files
                         changed = True
-                if not item.get("wave_completed"):
+                t_state = _child_transcript_terminal_state(cid_bound) if (cid_bound and tx_b is not None) else "HEADER_ONLY"
+                if t_state == "EMPTY_DONE":
+                    item["dispatch_failed"] = True
+                    item["empty_terminal_response"] = True
+                    item["failure_code"] = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
+                    item["completed_at"] = utc_now()
+                    item["completed_at_epoch"] = now_ts
+                    changed = True
+                    continue
+                child_ready_to_close = (
+                    tx_b is None
+                    or t_state == "COMPLETED_DONE"
+                    or ((wave_size == 1 or cid_bound in returned_cids) and t_state != "ACTIVE")
+                )
+                if not item.get("wave_completed") and child_ready_to_close:
                     item["wave_completed"] = True
                     item["completed_at"] = utc_now()
                     item["completed_at_epoch"] = now_ts
@@ -2103,6 +2222,14 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                         )
                         if src.get("inspected_files"):
                             le["inspected_files"] = list(src["inspected_files"])
+                        if src.get("dispatch_failed"):
+                            le["dispatch_failed"] = True
+                            if src.get("empty_terminal_response"):
+                                le["empty_terminal_response"] = True
+                            if src.get("failure_code"):
+                                le["failure_code"] = str(src["failure_code"])
+                            le["completed_at"] = str(src.get("completed_at") or utc_now())
+                            le["completed_at_epoch"] = src.get("completed_at_epoch", time.time())
                         if src.get("wave_completed") and not le.get("wave_completed"):
                             le["wave_completed"] = True
                             le["completed_at"] = str(src.get("completed_at") or utc_now())
@@ -3037,13 +3164,25 @@ def check_post_reviewer_reread_guard(
             # If any reviewer has FINDINGS, do not block reads (task will block/resume for fixes)
             if has_findings:
                 return (True, "", "")
-            # Case 1: All reviewers completed/ingested with PASS -> advance to next phase / assemble, do NOT re-read code!
+            # Case 1: All reviewers completed/ingested with PASS -> advance to next phase / assemble, do NOT re-read code
+            # UNLESS the developer explicitly sent a brand-new USER_INPUT follow-up after the reviews completed!
             if all_finished and verdicts and all(v == "PASS" for v in verdicts):
+                latest_rev_ts = max(
+                    [
+                        str(d.get("completed_at") or d.get("ingested_at") or d.get("updated_at") or "")
+                        for d in revs.values()
+                        if isinstance(d, dict)
+                    ]
+                    + [str(ledger.get("updated_at") or run.get("created_at") or "")]
+                )
+                if _parent_has_user_input_after(parent_cid, latest_rev_ts):
+                    return (True, "", "")
                 if status in {"VERIFYING", "IMPLEMENTING"}:
                     return (
                         False,
                         "POST_REVIEW_REREAD_BLOCKED: All specialist reviewers already passed. Do NOT re-read source files on the Lead Model — "
-                        "follow NEXT_ACTION (`begin-next-phase` / `prepare-verification` / `assemble` / `device install-start`) immediately.",
+                        "follow NEXT_ACTION (`begin-next-phase` / `prepare-verification` / `assemble` / `device install-start`) immediately "
+                        "(or run `python .agents/harness.py task resume` first if applying a developer-requested change).",
                         "POST_REVIEW_REREAD_BLOCKED",
                     )
             # Case 2: Dispatched reviewers whose transcripts are all finished (`DONE`) -> ingest verdicts first instead of reading code!
@@ -3886,12 +4025,14 @@ def validate_utility_dispatch(
     tid, st, pid = _current_task_phase_and_status(repo, plan)
     parent_cid = str(parent_conversation_id or "").strip()
 
-    # Cap consecutive scout waves within the SAME developer turn (resets automatically on every new USER_INPUT)
+    coalesced_wave_id = ""
+    # Cap consecutive scout waves within the SAME developer turn (resets on USER_INPUT or answered ask_question)
     if scout_items and parent_cid and parent_cid != "claude-session" and os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() not in {"claude", "copilot"}:
         cur_turns = _count_parent_user_turns(parent_cid)
+        cur_planner_turns = _count_parent_planner_turns(parent_cid)
         ledger = _load_utility_ledger(repo)
-        prior_scout_waves = {
-            str(e.get("wave_id") or "")
+        matching_turn_entries = [
+            e
             for e in (ledger.get("entries") or [])
             if isinstance(e, dict)
             and not bool(e.get("dispatch_failed"))
@@ -3900,9 +4041,27 @@ def validate_utility_dispatch(
             and int(e.get("parent_user_turns") or 0) == cur_turns
             and str(e.get("task_status") or "") == st
             and str(e.get("phase_id") or "") == pid
-        }
+        ]
+        # Antigravity emits parallel subagents as separate single-item `invoke_subagent` calls in one PLANNER_RESPONSE:
+        # coalesce sibling calls sharing `cur_planner_turns > 0` onto the same `wave_id` (enforcing the 3-scout cap per wave).
+        if len(scout_items) == 1 and cur_planner_turns > 0 and matching_turn_entries:
+            same_planner_entries = [
+                e for e in matching_turn_entries
+                if int(e.get("parent_planner_turns") or 0) == cur_planner_turns and str(e.get("wave_id") or "")
+            ]
+            if same_planner_entries:
+                candidate_wid = str(same_planner_entries[-1].get("wave_id") or "")
+                wid_count = sum(1 for e in same_planner_entries if str(e.get("wave_id") or "") == candidate_wid)
+                if wid_count >= 3:
+                    return (
+                        False,
+                        f"`{SCOUT_AGENT}` parallel wave size {wid_count + 1} exceeds the 3-scout parallel cap.",
+                        "SCOUT_BATCH_CAP",
+                    )
+                coalesced_wave_id = candidate_wid
+        prior_scout_waves = {str(e.get("wave_id") or "") for e in matching_turn_entries}
         prior_scout_waves.discard("")
-        if len(prior_scout_waves) >= MAX_SCOUT_WAVES_PER_USER_TURN:
+        if not coalesced_wave_id and len(prior_scout_waves) >= MAX_SCOUT_WAVES_PER_USER_TURN:
             return (
                 False,
                 f"SCOUT_WAVE_CAP_PER_TURN: Already executed {MAX_SCOUT_WAVES_PER_USER_TURN} `{SCOUT_AGENT}` waves in this turn. "
@@ -3910,7 +4069,7 @@ def validate_utility_dispatch(
                 "SCOUT_WAVE_CAP_PER_TURN",
             )
 
-    wave_id = uuid.uuid4().hex[:10]
+    wave_id = coalesced_wave_id or uuid.uuid4().hex[:10]
 
     if worker_items:
         if len(raw_subs) > 1:
@@ -4086,8 +4245,11 @@ _SCOUT_SAFE_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 _SCOUT_SAFE_GIT_RE = re.compile(
-    r"^\s*git(?:\.exe)?\s+(?:status|diff|log|show|branch\s+--show-current)\b",
+    r"^\s*git(?:\.exe)?\s+(?:status|diff|log|show|grep|ls-files|branch\s+--show-current)\b",
     re.IGNORECASE,
+)
+_SCOUT_UNSAFE_GIT_FLAG_RE = re.compile(
+    r"(?:^|\s)(?:(?i:--open-files-in-pager\b|--open\w*|--ext-diff\b|--textconv\b|--output(?:=|\s)|--exec(?:=|\s))|-(?!-)[A-Za-z0-9]*O\S*)"
 )
 
 _WORKER_FORBIDDEN_LIFECYCLE_RE = re.compile(
@@ -4104,10 +4266,28 @@ _WORKER_FORBIDDEN_LIFECYCLE_RE = re.compile(
 
 def scout_command_allowed(command: str) -> bool:
     cmd = str(command or "").strip()
-    if not cmd or any(tok in cmd for tok in ("&&", "||", ";", "|", ">", "<", "`", "$(")):
+    if not cmd:
+        return False
+    from mutation_guard import _operator_text_any_shell
+    op_txt = _operator_text_any_shell(cmd)
+    if op_txt is None:
+        return False
+    if any(tok in op_txt for tok in ("&&", "||", ";", "|", ">", "<", "`", "$", "&", "\n")):
         return False
     if "--inspect-file" in cmd or "--repair" in cmd or "--fix" in cmd:
         return False
+    if _SCOUT_UNSAFE_GIT_FLAG_RE.search(cmd):
+        return False
+    # Reject cmd.exe mid-word caret obfuscation (`g^it`, `^&`, `^--flag`) while permitting standard git revision carets (`^HEAD`, `abc123^..HEAD`)
+    if "^" in op_txt:
+        stripped_carets = re.sub(r"(?<=\s)\^(?=[\w.])", "", op_txt)
+        stripped_carets = re.sub(
+            r"(?<=[0-9A-Za-z])(?:\^(?:\d*|\{(?:commit|tree|tag|blob|object)\}))+(?=\s|\.\.|\.\.\.|$)",
+            "",
+            stripped_carets,
+        )
+        if "^" in stripped_carets:
+            return False
     return bool(_SCOUT_SAFE_COMMAND_RE.search(cmd) or _SCOUT_SAFE_GIT_RE.search(cmd))
 
 

@@ -769,7 +769,7 @@ def _complete_review_core(
         last_err = str(ledger["reviewers"][reviewer].get("last_error") or "")
         if (
             current_st == REVIEW_ENV_BLOCKED
-            and last_err.startswith(("REVIEW_MODEL_UNVERIFIED:", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE"))
+            and last_err.startswith(("REVIEW_MODEL_UNVERIFIED:", "EMPTY_SUBAGENT_TERMINAL_RESPONSE", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE"))
             and existing_bound_id == execution_id
         ):
             current_st = REVIEW_DISPATCHED
@@ -791,10 +791,24 @@ def _complete_review_core(
         except Exception as exc:
             if isinstance(exc, FileNotFoundError):
                 err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
+            elif "EMPTY_SUBAGENT_TERMINAL_RESPONSE" in str(exc):
+                err_code = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
             elif "no model response" in str(exc).lower():
                 err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            if err_code == "EMPTY_SUBAGENT_TERMINAL_RESPONSE":
+                attempts = int(ledger["reviewers"][reviewer].get("protocol_attempts") or 0) + 1
+                ledger["reviewers"][reviewer]["protocol_attempts"] = attempts
+                ledger["reviewers"][reviewer]["state"] = (
+                    REVIEW_PROTOCOL_RETRY_REQUIRED if attempts <= 1 else REVIEW_ENV_BLOCKED
+                )
+                ledger["reviewers"][reviewer]["last_error"] = (
+                    "EMPTY_SUBAGENT_TERMINAL_RESPONSE: reviewer terminated with DONE and empty payload (#201209); "
+                    "retry once via send_message or run `python .agents/harness.py task heal`"
+                )
+                save_ledger(directory, run_id, ledger)
+                raise ValidationError(ledger["reviewers"][reviewer]["last_error"])
             ledger["reviewers"][reviewer]["state"] = (
                 REVIEW_DISPATCHED if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE" else REVIEW_ENV_BLOCKED
             )

@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "human_review_cockpit", "static_health_bridge"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -28,8 +28,11 @@ BOOTSTRAP_ACTIONS = {
     "heal", "bridge",
 }
 SHELL_LAUNDERING = re.compile(r"`|\$|[<>^]|(?<!\|)\|(?!\|)|(?<!&)&(?!&)")
-GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base)\s", re.I)
-GIT_REV_EXCLUSION = re.compile(r"(?<=\s)\^(?=[\w./-])")
+GIT_RANGE_READ = re.compile(r"git(?:\.exe)?\s+(?:log|rev-list|show|diff|merge-base|grep|ls-files)\s", re.I)
+GIT_REV_EXCLUSION = re.compile(r"(?<=\s)\^(?=[\w.])")
+GIT_REV_PARENT_SUFFIX = re.compile(
+    r"(?<=[0-9A-Za-z])(?:\^(?:\d*|\{(?:commit|tree|tag|blob|object)\}))+(?=\s|\.\.|\.\.\.|$)"
+)
 
 
 # Read-only PowerShell cmdlets (Antigravity on Windows runs PowerShell). Pipes,
@@ -401,7 +404,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             ["maestro", "capabilities"], ["maestro", "list"],
         ):
             return True
-        if args[:1] in (["health"], ["diagnose-session"]):
+        if args[:1] in (["health"], ["diagnose-session"], ["review-diff"]):
             return True
         if args in (["device", "status"], ["device", "ios-status"]):
             return True
@@ -655,8 +658,21 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
         if rel_posix in external_writes:
             continue
 
+        try:
+            modules = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
+            if modules == [":"] and (rel_posix.startswith("app/") or rel_posix == "app") and ":app" in expected_modules:
+                modules = [":app"]
+        except Exception:
+            modules = [":app"]
+
         plan_surfs = set(plan.get("expected_surfaces") or [])
         skip_surface_drift = bool(plan_surfs - {"LOCALIZATION", "DOCS", "TEST_ONLY"}) and not rel_posix.endswith("AndroidManifest.xml")
+        # Zero-I/O fast path on Windows: when surface drift is already covered by planned code surfaces
+        # and the target file + module are explicitly approved in `plan.json`, skip opening `target_path`
+        # or spawning `git ls-files` right before the IDE truncates the file (avoids WinError 1224 mmap races).
+        if skip_surface_drift and rel_posix in expected_files and (not expected_modules or set(modules) <= expected_modules):
+            continue
+
         try:
             candidate_res = classify(
                 root,
@@ -673,13 +689,6 @@ def file_mutation_allowed(repo: Path, targets: list[str] | None = None) -> tuple
             # mentions sign-in or purchases would make any edit sensitive. Sensitive surfaces of a
             # tracked file are judged on its actual diff at prepare-verification and by the verifier.
             surfaces = [s for s in surfaces if s not in PRE_EXISTING_CONTENT_SURFACES]
-
-        try:
-            modules = changed_modules(root, {"task_changes": [{"path": rel_posix}]})
-            if modules == [":"] and (rel_posix.startswith("app/") or rel_posix == "app") and ":app" in expected_modules:
-                modules = [":app"]
-        except Exception:
-            modules = [":app"]
 
         drift = check_material_drift(
             plan,
@@ -1191,11 +1200,12 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     )
     if operator_text is None:
         return False, "unterminated quote in command"
-    if GIT_RANGE_READ.match(normalized):
-        # `^` is refused because cmd.exe drops it inside a word (`g^it pu^sh` runs `git push`); a
-        # revision exclusion (`git log branch ^HEAD`) starts an argument of a read-only git command,
-        # where cmd dropping it leaves a read-only command, so only that position is spared.
+    if GIT_RANGE_READ.match(normalized) and not re.search(r"[;&|\n]", operator_text):
+        # `^` is refused inside words (`g^it pu^sh`) or before shell operators (`^&`); on a single
+        # standalone read-only git command, both leading `^REV` exclusions and trailing `REV^` / `REV^2`
+        # parent revision suffixes leave only benign revision tokens even if cmd.exe strips `^`.
         operator_text = GIT_REV_EXCLUSION.sub("", operator_text)
+        operator_text = GIT_REV_PARENT_SUFFIX.sub("", operator_text)
     if SHELL_LAUNDERING.search(operator_text):
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
     if re.search(r"[(){}]", operator_text):

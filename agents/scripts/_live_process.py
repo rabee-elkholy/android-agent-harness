@@ -223,15 +223,22 @@ def resolve_compatible_windows_daemon_alignment(
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )[:32]
-        live_candidates: dict[str, tuple[str, list[str]]] = {}
+        # Map normalized javaHome -> (javaHome_str, immutable_opts, is_idle)
+        live_candidates: dict[str, tuple[str, list[str], bool]] = {}
         java_bin_rel = Path("bin") / ("java.exe" if os.name == "nt" or eff_os == "nt" else "java")
         for lg in logs:
             try:
                 m_pid = re.match(r"^daemon-(\d+)\.out\.log$", lg.name)
                 if not m_pid or not check_alive(int(m_pid.group(1))):
                     continue
+                fsize = lg.stat().st_size
                 with lg.open("r", encoding="utf-8", errors="ignore") as fh:
                     head = fh.read(24576)
+                    if fsize > 24576:
+                        fh.seek(max(0, fsize - 8192))
+                        tail = fh.read(8192)
+                    else:
+                        tail = head
                 m_ctx = re.search(r"DaemonContext\[([^\r\n]+)\]", head)
                 if not m_ctx:
                     continue
@@ -252,13 +259,28 @@ def resolve_compatible_windows_daemon_alignment(
                             val = m_p.group(1).strip()
                             if re.fullmatch(r"-D[a-z.]+=[A-Za-z0-9._-]+", val):
                                 immutable_opts.append(val)
+                last_idle = max(tail.rfind("Idle"), tail.rfind("Advertising the daemon address"))
+                last_busy = max(tail.rfind("Busy"), tail.rfind("Executing build"))
+                is_idle = last_idle >= last_busy
                 norm_key = str(jh_path).replace("\\", "/").rstrip("/").lower()
-                if norm_key not in live_candidates:
-                    live_candidates[norm_key] = (str(jh_path), immutable_opts)
+                existing = live_candidates.get(norm_key)
+                if existing is None or (is_idle and not existing[2]):
+                    live_candidates[norm_key] = (str(jh_path), immutable_opts, is_idle)
             except OSError:
                 continue
         if len(live_candidates) == 1:
-            return next(iter(live_candidates.values()))
+            jh_s, opts_s, _ = next(iter(live_candidates.values()))
+            return (jh_s, opts_s)
+        if len(live_candidates) > 1:
+            env_jh_raw = str(env.get("JAVA_HOME") or "").strip()
+            if env_jh_raw:
+                norm_env_jh = env_jh_raw.replace("\\", "/").rstrip("/").lower()
+                if norm_env_jh in live_candidates:
+                    jh_s, opts_s, _ = live_candidates[norm_env_jh]
+                    return (jh_s, opts_s)
+            idle_candidates = [(jh_s, opts_s) for jh_s, opts_s, idle in live_candidates.values() if idle]
+            if len(idle_candidates) == 1:
+                return idle_candidates[0]
     except (OSError, ValueError, TypeError, NotImplementedError):
         return (None, [])
     return (None, [])

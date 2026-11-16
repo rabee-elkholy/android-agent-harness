@@ -1496,10 +1496,23 @@ def _complete_phase_review_locked(
         except Exception as exc:
             if isinstance(exc, FileNotFoundError):
                 err_code = "TRUSTED_TRANSCRIPT_NOT_FOUND"
+            elif "EMPTY_SUBAGENT_TERMINAL_RESPONSE" in str(exc):
+                err_code = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
             elif "no model response" in str(exc).lower():
                 err_code = "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE"
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
+            if err_code == "EMPTY_SUBAGENT_TERMINAL_RESPONSE":
+                attempts = int(rev_entry.get("protocol_attempts") or 0) + 1
+                rev_entry["protocol_attempts"] = attempts
+                rev_entry["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED if attempts <= 1 else REVIEW_ENV_BLOCKED
+                rev_entry["last_error"] = (
+                    "EMPTY_SUBAGENT_TERMINAL_RESPONSE: phase reviewer terminated with DONE and empty payload (#201209)"
+                )
+                rev_entry["last_error_code"] = err_code
+                ledger["ledger_sha256"] = compute_ledger_sha(ledger)
+                atomic_write_json(phase_ledger_file(tdir, phase_id), ledger)
+                raise ValidationError(rev_entry["last_error"])
             rev_entry["state"] = (
                 REVIEW_DISPATCHED if err_code == "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE" else REVIEW_ENV_BLOCKED
             )

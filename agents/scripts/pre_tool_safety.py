@@ -1736,7 +1736,8 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 emit(
                     "deny",
                     f"SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is not permitted during IMPLEMENTING unless retrying phase review protocol (current router action: {act_code}). "
-                    "Subagents must emit their final report directly as plain assistant text and end their turn.",
+                    "Completed utility workers cannot be resumed via `send_message` — advance directly with `python .agents/harness.py task checkpoint-phase --advance-all-ready` "
+                    "(which runs compile + unit tests in one pass without a separate `compile` call) or `verify-steps`, or dispatch a fresh `invoke_subagent` worker wave.",
                     tool=name,
                     reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
                 )
@@ -3058,7 +3059,7 @@ def _main() -> None:
                     if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
                         emit(
                             "deny",
-                            "Scout subagent run_command permits only read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log inspection. Use native `grep_search` or `find_by_name` tools instead of shell `findstr`/`rg`.",
+                            "Scout subagent run_command permits only standalone read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log/grep/ls-files inspection (no pipes/chaining). Use `git grep -n \"<pattern>\"` / `git ls-files` or native `grep_search` / `find_by_name` instead of shell `findstr`/`rg`.",
                             tool=name,
                             reason_code="SCOUT_READ_ONLY_BOUNDARY",
                         )

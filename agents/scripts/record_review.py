@@ -98,14 +98,28 @@ def _extract_transcript_response(transcript_path: Path) -> str:
             lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
             if any(not isinstance(step, dict) for step in lines):
                 raise ValidationError("Transcript entries must be JSON objects")
+            saw_empty_done_terminal = False
+            checked_latest_model = False
             for step in reversed(lines):
                 source = str(step.get("source") or "").upper()
                 stype = str(step.get("type") or "").upper()
                 content = str(step.get("content") or "")
+                status = str(step.get("status") or "").upper()
+                has_tools = bool(step.get("tool_calls") or step.get("toolCalls"))
                 native_reply = stype in ("PLANNER_RESPONSE", "ASSISTANT_RESPONSE") and source in ("", "MODEL")
                 legacy_reply = source == "MODEL" and not stype and not native_transcript
-                if content and (native_reply or legacy_reply) and not step.get("tool_calls"):
+                if (native_reply or legacy_reply) and not checked_latest_model:
+                    checked_latest_model = True
+                    stripped_c = content.strip()
+                    if not has_tools and status == "DONE" and (not stripped_c or (len(stripped_c) < 16 and "{" not in stripped_c)):
+                        saw_empty_done_terminal = True
+                        break
+                if content.strip() and (native_reply or legacy_reply) and not has_tools:
                     return content
+            if saw_empty_done_terminal:
+                raise ValidationError(
+                    "EMPTY_SUBAGENT_TERMINAL_RESPONSE: subagent terminated with status DONE and an empty/stub response payload without completing the return protocol (#201209)"
+                )
             raise ValidationError("no model response in reviewer transcript; prompts and tool output are not reviewer results")
         else:
             data = json.loads(raw)

@@ -117,18 +117,21 @@ def capture_review_inputs(repo, task_directory, run_id, manifest, plan):
 
 
 def _comparison_texts(repo, previous, current, plan, previous_run_id, files):
-    from _vnext_common import read_json, ValidationError
+    from _vnext_common import read_json, state_root, validate_id, ValidationError
+    from final_verifier import red_plan_hashes
     path = _input_path(repo, plan["task_id"], previous_run_id)
     if not path.exists():
         return None
     if path.resolve() != path.absolute() or not path.resolve().is_relative_to(repo.resolve()) or path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("invalid review input cache")
     record = read_json(path)
+    task_directory = state_root(repo) / "tasks" / validate_id(str(plan["task_id"]), "task_id")
+    valid_plan_hashes = red_plan_hashes(task_directory, plan, str(plan.get("plan_sha256") or ""))
     expected = {"schema_version": 1, "task_id": plan["task_id"], "run_id": previous_run_id,
-                "plan_sha256": plan["plan_sha256"], "repository": previous.get("repository"),
+                "repository": previous.get("repository"),
                 "delivery_snapshot_sha256": previous["delivery_snapshot_sha256"],
                 "change_set_sha256": previous["change_set_sha256"]}
-    if any(record.get(key) != value for key, value in expected.items()):
+    if any(record.get(key) != value for key, value in expected.items()) or str(record.get("plan_sha256") or "") not in valid_plan_hashes:
         raise ValidationError("review input cache binding mismatch")
     before, after, comparison = _identities(previous), _identities(current), {}
     for relative in files:

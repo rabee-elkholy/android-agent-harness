@@ -92,6 +92,8 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
      "description": "Export a completed phone_e2e session into a repeatable .maestro/<task_id>.yaml flow without clearState."},
     {"command": "diagnose-session", "read_only": True, "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
      "description": "Analyze hook-audit streaks, out-of-scope read sprawl, and transcript token spikes with optional Zero-PII or `--export-chat-bundle` archive export."},
+    {"command": "review-diff", "read_only": True, "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
+     "description": "Generate task-isolated Interactive Human Review Cockpit (`human-review.html`) ordered by Clean Architecture with hotspot triage, blast-radius callers, AI Review X-Ray, and surgical reopen composer."},
     {"command": "web-pack", "read_only": True, "valid_states": ["ANY"], "required_inputs": [], "model_facing": True,
      "description": "Optional Manual Web-Relay pack: build an AST-scoped, secret-scrubbed single-file `.md` Context Pack for Gemini Web and copy to Clipboard without changing default Antigravity mode."},
     {"command": "web-apply", "read_only": False, "valid_states": ["ANY"], "required_inputs": ["source"], "model_facing": True,

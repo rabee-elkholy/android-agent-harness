@@ -1443,6 +1443,28 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
             / "reviews.json"
         ).is_file():
             completed_rounds = 0
+    actual_task_paths = changed_file_paths(manifest)
+    pre_extra_files = [
+        item[5:]
+        for item in check_material_drift(plan, [], [], actual_files=actual_task_paths, repo=repo)
+        if item.startswith("file:")
+    ]
+    if pre_extra_files and isinstance(plan.get("approval"), dict) and plan.get("approval", {}).get("plan_sha256"):
+        from mutation_guard import file_mutation_allowed as _pre_file_mutation_allowed
+        if all(_pre_file_mutation_allowed(repo, targets=[f])[0] for f in pre_extra_files):
+            old_plan_sha = str(plan.get("plan_sha256") or "")
+            if old_plan_sha:
+                history_dir = task_dir(repo, args.task_id) / "plan-history"
+                history_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
+                plan["supersedes_plan_sha256"] = old_plan_sha
+            plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(pre_extra_files))
+            plan.pop("material_drift", None)
+            plan.pop("material_drift_causes", None)
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+            plan["approval"]["plan_sha256"] = plan["plan_sha256"]
+            save_plan(_plan_path(repo, args.task_id), plan)
+
     if completed_rounds:
         previous_reviews = EvidenceStore(state_root(repo)).read(
             str(previous_current["delivery_snapshot_sha256"]),
@@ -1828,6 +1850,11 @@ def complete(args: argparse.Namespace) -> dict:
         from self_heal import save_stable_snapshot
         save_stable_snapshot(repo, args.task_id, "ready_for_delivery", plan=plan)
     except (OSError, ValueError, ImportError, ValidationError):
+        pass
+    try:
+        from human_review_cockpit import generate_human_review_cockpit
+        generate_human_review_cockpit(repo, args.task_id, open_browser=False)
+    except (OSError, ValueError, KeyError, RuntimeError, ImportError, ValidationError):
         pass
     return plan
 

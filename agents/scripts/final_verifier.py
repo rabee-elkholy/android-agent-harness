@@ -399,7 +399,12 @@ def validate_policy_artifact(
             raise
         return None, str(exc), "BLOCKED"
     if expected_policy != policy:
-        return None, "policy artifact does not match deterministic policy evaluation", "BLOCKED"
+        diff_keys = sorted(
+            k for k in (set(expected_policy) | set(policy)) - {"policy_sha256"}
+            if expected_policy.get(k) != policy.get(k)
+        )
+        detail_suffix = f" (mismatched keys: {', '.join(diff_keys)})" if diff_keys else ""
+        return None, f"policy artifact does not match deterministic policy evaluation{detail_suffix}", "BLOCKED"
     return expected_policy, None, "PASS"
 
 

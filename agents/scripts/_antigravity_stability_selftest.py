@@ -6865,5 +6865,703 @@ class TestV1318ForensicIntegration(unittest.TestCase):
             self.assertFalse(any(o.startswith("-Xmx") or o.startswith("--add-opens") for o in opts))
 
 
+class TestV1319ForensicIntegration(unittest.TestCase):
+    """End-to-end regression suite for all 7 systemic fixes from live session chat-a3c40cb9 (v1.3.19)."""
+
+    def test_v1319_01_later_round_policy_determinism_after_extra_files_and_revise(self):
+        import argparse
+        import subprocess as _sp
+        import workflow
+        from _vnext_common import atomic_write_json, canonical_sha256, read_json
+        from evidence_store import EvidenceStore
+        from final_verifier import validate_policy_artifact
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            _sp.run(["git", "init", "-q"], cwd=str(repo), check=True)
+            _sp.run(["git", "config", "user.email", "dev@example.com"], cwd=str(repo), check=True)
+            _sp.run(["git", "config", "user.name", "Dev"], cwd=str(repo), check=True)
+            # Install minimal skills & scripts symlink/copy layout via KIT
+            (repo / ".agents").mkdir(parents=True, exist_ok=True)
+            (repo / ".agents/VERSION").write_text((Path(__file__).resolve().parents[2] / "agents/VERSION").read_text(encoding="utf-8"), encoding="utf-8")
+            shutil.copytree(Path(__file__).resolve().parents[2] / "agents/skills", repo / ".agents/skills")
+            f1 = repo / "app/src/main/java/com/demo/OnboardingVm.kt"
+            f2 = repo / "app/src/main/java/com/demo/GenderUseCase.kt"
+            f1.parent.mkdir(parents=True, exist_ok=True)
+            f1.write_text("package com.demo\nclass OnboardingVm { fun clean() = 1 }\n", encoding="utf-8")
+            f2.write_text("package com.demo\nclass GenderUseCase { fun run(unused: Int = 0) = 2 }\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            _sp.run(["git", "add", "."], cwd=str(repo), check=True)
+            _sp.run(["git", "commit", "-qm", "init"], cwd=str(repo), check=True)
+
+            tid = "clean-onboarding-unused-code"
+            draft_res = workflow.draft(argparse.Namespace(
+                repo=str(repo),
+                task_id=tid,
+                outcome="Remove unused parameters in onboarding and worker callers",
+                kind="REFACTOR",
+                expected_files="app/src/main/java/com/demo/OnboardingVm.kt",
+                expected_surfaces="BUSINESS_LOGIC",
+                expected_modules=":app",
+                test_strategy="none",
+                approach="Remove unused parameters without changing runtime behavior.",
+                risks="Caller signature alignment across use cases.",
+                device_strategy="Verify startup.",
+                phases=None,
+                adopt_dirty=False,
+                arch_intent="REFACTOR",
+                module_placement=":app",
+                dependency_direction="presentation->domain",
+                state_ownership="OnboardingVm",
+                pattern="MVVM",
+                new_abstractions="none",
+            ))
+            workflow.record_approval(argparse.Namespace(
+                repo=str(repo),
+                task_id=tid,
+                source="conversation",
+                proof_reference="approve",
+                enforcement_tier="RULE_ENFORCED",
+                plan_hash=draft_res["plan_sha256"][:12],
+                approval_token=None,
+            ))
+
+            # Round 1 edit on planned file f1 + prepare-verification + PASS reviews
+            f1.write_text("package com.demo\nclass OnboardingVm { fun clean() = 2 }\n", encoding="utf-8")
+            r1 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id=tid, host="antigravity"))
+            r1_policy = read_json(Path(r1["policy"]))
+            store = EvidenceStore(workflow.state_root(repo))
+            store.write(
+                snapshot=r1["delivery_snapshot_sha256"],
+                run_id=r1["run_id"],
+                name="reviews",
+                producer="review_orchestrator",
+                harness_version=(Path(__file__).resolve().parents[2] / "agents/VERSION").read_text(encoding="utf-8").strip(),
+                change_set=r1["change_set_sha256"],
+                status="PASS",
+                evidence={
+                    "reviewers": list(r1_policy["reviewers"]),
+                    "blocking_findings": [],
+                    "reports": [
+                        {"reviewer": rev, "verdict": "PASS", "independent_execution_verified": True}
+                        for rev in r1_policy["reviewers"]
+                    ],
+                },
+            )
+            p_path = workflow.task_dir(repo, tid) / "plan.json"
+            p_doc = read_json(p_path)
+            p_doc["review_rounds"] = 1
+            from plan_authority import save_plan
+            save_plan(p_path, p_doc)
+
+            # Developer follow-up (`task resume` + touching extra in-module file `f2` NOT in initial `expected_files`)
+            workflow.resume(argparse.Namespace(repo=str(repo), task_id=tid, reopen=False))
+            f2.write_text("package com.demo\nclass GenderUseCase { fun run() = 2 }\n", encoding="utf-8")
+
+            r2 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id=tid, host="antigravity"))
+            r2_policy_path = Path(r2["policy"])
+            r2_policy = read_json(r2_policy_path)
+            r2_manifest = read_json(Path(r2["manifest"]))
+            updated_plan = read_json(p_path)
+            self.assertIn("app/src/main/java/com/demo/GenderUseCase.kt", updated_plan["expected_files"])
+            self.assertIsNotNone(r2_policy.get("fix_delta"))
+
+            # Exact `run_device.py` / `final_verifier.py` check that previously failed at L576 MUST PASS!
+            exp_pol, pol_err, pol_state = validate_policy_artifact(
+                repo,
+                updated_plan,
+                r2_policy,
+                workflow.state_root(repo),
+                r2_policy_path,
+                current_change_set=r2_manifest["change_set_sha256"],
+                task_changes=r2_manifest.get("task_changes"),
+            )
+            self.assertIsNone(pol_err, f"Round-2 policy validation failed: {pol_err}")
+            self.assertEqual("PASS", pol_state)
+            self.assertEqual(r2_policy, exp_pol)
+
+            # Diagnostic clarity check: if a key is tampered (with recomputed sha), mismatched keys are named!
+            tampered = dict(r2_policy)
+            tampered["max_review_rounds"] = 99
+            tampered["policy_sha256"] = canonical_sha256({k: v for k, v in tampered.items() if k != "policy_sha256"})
+            _, err_msg, _ = validate_policy_artifact(
+                repo,
+                updated_plan,
+                tampered,
+                workflow.state_root(repo),
+                r2_policy_path,
+                current_change_set=r2_manifest["change_set_sha256"],
+                task_changes=r2_manifest.get("task_changes"),
+            )
+            self.assertIn("policy artifact does not match deterministic policy evaluation", err_msg or "")
+            self.assertIn("max_review_rounds", err_msg or "")
+
+    def test_v1319_02_parallel_scout_wave_coalescing_and_ask_question_turn_reset(self):
+        from unittest.mock import patch
+        import delegation_policy as dp
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True, exist_ok=True)
+            tx_dir = repo / "brain" / "conv-a3c4" / ".system_generated" / "logs"
+            tx_dir.mkdir(parents=True, exist_ok=True)
+            parent_tx = tx_dir / "transcript_full.jsonl"
+
+            # Turn 1: User request + 1 PLANNER_RESPONSE emitting 3 parallel single-item `invoke_subagent` calls
+            rows = [
+                {"source": "USER_EXPLICIT", "type": "USER_INPUT", "created_at": "2026-11-16T09:55:47Z", "content": "Audit unused code"},
+                {
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "created_at": "2026-11-16T09:56:50Z",
+                    "tool_calls": [
+                        {"name": "invoke_subagent", "args": {"TypeName": "harness-scout-agent", "Prompt": "Audit onboarding slice 1 files"}},
+                        {"name": "invoke_subagent", "args": {"TypeName": "harness-scout-agent", "Prompt": "Audit foodplans slice 2 files"}},
+                        {"name": "invoke_subagent", "args": {"TypeName": "harness-scout-agent", "Prompt": "Audit domain/data slice 3 files"}},
+                    ],
+                },
+            ]
+            parent_tx.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+            with patch("delegation_policy.resolve_transcript", side_effect=lambda cid: parent_tx if cid == "conv-a3c4" else None):
+                for idx in range(3):
+                    ok, reason, code = dp.validate_utility_dispatch(
+                        repo,
+                        None,
+                        [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": f"Audit unused code slice {idx} in repo"}],
+                        parent_conversation_id="conv-a3c4",
+                    )
+                    self.assertTrue(ok, f"Parallel scout #{idx+1} denied: {reason}")
+                    self.assertEqual("UTILITY_SUBAGENT_ALLOWED", code)
+
+                entries = dp._load_utility_ledger(repo)["entries"]
+                wave_ids = {e["wave_id"] for e in entries}
+                self.assertEqual(1, len(wave_ids), f"3 parallel scout calls in 1 PLANNER_RESPONSE must share 1 wave_id, got {wave_ids}")
+
+                # A 4th scout in the SAME parallel PLANNER_RESPONSE must hit SCOUT_BATCH_CAP (3-scout parallel cap)
+                ok4, _, code4 = dp.validate_utility_dispatch(
+                    repo,
+                    None,
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Audit extra 4th parallel slice"}],
+                    parent_conversation_id="conv-a3c4",
+                )
+                self.assertFalse(ok4)
+                self.assertEqual("SCOUT_BATCH_CAP", code4)
+
+                # Lead asks `ask_question` and developer answers (GENERIC non-error event) -> turn count advances & Wave 2 succeeds!
+                rows.extend([
+                    {"source": "MODEL", "type": "PLANNER_RESPONSE", "created_at": "2026-11-16T10:01:21Z", "tool_calls": [{"name": "ask_question", "args": {"questions": []}}]},
+                    {"source": "MODEL", "type": "GENERIC", "status": "DONE", "created_at": "2026-11-16T10:02:57Z", "content": "A1: Clean all unused code"},
+                    {"source": "MODEL", "type": "PLANNER_RESPONSE", "created_at": "2026-11-16T10:02:58Z", "tool_calls": [{"name": "invoke_subagent", "args": {"TypeName": "harness-scout-agent"}}]},
+                ])
+                parent_tx.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+                self.assertEqual(2, dp._count_parent_user_turns("conv-a3c4"))
+                self.assertEqual(("", ""), dp.pending_post_subagent_directive(repo, "conv-a3c4"))
+                ok_w2, reason_w2, _ = dp.validate_utility_dispatch(
+                    repo,
+                    None,
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Audit remaining unread onboarding files"}],
+                    parent_conversation_id="conv-a3c4",
+                )
+                self.assertTrue(ok_w2, reason_w2)
+
+    def test_v1319_03_scout_safe_git_grep_ls_files_and_prompt_hygiene(self):
+        import delegation_policy as dp
+
+        self.assertTrue(dp.scout_command_allowed('git grep -n -E "popWarningConfirm|sufferFromDiseasesUi"'))
+        self.assertTrue(dp.scout_command_allowed('git grep -no "enqueue" app/src'))
+        self.assertTrue(dp.scout_command_allowed("git ls-files app/src/main/java/com/madarsoft/fitness/data"))
+        self.assertTrue(dp.scout_command_allowed("git log --oneline b86e16eaa9^..HEAD"))
+        self.assertFalse(dp.scout_command_allowed('git grep -Ovim "foo"'))
+        self.assertFalse(dp.scout_command_allowed('git grep -nOvim "foo"'))
+        self.assertFalse(dp.scout_command_allowed('git grep --open-files-in-pager "foo"'))
+        self.assertFalse(dp.scout_command_allowed('git log ^HEAD; g^it pu^sh'))
+
+        scout_prompt = dp.UTILITY_AGENT_SPECS[dp.SCOUT_AGENT]["system_prompt"]
+        self.assertIn("NEVER read `.agents/cache/project_graph.json` directly", scout_prompt)
+        self.assertIn("git grep -n", scout_prompt)
+
+    def test_v1319_04_git_parent_caret_and_zero_io_file_mutation_fast_path(self):
+        from unittest import mock
+        import change_classifier
+        import mutation_guard as mg
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            self.assertTrue(mg.command_allowed(repo, "git log --first-parent --oneline b86e16eaa9^..HEAD")[0])
+            self.assertTrue(mg.command_allowed(repo, "git diff --name-status b86e16eaa9^ HEAD")[0])
+            self.assertTrue(mg.command_allowed(repo, "git show HEAD^2")[0])
+            self.assertTrue(mg.command_allowed(repo, "git rev-list HEAD^{tree}")[0])
+            # Security invariants MUST remain strictly denied
+            self.assertFalse(mg.command_allowed(repo, "git log ^HEAD; g^it pu^sh")[0])
+            self.assertFalse(mg.command_allowed(repo, "git log x ^& calc")[0])
+            self.assertFalse(mg.command_allowed(repo, "git log ^--output=evil")[0])
+            self.assertFalse(mg.command_allowed(repo, "git checkout b86e16eaa9^")[0])
+
+            # Zero-I/O fast path on approved expected_files: neither classify() nor _is_tracked() may touch disk/git!
+            import argparse
+            import subprocess as _sp
+            import workflow
+            _sp.run(["git", "init", "-q"], cwd=str(repo), check=True)
+            _sp.run(["git", "config", "user.email", "dev@example.com"], cwd=str(repo), check=True)
+            _sp.run(["git", "config", "user.name", "Dev"], cwd=str(repo), check=True)
+            (repo / ".agents").mkdir(parents=True, exist_ok=True)
+            (repo / ".agents/VERSION").write_text((Path(__file__).resolve().parents[2] / "agents/VERSION").read_text(encoding="utf-8"), encoding="utf-8")
+            shutil.copytree(Path(__file__).resolve().parents[2] / "agents/skills", repo / ".agents/skills")
+            target_rel = "app/src/main/java/com/demo/GenderUseCase.kt"
+            f_t = repo / target_rel
+            f_t.parent.mkdir(parents=True, exist_ok=True)
+            f_t.write_text("package com.demo\nclass GenderUseCase\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            _sp.run(["git", "add", "."], cwd=str(repo), check=True)
+            _sp.run(["git", "commit", "-qm", "init"], cwd=str(repo), check=True)
+
+            d_res = workflow.draft(argparse.Namespace(
+                repo=str(repo),
+                task_id="fast-io-check",
+                outcome="Clean unused parameter in GenderUseCase",
+                kind="REFACTOR",
+                expected_files=target_rel,
+                expected_surfaces="BUSINESS_LOGIC",
+                expected_modules=":app",
+                test_strategy="none",
+                approach="Clean unused parameter.",
+                risks="None.",
+                device_strategy="Verify launch.",
+                phases=None,
+                adopt_dirty=False,
+                arch_intent="REFACTOR",
+                module_placement=":app",
+                dependency_direction="domain",
+                state_ownership="GenderUseCase",
+                pattern="UseCase",
+                new_abstractions="none",
+            ))
+            workflow.record_approval(argparse.Namespace(
+                repo=str(repo),
+                task_id="fast-io-check",
+                source="conversation",
+                proof_reference="approve",
+                enforcement_tier="RULE_ENFORCED",
+                plan_hash=d_res["plan_sha256"][:12],
+                approval_token=None,
+            ))
+
+            with mock.patch.object(change_classifier, "classify", side_effect=AssertionError("classify() must not touch target file on Zero-I/O fast path")), \
+                 mock.patch.object(mg, "_is_tracked", side_effect=AssertionError("_is_tracked() must not spawn git on Zero-I/O fast path")):
+                ok_edit, _, code_edit = mg.file_mutation_allowed(repo, targets=[target_rel])
+                self.assertTrue(ok_edit)
+                self.assertEqual("FILE_MUTATION_ALLOWED", code_edit)
+
+    def test_v1319_05_post_review_reread_unblocks_on_fresh_user_input_and_multi_daemon_align(self):
+        from unittest.mock import patch
+        import delegation_policy as dp
+        from _live_process import resolve_compatible_windows_daemon_alignment
+
+        # A) Post-review reread guard: blocks before new USER_INPUT, unblocks immediately when developer sends follow-up!
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            import subprocess as _sp2
+            _sp2.run(["git", "init", "-q"], cwd=str(repo), check=True)
+            _sp2.run(["git", "config", "user.email", "dev@example.com"], cwd=str(repo), check=True)
+            _sp2.run(["git", "config", "user.name", "Dev"], cwd=str(repo), check=True)
+            _sp2.run(["git", "commit", "--allow-empty", "-qm", "init"], cwd=str(repo), check=True)
+            import review_orchestrator as ro
+            from plan_authority import create_plan, save_plan
+            tid = "t-post-rev"
+            t_dir = repo / ".agents/state/tasks" / tid
+            (t_dir / "review-execution/run-1").mkdir(parents=True, exist_ok=True)
+            p_obj = create_plan(
+                repo,
+                task_id=tid,
+                requested_outcome="Clean unused parameter",
+                expected_surfaces=["BUSINESS_LOGIC"],
+                expected_modules=[":app"],
+                expected_files=["app/src/main/java/com/demo/Worker.kt"],
+                task_kind="REFACTOR",
+                base_manifest={
+                    "delivery_snapshot_sha256": "0" * 64,
+                    "change_set_sha256": "0" * 64,
+                    "repository": {"root_sha256": "0" * 64, "git_common_dir_sha256": "0" * 64, "branch": "main", "head": "0" * 40},
+                    "files": [],
+                },
+            )
+            p_obj["status"] = "VERIFYING"
+            p_obj["verification_run_id"] = "run-1"
+            save_plan(t_dir / "plan.json", p_obj)
+            (repo / ".agents/state/active-task.json").write_text(json.dumps({"task_id": tid, "plan_path": str(t_dir / "plan.json")}), encoding="utf-8")
+            snap_sha = "a" * 64
+            cs_sha = "b" * 64
+            (t_dir / "current-run.json").write_text(json.dumps({
+                "task_id": tid,
+                "run_id": "run-1",
+                "review_host": "antigravity",
+                "delivery_snapshot_sha256": snap_sha,
+                "change_set_sha256": cs_sha,
+                "created_at": "2026-11-16T10:43:00Z",
+            }), encoding="utf-8")
+            ledger_doc = {
+                "schema_version": 2,
+                "task_id": tid,
+                "run_id": "run-1",
+                "delivery_snapshot_sha256": snap_sha,
+                "change_set_sha256": cs_sha,
+                "review_package_sha256": "c" * 64,
+                "host": "antigravity",
+                "updated_at": "2026-11-16T10:46:08Z",
+                "reviewers": {
+                    "arch-regression-reviewer-agent": {
+                        "state": "INGESTED",
+                        "verdict": "PASS",
+                        "findings": [],
+                        "completed_at": "2026-11-16T10:46:08Z",
+                    },
+                },
+            }
+            ro.save_ledger(t_dir, "run-1", ledger_doc)
+            src_file = repo / "app/src/main/java/com/demo/Worker.kt"
+            src_file.parent.mkdir(parents=True, exist_ok=True)
+            src_file.write_text("class Worker\n", encoding="utf-8")
+
+            tx_p = repo / "brain/c-lead/.system_generated/logs/transcript_full.jsonl"
+            tx_p.parent.mkdir(parents=True, exist_ok=True)
+            tx_p.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "created_at": "2026-11-16T09:55:47Z", "content": "Initial task"}) + "\n", encoding="utf-8")
+
+            with patch("delegation_policy.resolve_transcript", return_value=tx_p):
+                ok_before, _, code_before = dp.check_post_reviewer_reread_guard(
+                    repo, "c-lead", tool_name="read_file", args={"Path": str(src_file)},
+                )
+                self.assertFalse(ok_before)
+                self.assertEqual("POST_REVIEW_REREAD_BLOCKED", code_before)
+
+                # Developer sends follow-up USER_INPUT at 10:46:55Z (> 10:46:08Z)
+                with tx_p.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "created_at": "2026-11-16T10:46:55Z", "content": "Parameter userRepository is never used"}) + "\n")
+                ok_after, _, _ = dp.check_post_reviewer_reread_guard(
+                    repo, "c-lead", tool_name="read_file", args={"Path": str(src_file)},
+                )
+                self.assertTrue(ok_after, "Fresh developer USER_INPUT after PASS reviews must allow Lead inspection")
+
+        # B) Multi-daemon Windows Gradle alignment (`1 busy` JBR + `1 incompatible` Adoptium-17 matching `JAVA_HOME`)
+        with tempfile.TemporaryDirectory() as td2:
+            root = Path(td2)
+            proj = root / "proj"
+            gu_home = root / "gradle_home"
+            jbr = root / "Android Studio/jbr"
+            adopt17 = root / "jdks/eclipse_adoptium-17"
+            (proj / "gradle/wrapper").mkdir(parents=True)
+            (proj / "gradle/wrapper/gradle-wrapper.properties").write_text(
+                "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip\n", encoding="utf-8",
+            )
+            for jdk in (jbr, adopt17):
+                (jdk / "bin").mkdir(parents=True)
+                (jdk / "bin/java.exe").write_text("", encoding="utf-8")
+                (jdk / "bin/java").write_text("", encoding="utf-8")
+            d_dir = gu_home / "daemon/8.9"
+            d_dir.mkdir(parents=True)
+            (d_dir / "daemon-3001.out.log").write_text(
+                f"DefaultDaemonContext[uid=a,javaHome={jbr},pid=3001,daemonOpts=-Xmx4g,-Dfile.encoding=UTF-8,-Duser.country=US]\nState transition: Busy\n",
+                encoding="utf-8",
+            )
+            (d_dir / "daemon-3002.out.log").write_text(
+                f"DefaultDaemonContext[uid=b,javaHome={adopt17},pid=3002,daemonOpts=-Xmx4g,-Dfile.encoding=UTF-8,-Duser.country=EG,-Duser.language=en]\nState transition: Idle\n",
+                encoding="utf-8",
+            )
+            # Case 1: JAVA_HOME matches adopt17 -> aligns immutable_opts to adopt17 even when jbr is also alive!
+            jh1, opts1 = resolve_compatible_windows_daemon_alignment(
+                proj, {"GRADLE_USER_HOME": str(gu_home), "JAVA_HOME": str(adopt17)},
+                os_name="nt", pid_alive_fn=lambda pid: pid in {3001, 3002},
+            )
+            self.assertEqual(str(adopt17), jh1)
+            self.assertIn("-Duser.country=EG", opts1)
+            # Case 2: JAVA_HOME unset -> picks the single Idle daemon (adopt17) over the Busy daemon (jbr)!
+            jh2, opts2 = resolve_compatible_windows_daemon_alignment(
+                proj, {"GRADLE_USER_HOME": str(gu_home)},
+                os_name="nt", pid_alive_fn=lambda pid: pid in {3001, 3002},
+            )
+            self.assertEqual(str(adopt17), jh2)
+            self.assertIn("-Dfile.encoding=UTF-8", opts2)
+
+    @staticmethod
+    def _init_mini_git_repo(repo: Path) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=str(repo), check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True)
+        (repo / "settings.gradle.kts").write_text("include(\":app\")\n", encoding="utf-8")
+        (repo / "app").mkdir(parents=True, exist_ok=True)
+        (repo / "app/build.gradle.kts").write_text("plugins {}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=str(repo), check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(repo), check=True)
+
+    def test_v1319_06_empty_subagent_terminal_payload_guard_201209(self) -> None:
+        """Verify #201209: DONE subagent transcripts with empty/tiny payload fail fast as recoverable EMPTY_SUBAGENT_TERMINAL_RESPONSE."""
+        import unittest.mock
+        import delegation_policy as dp
+        import record_review as rr
+        import review_orchestrator as ro
+        import workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            self._init_mini_git_repo(repo)
+            brain = root / "appdata" / "brain"
+            brain.mkdir(parents=True, exist_ok=True)
+
+            with unittest.mock.patch.dict(os.environ, {"APPDATA": str(root / "appdata"), "HARNESS_BRAIN_ROOT": str(brain)}, clear=False):
+                # A. Reviewer transcript marked DONE with empty content -> raises EMPTY_SUBAGENT_TERMINAL_RESPONSE immediately
+                rev_cid = "rev-empty-done-201209"
+                rev_tx = brain / rev_cid / ".system_generated" / "logs" / "transcript.jsonl"
+                rev_tx.parent.mkdir(parents=True, exist_ok=True)
+                rev_tx.write_text(
+                    json.dumps({"source": "USER", "type": "USER_INPUT", "content": "Review package"}) + "\n"
+                    + json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "", "output_tokens": 8}) + "\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(rr.ValidationError) as ctx_rr:
+                    rr._extract_transcript_response(rev_tx)
+                self.assertIn("EMPTY_SUBAGENT_TERMINAL_RESPONSE", str(ctx_rr.exception))
+
+                # B. Scout wave with DONE + empty payload marks dispatch_failed=True without locking Lead under anti-reread
+                parent_cid = "lead-empty-scout-201209"
+                parent_tx = brain / parent_cid / ".system_generated" / "logs" / "transcript.jsonl"
+                parent_tx.parent.mkdir(parents=True, exist_ok=True)
+                prompt_s = "Sweep onboarding screens and viewmodels across feature modules with full detail"
+                parent_tx.write_text(
+                    json.dumps({"source": "USER", "type": "USER_INPUT", "content": "Check onboarding"}) + "\n"
+                    + json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "toolCalls": [{"name": "invoke_subagent"}]}) + "\n",
+                    encoding="utf-8",
+                )
+                tx_lookup = {
+                    parent_cid: parent_tx,
+                    "scout-empty-done-201209": brain / "scout-empty-done-201209" / ".system_generated" / "logs" / "transcript.jsonl",
+                }
+                with unittest.mock.patch("delegation_policy.resolve_transcript", side_effect=lambda cid: tx_lookup.get(cid)):
+                    ok_s, reason_s, _code_s = dp.validate_utility_dispatch(
+                        repo,
+                        None,
+                        [{
+                            "TypeName": "harness-scout-agent",
+                            "Role": "harness-scout-agent",
+                            "Prompt": prompt_s,
+                            "Workspace": "inherit",
+                        }],
+                        parent_conversation_id=parent_cid,
+                    )
+                    self.assertTrue(ok_s, reason_s)
+
+                scout_cid = "scout-empty-done-201209"
+                scout_tx = brain / scout_cid / ".system_generated" / "logs" / "transcript.jsonl"
+                scout_tx.parent.mkdir(parents=True, exist_ok=True)
+                scout_tx.write_text(
+                    json.dumps({
+                        "source": "SYSTEM_SDK",
+                        "type": "SYSTEM_MESSAGE",
+                        "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={prompt_s}\n</SYSTEM_MESSAGE>",
+                    }) + "\n"
+                    + json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "   ", "output_tokens": 3}) + "\n",
+                    encoding="utf-8",
+                )
+                with unittest.mock.patch("delegation_policy.resolve_transcript", side_effect=lambda cid: tx_lookup.get(cid)):
+                    dp.bind_utility_from_post_tool(
+                        repo,
+                        {
+                            "conversationId": parent_cid,
+                            "transcriptPath": str(parent_tx),
+                            "toolCall": {"name": "invoke_subagent"},
+                            "toolResult": {"subagents": [{"conversationId": scout_cid}]},
+                        },
+                    )
+                ledger = dp._load_utility_ledger(repo)
+                entry = ledger["entries"][-1]
+                self.assertTrue(entry.get("dispatch_failed"), entry)
+                self.assertEqual("EMPTY_SUBAGENT_TERMINAL_RESPONSE", entry.get("failure_code"))
+                self.assertFalse(entry.get("wave_completed"), entry)
+
+    def test_v1319_07_sir_flash_lite_hygiene_and_preamble_immunity_201208(self) -> None:
+        """Verify #201209 & #201208: zero `edit_file`, zero CLI `git diff --check`, and zero generic SWE boilerplate preambles in templates."""
+        kit_root = Path(__file__).resolve().parents[2]
+        gemini_tpl = (kit_root / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        self.assertNotIn("edit_file", gemini_tpl)
+        self.assertNotIn("git diff --check", gemini_tpl)
+        self.assertNotIn("The user will primarily request you perform software engineering tasks", gemini_tpl)
+        self.assertLess(len(gemini_tpl), 40000)
+
+        for sub_json in (kit_root / "agents" / "subagents").glob("*.json"):
+            raw = sub_json.read_text(encoding="utf-8")
+            self.assertNotIn("git diff --check", raw, sub_json.name)
+            self.assertNotIn("The user will primarily request you perform software engineering tasks", raw, sub_json.name)
+
+    def test_v1319_08_interactive_human_review_cockpit_and_cli(self) -> None:
+        """Verify Interactive Human Review Cockpit (`human-review.html` & `harness.py review-diff`): isolation, layer order, triage, blast-radius callers, X-Ray, and side-effect detection."""
+        import argparse
+        from _vnext_common import atomic_write_json
+        import human_review_cockpit as hrc
+        import review_orchestrator as ro
+        import workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            self._init_mini_git_repo(repo)
+            # Install minimal `.agents` bridge for CLI test
+            kit_root = Path(__file__).resolve().parents[2]
+            shutil.copytree(kit_root / "agents", repo / ".agents", ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "state", "cache"))
+
+            # Seed project files across Clean Architecture layers + an untouched caller + an unrelated dirty file
+            domain_f = repo / "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt"
+            vm_f = repo / "app/src/main/java/com/demo/presentation/FoodPlanViewModel.kt"
+            ui_f = repo / "app/src/main/java/com/demo/ui/FoodPlanFragment.kt"
+            caller_f = repo / "app/src/main/java/com/demo/ui/HomeDashboardFragment.kt"
+            dirty_unrelated = repo / "app/src/main/java/com/demo/DirtyScratch.kt"
+            str_f = repo / "app/src/main/res/values/strings.xml"
+            test_f = repo / "app/src/test/java/com/demo/FoodPlanViewModelTest.kt"
+
+            for fp, content in [
+                (domain_f, "package com.demo.domain\nclass StartFoodPlansUseCase { fun executePlan(fromOnboarding: Boolean = false): Boolean = fromOnboarding }\n"),
+                (vm_f, "package com.demo.presentation\nclass FoodPlanViewModel(private val uc: com.demo.domain.StartFoodPlansUseCase) { fun onStartClicked() { uc.executePlan() } }\n"),
+                (ui_f, "package com.demo.ui\nclass FoodPlanFragment { fun openScreen() {} }\n"),
+                (caller_f, "package com.demo.ui\nclass HomeDashboardFragment(private val uc: com.demo.domain.StartFoodPlansUseCase) { fun openFromHome() { uc.executePlan() } }\n"),
+                (dirty_unrelated, "package com.demo\nclass DirtyScratch { val x = 1 }\n"),
+                (str_f, "<resources><string name=\"app_name\">Demo</string></resources>\n"),
+                (test_f, "package com.demo\nclass FoodPlanViewModelTest { fun testOne() {} }\n"),
+            ]:
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(content, encoding="utf-8")
+
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "seed architecture"], cwd=str(repo), check=True, capture_output=True)
+
+            # Dirty `DirtyScratch.kt` BEFORE drafting the task so baseline isolation must exclude it!
+            dirty_unrelated.write_text("package com.demo\nclass DirtyScratch { val x = 999 /* pre-existing dirty edit */ }\n", encoding="utf-8")
+
+            tid = "cockpit-demo-task"
+            d_res = workflow.draft(argparse.Namespace(
+                repo=str(repo),
+                task_id=tid,
+                outcome="Update StartFoodPlansUseCase onboarding navigation and ViewModel flow",
+                kind="FEATURE",
+                expected_files="app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt,app/src/main/java/com/demo/presentation/FoodPlanViewModel.kt,app/src/main/res/values/strings.xml,app/src/test/java/com/demo/FoodPlanViewModelTest.kt",
+                expected_surfaces="BUSINESS_LOGIC,LOCALIZATION",
+                modules=":app",
+                phases=None,
+                approach="Clean architecture flow",
+                risks="Caller default parameter behavior",
+                device_strategy="Unit tests",
+                allow_sensitive=False,
+                adopt_dirty=False,
+                from_task=None,
+            ))
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents" / "harness.py"),
+                    "task", "approve", "--repo", str(repo), "--task-id", tid,
+                    "--source", "conversation", "--proof-reference", "Proceed approved",
+                    "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", d_res["plan_sha256"],
+                ],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+
+            # Snapshot initial plan into plan-history to simulate an extra side-effect file (`FoodPlanFragment.kt`) absorbed later
+            t_dir = workflow.task_dir(repo, tid)
+            hist_dir = t_dir / "plan-history"
+            hist_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(t_dir / "plan.json", hist_dir / f"{d_res['plan_sha256']}.json")
+
+            # Modify task files (including side-effect `ui_f`, leaving `caller_f` untouched!)
+            domain_f.write_text(
+                "package com.demo.domain\nclass StartFoodPlansUseCase {\n"
+                "    fun executePlan(fromOnboarding: Boolean = true, paymentRequired: Boolean = false): Boolean {\n"
+                "        if (paymentRequired) return false\n"
+                "        return fromOnboarding\n"
+                "    }\n}\n",
+                encoding="utf-8",
+            )
+            vm_f.write_text(
+                "package com.demo.presentation\nclass FoodPlanViewModel(private val uc: com.demo.domain.StartFoodPlansUseCase) {\n"
+                "    fun onStartClicked() { if (uc.executePlan(fromOnboarding = true)) { /*MutableStateFlow*/ } }\n}\n",
+                encoding="utf-8",
+            )
+            ui_f.write_text(
+                "package com.demo.ui\nclass FoodPlanFragment { fun openScreen() { findNavController() } }\n",
+                encoding="utf-8",
+            )
+            str_f.write_text("<resources><string name=\"app_name\">Demo2</string></resources>\n", encoding="utf-8")
+            test_f.write_text("package com.demo\nclass FoodPlanViewModelTest { fun testOne() { assert(true) } }\n", encoding="utf-8")
+
+            # Seed a Round 1 resolved finding + Round 2 LOW advisory finding for AI Review X-Ray
+            r1_res = t_dir / "review-execution" / "run-1" / "results"
+            r2_res = t_dir / "review-execution" / "run-2" / "results"
+            r1_res.mkdir(parents=True, exist_ok=True)
+            r2_res.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(r1_res / "bug-test-reviewer-agent.json", {
+                "reviewer": "bug-test-reviewer-agent",
+                "result": {
+                    "verdict": "CHANGES_REQUESTED",
+                    "findings": [{
+                        "severity": "HIGH",
+                        "title": "Check default onboarding flag",
+                        "description": "Verify HomeDashboardFragment caller behavior.",
+                        "file": "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt",
+                        "line": 3,
+                    }],
+                },
+            })
+            atomic_write_json(r2_res / "bug-test-reviewer-agent.json", {
+                "reviewer": "bug-test-reviewer-agent",
+                "result": {
+                    "verdict": "PASS",
+                    "findings": [{
+                        "severity": "LOW",
+                        "title": "Optional KDoc suggestion",
+                        "description": "Consider documenting paymentRequired param.",
+                        "file": "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt",
+                        "line": 3,
+                    }],
+                },
+            })
+
+            # Invoke via public CLI `python .agents/harness.py review-diff --task-id <tid> --json`
+            cli_proc = subprocess.run(
+                [sys.executable, str(repo / ".agents" / "harness.py"), "review-diff", "--task-id", tid, "--json"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            summary = json.loads(cli_proc.stdout)
+            self.assertEqual(tid, summary["task_id"])
+            # 1. Pre-existing dirty file `DirtyScratch.kt` MUST NOT appear in isolated task review!
+            ordered_paths = [item["path"] for item in summary["ordered_files"]]
+            self.assertNotIn("app/src/main/java/com/demo/DirtyScratch.kt", ordered_paths)
+            # 2. Narrative Clean Architecture ordering: DOMAIN -> VIEWMODEL -> UI_NAV -> RESOURCES_CONFIG -> TESTS
+            layers = [item["layer"] for item in summary["ordered_files"]]
+            self.assertEqual(["DOMAIN", "VIEWMODEL", "UI_NAV", "RESOURCES_CONFIG", "TESTS"], layers)
+            # 3. Hotspots vs Auto-Collapsed Boilerplate triage
+            triage_by_layer = {item["layer"]: item["triage"] for item in summary["ordered_files"]}
+            self.assertEqual("HOTSPOT", triage_by_layer["DOMAIN"])
+            self.assertEqual("HOTSPOT", triage_by_layer["UI_NAV"])
+            self.assertEqual("AUTO_COLLAPSED", triage_by_layer["RESOURCES_CONFIG"])
+            self.assertEqual("AUTO_COLLAPSED", triage_by_layer["TESTS"])
+            # 4. Unmodified Blast-Radius Callers radar catches `HomeDashboardFragment.kt`!
+            html_content = Path(summary["html_path"]).read_text(encoding="utf-8")
+            self.assertGreaterEqual(summary["blast_radius_callers_count"], 1)
+            self.assertIn("HomeDashboardFragment.kt", html_content)
+            self.assertNotIn("DirtyScratch.kt", html_content)
+            # 5. Side-Effect detector flags `FoodPlanFragment.kt`!
+            self.assertEqual(1, summary["side_effect_files_count"])
+            self.assertIn("Side-Effect / Extra-Scope Files Outside Initial Plan", html_content)
+            # 6. AI Review X-Ray shows both RESOLVED_IN_LATER_ROUND and LOW ADVISORY + surgical reopen command
+            self.assertIn("RESOLVED_IN_LATER_ROUND", html_content)
+            self.assertIn("Optional KDoc suggestion", html_content)
+            self.assertIn("task resume --repo . --task-id cockpit-demo-task --reopen", html_content)
+            self.assertIn("toggleLanguage()", html_content)
+            self.assertIn("toggleReviewed(", html_content)
+            self.assertTrue(all(bool(item.get("why_en")) and bool(item.get("why_ar")) for item in summary["ordered_files"]))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
