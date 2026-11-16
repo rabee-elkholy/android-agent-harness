@@ -2906,6 +2906,23 @@ def _compact_plan_json_for_cli_stdout(payload: dict) -> dict:
             if isinstance(hv, list) and len(hv) > 5:
                 ac_copy[heavy_k] = [*hv[:5], f"<+{len(hv) - 5} items stored in plan.json>"]
         out["architecture_contract"] = ac_copy
+    dbg_ev = out.get("debug_evidence")
+    if isinstance(dbg_ev, list) and len(dbg_ev) > 4:
+        out["debug_evidence"] = [*dbg_ev[-3:], f"<+{len(dbg_ev) - 3} earlier debug_evidence entries stored in plan.json>"]
+    elif isinstance(dbg_ev, dict) and isinstance(dbg_ev.get("entries"), list) and len(dbg_ev["entries"]) > 4:
+        out["debug_evidence"] = {
+            **dbg_ev,
+            "entries": [*dbg_ev["entries"][-3:], f"<+{len(dbg_ev['entries']) - 3} earlier entries stored in plan.json>"],
+        }
+    for nested_k in ("plan", "updated_plan", "merged_plan", "active_plan", "previous_task", "brief"):
+        nested_v = out.get(nested_k)
+        if isinstance(nested_v, dict) and (
+            "base_file_identities" in nested_v
+            or "base_change_identities" in nested_v
+            or "task_baseline" in nested_v
+            or "architecture_contract" in nested_v
+        ):
+            out[nested_k] = _compact_plan_json_for_cli_stdout(nested_v)
     return out
 
 
@@ -3618,7 +3635,10 @@ def status(args: argparse.Namespace) -> dict:
         compact = {key: _compact_for_host(plan[key]) for key in last}
         plan = {**{k: v for k, v in plan.items() if k not in last}, **compact}
         # Strip heavy baseline/history arrays when querying --next so output never balloons to 40,000+ lines
-        for heavy_key in ("baseline", "plan_history", "history", "verification_recipes"):
+        for heavy_key in (
+            "baseline", "task_baseline", "base_file_identities", "base_change_identities",
+            "plan_history", "history", "verification_recipes",
+        ):
             plan.pop(heavy_key, None)
     if bool(getattr(args, "brief", False)):
         keys = ("task_id", "status", "plan_sha256", "review_rounds", "review_calls_used", "verification_run_id", "next_action")
@@ -4463,6 +4483,19 @@ def _with_planned_file_surfaces(
     if any(is_kmp_or_android_test_path(path) for path in files):
         expected = sorted(set(expected) | {"TEST_ONLY"})
     from_content, _unread = _planned_file_surfaces(repo, files)
+    if "SENSITIVE_DATA" not in expected and re.search(
+        r"\b(location|gps|geofence|biometric|healthconnect)\b",
+        f"{outcome} {' '.join(files)}",
+        re.I,
+    ):
+        for _rel in files:
+            try:
+                _raw_s = set(classify(repo, task_changes=[{"path": _rel}], candidate_paths=[_rel], progress=False).get("surfaces") or [])
+            except (OSError, ValueError, KeyError, ValidationError):
+                _raw_s = set()
+            if "SENSITIVE_DATA" in _raw_s:
+                from_content = set(from_content) | {"SENSITIVE_DATA"}
+                break
     extra = sorted(from_content - set(expected))
     if not extra:
         return expected
@@ -4723,7 +4756,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.action == "prepare-verification":
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
         else:
             print(f"HARNESS_RUN_ID={result['run_id']}")
             print(f"HARNESS_DELIVERY_SNAPSHOT={result['delivery_snapshot_sha256']}")
@@ -4734,10 +4767,10 @@ def main(argv: list[str] | None = None) -> int:
                     for step in recipe["steps"]:
                         print(f"    - {step}")
     elif args.action in ("change-decision", "plan-note", "heal"):
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
     elif args.action == "plan-check":
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
         else:
             print(f"PLAN_READINESS_STATUS={result.get('status', 'READY')}")
             print(f"TASK_ID={result.get('task_id')} ({result.get('planning_depth')}, {result.get('risk_tier')})")
@@ -4747,7 +4780,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     elif args.action == "bridge":
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
         else:
             b_status = str(result.get("status") or "READY")
             print(f"TASK_STATUS={b_status}")
@@ -4812,10 +4845,10 @@ def main(argv: list[str] | None = None) -> int:
     elif args.action == "validate-finding":
         print(f"FINDING_VALIDATION_RECORDED={len(result.get('validations', []))}")
     elif args.action == "verify":
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
     elif args.action == "reconcile-delivery":
         if args.json:
-            print(json.dumps(result, ensure_ascii=False, indent=2))
+            print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
         else:
             if result.get("reconciled"):
                 print(f"RECONCILED={result.get('task_id')} -> DELIVERED")
@@ -4835,7 +4868,9 @@ def main(argv: list[str] | None = None) -> int:
             # A live run passed --json to draft and revise and got none of this, so the agent wrote the
             # approval question itself (no Cancel option, no files).
             lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
-            result = _compact_plan_json_for_cli_stdout({**result, "approval_material": "\n".join(lines)})
+            result = {**result, "approval_material": "\n".join(lines)}
+        if isinstance(result, dict):
+            result = _compact_plan_json_for_cli_stdout(result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         if args.action == "merge" and not args.apply:

@@ -1465,6 +1465,13 @@ def _complete_phase_review_locked(
 
     if current_st == REVIEW_COMPLETED:
         raise ValidationError(f"reviewer '{reviewer}' already completed; cannot be silently redispatched")
+    last_err_p = str(rev_entry.get("last_error") or "")
+    if (
+        current_st == REVIEW_ENV_BLOCKED
+        and last_err_p.startswith(("REVIEW_MODEL_UNVERIFIED:", "EMPTY_SUBAGENT_TERMINAL_RESPONSE", "TRUSTED_TRANSCRIPT_NO_MODEL_RESPONSE", "TRUSTED_TRANSCRIPT_NOT_FOUND", "TRUSTED_TRANSCRIPT_UNREADABLE"))
+        and rev_entry.get("execution_id") == execution_id
+    ):
+        current_st = REVIEW_DISPATCHED
     if current_st in (REVIEW_ENV_BLOCKED, REVIEW_FAILED_PROTOCOL):
         raise ValidationError(f"reviewer '{reviewer}' in failed state '{current_st}'; cannot be completed")
     if current_st not in (REVIEW_DISPATCHED, REVIEW_PROTOCOL_RETRY_REQUIRED):
@@ -1472,8 +1479,9 @@ def _complete_phase_review_locked(
             f"cannot complete phase review for '{reviewer}': state is '{current_st}', expected DISPATCHED or PROTOCOL_RETRY_REQUIRED"
         )
 
-    expected_sha = run_meta.get("package_sha256")
-    if package_sha256 and expected_sha and package_sha256 != expected_sha:
+    from review_orchestrator import _package_sha256_matches_or_single_repeat_typo
+    expected_sha = str(run_meta.get("package_sha256") or "")
+    if package_sha256 and expected_sha and not _package_sha256_matches_or_single_repeat_typo(package_sha256, expected_sha):
         raise ValidationError(f"package SHA-256 mismatch for phase review: expected {expected_sha}, got {package_sha256}")
 
     # Bind execution ID only after the supplied package identity is accepted.
@@ -1503,8 +1511,15 @@ def _complete_phase_review_locked(
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
             if err_code == "EMPTY_SUBAGENT_TERMINAL_RESPONSE":
-                attempts = int(rev_entry.get("protocol_attempts") or 0) + 1
+                empty_sig_p = f"EMPTY:{t_path.stat().st_size}" if ("t_path" in locals() and t_path and t_path.is_file()) else "EMPTY:0"
+                empty_sha_p = hashlib.sha256(empty_sig_p.encode("utf-8")).hexdigest()
+                prev_att_p = int(rev_entry.get("protocol_attempts") or 0)
+                if prev_att_p > 0 and str(rev_entry.get("last_protocol_response_sha256") or "") == empty_sha_p:
+                    attempts = prev_att_p
+                else:
+                    attempts = prev_att_p + 1
                 rev_entry["protocol_attempts"] = attempts
+                rev_entry["last_protocol_response_sha256"] = empty_sha_p
                 rev_entry["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED if attempts <= 1 else REVIEW_ENV_BLOCKED
                 rev_entry["last_error"] = (
                     "EMPTY_SUBAGENT_TERMINAL_RESPONSE: phase reviewer terminated with DONE and empty payload (#201209)"
@@ -1538,8 +1553,14 @@ def _complete_phase_review_locked(
                 expected_package_sha256=expected_sha,
             )
         except ValidationError as exc:
-            attempts = int(rev_entry.get("protocol_attempts") or 0) + 1
+            resp_sha_p = hashlib.sha256((raw_response or "").encode("utf-8", errors="replace")).hexdigest()
+            prev_att_m = int(rev_entry.get("protocol_attempts") or 0)
+            if prev_att_m > 0 and str(rev_entry.get("last_protocol_response_sha256") or "") == resp_sha_p:
+                attempts = prev_att_m
+            else:
+                attempts = prev_att_m + 1
             rev_entry["protocol_attempts"] = attempts
+            rev_entry["last_protocol_response_sha256"] = resp_sha_p
             rev_entry["last_error"] = str(exc)
             rev_entry["last_error_code"] = "MALFORMED_PROTOCOL_RESPONSE"
             if attempts <= 1:
@@ -2004,8 +2025,11 @@ def _main(argv: list[str] | None = None) -> int:
                 last_step = m_steps[-1] if m_steps else {}
                 if not last_step.get("content") or last_step.get("tool_calls"):
                     continue
-            res = complete_phase_review(repo, args.task_id, args.phase_id, r_role, eid, host=args.host or run_host)
-            completed_results.append(res)
+            try:
+                res = complete_phase_review(repo, args.task_id, args.phase_id, r_role, eid, host=args.host or run_host)
+                completed_results.append(res)
+            except ValidationError as p_exc:
+                completed_results.append({"status": "ERROR", "reviewer": r_role, "error": str(p_exc)})
 
         ok2, _, ledger2 = load_phase_ledger(tdir, args.phase_id, expected_run_id=run_meta.get("phase_review_run_id"))
         revs2 = (ledger2 or {}).get("reviewers") or {}

@@ -15,7 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
-    "heal", "plan-check", "plan-note", "bridge",
+    "heal", "plan-check", "plan-note", "bridge", "review-brief",
 })
 
 
@@ -208,6 +208,8 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
     print(f"NEXT_ACTION={code}: {command or '(no command: ' + str(action.get('kind') or 'action') + ')'}", flush=True)
     if action.get("reason"):
         print(f"NEXT_REASON={action['reason']}", flush=True)
+    if action.get("recovery_command"):
+        print(f"NEXT_RECOVERY_COMMAND={action['recovery_command']}", flush=True)
     if action.get("suggested_commit"):
         print(f"SUGGESTED_COMMIT={action['suggested_commit']}", flush=True)
     if action.get("instructions") and (action.get("tool") == "ask_question" or action.get("kind") == "DEVELOPER_ACTION"):
@@ -388,8 +390,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("maestro_bridge.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "diagnose-session":
         return _run("session_forensics.py", [*args, "--repo", str(REPO_ROOT)])
-    if command == "review-diff":
-        forwarded_rd = list(args)
+    if command == "review-diff" or (command == "task" and args and args[0] == "review-brief"):
+        forwarded_rd = list(args[1:] if command == "task" else args)
         if not {"-h", "--help"} & set(forwarded_rd) and "--repo" not in forwarded_rd and not any(a.startswith("--repo=") for a in forwarded_rd):
             forwarded_rd = ["--repo", str(REPO_ROOT), *forwarded_rd]
         return _run("human_review_cockpit.py", forwarded_rd)
@@ -435,7 +437,24 @@ def _main(argv: list[str] | None = None) -> int:
         sys.path.insert(0, str(SCRIPTS))
         import json
         from _public_commands import get_public_commands
-        print(json.dumps(get_public_commands(), indent=2, ensure_ascii=False))
+        cmds_list = get_public_commands()
+        kw = ""
+        for idx_c, tok_c in enumerate(args):
+            if tok_c in ("--filter", "--grep", "-k") and idx_c + 1 < len(args):
+                kw = args[idx_c + 1].strip().lower()
+                break
+            if not tok_c.startswith("-"):
+                kw = tok_c.strip().lower()
+                break
+        if kw:
+            cmds_list = [
+                row for row in cmds_list
+                if kw in str(row.get("command") or "").lower() or kw in str(row.get("description") or "").lower()
+            ]
+        if not cmds_list:
+            print("[]")
+        else:
+            print("[\n  " + ",\n  ".join(json.dumps(row, ensure_ascii=False) for row in cmds_list) + "\n]")
         return 0
     if command == "assemble":
         forwarded = list(args)

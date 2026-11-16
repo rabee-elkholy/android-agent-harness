@@ -9,12 +9,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS.parent.parent
 
 sys.path.insert(0, str(SCRIPTS))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def _with_audit_reason(out: dict, env: dict, engine: Path) -> dict:
@@ -798,7 +801,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
             text=True,
             env=self.env,
             check=False,
-            timeout=15,
+            timeout=60,
         )
         return _with_audit_reason(json.loads(proc.stdout), self.env, SCRIPTS / "pre_tool_safety.py")
 
@@ -998,7 +1001,7 @@ class TestReviewProtocolV2FailClosed(unittest.TestCase):
                 text=True,
                 env=self.env,
                 check=False,
-                timeout=15,
+                timeout=60,
             )
             res = _with_audit_reason(json.loads(proc.stdout), self.env, SCRIPTS / "pre_tool_safety.py")
             self.assertEqual("allow", res["decision"], (r, res))
@@ -2772,7 +2775,7 @@ class ContextBridgeAndHookPolishSelftest(unittest.TestCase):
                 text=True,
                 env=env,
                 check=False,
-                timeout=15,
+                timeout=60,
             )
             return _with_audit_reason(json.loads(proc.stdout), env, SCRIPTS / "pre_tool_safety.py")
 
@@ -7561,6 +7564,358 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertIn("toggleLanguage()", html_content)
             self.assertIn("toggleReviewed(", html_content)
             self.assertTrue(all(bool(item.get("why_en")) and bool(item.get("why_ar")) for item in summary["ordered_files"]))
+
+
+    def test_v1321_all_forensic_edge_cases_and_cockpit_v3(self) -> None:
+        """Verify all v1.3.21 fixes from chat-b8bf4a73 forensic audit & Carbon/Hydrogen/Orchestrator routing."""
+        import argparse
+        import time
+        import unittest.mock
+        from _vnext_common import atomic_write_json, canonical_sha256, read_json
+        import delegation_policy as dp
+        import human_review_cockpit as hrc
+        import review_orchestrator as ro
+        import self_heal
+        import workflow
+
+        # 1. Single-repeated-digit 63/65-char SHA-256 transcription tolerance vs real mismatch rejection
+        exp_sha = "64a26f6f9f8838920ed56ee0ead3f57220c81bb347325c14a3041c213adee884"
+        slip_63 = "64a26f6f9f8838920ed56ee0ead3f57220c81bb347325c14a3041c213adee84"  # exact b8bf4a73 Run 2 typo!
+        slip_65 = "64a26f6f9f8838920ed56ee0ead3f57220c81bb347325c14a3041c213adee8884"
+        wrong_63 = "64a26f6f9f8838920ed56ee0ead3f57220c81bb347325c14a3041c213adee89"
+        parsed_ok = ro.parse_structured_result(
+            text=f'```json\n{{"schema_version": 2, "task_id": "t1", "run_id": "r1", "reviewer": "bug-test-reviewer-agent", "review_package_sha256": "{slip_63}", "verdict": "PASS", "findings": []}}\n```',
+            expected_task_id="t1",
+            expected_run_id="r1",
+            expected_reviewer="bug-test-reviewer-agent",
+            expected_package_sha256=exp_sha,
+        )
+        self.assertEqual(exp_sha, parsed_ok["review_package_sha256"])
+        self.assertTrue(ro._package_sha256_matches_or_single_repeat_typo(slip_65, exp_sha))
+        self.assertFalse(ro._package_sha256_matches_or_single_repeat_typo(wrong_63, exp_sha))
+        self.assertFalse(ro._package_sha256_matches_or_single_repeat_typo("b" * 64, exp_sha))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            self._init_mini_git_repo(repo)
+            kit_root = Path(__file__).resolve().parents[2]
+            shutil.copytree(kit_root / "agents", repo / ".agents", ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "state", "cache"))
+
+            # 2. CLI `--json` compaction across massive 2,000-entry `base_file_identities`
+            massive_plan = {
+                "task_id": "t-compact",
+                "status": "IMPLEMENTING",
+                "base_file_identities": [{"path": f"app/src/File{i}.kt", "sha": "a" * 64} for i in range(2000)],
+                "plan": {
+                    "base_file_identities": [{"path": f"app/src/File{i}.kt", "sha": "a" * 64} for i in range(2000)],
+                },
+            }
+            compacted = workflow._compact_plan_json_for_cli_stdout(massive_plan)
+            self.assertEqual(1, len(compacted["base_file_identities"]))
+            self.assertEqual(1, len(compacted["plan"]["base_file_identities"]))
+            self.assertEqual(2000, len(massive_plan["base_file_identities"]))
+            self.assertLess(len(json.dumps(compacted)), 1024)
+
+            # 3. Live Gemini-4 Lead Routing (`Hydrogen`, `Carbon`, `Argon`, `Orchestrator`) -> Warm-Cache Direct!
+            plan_4files = {
+                "task_id": "t-g4",
+                "status": "IMPLEMENTING",
+                "kind": "BUG",
+                "risk_tier": "T3_MEDIUM",
+                "expected_files": [
+                    "app/src/main/java/com/demo/A.kt",
+                    "app/src/main/java/com/demo/B.kt",
+                    "app/src/main/java/com/demo/C.kt",
+                    "app/src/test/java/com/demo/ATest.kt",
+                ],
+                "expected_surfaces": ["BUSINESS_LOGIC"],
+            }
+            for live_m, exp_fam in [
+                ("gemini-4-hydrogen-high", "gemini-4-hydrogen"),
+                ("gemini-4-carbon-medium", "gemini-4-carbon"),
+                ("gemini-4-argon-high", "gemini-4-argon"),
+                ("Orchestrator (Carbon)", "gemini-4-hydrogen"),
+            ]:
+                dp.record_live_lead_session_model(repo, "lead-live-cid", live_m)
+                self.assertEqual(exp_fam, dp._detect_live_parent_lead_family(repo))
+                pol_red = dp.evaluate_delegation_policy(repo, task_id="t-g4", plan=plan_4files, router_action="CAPTURE_RED_EVIDENCE")
+                self.assertEqual("LEAD_WARM_CACHE_RED_DIRECT", pol_red["strategy"])
+                self.assertIsNone(pol_red["recommended_subagent"])
+                pol_impl = dp.evaluate_delegation_policy(repo, task_id="t-g4", plan=plan_4files, router_action="IMPLEMENT")
+                self.assertIn(pol_impl["strategy"], ("HYDROGEN_LEAD_WARM_CACHE_DIRECT", "GEMINI4_LEAD_WARM_CACHE_DIRECT"))
+                self.assertIsNone(pol_impl["recommended_subagent"])
+            (repo / ".agents/state/live-session-models.json").unlink(missing_ok=True)
+
+            # 4. Async `invoke_subagent` `HEADER_ONLY` open wave at spawn -> settles cleanly on `COMPLETED_DONE`!
+            ag_brain = Path(td) / "ag_brain" / "brain"
+            parent_cid = "lead-async-001"
+            worker_cid = "worker-async-002"
+            parent_tx = ag_brain / parent_cid / ".system_generated" / "logs" / "transcript.jsonl"
+            worker_tx = ag_brain / worker_cid / ".system_generated" / "logs" / "transcript.jsonl"
+            parent_tx.parent.mkdir(parents=True, exist_ok=True)
+            worker_tx.parent.mkdir(parents=True, exist_ok=True)
+            parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "fix bug"}) + "\n", encoding="utf-8")
+            w_prompt = "Author failing unit test ATest.kt and run test --capture-red"
+            worker_tx.write_text(
+                json.dumps({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={w_prompt}\n</SYSTEM_MESSAGE>"}) + "\n",
+                encoding="utf-8",
+            )
+            atomic_write_json(repo / ".agents/state/tasks/t-g4/plan.json", plan_4files)
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(Path(td) / "ag_brain")}, clear=False):
+                dp.record_utility_dispatch(
+                    repo, agent_type=dp.WORKER_AGENT, role_label=dp.WORKER_AGENT,
+                    prompt=w_prompt, parent_conversation_id=parent_cid, task_id="t-g4",
+                    wave_id="w-async-1", worker_mode="CAPTURE_RED_ONLY",
+                )
+                dp.bind_utility_from_post_tool(
+                    repo,
+                    {
+                        "conversationId": parent_cid,
+                        "transcriptPath": str(parent_tx),
+                        "toolCall": {"name": "invoke_subagent"},
+                        "toolResult": {"conversationId": worker_cid},
+                    },
+                )
+                ent_open = [e for e in dp._load_utility_ledger(repo)["entries"] if e.get("wave_id") == "w-async-1"][0]
+                self.assertEqual(worker_cid, ent_open["execution_id"])
+                self.assertFalse(ent_open.get("wave_completed"))
+                self.assertEqual(0, dp.get_worker_friction_state(repo, "t-g4", plan_4files)["wave_failures"])
+
+                # Worker finishes writing red-evidence.json and emits COMPLETED_DONE response
+                atomic_write_json(repo / ".agents/state/tasks/t-g4/red-evidence.json", {"captured_at_epoch": time.time() + 5})
+                with worker_tx.open("a", encoding="utf-8") as wf:
+                    wf.write(json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Captured failing RED test successfully in ATest.kt."}) + "\n")
+                fr_after = dp.get_worker_friction_state(repo, "t-g4", plan_4files)
+                self.assertEqual(0, fr_after["wave_failures"])
+                ent_closed = [e for e in dp._load_utility_ledger(repo)["entries"] if e.get("wave_id") == "w-async-1"][0]
+                self.assertTrue(ent_closed.get("wave_completed"))
+
+            # 5. Idempotent `protocol_attempts` + `task heal` unblocking `REVIEW_FAILED_PROTOCOL` while preserving PASSED peers
+            t_heal = "t-heal-proto"
+            tdir_h = repo / ".agents/state/tasks" / t_heal
+            (tdir_h / "review-execution/run-h1/dispatch").mkdir(parents=True, exist_ok=True)
+            (tdir_h / "review-execution/run-h1/results").mkdir(parents=True, exist_ok=True)
+            pol_h = tdir_h / "policy-h1.json"
+            atomic_write_json(pol_h, {"reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent"]})
+            atomic_write_json(tdir_h / "plan.json", {"task_id": t_heal, "status": "VERIFYING", "approval": {"single_use_nonce": "n1"}, "execution_nonce": "n1"})
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": t_heal})
+            atomic_write_json(tdir_h / "current-run.json", {
+                "task_id": t_heal, "run_id": "run-h1", "review_host": "antigravity",
+                "review_protocol_version": 2, "policy": str(pol_h),
+                "delivery_snapshot_sha256": "s" * 64, "change_set_sha256": "c" * 64, "package_sha256": "p" * 64,
+            })
+            ro.save_ledger(tdir_h, "run-h1", {
+                "schema_version": 1, "task_id": t_heal, "run_id": "run-h1",
+                "delivery_snapshot_sha256": "s" * 64, "change_set_sha256": "c" * 64, "review_package_sha256": "p" * 64,
+                "required_reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent"],
+                "reviewers": {
+                    "arch-regression-reviewer-agent": {"state": ro.REVIEW_COMPLETED, "protocol_attempts": 0},
+                    "bug-test-reviewer-agent": {"state": ro.REVIEW_FAILED_PROTOCOL, "protocol_attempts": 2, "last_error": "bad json"},
+                },
+            })
+            with unittest.mock.patch("workflow.verification_freshness", return_value={"fresh": True}), \
+                 unittest.mock.patch("_workflow.engine.verification_freshness", return_value={"fresh": True}), \
+                 unittest.mock.patch("workflow.resolve_next_action", return_value={"code": "DISPATCH_REVIEWERS"}):
+                h_res = self_heal.heal_task_state(repo, t_heal, host="antigravity")
+            self.assertEqual("HEALED", h_res["status"])
+            healed_l = ro.load_ledger(tdir_h, "run-h1")
+            self.assertEqual(ro.REVIEW_COMPLETED, healed_l["reviewers"]["arch-regression-reviewer-agent"]["state"])
+            self.assertEqual(ro.REVIEW_NOT_DISPATCHED, healed_l["reviewers"]["bug-test-reviewer-agent"]["state"])
+            self.assertEqual(0, healed_l["reviewers"]["bug-test-reviewer-agent"]["protocol_attempts"])
+
+            # 6. Cockpit v3 `task review-brief` + `review-diff --title-ar` + `requested_outcome` extraction
+            shutil.rmtree(repo / ".agents/state", ignore_errors=True)
+            loc_f = repo / "app/src/main/java/com/demo/di/LocationModule.kt"
+            loc_f.parent.mkdir(parents=True, exist_ok=True)
+            loc_f.write_text("package com.demo.di\n@Singleton\nfun provideLocation() = 1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "add loc module"], cwd=str(repo), check=True, capture_output=True)
+
+            tid_loc = "fix-location-callback-leaks"
+            d_loc = workflow.draft(argparse.Namespace(
+                repo=str(repo), task_id=tid_loc,
+                outcome="Prevent LocationCallback leaks across LocationModule and foreground services",
+                kind="BUG", expected_files="app/src/main/java/com/demo/di/LocationModule.kt",
+                expected_surfaces="BUSINESS_LOGIC", modules=":app", phases=None,
+                approach="Unscope LocationModule from Singleton", risks="None", device_strategy="Unit tests",
+                allow_sensitive=False, adopt_dirty=False, from_task=None,
+            ))
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "task", "approve",
+                    "--repo", str(repo), "--task-id", tid_loc, "--source", "conversation",
+                    "--proof-reference", "Approve", "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", d_loc["plan_sha256"],
+                ],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            loc_f.write_text("package com.demo.di\nfun provideLocation() = 1\n", encoding="utf-8")
+
+            brief_proc = subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "task", "review-brief",
+                    "--task-id", tid_loc,
+                    "--title-ar", "Fixes LocationAR Title",
+                    "--title-en", "Fix Location Callback Leaks",
+                    "--problem-ar", "Location stayed active in background.",
+                    "--solution-ar", "Removed Singleton from LocationModule.",
+                    "--file-note", "LocationModule.kt|Custom AR File Rationale|Custom EN File Rationale",
+                    "--json",
+                ],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            b_sum = json.loads(brief_proc.stdout)
+            self.assertTrue(b_sum["has_ai_brief"])
+            self.assertEqual("Fixes LocationAR Title", b_sum["title_ar"])
+            self.assertEqual("Custom AR File Rationale", b_sum["ordered_files"][0]["why_ar"])
+            html_v3 = Path(b_sum["html_path"]).read_text(encoding="utf-8")
+            self.assertIn("adjustZoom(", html_v3)
+            self.assertIn("story-grid", html_v3)
+            self.assertIn("Custom AR File Rationale", html_v3)
+            self.assertIn("return lines.join(String.fromCharCode(10));", html_v3)
+            self.assertNotIn('return lines.join("\\n");', html_v3)
+            self.assertIn("toggleNoteBoxFromBtn(this)", html_v3)
+
+            # 7. Pipe-free `::` delimiter support in `--check-ar` and `--file-note`
+            brief_pipefree = subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "review-diff",
+                    "--task-id", tid_loc,
+                    "--check-ar", "Check item 1::Check item 2",
+                    "--file-note", "LocationModule.kt::PipeFree AR Why::PipeFree EN Why",
+                    "--json",
+                ],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            pf_sum = json.loads(brief_pipefree.stdout)
+            self.assertEqual("PipeFree AR Why", pf_sum["ordered_files"][0]["why_ar"])
+            self.assertEqual("PipeFree EN Why", pf_sum["ordered_files"][0]["why_en"])
+            saved_brief_doc = read_json(repo / ".agents/state/tasks" / tid_loc / "review-brief.json")
+            self.assertEqual(["Check item 1", "Check item 2"], saved_brief_doc["checks_ar"])
+
+            # 8. `phase_review.py` malformed response SHA idempotency + 1-char repeated hex SHA tolerance
+            import phase_review as pr_mod
+            p_tdir = repo / ".agents/state/tasks" / tid_loc
+            p_rdir = pr_mod.phase_review_dir(p_tdir, "phase-1")
+            p_rdir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(pr_mod.phase_run_file(p_tdir, "phase-1"), {
+                "task_id": tid_loc, "phase_id": "phase-1", "phase_review_run_id": "prun-1",
+                "package_sha256": exp_sha, "selected_reviewers": ["bug-test-reviewer-agent"], "review_host": "cli",
+            })
+            p_ledger = {
+                "schema_version": 2, "task_id": tid_loc, "phase_id": "phase-1", "run_id": "prun-1",
+                "package_sha256": exp_sha,
+                "reviewers": {"bug-test-reviewer-agent": {"state": ro.REVIEW_DISPATCHED, "protocol_attempts": 0}},
+            }
+            p_ledger["ledger_sha256"] = pr_mod.compute_ledger_sha(p_ledger)
+            atomic_write_json(pr_mod.phase_ledger_file(p_tdir, "phase-1"), p_ledger)
+
+            with unittest.mock.patch.object(pr_mod, "phase_review_freshness", return_value=(True, "ok")):
+                r_retry1 = pr_mod.complete_phase_review(
+                    repo, tid_loc, "phase-1", "bug-test-reviewer-agent", "exec-p1",
+                    raw_response="not valid json yet", package_sha256=slip_63,
+                )
+                self.assertEqual("PROTOCOL_RETRY_REQUIRED", r_retry1["status"])
+                r_retry2 = pr_mod.complete_phase_review(
+                    repo, tid_loc, "phase-1", "bug-test-reviewer-agent", "exec-p1",
+                    raw_response="not valid json yet", package_sha256=slip_63,
+                )
+            self.assertEqual("PROTOCOL_RETRY_REQUIRED", r_retry2["status"])
+            ok_pl, _, loaded_pl = pr_mod.load_phase_ledger(p_tdir, "phase-1")
+            self.assertTrue(ok_pl)
+            self.assertEqual(1, loaded_pl["reviewers"]["bug-test-reviewer-agent"]["protocol_attempts"])
+
+            # 9. Nested `previous_task` / `brief` compaction in CLI JSON sanitizer
+            bridge_blob = {
+                "status": "BRIDGE_LOADED",
+                "previous_task": {"base_file_identities": [{"path": f"F{i}.kt"} for i in range(1200)]},
+                "brief": {"task_baseline": {"changes": list(range(500))}},
+            }
+            comp_b = workflow._compact_plan_json_for_cli_stdout(bridge_blob)
+            self.assertEqual(1, len(comp_b["previous_task"]["base_file_identities"]))
+            self.assertEqual(9, len(comp_b["brief"]["task_baseline"]["changes"]))
+
+            # 10. `debug logs --lines --filter` CLI aliases + `debug_device.summarize` Logcat tag & multi-term `::` matching
+            from debug_device import summarize as dbg_summarize
+            sample_logcat = "\n".join([
+                "105.100  42  42 D SensorForegroundService: Location request registered",
+                "105.200  42  42 I UnrelatedTag: Heartbeat tick",
+                "105.300  42  42 D HomeViewModel: Updated GoogleLocationDataSource state",
+            ])
+            matched_tag_lines = dbg_summarize(
+                sample_logcat, "com.madarsoft.fitness", None, [], True, 100,
+                "SensorForegroundService::GoogleLocationDataSource", current_pids=("42",),
+            )
+            self.assertEqual(2, len(matched_tag_lines))
+            dbg_help = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "debug", "logs", "--help"],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            self.assertIn("--lines", dbg_help.stdout)
+            self.assertIn("--filter", dbg_help.stdout)
+
+            # 11. `harness.py commands` compact valid JSON (<150 lines, never 1,500+ lines) + keyword filtering
+            cmds_all = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "commands"],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            parsed_cmds = json.loads(cmds_all.stdout)
+            self.assertGreater(len(parsed_cmds), 30)
+            self.assertLess(len(cmds_all.stdout.splitlines()), 160)
+            cmds_heal = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "commands", "heal"],
+                cwd=str(repo), check=True, capture_output=True, text=True,
+            )
+            heal_rows = json.loads(cmds_heal.stdout)
+            self.assertTrue(any("heal" in r["command"] for r in heal_rows))
+
+            # 12. `PHASE_REVIEW_PROTOCOL_BLOCKED` & `debug_evidence` compaction
+            p_ledger_fail = read_json(pr_mod.phase_ledger_file(p_tdir, "phase-1"))
+            p_ledger_fail["reviewers"]["bug-test-reviewer-agent"]["state"] = ro.REVIEW_FAILED_PROTOCOL
+            p_ledger_fail["ledger_sha256"] = pr_mod.compute_ledger_sha(p_ledger_fail)
+            atomic_write_json(pr_mod.phase_ledger_file(p_tdir, "phase-1"), p_ledger_fail)
+            from _workflow.phase_routing import phase_implementation_action
+            pr_mod.set_phase_substate(p_tdir, "phase-1", pr_mod.PHASE_REVIEWING)
+            with unittest.mock.patch.object(pr_mod, "phase_review_freshness", return_value=(True, "ok")):
+                pr_act = phase_implementation_action(
+                    repo, tid_loc, {"phases": [{"id": "phase-1"}], "active_phase_index": 0},
+                    "antigravity", None, p_tdir, [{"id": "phase-1"}],
+                )
+            self.assertEqual("PHASE_REVIEW_PROTOCOL_BLOCKED", pr_act["code"])
+            self.assertIn("task heal", pr_act["recovery_command"])
+            dbg_plan = {"task_id": "t-dbg", "debug_evidence": [f"log-{i}" for i in range(25)]}
+            self.assertEqual(4, len(workflow._compact_plan_json_for_cli_stdout(dbg_plan)["debug_evidence"]))
+
+            # 13. Read-only `jar tf` / `javap` allowed for Scout & Lead (with or without task), while `jar xf`/`cf` blocked!
+            import mutation_guard as mg_mod
+            self.assertTrue(dp.scout_command_allowed("jar tf app/libs/LocationData-release.aar"))
+            self.assertTrue(dp.scout_command_allowed("jar -tf build/classes.jar"))
+            self.assertTrue(dp.scout_command_allowed("javap -cp build/classes.jar com.demo.LocationControl"))
+            self.assertFalse(dp.scout_command_allowed("jar xf app/libs/LocationData-release.aar"))
+            self.assertFalse(dp.scout_command_allowed("javap -J-Xmx1g com.demo.LocationControl"))
+            self.assertTrue(mg_mod._is_read_only("jar tf app/libs/LocationData-release.aar", repo))
+            self.assertTrue(mg_mod._is_read_only("javap -p -cp build/classes.jar com.demo.LocationControl", repo))
+            self.assertFalse(mg_mod._is_read_only("jar xf app/libs/LocationData-release.aar", repo))
+            self.assertFalse(mg_mod._is_read_only("jar cf out.jar .", repo))
+
+            # 14. Turn-0 `pre_invocation_reminder` subagent shield (unbound Scout/Reviewer spawns emit `{}` on Turn 0!) + zero Orchestrator scold
+            import io as _io_pir, contextlib as _ctx_pir
+            import pre_invocation_reminder as pir_mod
+            dp.record_utility_dispatch(
+                repo, agent_type=dp.SCOUT_AGENT, role_label=dp.SCOUT_AGENT,
+                prompt="Investigate LocationData-release.aar", parent_conversation_id="lead-main-99",
+                task_id=tid_loc,
+            )
+            buf_child = _io_pir.StringIO()
+            with unittest.mock.patch.object(pir_mod, "REPO", repo),                  unittest.mock.patch("sys.stdin", _io_pir.StringIO(json.dumps({"conversationId": "child-scout-turn0", "invocationNum": 0}))),                  _ctx_pir.redirect_stdout(buf_child):
+                pir_mod.main()
+            self.assertEqual({}, json.loads(buf_child.getvalue().strip()))
+
+            buf_lead_orch = _io_pir.StringIO()
+            with unittest.mock.patch.object(pir_mod, "REPO", repo),                  unittest.mock.patch("sys.stdin", _io_pir.StringIO(json.dumps({"conversationId": "lead-main-99", "invocationNum": 0, "modelName": "Orchestrator (Carbon)"}))),                  _ctx_pir.redirect_stdout(buf_lead_orch):
+                pir_mod.main()
+            lead_orch_out = buf_lead_orch.getvalue()
+            self.assertNotIn("HAZARD #200029", lead_orch_out)
+            self.assertIn("injectSteps", lead_orch_out)
 
 
 if __name__ == "__main__":

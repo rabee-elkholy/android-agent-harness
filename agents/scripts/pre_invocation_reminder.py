@@ -85,12 +85,86 @@ def _has_subagent_transcript_signature(conversation_id: str) -> bool:
         return False
 
 
-def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
+def _has_explicit_user_turn(conversation_id: str) -> bool:
+    if not conversation_id or conversation_id == "claude-session":
+        return False
+    try:
+        from antigravity_runtime import prefer_full_transcript, resolve_transcript
+        tp = prefer_full_transcript(resolve_transcript(conversation_id))
+        if tp is not None and tp.is_file():
+            return '"USER_EXPLICIT"' in tp.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return False
+    return False
+
+
+def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
+    """Detect Turn-0 child subagent invocations before Antigravity flushes step 1 or PostToolUse binds execution_id."""
+    if not conversation_id or _has_explicit_user_turn(conversation_id):
+        return False
+    import time
+    now_ts = time.time()
+    st_dir = repo / ".agents" / "state" if (repo / ".agents").is_dir() else repo / "agents" / "state"
+    # 1) Unbound utility subagent (Scout / Worker / Specialist) spawned <60s ago by a different parent conversation
+    util_f = st_dir / "utility-subagents.json"
+    if util_f.is_file():
+        try:
+            udoc = json.loads(util_f.read_text(encoding="utf-8"))
+            for ent in (udoc.get("entries") or []) if isinstance(udoc, dict) else []:
+                if not isinstance(ent, dict):
+                    continue
+                p_cid = str(ent.get("parent_conversation_id") or "").strip()
+                if (
+                    p_cid
+                    and p_cid != conversation_id
+                    and not ent.get("execution_id")
+                    and not ent.get("wave_completed")
+                    and not ent.get("dispatch_failed")
+                ):
+                    ts_e = float(ent.get("dispatched_at_epoch") or ent.get("dispatched_epoch") or ent.get("created_epoch") or 0.0)
+                    if ts_e > 0 and abs(now_ts - ts_e) < 60.0:
+                        return True
+        except (OSError, ValueError, TypeError):
+            _u_err = True
+    # 2) Unbound V2 final or phase reviewer when a different Lead conversation is recorded
+    lead_cids: set[str] = set()
+    lsm_f = st_dir / "live-session-models.json"
+    if lsm_f.is_file():
+        try:
+            ldoc = json.loads(lsm_f.read_text(encoding="utf-8"))
+            if isinstance(ldoc, dict) and ldoc.get("latest_lead_cid"):
+                lead_cids.add(str(ldoc["latest_lead_cid"]).strip())
+        except (OSError, ValueError):
+            _l_err = True
+    if lead_cids and conversation_id not in lead_cids:
+        act_f = st_dir / "active-task.json"
+        if act_f.is_file():
+            try:
+                tid = str(json.loads(act_f.read_text(encoding="utf-8")).get("task_id") or "").strip()
+                if tid:
+                    tdir = st_dir / "tasks" / tid
+                    crun_f = tdir / "current-run.json"
+                    if crun_f.is_file():
+                        rid = str(json.loads(crun_f.read_text(encoding="utf-8")).get("run_id") or "").strip()
+                        led_f = tdir / "review-execution" / rid / "ledger.json" if rid else None
+                        if led_f and led_f.is_file():
+                            revs = (json.loads(led_f.read_text(encoding="utf-8")).get("reviewers") or {})
+                            if any(isinstance(v, dict) and v.get("state") == "DISPATCHED" and not v.get("execution_id") for v in revs.values()):
+                                return True
+            except (OSError, ValueError, TypeError):
+                _r_err = True
+    return False
+
+
+def _is_reviewer_conversation(repo: Path, conversation_id: str, payload: dict | None = None) -> bool:
     """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents.
 
     Also enforces byte-identical Turn-0 systemInstruction+tools prefix stability (#200026) across
     Scout, Worker, Specialist, and Reviewer subagents before PostToolUse execution_id binding finishes.
     """
+    if isinstance(payload, dict):
+        if payload.get("isSubagent") is True or payload.get("parentConversationId") or payload.get("parent_conversation_id") or payload.get("subagentType"):
+            return True
     if not conversation_id:
         return False
     try:
@@ -100,6 +174,8 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str) -> bool:
     except (ImportError, OSError, ValueError, KeyError, ValidationError):
         pass
     if _has_subagent_transcript_signature(conversation_id):
+        return True
+    if _has_fresh_unbound_subagent_spawn(repo, conversation_id):
         return True
     try:
         from reviewer_host import active_reviews, reviewer_context
@@ -163,13 +239,13 @@ def _compact_message() -> str:
         return (
             f"Harness [Task {task_id}: IMPLEMENTING]{mode_tag}: Autonomous execution. Do not create new plans or ask for Proceed. "
             f"Record in-scope developer refinements via `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary>\" --source conversation --proof-reference \"<words>\"` before `prepare-verification`. "
-            f"When a background command or subagent is still running, write at most one short status sentence and end your turn immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` and never simulate or fabricate background completion outputs.{notes_rem}"
+            f"When a background command or subagent is still running, write at most one short status sentence and end your turn immediately with ZERO tool calls (plain text only, never an empty function call); never read `.system_generated/tasks/*.log` and never simulate or fabricate background completion outputs.{notes_rem}"
         )
     if status == "VERIFYING":
         return (
             f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (after ALL reviewers pass) -> 5. immediate `ask_question` first token (zero pre-tool prose, 3-section mobile walkthrough, no `|` tables) -> 6. task complete. "
             f"Run workflow.py resume for fixes; do not stall on follow-ups (phone E2E follows .agents/workflows/phone-e2e.md). "
-            f"When a background command or subagent is running, write at most one short status sentence and end your turn immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` and never simulate or fabricate subagent/task outputs.{notes_rem}"
+            f"When a background command or subagent is running, write at most one short status sentence and end your turn immediately with ZERO tool calls (plain text only, never an empty function call); never read `.system_generated/tasks/*.log` and never simulate or fabricate subagent/task outputs.{notes_rem}"
         )
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])
@@ -194,7 +270,7 @@ def _current_task_state() -> tuple[str, str]:
 def _unchanged_state_message(task_id: str, status: str) -> str:
     if not task_id or status == "IDLE":
         return "Android Harness: Idle (no active task)."
-    return f"Harness [{task_id}:{status}]: State unchanged; yield with ZERO tool calls if a bg task runs, else run NEXT_ACTION."
+    return f"Harness [{task_id}:{status}]: State unchanged; yield plain text (ZERO tool calls) if bg runs, else NEXT_ACTION."
 
 
 def _is_raw_kit_repo(repo: Path) -> bool:
@@ -274,7 +350,7 @@ def main() -> None:
             (payload.get("modelName") or payload.get("model_name") or "")
             if isinstance(payload, dict) else ""
         ).strip()
-        if conversation_id and _is_reviewer_conversation(REPO, conversation_id):
+        if conversation_id and _is_reviewer_conversation(REPO, conversation_id, payload if isinstance(payload, dict) else None):
             if type(invocation) is int and invocation > 0:
                 try:
                     from delegation_policy import get_subagent_budget_reminder
@@ -288,13 +364,7 @@ def main() -> None:
             return
         model_hazard_prefix = ""
         m_low = model_name.lower()
-        if "orchestrator" in m_low:
-            model_hazard_prefix = (
-                f"[HAZARD #200029: Built-in `{model_name}` active] Switch the main chat model selector to explicit "
-                "`Gemini 4 Carbon (Medium)` (or `Claude Sonnet 5.5`) — built-in Orchestrator risks false-positive 403 TOS_VIOLATION "
-                "suspensions, locks `--effort`, and bloats shared Carbon context (-24% vs Harness Native Orchestrator -65%..-92%). "
-            )
-        elif "4.6" in m_low and "claude" in m_low:
+        if "4.6" in m_low and "claude" in m_low:
             model_hazard_prefix = (
                 f"[DEPRECATION NOTICE: `{model_name}` retires Nov 18, 2026] Switch mid-week rotation to `Claude Sonnet 5.5 (Thinking)` or `Claude Opus 5.5 (Thinking)`. "
             )

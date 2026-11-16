@@ -944,13 +944,21 @@ def resolve_task_contexts(
         sync = engine.sync(persist=False, trust_stat=trust_stat)
     read_inputs = {}
     deduped = list(dict.fromkeys(combined))
+    eff_limit = min(int(limit), 8) if len(deduped) >= 3 else min(int(limit), 12) if len(deduped) == 2 else limit
     results = [_resolve_task_context(root, engine, sync,
                                     file=target if kind == "file" else None, symbol=target if kind == "symbol" else None,
-                                    module=module, source_set=source_set, limit=limit, publish=False, read_inputs=read_inputs)
+                                    module=module, source_set=source_set, limit=eff_limit, publish=False, read_inputs=read_inputs)
                for kind, target in deduped]
     for row in results:
         if isinstance(row.get("project_notes"), dict) and "content" in row["project_notes"]:
             row["project_notes"] = {k: v for k, v in row["project_notes"].items() if k != "content"}
+        if len(deduped) >= 2:
+            t_info = row.get("target")
+            if isinstance(t_info, dict) and isinstance(t_info.get("outline"), list) and len(t_info["outline"]) > 24:
+                non_prop = [e for e in t_info["outline"] if isinstance(e, dict) and e.get("kind") not in ("val", "var")]
+                slim_outline = (non_prop or t_info["outline"])[:24]
+                t_info["outline_total_count"] = len(t_info["outline"])
+                t_info["outline"] = slim_outline
     successful = [row for row in results if row["status"] in {"RESOLVED", "ADVISORY_STALE_FALLBACK_USED"}]
     result = {
         "schema_version": SCHEMA_VERSION,

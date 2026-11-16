@@ -201,8 +201,8 @@ def main(argv=None):
         s.add_argument("--device")
         if name == "logs":
             s.add_argument("--all", action="store_true")
-            s.add_argument("--max-lines", type=int)
-            s.add_argument("--grep")
+            s.add_argument("--max-lines", "--lines", dest="max_lines", type=int)
+            s.add_argument("--grep", "--filter", dest="grep")
         if name == "install":
             s.add_argument("--allow-downgrade", action="store_true")
     args = parser.parse_args(argv)

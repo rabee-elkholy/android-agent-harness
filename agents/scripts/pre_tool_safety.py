@@ -1151,6 +1151,27 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 return
         except (ImportError, OSError, ValueError, ValidationError):
             pass
+    if (
+        hook_host == "antigravity"
+        and os.environ.get("HARNESS_HOST", "").strip().lower() == "antigravity"
+        and _is_live_interactive_antigravity_lead(conversation, transcript_hint=transcript_hint)
+        and re.search(
+            r"(?:^|[;&|\r\n]\s*)(?:rg(?:\.exe)?|ripgrep(?:\.exe)?)\b|(?:^|[;&|\r\n]\s*)git(?:\.exe)?\s+diff\s+[^;&|\r\n]*--check\b",
+            command,
+            re.I | re.M,
+        )
+    ):
+        emit(
+            "deny",
+            "ANTIGRAVITY_FAST_TOOL_HYGIENE (#201209 / Windows mmap guard): Do NOT invoke `rg` or `git diff --check` via `run_command` — "
+            "`rg` triggers a 1.7s `sir_flash_lite` cloud safety scan and memory-maps files on Windows (causing `ERROR_USER_MAPPED_FILE` when paired with parallel file edits). "
+            "Use the built-in `grep_search` tool for fast code search, and `python .agents/harness.py preflight` for diff/whitespace checks.",
+            tool="run_command",
+            command=command,
+            reason_code="COMMAND_MUTATION_GUARD",
+            task_id=active_tid,
+        )
+        return
     if hook_host == "antigravity" and re.search(
         r"(?:^|[;&|\r\n]\s*)(?:(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b|(?:powershell|pwsh)(?:\.exe)?\s+(?:-\S+\s+)*(?:-c|-command)\b)",
         command,
@@ -3272,6 +3293,12 @@ def _main() -> None:
             emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
             return
         lead_conv = conversation if (conversation and not reviewer and utility_ctx is None) else ""
+        if lead_conv and _ACTIVE_HOOK_MODEL_NAME:
+            try:
+                from delegation_policy import record_live_lead_session_model
+                record_live_lead_session_model(REPO, lead_conv, _ACTIVE_HOOK_MODEL_NAME)
+            except (ImportError, OSError, ValueError):
+                pass
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
             _handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint)

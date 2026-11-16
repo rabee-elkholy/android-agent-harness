@@ -266,6 +266,52 @@ def _worker_handoff_file(repo: Path, task_id: str) -> Path:
     return task_dir(repo, task_id) / "worker-handoff.json"
 
 
+def reconcile_completed_async_utility_waves(repo: Path) -> list[str]:
+    """Close any open utility waves whose bound async child transcripts have now reached COMPLETED_DONE or EMPTY_DONE."""
+    ledger = _load_utility_ledger(repo)
+    entries = ledger.get("entries") or []
+    if not entries:
+        return []
+    open_entries = [
+        e for e in entries
+        if isinstance(e, dict) and not e.get("wave_completed") and not e.get("dispatch_failed") and str(e.get("execution_id") or "").strip()
+    ]
+    if not open_entries:
+        return []
+    now_ts = time.time()
+    changed = False
+    completed_w_items: list[dict[str, Any]] = []
+    closed_ids: list[str] = []
+    for item in open_entries:
+        cid_b = str(item.get("execution_id") or "").strip()
+        t_st = _child_transcript_terminal_state(cid_b)
+        if t_st == "EMPTY_DONE":
+            item["dispatch_failed"] = True
+            item["empty_terminal_response"] = True
+            item["failure_code"] = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
+            item["completed_at"] = utc_now()
+            item["completed_at_epoch"] = now_ts
+            changed = True
+            closed_ids.append(cid_b)
+        elif t_st == "COMPLETED_DONE":
+            item["wave_completed"] = True
+            item["completed_at"] = utc_now()
+            item["completed_at_epoch"] = now_ts
+            changed = True
+            closed_ids.append(cid_b)
+            if str(item.get("agent_type") or "") == WORKER_AGENT:
+                completed_w_items.append(dict(item))
+    if changed:
+        try:
+            with StateLock(state_root(repo)):
+                _save_utility_ledger(repo, ledger)
+        except (OSError, ValidationError):
+            pass
+    for w_it in completed_w_items:
+        evaluate_completed_worker_wave(repo, w_it, worker_output="")
+    return closed_ids
+
+
 def get_worker_friction_state(
     repo: Path,
     task_id: str | None = None,
@@ -273,6 +319,10 @@ def get_worker_friction_state(
     *,
     phase_id: str | None = None,
 ) -> dict[str, Any]:
+    try:
+        reconcile_completed_async_utility_waves(repo)
+    except (OSError, ValueError, KeyError, TypeError, ValidationError):
+        _reconcile_skipped = True
     """Return Native Harness Orchestrator wave-boundary & intra-wave friction state for `(task_id, phase_id)`."""
     if plan is None and not task_id:
         try:
@@ -337,6 +387,43 @@ def get_worker_friction_state(
     }
 
 
+def record_live_lead_session_model(repo: Path, conversation_id: str, model_name: str) -> None:
+    """Persist observed PreToolUse stdin `modelName` for the active Antigravity Lead session."""
+    cid = str(conversation_id or "").strip()
+    mname = str(model_name or "").strip()
+    if not cid or not mname:
+        return
+    try:
+        st = state_root(repo)
+        st.mkdir(parents=True, exist_ok=True)
+        cache_p = st / "live-session-models.json"
+        doc = read_json(cache_p) if cache_p.is_file() else {}
+        if not isinstance(doc, dict):
+            doc = {}
+        sessions = doc.get("sessions") if isinstance(doc.get("sessions"), dict) else {}
+        if sessions.get(cid) == mname and doc.get("latest_lead_cid") == cid:
+            return
+        sessions[cid] = mname
+        if len(sessions) > 16:
+            for old_k in list(sessions.keys())[:-16]:
+                sessions.pop(old_k, None)
+        atomic_write_json(cache_p, {"schema_version": 1, "latest_lead_cid": cid, "sessions": sessions, "updated_at": utc_now()})
+    except (OSError, ValueError, TypeError, ValidationError):
+        pass
+
+
+def _is_live_gemini4_lead_family(lead_family: str) -> bool:
+    """Return True when the live Antigravity Lead runs on Gemini 4 (Hydrogen, Carbon, Argon) or native Orchestrator.
+
+    Per Google Antigravity's subagent specification, custom `.agents/agents/*/agent.md` subagents only support
+    `model: inherit | flash_lite | flash | pro` — they cannot switch a standalone `Carbon` or `Argon` parent down
+    to `Hydrogen` (`inherit` spawns a cold-cache `Carbon`/`Argon` 3x subagent, while `Orchestrator (Carbon/Argon)`
+    already runs implementation on `Hydrogen` natively inside the main thread).
+    """
+    fam = str(lead_family or "").strip().lower()
+    return bool(fam and (fam.startswith("gemini-4-") or "orchestrator" in fam))
+
+
 def _detect_live_parent_lead_family(repo: Path) -> str:
     """Return normalized native family (e.g. 'gemini-4-hydrogen' or 'gemini-4-carbon') of the active Antigravity Lead session when observable."""
     cand_cids: list[str] = []
@@ -354,12 +441,30 @@ def _detect_live_parent_lead_family(repo: Path) -> str:
     except ImportError:
         return ""
     st = state_root(repo)
+    live_models_map: dict[str, str] = {}
+    live_cache_p = st / "live-session-models.json"
+    if live_cache_p.is_file():
+        try:
+            ldoc = read_json(live_cache_p)
+            if isinstance(ldoc, dict):
+                if isinstance(ldoc.get("sessions"), dict):
+                    live_models_map = {str(k): str(v) for k, v in ldoc["sessions"].items() if k and v}
+                latest_c = str(ldoc.get("latest_lead_cid") or "").strip()
+                if latest_c and latest_c not in cand_cids:
+                    cand_cids.append(latest_c)
+        except (OSError, ValueError, ValidationError):
+            live_models_map = {}
     for scid in extract_lead_candidates_from_state(st):
         if scid not in cand_cids:
             cand_cids.append(scid)
-    if not cand_cids:
-        return ""
     for cid in cand_cids[:6]:
+        cached_m = live_models_map.get(cid, "")
+        if cached_m:
+            if "orchestrator" in cached_m.lower():
+                return "gemini-4-hydrogen"
+            fam_c, _ = _split_antigravity_family_and_tier(cached_m)
+            if fam_c:
+                return fam_c
         try:
             tx_p = resolve_transcript(cid)
             if tx_p is None:
@@ -370,9 +475,21 @@ def _detect_live_parent_lead_family(repo: Path) -> str:
         except Exception:
             continue
         if isinstance(meta, dict) and meta.get("host_configured_model"):
-            fam, _ = _split_antigravity_family_and_tier(str(meta["host_configured_model"]))
+            raw_hm = str(meta["host_configured_model"])
+            if "orchestrator" in raw_hm.lower():
+                return "gemini-4-hydrogen"
+            fam, _ = _split_antigravity_family_and_tier(raw_hm)
             if fam:
                 return fam
+    if cand_cids and os.environ.get("HARNESS_HOST", "").strip().lower() == "antigravity":
+        try:
+            from review_models import load_policy
+            pol, pol_src = load_policy(repo, None)
+            def_m = str((pol or {}).get("default") or "").strip().lower()
+            if pol_src != "default" and def_m.startswith("hydrogen"):
+                return "gemini-4-hydrogen"
+        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+            _policy_probe_failed = True
     return ""
 
 
@@ -2185,10 +2302,22 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     item["completed_at_epoch"] = now_ts
                     changed = True
                     continue
+                # Antigravity `invoke_subagent` is asynchronous: PostToolUse fires immediately at spawn
+                # while a newly launched Worker transcript only contains its initial SYSTEM_MESSAGE (`HEADER_ONLY`)
+                # with 0 tool calls executed yet. Never close a freshly spawned Worker wave prematurely!
+                is_fresh_async_worker_spawn = (
+                    str(item.get("agent_type") or "") == WORKER_AGENT
+                    and tx_b is not None
+                    and t_state == "HEADER_ONLY"
+                    and int(item.get("tool_calls_used") or 0) == 0
+                )
                 child_ready_to_close = (
-                    tx_b is None
-                    or t_state == "COMPLETED_DONE"
-                    or ((wave_size == 1 or cid_bound in returned_cids) and t_state != "ACTIVE")
+                    not is_fresh_async_worker_spawn
+                    and (
+                        tx_b is None
+                        or t_state == "COMPLETED_DONE"
+                        or ((wave_size == 1 or cid_bound in returned_cids) and t_state != "ACTIVE")
+                    )
                 )
                 if not item.get("wave_completed") and child_ready_to_close:
                     item["wave_completed"] = True
@@ -3679,9 +3808,36 @@ def evaluate_delegation_policy(
             "quota_strategy": quota_guide,
         }
 
+    live_lead_fam = _detect_live_parent_lead_family(repo)
+    is_live_gemini4_lead = _is_live_gemini4_lead_family(live_lead_fam)
+
     if act_code == "CAPTURE_RED_EVIDENCE":
         w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="CAPTURE_RED_ONLY")
         sync_utility_worker_model(repo, w_model)
+        if is_live_gemini4_lead and not w_model.startswith("gemini-3.8-flash"):
+            return {
+                "status": status,
+                "task_id": tid,
+                "phase_id": phase_id,
+                "risk_tier": risk_tier,
+                "complexity_tier": c_tier,
+                "router_action": act_code,
+                "before_first_edit": before_first_edit_cmd,
+                "strategy": "LEAD_WARM_CACHE_RED_DIRECT",
+                "recommended_subagent": None,
+                "worker_allowed": True,
+                "worker_mode": "CAPTURE_RED_ONLY",
+                "worker_model": w_model,
+                "lead_native_family": live_lead_fam,
+                "target_files": [f for f in target_files if is_test_file(f)],
+                "reason": (
+                    f"Lead session is on `{live_lead_fam}` with a warm prompt cache (and Antigravity `inherit` would spawn `{WORKER_AGENT}` "
+                    "on the exact same parent model with a cold cache): write the failing reproduction test directly on the Lead session "
+                    "and run `python .agents/harness.py test --capture-red` before editing production files."
+                ),
+                "project_context": ctx_handoff,
+                "quota_strategy": quota_guide,
+            }
         return {
             "status": status,
             "task_id": tid,
@@ -3708,8 +3864,8 @@ def evaluate_delegation_policy(
     if sensitive_active or risk_tier in HIGH_SENSITIVITY_TIERS:
         w_model, c_tier = resolve_utility_worker_model(repo, task_id=tid, plan=plan, worker_mode="TESTS_AND_GATES_ONLY")
         sync_utility_worker_model(repo, w_model)
-        lead_fam_sens = _detect_live_parent_lead_family(repo)
-        rec_worker_sens = None if lead_fam_sens == "gemini-4-hydrogen" else WORKER_AGENT
+        lead_fam_sens = live_lead_fam
+        rec_worker_sens = None if (is_live_gemini4_lead and not w_model.startswith("gemini-3.8-flash")) else WORKER_AGENT
         return {
             "status": status,
             "task_id": tid,
@@ -3804,8 +3960,21 @@ def evaluate_delegation_policy(
     quota_guide = dict(quota_guide, subagent_workhorse_model=w_model)
     w_invoke_arg = "flash" if w_model.startswith("gemini-3.8-flash") else None
 
-    lead_native_family = _detect_live_parent_lead_family(repo)
-    if f_strikes == 0 and lead_native_family == "gemini-4-hydrogen":
+    lead_native_family = live_lead_fam
+    if f_strikes == 0 and is_live_gemini4_lead and not w_model.startswith("gemini-3.8-flash"):
+        strat_name = "HYDROGEN_LEAD_WARM_CACHE_DIRECT" if lead_native_family == "gemini-4-hydrogen" else "GEMINI4_LEAD_WARM_CACHE_DIRECT"
+        lead_reason = (
+            "Lead session is already running on `Gemini 4 Hydrogen` (`1.00x` quota weight) with a warm prompt cache: "
+            "implement scoped files and run `checkpoint-phase` / unit tests directly on the Lead session to avoid "
+            f"cold-cache `{WORKER_AGENT}` startup duplication."
+            if lead_native_family == "gemini-4-hydrogen"
+            else (
+                f"Lead session is running on `{lead_native_family}` with a warm prompt cache, and Antigravity custom subagent `inherit` "
+                f"cannot switch `{WORKER_AGENT}` down to `Hydrogen` (spawning `{WORKER_AGENT}` would re-read files on `{lead_native_family}` `3x` cold cache; "
+                "use `Orchestrator (Carbon)` / `Orchestrator (Argon)` in the Antigravity model picker for native `1x` Hydrogen execution): "
+                "implement scoped files directly on the Lead session."
+            )
+        )
         return {
             "status": status,
             "task_id": tid,
@@ -3816,18 +3985,14 @@ def evaluate_delegation_policy(
             "high_friction_strikes": 0,
             "friction_escalation": "NONE",
             "before_first_edit": before_first_edit_cmd,
-            "strategy": "HYDROGEN_LEAD_WARM_CACHE_DIRECT",
+            "strategy": strat_name,
             "recommended_subagent": None,
             "worker_allowed": True,
             "worker_mode": "FULL_SLICE",
             "worker_model": w_model,
             "lead_native_family": lead_native_family,
             "target_files": target_files,
-            "reason": (
-                "Lead session is already running on `Gemini 4 Hydrogen` (`1.00x` quota weight) with a warm prompt cache: "
-                "implement scoped files and run `checkpoint-phase` / unit tests directly on the Lead session to avoid "
-                f"cold-cache `{WORKER_AGENT}` startup duplication (`{WORKER_AGENT}` remains optionally allowed if desired)."
-            ),
+            "reason": lead_reason,
             "project_context": ctx_handoff,
             "quota_strategy": quota_guide,
         }
@@ -4248,6 +4413,9 @@ _SCOUT_SAFE_GIT_RE = re.compile(
     r"^\s*git(?:\.exe)?\s+(?:status|diff|log|show|grep|ls-files|branch\s+--show-current)\b",
     re.IGNORECASE,
 )
+_SCOUT_SAFE_JAR_RE = re.compile(
+    r"^\s*(?:(?:\"[^\"\n]*[/\\]|[^\s\"\n]*[/\\]))?(?:(?i:jar(?:\.exe)?)\s+(?:-?t(?:vf|fv|f)|--list(?:\s+(?:-f|--file))?)\s+\S+|(?i:javap(?:\.exe)?)\s+(?![\"\x27]?-J)(?!.*\s[\"\x27]?-J)\S.*)$"
+)
 _SCOUT_UNSAFE_GIT_FLAG_RE = re.compile(
     r"(?:^|\s)(?:(?i:--open-files-in-pager\b|--open\w*|--ext-diff\b|--textconv\b|--output(?:=|\s)|--exec(?:=|\s))|-(?!-)[A-Za-z0-9]*O\S*)"
 )
@@ -4288,7 +4456,7 @@ def scout_command_allowed(command: str) -> bool:
         )
         if "^" in stripped_carets:
             return False
-    return bool(_SCOUT_SAFE_COMMAND_RE.search(cmd) or _SCOUT_SAFE_GIT_RE.search(cmd))
+    return bool(_SCOUT_SAFE_COMMAND_RE.search(cmd) or _SCOUT_SAFE_GIT_RE.search(cmd) or _SCOUT_SAFE_JAR_RE.search(cmd))
 
 
 def extract_symbol_write_targets(command: str) -> tuple[bool, list[str]]:
@@ -4376,7 +4544,26 @@ def main(argv: list[str] | None = None) -> int:
             plan = read_json(p_file)
     report = evaluate_delegation_policy(repo, task_id=args.task_id, plan=plan)
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        out_report = dict(report)
+        raw_dump = json.dumps(out_report, indent=2, ensure_ascii=False)
+        if len(raw_dump) > 12000:
+            p_ctx = out_report.get("project_context")
+            if isinstance(p_ctx, dict):
+                p_ctx_slim = dict(p_ctx)
+                for verbose_k in ("notes_content", "content", "raw_markdown"):
+                    if verbose_k in p_ctx_slim and isinstance(p_ctx_slim[verbose_k], str) and len(p_ctx_slim[verbose_k]) > 600:
+                        p_ctx_slim[verbose_k] = p_ctx_slim[verbose_k][:600] + "... [see .agents/project-context/project-notes.md]"
+                out_report["project_context"] = p_ctx_slim
+            for h_key in ("previous_wave_handoff", "lead_takeover_handoff"):
+                h_val = out_report.get(h_key)
+                if isinstance(h_val, dict):
+                    h_slim = dict(h_val)
+                    for hk, hv in list(h_slim.items()):
+                        if isinstance(hv, str) and len(hv) > 1200:
+                            h_slim[hk] = hv[:1200] + "... [see worker-handoff.json]"
+                    out_report[h_key] = h_slim
+            raw_dump = json.dumps(out_report, indent=2, ensure_ascii=False)
+        print(raw_dump)
     else:
         print(f"[Delegation Policy] status={report.get('status')} | strategy={report.get('strategy')}")
         print(f"  recommended_subagent : {report.get('recommended_subagent') or 'none (lead inline)'}")

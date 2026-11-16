@@ -50,6 +50,7 @@ def summarize(raw, package, start, ids, show_all, limit, pattern, current_pids=(
     blocks = {}
     crashes = []
     logs = []
+    pat_terms = [t.strip().lower() for t in re.split(r"::|\|", str(pattern)) if t.strip()] if pattern else []
     for line in raw.splitlines():
         match = re.match(r"\s*(\d+\.\d+)\s+(\d+)\s+\d+\s+[VDIWEFA]\s+([^:]+):\s?(.*)", line)
         if not match or start and Decimal(match[1]) < Decimal(start):
@@ -75,7 +76,8 @@ def summarize(raw, package, start, ids, show_all, limit, pattern, current_pids=(
         if re.search(r"\bANR in " + re.escape(package) + r"(?=[:\s(]|$)", msg) or pid in pids and "Fatal signal" in msg:
             crashes.append([msg])
         owned = any("#" + ident in msg for ident in ids)
-        if (owned or show_all and pid in pids) and (not pattern or pattern.lower() in msg.lower()):
+        haystack = f"{tag.strip()}: {msg}".lower()
+        if (owned or show_all and pid in pids) and (not pat_terms or any(term in haystack for term in pat_terms)):
             if logs and logs[-1][0] == msg:
                 logs[-1][1] += 1
             else:
@@ -255,7 +257,7 @@ def device_action(repo, plan, args):
             current_pids = adb(serial, "shell", "pidof", package).split()
         except ValidationError:
             current_pids = []
-        lines = summarize(raw, package, start, ids, args.all, limit, args.grep, current_pids)
+        lines = summarize(raw, package, start, ids, bool(args.all or not ids), limit, args.grep, current_pids)
         result = {"attempt": attempt, "start_epoch": start, "serial_hash": serial_hash, "package": package,
                   "identity": identity(serial, user, package, artifact), "fallback": fallback,
                   "lost_sources": lost, "lines": lines, "matched": bool(lines)}

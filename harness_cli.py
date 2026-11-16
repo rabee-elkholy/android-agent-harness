@@ -1205,6 +1205,8 @@ SELFTEST_PROGRESS_SECONDS = 30
 # Suites long enough to dominate a parallel run are split into contiguous shards (parallel mode only).
 SELFTEST_SHARDS = {
     "_daily_workflow_selftest.py": 12,
+    "_antigravity_stability_selftest.py": 8,
+    "_ecosystem_upgrades_selftest.py": 5,
     "_vnext_selftest.py": 4,
     "_phase_review_v2_selftest.py": 4,
     "_worktree_handoff_selftest.py": 2,
@@ -1214,16 +1216,19 @@ SELFTEST_SHARDS = {
     "_task_isolation_selftest.py": 2,
     "_host_continuation_selftest.py": 2,
 }
-# Measured full-suite seconds on Windows (2026-09-28); only the start order uses them, longest first,
-# so the long suites never begin last. Unlisted suites count as short.
+# Measured full-suite seconds; only the start order uses them (expected / shards, longest first),
+# so heavy suites and singleton tests never begin near the end. Unlisted suites count as short.
 SELFTEST_EXPECTED_SECONDS = {
     "_daily_workflow_selftest.py": 1420,
+    "_antigravity_stability_selftest.py": 2000,
+    "_ecosystem_upgrades_selftest.py": 1400,
     "_vnext_selftest.py": 455,
     "_phase_review_v2_selftest.py": 380,
     "_task_isolation_selftest.py": 205,
     "_host_continuation_selftest.py": 200,
     "_worktree_handoff_selftest.py": 160,
     "_review_models_selftest.py": 150,
+    "_web_relay_selftest.py": 140,
     "_stabilization_v41_selftest.py": 140,
     "_verification_value_selftest.py": 130,
     "_android_scenarios_selftest.py": 125,

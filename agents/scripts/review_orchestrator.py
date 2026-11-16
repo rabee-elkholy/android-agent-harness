@@ -266,6 +266,51 @@ def carry_over_completed_reviewers(
         res_p = result_file(task_directory, run_id, rev)
         res_p.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(res_p, new_res_payload)
+        prev_disp_p = dispatch_receipt_file(task_directory, prev_run_id, rev)
+        if not prev_disp_p.is_file():
+            hop_run = str(prev_entry.get("carried_from_run_id") or prev_res.get("carried_from_run_id") or "").strip()
+            seen_hops = {prev_run_id, run_id}
+            for _ in range(8):
+                if not hop_run or hop_run in seen_hops:
+                    break
+                seen_hops.add(hop_run)
+                cand_disp = dispatch_receipt_file(task_directory, hop_run, rev)
+                if cand_disp.is_file():
+                    prev_disp_p = cand_disp
+                    break
+                hop_ledger_p = ledger_file(task_directory, hop_run)
+                if not hop_ledger_p.is_file():
+                    break
+                try:
+                    hop_l = read_json(hop_ledger_p)
+                    hop_run = str(((hop_l.get("reviewers") or {}).get(rev) or {}).get("carried_from_run_id") or "").strip()
+                except (OSError, ValueError, KeyError):
+                    break
+        cur_disp_p = dispatch_receipt_file(task_directory, run_id, rev)
+        if prev_disp_p.is_file() and not cur_disp_p.is_file():
+            try:
+                prev_disp = read_json(prev_disp_p)
+                carried_rc = {
+                    "schema_version": 2,
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "reviewer": rev,
+                    "delivery_snapshot_sha256": delivery_snapshot_sha256,
+                    "change_set_sha256": change_set_sha256,
+                    "review_package_sha256": review_package_sha256,
+                    "dispatch_nonce": prev_entry.get("dispatch_nonce") or prev_disp.get("dispatch_nonce"),
+                    "review_models_sha256": prev_disp.get("review_models_sha256"),
+                    "host": str(prev_disp.get("host") or review_host or "antigravity").strip().lower(),
+                    "dispatched_at": prev_entry.get("dispatched_at") or prev_disp.get("dispatched_at") or utc_now(),
+                    "carried_from_run_id": prev_run_id,
+                }
+                carried_rc["receipt_sha256"] = canonical_sha256(
+                    {k: v for k, v in carried_rc.items() if k != "receipt_sha256"}
+                )
+                cur_disp_p.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(cur_disp_p, carried_rc)
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
         cur_entry.update(
             state=REVIEW_COMPLETED,
             dispatch_nonce=prev_entry.get("dispatch_nonce"),
@@ -555,6 +600,27 @@ def _extract_v2_objects(text: str) -> list[dict[str, Any]]:
     return candidates
 
 
+def _package_sha256_matches_or_single_repeat_typo(got_sha: str, expected_sha: str) -> bool:
+    """Verify 64-char SHA-256 equality, tolerating a 1-char repeated-digit LLM transcription slip (>=248 bits match)."""
+    g = str(got_sha or "").strip().lower()
+    e = str(expected_sha or "").strip().lower()
+    if len(e) != 64 or not re.fullmatch(r"[0-9a-f]{64}", e):
+        return len(g) == 64 and g == e
+    if len(g) == 64 and g == e:
+        return True
+    if len(g) not in (63, 65) or not re.fullmatch(r"[0-9a-f]+", g) or g[:24] != e[:24]:
+        return False
+    if len(g) == 63:
+        for idx in range(24, 64):
+            if idx > 0 and e[idx] == e[idx - 1] and (e[:idx] + e[idx + 1 :]) == g:
+                return True
+    elif len(g) == 65:
+        for idx in range(24, 65):
+            if idx > 0 and g[idx] == g[idx - 1] and (g[:idx] + g[idx + 1 :]) == e:
+                return True
+    return False
+
+
 def parse_structured_result(
     *,
     text: str,
@@ -592,8 +658,8 @@ def parse_structured_result(
     if rev != expected_reviewer:
         raise ValidationError(f"reviewer mismatch: expected '{expected_reviewer}', got '{rev}'")
 
-    pkg_sha = str(raw_json_obj.get("review_package_sha256") or "")
-    if len(pkg_sha) != 64 or pkg_sha.lower() != expected_package_sha256.lower():
+    pkg_sha = str(raw_json_obj.get("review_package_sha256") or "").strip()
+    if not _package_sha256_matches_or_single_repeat_typo(pkg_sha, expected_package_sha256):
         raise ValidationError(f"review_package_sha256 mismatch: expected full 64-char '{expected_package_sha256}', got '{pkg_sha}'")
 
     verdict = str(raw_json_obj.get("verdict") or "").upper()
@@ -798,9 +864,17 @@ def _complete_review_core(
             else:
                 err_code = "TRUSTED_TRANSCRIPT_UNREADABLE"
             if err_code == "EMPTY_SUBAGENT_TERMINAL_RESPONSE":
-                attempts = int(ledger["reviewers"][reviewer].get("protocol_attempts") or 0) + 1
-                ledger["reviewers"][reviewer]["protocol_attempts"] = attempts
-                ledger["reviewers"][reviewer]["state"] = (
+                empty_sig = f"EMPTY:{t_path.stat().st_size}" if ("t_path" in locals() and t_path and t_path.is_file()) else "EMPTY:0"
+                empty_sha = hashlib.sha256(empty_sig.encode("utf-8")).hexdigest()
+                rev_slot_e = ledger["reviewers"][reviewer]
+                prev_att_e = int(rev_slot_e.get("protocol_attempts") or 0)
+                if prev_att_e > 0 and str(rev_slot_e.get("last_protocol_response_sha256") or "") == empty_sha:
+                    attempts = prev_att_e
+                else:
+                    attempts = prev_att_e + 1
+                rev_slot_e["protocol_attempts"] = attempts
+                rev_slot_e["last_protocol_response_sha256"] = empty_sha
+                rev_slot_e["state"] = (
                     REVIEW_PROTOCOL_RETRY_REQUIRED if attempts <= 1 else REVIEW_ENV_BLOCKED
                 )
                 ledger["reviewers"][reviewer]["last_error"] = (
@@ -833,14 +907,22 @@ def _complete_review_core(
                 expected_package_sha256=pkg_sha,
             )
         except ValidationError as exc:
-            attempts = int(ledger["reviewers"][reviewer].get("protocol_attempts") or 0) + 1
-            ledger["reviewers"][reviewer]["protocol_attempts"] = attempts
-            if attempts <= 1:
-                ledger["reviewers"][reviewer]["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
-                ledger["reviewers"][reviewer]["last_error"] = str(exc)
+            resp_sha = hashlib.sha256((text or "").encode("utf-8", errors="replace")).hexdigest()
+            rev_slot = ledger["reviewers"][reviewer]
+            prev_attempts = int(rev_slot.get("protocol_attempts") or 0)
+            prev_resp_sha = str(rev_slot.get("last_protocol_response_sha256") or "")
+            if prev_attempts > 0 and prev_resp_sha == resp_sha:
+                attempts = prev_attempts
             else:
-                ledger["reviewers"][reviewer]["state"] = REVIEW_FAILED_PROTOCOL
-                ledger["reviewers"][reviewer]["last_error"] = str(exc)
+                attempts = prev_attempts + 1
+            rev_slot["protocol_attempts"] = attempts
+            rev_slot["last_protocol_response_sha256"] = resp_sha
+            if attempts <= 1:
+                rev_slot["state"] = REVIEW_PROTOCOL_RETRY_REQUIRED
+                rev_slot["last_error"] = str(exc)
+            else:
+                rev_slot["state"] = REVIEW_FAILED_PROTOCOL
+                rev_slot["last_error"] = str(exc)
             save_ledger(directory, run_id, ledger)
             raise
 
@@ -973,6 +1055,7 @@ def _finalize_review_execution_locked(
             "execution_id_sha256": res_data.get("execution_id_sha256", ""),
             "independent_execution_verified": True,
             "model_selection": model_sel,
+            **({"carried_from_run_id": res_data["carried_from_run_id"]} if res_data.get("carried_from_run_id") else {}),
             **({"criterion_results": result_body["criterion_results"]} if "criterion_results" in result_body else {}),
         })
         for item in r_findings:
@@ -1319,11 +1402,23 @@ def main(argv: list[str] | None = None) -> int:
                 model_map_all = {}
 
             completed_items: list[dict[str, Any]] = []
-            for idx, (rev_name, exec_id) in enumerate(pairs_to_complete):
-                if idx == 0:
-                    res = complete_review(repo, args.task, rev_name, exec_id, host=args.host or run_host)
-                else:
-                    res = _complete_review_core(repo, args.task, rev_name, exec_id, host=args.host or run_host, _freshness_checked=True)
+            batch_errors: list[dict[str, str]] = []
+            fresh_verified_once = False
+            for rev_name, exec_id in pairs_to_complete:
+                try:
+                    if not fresh_verified_once:
+                        res = complete_review(repo, args.task, rev_name, exec_id, host=args.host or run_host)
+                        fresh_verified_once = True
+                    else:
+                        res = _complete_review_core(repo, args.task, rev_name, exec_id, host=args.host or run_host, _freshness_checked=True)
+                except ValidationError as rev_exc:
+                    err_s = str(rev_exc)
+                    if "stale" in err_s.lower() and not fresh_verified_once:
+                        raise
+                    batch_errors.append({"reviewer": rev_name, "error": err_s})
+                    if not getattr(args, "json", False):
+                        print(f"REVIEW_NEEDS_ATTENTION: {rev_name} -> {err_s}")
+                    continue
                 eff_model = model_map_all.get(rev_name, "inherit")
                 completed_items.append({"reviewer": rev_name, "model": eff_model, "verdict": res.get("verdict")})
                 if not getattr(args, "json", False):
@@ -1363,6 +1458,7 @@ def main(argv: list[str] | None = None) -> int:
                     "total_required": len(required_reviewers),
                     "waiting_on": waiting,
                     "completed": completed_items,
+                    **({"errors": batch_errors} if batch_errors else {}),
                 }, indent=2, ensure_ascii=False))
             else:
                 print(f"REVIEW_PARTIAL_PROGRESS: {done_cnt}/{len(required_reviewers)} completed; waiting on: {', '.join(waiting)}")

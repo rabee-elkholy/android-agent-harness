@@ -131,9 +131,14 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
                     sdk_adb = (Path(sdk_root).expanduser() / "platform-tools" / adb_name).resolve()
                     if not sdk_adb.is_relative_to(Path(repo).resolve()):
                         trusted.add(sdk_adb)
+        if executable in {"jar", "jar.exe", "javap", "javap.exe"} and os.environ.get("JAVA_HOME"):
+            for jdk_bin in ("jar.exe", "jar", "javap.exe", "javap"):
+                jdk_exe = (Path(os.environ["JAVA_HOME"]).expanduser() / "bin" / jdk_bin).resolve()
+                if not jdk_exe.is_relative_to(Path(repo).resolve()):
+                    trusted.add(jdk_exe)
         if candidate not in trusted:
             return "", []
-    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb"}:
+    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap"}:
         executable = executable[:-4]
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
         if len(tokens) < 2:
@@ -150,7 +155,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[2:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap"}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -371,6 +376,17 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return has_ro_action
     if name == "swift":
         return args in (["--version"], ["-version"], ["--help"], ["-h"])
+    if name == "jar":
+        if not args:
+            return False
+        first_j = args[0]
+        if first_j in {"tf", "-tf", "tvf", "-tvf"} and len(args) == 2 and not args[1].startswith("-"):
+            return True
+        if first_j in {"--list", "-t"} and len(args) in (2, 3):
+            return not any(a.startswith(("-x", "-c", "-u", "--extract", "--create", "--update")) for a in args)
+        return False
+    if name == "javap":
+        return bool(args) and not any(a.startswith("-J") for a in args)
     if name == "run_device" and args[:1] in (["status"], ["ios-status"]) and len(args) == 1:
         return True
     if name == "android_inspect" or (name in {"harness_cli", "android-harness"} and args[:1] == ["android-inspect"]):
@@ -404,7 +420,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             ["maestro", "capabilities"], ["maestro", "list"],
         ):
             return True
-        if args[:1] in (["health"], ["diagnose-session"], ["review-diff"]):
+        if args[:1] in (["health"], ["diagnose-session"], ["review-diff"]) or args[:2] == ["task", "review-brief"]:
             return True
         if args in (["device", "status"], ["device", "ios-status"]):
             return True

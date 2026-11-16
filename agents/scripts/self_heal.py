@@ -246,7 +246,15 @@ def heal_task_state(
     if status == "IMPLEMENTING" and (tdir / "phase-state.json").is_file():
         try:
             from phase_review import PHASE_REVIEWING, compute_ledger_sha, get_phase_substate, load_phase_ledger, phase_ledger_file, phase_review_dir, phase_run_file
-            from review_orchestrator import REVIEW_ENV_BLOCKED, REVIEW_NOT_DISPATCHED
+            from review_orchestrator import (
+                REVIEW_ENV_BLOCKED,
+                REVIEW_FAILED_PROTOCOL,
+                REVIEW_NOT_DISPATCHED,
+                REVIEW_PROTOCOL_RETRY_REQUIRED,
+            )
+            healable_phase_states = {REVIEW_ENV_BLOCKED, REVIEW_FAILED_PROTOCOL, "FAILED_PROTOCOL"}
+            if prepare_fresh_run:
+                healable_phase_states.add(REVIEW_PROTOCOL_RETRY_REQUIRED)
             pstate_cur = read_json(tdir / "phase-state.json")
             cur_pid = str(pstate_cur.get("current_phase_id") or "").strip()
             if cur_pid and get_phase_substate(pstate_cur, cur_pid) == PHASE_REVIEWING:
@@ -257,8 +265,10 @@ def heal_task_state(
                 reset_proles: list[str] = []
                 if ok_pl and isinstance(pledger, dict):
                     for r_role, r_entry in (pledger.get("reviewers") or {}).items():
-                        if isinstance(r_entry, dict) and r_entry.get("state") == REVIEW_ENV_BLOCKED:
+                        if isinstance(r_entry, dict) and r_entry.get("state") in healable_phase_states:
                             r_entry["state"] = REVIEW_NOT_DISPATCHED
+                            r_entry["protocol_attempts"] = 0
+                            r_entry.pop("last_protocol_response_sha256", None)
                             r_entry["last_error"] = None
                             r_entry["last_error_code"] = None
                             r_entry.pop("execution_id", None)
@@ -299,22 +309,38 @@ def heal_task_state(
                 atomic_write_json(crun_file, crun)
                 healed_actions.append("restored_current_run_from_snapshot")
 
-        # 4a. Unblock ENV_BLOCKED final reviewers in-place without discarding passed reviewers or Gradle evidence!
+        # 4a. Unblock ENV_BLOCKED / FAILED_PROTOCOL final reviewers in-place without discarding passed reviewers or Gradle evidence!
         if isinstance(crun, dict) and crun.get("run_id"):
             run_id_cur = str(crun["run_id"])
             try:
-                from review_orchestrator import REVIEW_ENV_BLOCKED, REVIEW_NOT_DISPATCHED, dispatch_receipt_file, load_ledger, review_execution_dir, save_ledger
+                from review_orchestrator import (
+                    REVIEW_ENV_BLOCKED,
+                    REVIEW_FAILED_PROTOCOL,
+                    REVIEW_NOT_DISPATCHED,
+                    REVIEW_PROTOCOL_RETRY_REQUIRED,
+                    dispatch_receipt_file,
+                    load_ledger,
+                    result_file,
+                    review_execution_dir,
+                    save_ledger,
+                )
+                healable_rev_states = {REVIEW_ENV_BLOCKED, REVIEW_FAILED_PROTOCOL}
+                if prepare_fresh_run:
+                    healable_rev_states.add(REVIEW_PROTOCOL_RETRY_REQUIRED)
                 ledger_cur = load_ledger(tdir, run_id_cur)
                 revs_cur = ledger_cur.get("reviewers") or {}
                 reset_roles: list[str] = []
                 for r_role, r_entry in revs_cur.items():
-                    if isinstance(r_entry, dict) and r_entry.get("state") == REVIEW_ENV_BLOCKED:
+                    if isinstance(r_entry, dict) and r_entry.get("state") in healable_rev_states:
                         r_entry["state"] = REVIEW_NOT_DISPATCHED
+                        r_entry["protocol_attempts"] = 0
+                        r_entry.pop("last_protocol_response_sha256", None)
                         r_entry["last_error"] = None
                         r_entry["last_error_code"] = None
                         r_entry.pop("execution_id", None)
                         r_entry.pop("execution_id_sha256", None)
                         dispatch_receipt_file(tdir, run_id_cur, r_role).unlink(missing_ok=True)
+                        result_file(tdir, run_id_cur, r_role).unlink(missing_ok=True)
                         reset_roles.append(r_role)
                 err_marker = review_execution_dir(tdir, run_id_cur) / "post-tool-reconcile-error.json"
                 if reset_roles or err_marker.is_file():
@@ -448,8 +474,8 @@ def heal_task_state(
 
     next_act: dict[str, Any] = {}
     try:
-        from workflow import resolve_next_action
-        next_act = resolve_next_action(repo, resolved_tid, plan, host=host)
+        from workflow import _compact_for_host, resolve_next_action
+        next_act = _compact_for_host(resolve_next_action(repo, resolved_tid, plan, host=host))
     except (OSError, ValueError, ValidationError):
         next_act = {}
 

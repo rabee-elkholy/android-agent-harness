@@ -168,8 +168,12 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
             return {
                 "code": "PHASE_REVIEW_ENV_BLOCKED",
                 "kind": "HARNESS_DIAGNOSTIC",
+                "recovery_command": f"python .agents/harness.py task heal --task-id {task_id}",
                 "blocking": True,
-                "reason": "Phase reviewer subagent launch failed and post-tool reconciliation encountered an error.",
+                "reason": (
+                    "Phase reviewer subagent launch failed and post-tool reconciliation encountered an error. "
+                    f"Run `python .agents/harness.py task heal --task-id {task_id}` to recover in-place."
+                ),
                 "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
                 "expected": {},
             }
@@ -214,8 +218,12 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     return {
                         "code": "PHASE_REVIEW_PROTOCOL_BLOCKED",
                         "kind": "HARNESS_DIAGNOSTIC",
+                        "recovery_command": f"python .agents/harness.py task heal --task-id {task_id}",
                         "blocking": True,
-                        "reason": f"Phase reviewer '{r_name}' failed review protocol repeatedly: {r_info.get('last_error')}.",
+                        "reason": (
+                            f"Phase reviewer '{r_name}' failed review protocol repeatedly: {r_info.get('last_error')}. "
+                            f"Run `python .agents/harness.py task heal --task-id {task_id}` to reset only the failed phase reviewer in-place."
+                        ),
                         "inputs": {"repo": ".", "task_id": task_id, "phase_id": phase_id},
                         "expected": {},
                     }

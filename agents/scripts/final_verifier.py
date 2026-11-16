@@ -1005,23 +1005,65 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                                 break
                             v2_disp_file = v2_exec_root / "dispatch" / f"{rev_name}.json"
                             ledger_rev = (v2_ledger_data.get("reviewers") or {}).get(rev_name) or {}
-                            if v2_disp_file.is_file() or ledger_rev.get("dispatch_nonce"):
-                                if not v2_disp_file.is_file():
+                            carried_from_run = str(
+                                ledger_rev.get("carried_from_run_id")
+                                or v2_res.get("carried_from_run_id")
+                                or rep.get("carried_from_run_id")
+                                or ""
+                            ).strip()
+                            carried_policy_item = next(
+                                (
+                                    c_it for c_it in (policy.get("carried_reviews") or [])
+                                    if isinstance(c_it, dict) and str(c_it.get("reviewer") or "") == rev_name
+                                ),
+                                None,
+                            )
+                            if not carried_from_run and isinstance(carried_policy_item, dict):
+                                carried_from_run = str(carried_policy_item.get("source_run_id") or "").strip()
+                            effective_disp_file = v2_disp_file
+                            expect_rc_run = run_id
+                            expect_rc_snap = snapshot
+                            expect_rc_cs = change_set
+                            carried_ancestor_runs: set[str] = set()
+                            if carried_from_run:
+                                hop_r = carried_from_run
+                                for _ in range(8):
+                                    if not hop_r or hop_r in carried_ancestor_runs or hop_r == run_id:
+                                        break
+                                    carried_ancestor_runs.add(hop_r)
+                                    src_disp_candidate = v2_exec_root.parent / hop_r / "dispatch" / f"{rev_name}.json"
+                                    src_ledger_p = v2_exec_root.parent / hop_r / "ledger.json"
+                                    src_l_doc = read_json(src_ledger_p) if src_ledger_p.is_file() else {}
+                                    if not effective_disp_file.is_file() and src_disp_candidate.is_file():
+                                        effective_disp_file = src_disp_candidate
+                                        expect_rc_run = hop_r
+                                        if isinstance(carried_policy_item, dict) and str(carried_policy_item.get("source_run_id") or "") == hop_r:
+                                            expect_rc_snap = str(carried_policy_item.get("source_snapshot") or src_l_doc.get("delivery_snapshot_sha256") or snapshot)
+                                            expect_rc_cs = str(carried_policy_item.get("source_change_set") or src_l_doc.get("change_set_sha256") or change_set)
+                                        else:
+                                            expect_rc_snap = str(src_l_doc.get("delivery_snapshot_sha256") or snapshot)
+                                            expect_rc_cs = str(src_l_doc.get("change_set_sha256") or change_set)
+                                    hop_r = str((((src_l_doc.get("reviewers") or {}).get(rev_name) or {}).get("carried_from_run_id")) or "").strip()
+                            if effective_disp_file.is_file() or ledger_rev.get("dispatch_nonce"):
+                                if not effective_disp_file.is_file():
                                     err_msg = f"reviewer {rev_name} Review Protocol V2 dispatch receipt is missing"
                                     reasons.append(err_msg)
                                     checks[-1]["status"] = "FAIL"
                                     checks[-1]["detail"] = err_msg
                                     break
                                 try:
-                                    v2_rc = read_json(v2_disp_file)
+                                    v2_rc = read_json(effective_disp_file)
                                     exp_v2_rc_sha = canonical_sha256({k: v for k, v in v2_rc.items() if k != "receipt_sha256"})
+                                    rc_run_ok = v2_rc.get("run_id") == expect_rc_run
+                                    rc_snap_ok = v2_rc.get("delivery_snapshot_sha256") == expect_rc_snap
+                                    rc_cs_ok = v2_rc.get("change_set_sha256") == expect_rc_cs
                                     if (
                                         v2_rc.get("schema_version") != 2
                                         or v2_rc.get("reviewer") != rev_name
                                         or v2_rc.get("task_id") != plan.get("task_id")
-                                        or v2_rc.get("run_id") != run_id
-                                        or v2_rc.get("delivery_snapshot_sha256") != snapshot
-                                        or v2_rc.get("change_set_sha256") != change_set
+                                        or not rc_run_ok
+                                        or not rc_snap_ok
+                                        or not rc_cs_ok
                                         or v2_rc.get("receipt_sha256") != exp_v2_rc_sha
                                     ):
                                         err_msg = f"reviewer {rev_name} Review Protocol V2 dispatch receipt is invalid or mismatched"
@@ -1036,7 +1078,13 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                                     checks[-1]["detail"] = err_msg
                                     break
                         proof = rep.get("execution_proof") or {}
-                        if proof.get("task_id") and (proof.get("task_id") != plan.get("task_id") or proof.get("run_id") != run_id):
+                        allowed_proof_runs = {run_id}
+                        if int(evidence.get("review_protocol_version") or 0) >= 2:
+                            allowed_proof_runs |= carried_ancestor_runs
+                            _c_run = str((rep.get("carried_from_run_id") or ((v2_ledger_data.get("reviewers") or {}).get(rev_name) or {}).get("carried_from_run_id") or "")).strip()
+                            if _c_run:
+                                allowed_proof_runs.add(_c_run)
+                        if proof.get("task_id") and (proof.get("task_id") != plan.get("task_id") or proof.get("run_id") not in allowed_proof_runs):
                             err_msg = f"reviewer {rev_name} execution proof task/run mismatch"
                             reasons.append(err_msg)
                             checks[-1]["status"] = "FAIL"

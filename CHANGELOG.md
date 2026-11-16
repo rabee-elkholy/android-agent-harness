@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.21] - 2026-11-16
+
+### Fixed & Improved
+- **Carried Review Protocol V2 Dispatch Receipt Verification**: `final_verifier.py` and `review_orchestrator.py` now preserve and verify `carried_from_run_id` V2 dispatch receipts across multi-round review runs, eliminating `HARNESS_CONTRADICTION` deadlocks on `task complete`.
+- **CLI `--json` Plan Compaction Everywhere**: `_workflow/engine.py` compacts `base_file_identities` and heavy baseline arrays across all `--json` CLI commands (`approve`, `status`, `resume`, `complete`, `prepare-verification`, `verify`), preventing multi-megabyte stdout context dumps.
+- **Review Protocol Idempotency, 1-Char Hex Slip Guard & In-Place `task heal`**: `review_orchestrator.py` keys `protocol_attempts` by response digest, tolerates single-repeated-digit 63/65-char SHA-256 transcription slips (`>=248` matching bits), and `self_heal.py` resets `FAILED_PROTOCOL` reviewers in-place without discarding passed sibling reviewers or Gradle evidence.
+- **Async Subagent Wave Reconciliation & Live Gemini-4 Warm-Cache Direct Routing**: `delegation_policy.py` keeps newly spawned `HEADER_ONLY` async subagent waves open until `COMPLETED_DONE` and routes all live Gemini-4 Lead sessions (`Hydrogen`, `Carbon`, `Argon`, `Orchestrator`) directly on warm cache instead of cold-cache `inherit` Worker subagents.
+- **Interactive Review Cockpit v3**: High-legibility `16px` desktop UI with `A-/A+` zoom, model-authored bilingual `review-brief.json` (`review-diff --title-ar ...` / `task review-brief`), 3-column executive story cards, visible per-file rationale on collapsed cards, and translated auto-collapsed AI review history.
+
 ## [1.3.20] - 2026-11-16
 
 ### Improved
