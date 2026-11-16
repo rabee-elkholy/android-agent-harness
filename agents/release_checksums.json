@@ -134,7 +134,7 @@
     "agents/scripts/gradle_error_parser.py": "256152e2ad903f05a002925f58b119f5d12010ecad8309d02080b5a8521a1b05",
     "agents/scripts/harness_doctor.py": "88209e61202bf0a7d756b53a83b574f61f279f09dbb1e48a8bbd0baff91f066e",
     "agents/scripts/host_continuation.py": "462edf9849ce75b9308ab46a9b96ed5bcd36690bd4bf1aa225b8810bba29c918",
-    "agents/scripts/human_review_cockpit.py": "3281eb4fc9ea87fa0e90dda9f7ca1fdd65e697e94d590c45165082f2f844ffd4",
+    "agents/scripts/human_review_cockpit.py": "f6a4bf484021f39bd845cda7782d90e3f703fc31b599e74697dfba48ca4f5d61",
     "agents/scripts/incident_reporter.py": "5f4d2aa5ccdafa304cf774742452462221ba513624ad762f3d11517762e6df8a",
     "agents/scripts/install_or_update.py": "8c5d14933819331b330b4693d7f531a997d3361702624eb00447466cba9fe2b7",
     "agents/scripts/install_tool_adapters.py": "7dcc6c26e57668accad20148d97d0467e5524737977098bc6af21047af05fd57",
