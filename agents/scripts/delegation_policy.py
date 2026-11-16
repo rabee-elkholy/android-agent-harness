@@ -2872,10 +2872,12 @@ def check_and_record_lead_post_subagent_read(
     sample = wave_entries[-1]
     a_type = str(sample.get("agent_type") or "")
 
-    # Block bloated >220-line or full-file reads on large code files (>350 lines) immediately without burning a surgical slot
+    # Nonexistent paths return `file does not exist` in 0ms without loading file tokens; never burn post-scout read slots on path typos.
     if is_view and target:
         try:
             cand = Path(target).expanduser().resolve() if Path(target).expanduser().is_absolute() else (repo / target).resolve()
+            if not cand.exists():
+                return (True, "", "")
             if cand.is_file() and cand.suffix.lower() in {".kt", ".kts", ".java", ".swift", ".xml"}:
                 total_lines = cand.read_text(encoding="utf-8", errors="replace").count("\n") + 1
                 if total_lines > LARGE_SOURCE_FILE_LINE_THRESHOLD:

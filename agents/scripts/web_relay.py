@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -315,8 +316,52 @@ def _default_outbox_dir() -> Path:
         return fb
 
 
+def _recent_antigravity_user_uploaded_dirs() -> list[Path]:
+    """Return recent Antigravity `.user_uploaded` attachment folders (newest first)."""
+    explicit_up = os.environ.get("HARNESS_USER_UPLOADED_DIR", "").strip()
+    if explicit_up:
+        up_p = Path(explicit_up).expanduser().resolve()
+        return [up_p] if up_p.is_dir() else []
+    if any(
+        os.environ.get(k, "").strip()
+        for k in ("HARNESS_WEB_RELAY_DIR", "HARNESS_WEB_RELAY_OUTBOX", "HARNESS_WEB_RELAY_DOWNLOADS", "HARNESS_DOWNLOADS_DIR")
+    ):
+        return []
+    roots: list[Path] = []
+    ag_env = os.environ.get("ANTIGRAVITY_APP_DATA", "").strip()
+    if ag_env:
+        roots.append(Path(ag_env).expanduser() / "brain")
+    try:
+        roots.append(Path.home() / ".gemini" / "antigravity" / "brain")
+    except (OSError, RuntimeError):
+        pass
+    found: list[tuple[float, Path]] = []
+    now = time.time()
+    for brain_root in roots:
+        if not brain_root.is_dir():
+            continue
+        try:
+            for conv_dir in brain_root.iterdir():
+                up_dir = conv_dir / ".user_uploaded"
+                if up_dir.is_dir():
+                    mtime = up_dir.stat().st_mtime
+                    if (now - mtime) <= 7200:
+                        found.append((mtime, up_dir.resolve()))
+        except OSError:
+            continue
+    found.sort(key=lambda item: item[0], reverse=True)
+    out: list[Path] = []
+    for _, d in found[:5]:
+        if d not in out:
+            out.append(d)
+    return out
+
+
 def _default_downloads_dirs() -> list[Path]:
     dirs: list[Path] = []
+    for up_d in _recent_antigravity_user_uploaded_dirs():
+        if up_d not in dirs:
+            dirs.append(up_d)
     for env_key in ("HARNESS_WEB_RELAY_DIR", "HARNESS_WEB_RELAY_OUTBOX", "HARNESS_WEB_RELAY_DOWNLOADS", "HARNESS_DOWNLOADS_DIR"):
         val = os.environ.get(env_key, "").strip()
         if val:
@@ -1296,6 +1341,49 @@ def _strip_trailing_json_commas(src: str) -> str:
     return "".join(out)
 
 
+def _is_template_example_merge_obj(obj: dict[str, Any]) -> bool:
+    """Reject schema documentation examples embedded inside outgoing Context Pack `.md` files."""
+    raw_nf = obj.get("need_files") or obj.get("needed_files") or []
+    if raw_nf == ["relative/path/to/MissingFile.kt"] or (
+        str(obj.get("reason") or "").strip() == "Why full body of this file is required before editing"
+    ):
+        return True
+    ops = obj.get("operations")
+    if isinstance(ops, list) and ops:
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            if op.get("path") == "path/to/NewFileOrTestOrVectorDrawable.kt":
+                return True
+            hunks = op.get("hunks")
+            if isinstance(hunks, list) and any(
+                isinstance(h, dict) and h.get("search") == "exact existing lines from FILE block"
+                for h in hunks
+            ):
+                return True
+    return False
+
+
+def _is_outgoing_context_pack_text(raw_text: str) -> bool:
+    stripped = (raw_text or "").lstrip()
+    return stripped.startswith("# Android Agent Harness — Web-Relay Context Pack")
+
+
+def _detect_truncated_merge_pack_id(raw_text: str, known_packs: set[str]) -> str:
+    """Detect a pasted/uploaded HARNESS_WEB_MERGE_V1 JSON snippet that was truncated mid-stream."""
+    if not raw_text or _is_outgoing_context_pack_text(raw_text):
+        return ""
+    if f'"{WEB_MERGE_SCHEMA}"' not in raw_text:
+        return ""
+    m_pid = re.search(r'"pack_id"\s*:\s*"(wpack-[a-f0-9]{12})"', raw_text)
+    if not m_pid:
+        return ""
+    pid = m_pid.group(1)
+    if known_packs and pid not in known_packs:
+        return ""
+    return pid
+
+
 def _extract_merge_json_from_text(raw_text: str) -> dict[str, Any] | None:
     text = (raw_text or "").strip()
     if not text:
@@ -1304,7 +1392,7 @@ def _extract_merge_json_from_text(raw_text: str) -> dict[str, Any] | None:
     for candidate_text in (text, _strip_trailing_json_commas(text)):
         try:
             obj = json.loads(candidate_text)
-            if isinstance(obj, dict) and obj.get("schema") == WEB_MERGE_SCHEMA:
+            if isinstance(obj, dict) and obj.get("schema") == WEB_MERGE_SCHEMA and not _is_template_example_merge_obj(obj):
                 return obj
         except ValueError:
             pass
@@ -1319,7 +1407,11 @@ def _extract_merge_json_from_text(raw_text: str) -> dict[str, Any] | None:
             while brace_pos != -1:
                 try:
                     obj, _ = decoder.raw_decode(candidate_text, brace_pos)
-                    if isinstance(obj, dict) and obj.get("schema") == WEB_MERGE_SCHEMA:
+                    if (
+                        isinstance(obj, dict)
+                        and obj.get("schema") == WEB_MERGE_SCHEMA
+                        and not _is_template_example_merge_obj(obj)
+                    ):
                         matched_objs.append(obj)
                         break
                 except ValueError:
@@ -1345,15 +1437,26 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
                         if parsed:
                             return parsed, f"zip:{fp}"
             raise ValidationError(f"ZIP file '{fp}' does not contain a valid {WEB_MERGE_SCHEMA} JSON document.")
-        parsed = _extract_merge_json_from_text(fp.read_text(encoding="utf-8", errors="replace"))
+        raw_fp = fp.read_text(encoding="utf-8", errors="replace")
+        parsed = _extract_merge_json_from_text(raw_fp)
         if not parsed:
+            if _detect_truncated_merge_pack_id(raw_fp, set()):
+                raise ValidationError(
+                    f"WEB_MERGE_JSON_TRUNCATED: File '{fp}' begins a `{WEB_MERGE_SCHEMA}` payload but is cut off before the closing JSON brace. "
+                    "Download the complete `harness-merge-*.json` file from Gemini Web (or copy after generation finishes) and re-run `web-apply`."
+                )
             raise ValidationError(f"File '{fp}' does not contain a valid `{WEB_MERGE_SCHEMA}` JSON payload.")
         return parsed, f"file:{fp}"
 
     if use_stdin:
         from _vnext_common import read_utf8_stdin
-        parsed = _extract_merge_json_from_text(read_utf8_stdin())
+        raw_in = read_utf8_stdin()
+        parsed = _extract_merge_json_from_text(raw_in)
         if not parsed:
+            if _detect_truncated_merge_pack_id(raw_in, set()):
+                raise ValidationError(
+                    f"WEB_MERGE_JSON_TRUNCATED: Standard input begins a `{WEB_MERGE_SCHEMA}` payload but is truncated before JSON completion."
+                )
             raise ValidationError(f"Standard input did not contain a valid `{WEB_MERGE_SCHEMA}` JSON payload.")
         return parsed, "stdin"
 
@@ -1370,15 +1473,20 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             except (OSError, ValueError):
                 unapplied_packs.add(pf.stem)
 
+    truncated_sources: list[tuple[float, str, str]] = []
     clip_fallback: dict[str, Any] | None = None
     clip_txt = _read_clipboard_text()
-    if clip_txt:
+    if clip_txt and not _is_outgoing_context_pack_text(clip_txt):
         parsed = _extract_merge_json_from_text(clip_txt)
         if parsed:
             cpid = str(parsed.get("pack_id") or "")
             if not known_packs or cpid in known_packs:
                 return parsed, "clipboard"
             clip_fallback = parsed
+        else:
+            t_pid = _detect_truncated_merge_pack_id(clip_txt, unapplied_packs or known_packs)
+            if t_pid:
+                truncated_sources.append((time.time(), t_pid, "clipboard"))
 
     candidates: list[tuple[int, float, dict[str, Any], Path]] = []
     inbox_dir = _web_relay_state_dir(repo) / "inbox"
@@ -1389,8 +1497,11 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
                 continue
             if cand.suffix.lower() not in {".json", ".md", ".txt", ".zip"}:
                 continue
+            if re.search(r"-wpack-[a-f0-9]{12}\.md$", cand.name, re.I):
+                continue
             try:
-                if cand.stat().st_size > 20 * 1024 * 1024:
+                st = cand.stat()
+                if st.st_size > 20 * 1024 * 1024:
                     continue
             except OSError:
                 continue
@@ -1403,12 +1514,19 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
                                 doc = _extract_merge_json_from_text(zf.read(zn).decode("utf-8", errors="replace"))
                                 dpid = str((doc or {}).get("pack_id") or "")
                                 if doc and dpid in known_packs:
-                                    candidates.append((1 if dpid in unapplied_packs else 0, cand.stat().st_mtime, doc, cand))
+                                    candidates.append((1 if dpid in unapplied_packs else 0, st.st_mtime, doc, cand))
                 else:
-                    doc = _extract_merge_json_from_text(cand.read_text(encoding="utf-8", errors="replace"))
+                    raw_cand = cand.read_text(encoding="utf-8", errors="replace")
+                    if _is_outgoing_context_pack_text(raw_cand):
+                        continue
+                    doc = _extract_merge_json_from_text(raw_cand)
                     dpid = str((doc or {}).get("pack_id") or "")
                     if doc and dpid in known_packs:
-                        candidates.append((1 if dpid in unapplied_packs else 0, cand.stat().st_mtime, doc, cand))
+                        candidates.append((1 if dpid in unapplied_packs else 0, st.st_mtime, doc, cand))
+                    elif not doc:
+                        t_pid = _detect_truncated_merge_pack_id(raw_cand, unapplied_packs or known_packs)
+                        if t_pid:
+                            truncated_sources.append((st.st_mtime, t_pid, str(cand)))
             except OSError:
                 continue
     if candidates:
@@ -1419,8 +1537,17 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
     if clip_fallback is not None:
         return clip_fallback, "clipboard"
 
+    if truncated_sources:
+        truncated_sources.sort(key=lambda item: item[0], reverse=True)
+        _, t_pid, t_src = truncated_sources[0]
+        raise ValidationError(
+            f"WEB_MERGE_JSON_TRUNCATED: Detected `{WEB_MERGE_SCHEMA}` for pack `{t_pid}` in `{t_src}`, "
+            "but the JSON text was truncated mid-stream (likely chat input length cap or copying before Gemini Web finished). "
+            f"Download `harness-merge-{t_pid}.json` into `Downloads` (or copy the full JSON block via Gemini Web's copy button) and re-run `web-apply`."
+        )
+
     raise ValidationError(
-        f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{WEB_MERGE_SCHEMA}` JSON found in Clipboard or Downloads. "
+        f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{WEB_MERGE_SCHEMA}` JSON found in Clipboard, `.user_uploaded`, or Downloads. "
         "Copy the JSON block from Gemini Web (or click Download on `harness-merge-*.json`) and re-run `web-apply`."
     )
 
@@ -1780,14 +1907,26 @@ def apply_web_merge(
                 "requested_files": req_files,
             }
         norm_req: list[str] = []
+        missing_req: list[str] = []
         for rf in req_files:
             try:
                 nr = _norm_rel(repo, rf)
-                if nr not in norm_req:
-                    norm_req.append(nr)
+                blocked_nf, _ = _is_protected_or_secret_path(nr)
+                if blocked_nf:
+                    missing_req.append(rf)
+                    continue
+                if (repo / nr).is_file():
+                    if nr not in norm_req:
+                        norm_req.append(nr)
+                else:
+                    missing_req.append(rf)
             except ValidationError:
-                if rf not in norm_req:
-                    norm_req.append(rf)
+                missing_req.append(rf)
+        if not norm_req:
+            raise ValidationError(
+                f"NEED_FILES_NOT_FOUND: Requested file(s) do not exist in repository `{repo.name}` (or are protected): {missing_req}. "
+                "Do NOT apply template examples; copy or download the actual Gemini Web reply and re-run `web-apply`."
+            )
         cur_ed_keys = list((pack_doc.get("editable_files") or {}).keys())
         merged_active_files = list(dict.fromkeys(cur_ed_keys + norm_req))
         raw_prev_pending = pack_doc.get("pending_batches") or []

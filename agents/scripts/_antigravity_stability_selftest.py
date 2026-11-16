@@ -6445,5 +6445,425 @@ class TestV1317LiveSessionHardening(unittest.TestCase):
             self.assertIsNone(resolve_compatible_windows_daemon_java_home(proj, env, os_name="nt", pid_alive_fn=lambda pid: pid in {4455, 7788}))
 
 
+class TestV1318ForensicIntegration(unittest.TestCase):
+    """Comprehensive regression & edge-case suite for all 6 v1.3.18 forensic upgrades."""
+
+    def test_v1318_01_multimodule_test_failure_only_attribution(self):
+        import run_gradle_task
+
+        batched_tasks = ":app:testDebugUnitTest :base:testDebugUnitTest :fat-burner:testDebugUnitTest :gdpr:testDebugUnitTest"
+        single_mod_fail_log = (
+            "> Task :app:testDebugUnitTest FAILED\n"
+            "FAILURE: Build failed with an exception.\n"
+            "* What went wrong:\n"
+            "Execution failed for task ':app:testDebugUnitTest'.\n"
+            "> There were failing tests. See the report at: file:///E:/repo/app/build/reports/tests/testDebugUnitTest/index.html\n"
+            "* Try:\n"
+            "> Run with --scan to get full insights.\n"
+            "BUILD FAILED in 1m 7s\n"
+        )
+        # 1. Single failing module in a 4-module `--continue` batch -> True
+        self.assertTrue(run_gradle_task.test_failure_only(batched_tasks, single_mod_fail_log))
+
+        # 2. Two failing test modules in a 4-module `--continue` batch -> True
+        two_mod_fail_log = (
+            "> Task :app:testDebugUnitTest FAILED\n"
+            "> Task :base:testDebugUnitTest FAILED\n"
+            "FAILURE: Build completed with 2 failures.\n\n"
+            "1: Task failed with an exception.\n"
+            "-----------\n"
+            "* What went wrong:\n"
+            "Execution failed for task ':app:testDebugUnitTest'.\n"
+            "> There were failing tests. See the report at: file:///E:/repo/app/index.html\n\n"
+            "2: Task failed with an exception.\n"
+            "-----------\n"
+            "* What went wrong:\n"
+            "Execution failed for task ':base:testDebugUnitTest'.\n"
+            "> There were failing tests. See the report at: file:///E:/repo/base/index.html\n\n"
+            "BUILD FAILED in 42s\n"
+        )
+        self.assertTrue(run_gradle_task.test_failure_only(batched_tasks, two_mod_fail_log))
+
+        # 3. Mixed test failure + Kotlin compilation failure -> False
+        mixed_compile_log = (
+            "e: file:///E:/repo/base/src/test/kotlin/X.kt:12:5 Unresolved reference 'foo'.\n"
+            "> Task :base:compileDebugUnitTestKotlin FAILED\n"
+            + single_mod_fail_log
+        )
+        self.assertFalse(run_gradle_task.test_failure_only(batched_tasks, mixed_compile_log))
+
+        # 4. Unrequested module test failure -> False
+        self.assertFalse(
+            run_gradle_task.test_failure_only(
+                ":app:testDebugUnitTest :base:testDebugUnitTest",
+                single_mod_fail_log + "\n> Task :other:testDebugUnitTest FAILED\n",
+            )
+        )
+
+        # 5. Single task with mismatched failure count -> False
+        self.assertFalse(
+            run_gradle_task.test_failure_only(
+                ":app:testDebugUnitTest",
+                "FAILURE: Build completed with 2 failures.\n" + single_mod_fail_log,
+            )
+        )
+
+    def test_v1318_02_web_mode_pre_apply_bug_routing_vs_normal_tdd(self):
+        import io
+        import contextlib
+        import subprocess as sp
+        from _workflow import engine as wf_eng
+        from execution_mode import set_execution_mode
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            sp.run(["git", "init", "-q"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "demo"\ninclude(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            (repo / "app/src/main/java/com/demo").mkdir(parents=True)
+            (repo / "app/src/main/java/com/demo/NavBug.kt").write_text("package com.demo\nclass NavBug\n", encoding="utf-8")
+            (repo / "app/src/test/java/com/demo").mkdir(parents=True)
+            (repo / "app/src/test/java/com/demo/NavBugTest.kt").write_text("package com.demo\nclass NavBugTest\n", encoding="utf-8")
+            sp.run(["git", "add", "."], cwd=repo, check=True)
+            sp.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            set_execution_mode(repo, choice="web-project", source="conversation", proof_reference="use web mode")
+            parser = wf_eng.build_parser()
+            drafted = wf_eng.draft(parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", "bug-web-1",
+                "--kind", "BUG", "--outcome", "Fix backstack bug cleanly",
+                "--expected-files", "app/src/main/java/com/demo/NavBug.kt,app/src/test/java/com/demo/NavBugTest.kt",
+            ]))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                wf_eng.main([
+                    "approve", "--repo", str(repo), "--task-id", "bug-web-1",
+                    "--source", "conversation", "--proof-reference", "approved",
+                    "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", drafted["plan_sha256"][:12],
+                ])
+            approve_out = buf.getvalue()
+            self.assertIn("NEXT_ACTION=WEB_RELAY_PACK: python .agents/harness.py web-pack --task-id bug-web-1", approve_out)
+            self.assertNotIn("BEFORE_FIRST_EDIT=", approve_out)
+
+            act_web = wf_eng.resolve_next_action(repo, "bug-web-1", host="antigravity")
+            self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act_web["code"])
+            self.assertNotIn("before_first_edit", act_web)
+            self.assertEqual("WEB_RELAY_ACTIVE", act_web["delegation_advisory"]["strategy"])
+            self.assertIn("web-pack --task-id bug-web-1", act_web["delegation_advisory"]["next_command"])
+
+            # Switching mid-task from web -> normal before applying any pack restores strict local CAPTURE_RED_EVIDENCE!
+            set_execution_mode(repo, choice="normal-task", task_id="bug-web-1", source="conversation", proof_reference="switch local")
+            act_normal = wf_eng.resolve_next_action(repo, "bug-web-1", host="antigravity")
+            self.assertEqual("CAPTURE_RED_EVIDENCE", act_normal["code"])
+
+    def test_v1318_03_web_relay_template_immunity_user_uploaded_and_truncation(self):
+        import subprocess as sp
+        from unittest import mock
+        import web_relay
+        from _vnext_common import ValidationError
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            outbox = root / "outbox"
+            user_up = root / "brain/conv-1/.user_uploaded"
+            (repo / ".agents/state").mkdir(parents=True)
+            outbox.mkdir()
+            user_up.mkdir(parents=True)
+            sp.run(["git", "init", "-q"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            sp.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "demo"\ninclude(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            f_kt = repo / "app/src/main/java/com/demo/Screen.kt"
+            f_kt.parent.mkdir(parents=True)
+            f_kt.write_text("package com.demo\nclass Screen {\n    fun v(): Int = 1\n}\n", encoding="utf-8")
+            sp.run(["git", "add", "."], cwd=repo, check=True)
+            sp.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            # Verify ANTIGRAVITY_APP_DATA `.user_uploaded` auto-discovery runs cleanly without env overrides
+            with mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}, clear=True):
+                discovered = web_relay._recent_antigravity_user_uploaded_dirs()
+                self.assertIn(user_up.resolve(), discovered)
+
+            env_patch = {
+                "HARNESS_WEB_RELAY_DIR": str(outbox),
+                "HARNESS_USER_UPLOADED_DIR": str(user_up),
+                "HARNESS_NO_CLIPBOARD": "1",
+            }
+            with mock.patch.dict(os.environ, env_patch, clear=False), \
+                 mock.patch.object(web_relay, "_read_clipboard_text", return_value=""):
+                pack_res = web_relay.build_web_pack(
+                    repo,
+                    prompt="Update Screen.v to 2",
+                    kind="FEATURE",
+                    files=["app/src/main/java/com/demo/Screen.kt"],
+                    no_clipboard=True,
+                )
+                bundle_md = Path(pack_res["bundle_file"]).read_text(encoding="utf-8")
+                # 1. Context Pack .md itself (even if copied into clipboard or sitting in outbox) NEVER extracts template examples!
+                self.assertIsNone(web_relay._extract_merge_json_from_text(bundle_md))
+
+                with mock.patch.object(web_relay, "_read_clipboard_text", return_value=bundle_md):
+                    with self.assertRaises(ValidationError) as ctx_nf:
+                        web_relay.apply_web_merge(repo, source="conversation", proof_reference="apply")
+                    self.assertIn("WEB_MERGE_PAYLOAD_NOT_FOUND", str(ctx_nf.exception))
+
+                # 1b. Truncated clipboard payload emits WEB_MERGE_JSON_TRUNCATED
+                trunc_clip = '{"schema": "HARNESS_WEB_MERGE_V1", "pack_id": "' + pack_res["pack_id"] + '", "operations": ['
+                with mock.patch.object(web_relay, "_read_clipboard_text", return_value=trunc_clip):
+                    with self.assertRaises(ValidationError) as ctx_clip_tr:
+                        web_relay.apply_web_merge(repo, source="conversation", proof_reference="apply")
+                    self.assertIn("WEB_MERGE_JSON_TRUNCATED", str(ctx_clip_tr.exception))
+
+                # 2. Explicit NEED_FILES with nonexistent path raises NEED_FILES_NOT_FOUND (no bogus expanded pack!)
+                bad_nf = outbox / "bad_nf.json"
+                bad_nf.write_text(json.dumps({
+                    "schema": "HARNESS_WEB_MERGE_V1",
+                    "pack_id": pack_res["pack_id"],
+                    "status": "NEED_FILES",
+                    "need_files": ["app/src/main/java/com/demo/DoesNotExist.kt"],
+                }), encoding="utf-8")
+                with self.assertRaises(ValidationError) as ctx_bad_nf:
+                    web_relay.apply_web_merge(repo, merge_file=str(bad_nf), source="conversation", proof_reference="apply")
+                self.assertIn("NEED_FILES_NOT_FOUND", str(ctx_bad_nf.exception))
+                bad_nf.unlink()
+
+                # 3. Truncated JSON in Antigravity `.user_uploaded/` raises explicit WEB_MERGE_JSON_TRUNCATED!
+                trunc_f = user_up / "media_1_trunc.json"
+                trunc_f.write_text(
+                    '{\n  "schema": "HARNESS_WEB_MERGE_V1",\n  "pack_id": "' + pack_res["pack_id"] + '",\n  "status": "READY",\n  "operations": [{"path": "import com.demo.',
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValidationError) as ctx_tr:
+                    web_relay.apply_web_merge(repo, source="conversation", proof_reference="apply")
+                self.assertIn("WEB_MERGE_JSON_TRUNCATED", str(ctx_tr.exception))
+                self.assertIn("media_1_trunc.json", str(ctx_tr.exception))
+
+                # 4. Complete JSON uploaded to `.user_uploaded/` afterwards overrides truncated file and applies cleanly!
+                good_f = user_up / "media_2_complete.json"
+                good_f.write_text(json.dumps({
+                    "schema": "HARNESS_WEB_MERGE_V1",
+                    "pack_id": pack_res["pack_id"],
+                    "status": "READY",
+                    "operations": [{
+                        "action": "MODIFY",
+                        "path": "app/src/main/java/com/demo/Screen.kt",
+                        "hunks": [{"search": "fun v(): Int = 1", "replace": "fun v(): Int = 2", "replace_all": False}],
+                    }],
+                }), encoding="utf-8")
+                applied = web_relay.apply_web_merge(repo, source="conversation", proof_reference="apply complete")
+                self.assertIn("media_2_complete.json", applied["origin"])
+                self.assertIn("fun v(): Int = 2", f_kt.read_text(encoding="utf-8"))
+
+    def test_v1318_04_de_triggered_reminders_and_concurrent_verification_lock_guard(self):
+        import io
+        import contextlib
+        from unittest import mock
+        import pre_invocation_reminder as pir
+        import pre_tool_safety as pts
+        from _vnext_common import atomic_write_json, state_root
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            tdir = state_root(repo) / "tasks" / "t-lock"
+            tdir.mkdir(parents=True)
+            plan_p = tdir / "plan.json"
+            for st in ("IMPLEMENTING", "VERIFYING"):
+                atomic_write_json(plan_p, {"task_id": "t-lock", "status": st})
+                atomic_write_json(state_root(repo) / "active-task.json", {"task_id": "t-lock", "plan_path": str(plan_p)})
+                with mock.patch.object(pir, "REPO", repo):
+                    msg = pir._compact_message()
+                self.assertNotIn("<SYSTEM_MESSAGE>", msg)
+                self.assertNotIn("[Message]", msg)
+                self.assertIn("never simulate or fabricate", msg)
+
+            # Simulate an external live PID holding android-build-execution/.write.lock (use PID 1 / ppid)
+            ext_pid = os.getppid()
+            if ext_pid <= 0 or ext_pid == os.getpid():
+                ext_pid = 1
+            lock_dir = state_root(repo) / "android-build-execution"
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(lock_dir / ".write.lock", {"pid": ext_pid, "nonce": "live123", "created_at": "2026-11-16T07:33:11Z"})
+
+            def _run_pts(tool_name: str, tool_args: dict) -> dict:
+                buf = io.StringIO()
+                payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args, "conversationId": "lead-c1"})
+                with mock.patch.object(pts, "REPO", repo), \
+                     mock.patch("evidence_store._pid_alive", side_effect=lambda p: p == ext_pid), \
+                     mock.patch("evidence_store._process_marker", return_value=""), \
+                     mock.patch("sys.stdin", io.StringIO(payload)), \
+                     contextlib.redirect_stdout(buf):
+                    try:
+                        pts.main()
+                    except SystemExit:
+                        pass
+                return json.loads(buf.getvalue().strip())
+
+            # Overlapping verify-steps & review package are blocked while external live PID owns lock!
+            d_vs = _run_pts("run_command", {"CommandLine": "python .agents/harness.py verify-steps --task-id t-lock --host antigravity"})
+            self.assertEqual("deny", d_vs["decision"])
+            self.assertIn("CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS", d_vs.get("reason", ""))
+
+            d_rp = _run_pts("run_command", {"CommandLine": "python .agents/harness.py review package --task-id t-lock"})
+            self.assertEqual("deny", d_rp["decision"])
+            self.assertIn("CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS", d_rp.get("reason", ""))
+
+            # `--help` and `task status` remain allowed even while build lock is held!
+            a_help = _run_pts("run_command", {"CommandLine": "python .agents/harness.py verify-steps --help"})
+            self.assertEqual("allow", a_help["decision"])
+
+    def test_v1318_05_manage_task_idle_and_nonexistent_path_anti_reread_exemption(self):
+        import io
+        import contextlib
+        from unittest import mock
+        import pre_tool_safety as pts
+        import delegation_policy as dp
+        from _workflow import planning as wf_plan
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / ".agents/state").mkdir(parents=True)
+
+            def _call_hook(tool_name: str, tool_args: dict) -> dict:
+                buf = io.StringIO()
+                payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args, "conversationId": "lead-idle"})
+                with mock.patch.object(pts, "REPO", repo), \
+                     mock.patch("sys.stdin", io.StringIO(payload)), \
+                     contextlib.redirect_stdout(buf):
+                    try:
+                        pts.main()
+                    except SystemExit:
+                        pass
+                return json.loads(buf.getvalue().strip())
+
+            # 1. manage_task(list) and manage_task(kill) succeed in IDLE (no active-task.json)!
+            res_list = _call_hook("manage_task", {"Action": "list"})
+            self.assertEqual("allow", res_list["decision"])
+            self.assertIn("permitted across all task states", res_list.get("reason", ""))
+
+            res_kill = _call_hook("manage_task", {"Action": "kill", "TaskId": "conv/task-238"})
+            self.assertEqual("allow", res_kill["decision"])
+
+            # 2. manage_task(status) stays blocked by ZERO-POLLING INVARIANT!
+            res_status = _call_hook("manage_task", {"Action": "status", "TaskId": "conv/task-238"})
+            self.assertEqual("deny", res_status["decision"])
+
+            # 3. Nonexistent read_file paths do NOT deduct from post-scout read counters!
+            real_f = repo / "app/src/main/java/com/demo/RealFile.kt"
+            real_f.parent.mkdir(parents=True)
+            real_f.write_text("package com.demo\nclass RealFile\n", encoding="utf-8")
+            parent_tx = repo / "brain/lead-idle/.system_generated/logs/transcript.jsonl"
+            parent_tx.parent.mkdir(parents=True, exist_ok=True)
+            parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Inspect flow"}) + "\n", encoding="utf-8")
+            dp._save_utility_ledger(repo, {
+                "schema_version": 1,
+                "entries": [{
+                    "execution_id": "scout-1",
+                    "parent_conversation_id": "lead-idle",
+                    "parent_user_turns": 1,
+                    "wave_id": "wave123",
+                    "agent_type": dp.SCOUT_AGENT,
+                    "role": dp.SCOUT_AGENT,
+                    "wave_completed": True,
+                    "dispatched_epoch": 9999999999.0,
+                    "completed_at_epoch": 9999999999.0,
+                    "task_id": "",
+                    "task_status": "IDLE",
+                    "inspected_files": ["app/src/main/java/com/demo/RealFile.kt"],
+                    "lead_post_reads": 0,
+                    "lead_unread_post_reads": 0,
+                }],
+            })
+            with mock.patch("antigravity_runtime.resolve_transcript", side_effect=lambda cid: parent_tx if cid == "lead-idle" else None):
+                for i in range(6):
+                    ok_r, _, _ = dp.check_and_record_lead_post_subagent_read(
+                        repo, "lead-idle",
+                        tool_name="read_file",
+                        args={"Path": str(repo / f"app/src/main/java/com/demo/Missing{i}.kt")},
+                    )
+                    self.assertTrue(ok_r)
+                # All 3 real surgical post-scout reads STILL succeed (proving 6 missing files consumed 0 slots!), and 4th hits cap!
+                for _ in range(3):
+                    ok_real, _, _ = dp.check_and_record_lead_post_subagent_read(
+                        repo, "lead-idle",
+                        tool_name="read_file",
+                        args={"Path": str(real_f)},
+                    )
+                    self.assertTrue(ok_real)
+                ok_4th, _, code_4th = dp.check_and_record_lead_post_subagent_read(
+                    repo, "lead-idle",
+                    tool_name="read_file",
+                    args={"Path": str(real_f)},
+                )
+                self.assertFalse(ok_4th)
+                self.assertEqual("POST_SCOUT_REREAD_CAP_REACHED", code_4th)
+
+            # 4. PHASE_PLAN_REQUIRED highlights shell-safe `id:Title` syntax
+            self.assertIn("Prefer this compact comma-separated 'id:Title' syntax", Path(wf_plan.__file__).read_text(encoding="utf-8"))
+
+    def test_v1318_06_interpolation_aware_check_strings_and_32_log_daemon_alignment(self):
+        import time
+        import check_strings
+        from _live_process import resolve_compatible_windows_daemon_alignment
+
+        # 1. Kotlin UI interpolation-only / symbol-only literals pass, while real prose still fails!
+        self.assertFalse(check_strings._kt_line_has_translatable_literal('binding?.textView228?.text = "$maxProgress % "'))
+        self.assertFalse(check_strings._kt_line_has_translatable_literal('Text("${mins}:${secs}")'))
+        self.assertFalse(check_strings._kt_line_has_translatable_literal('Text("100%")'))
+        self.assertFalse(check_strings._kt_line_has_translatable_literal('tv.setText("%d / %d")'))
+
+        self.assertTrue(check_strings._kt_line_has_translatable_literal('Text("Step $step of $total")'))
+        self.assertTrue(check_strings._kt_line_has_translatable_literal('binding.tv.text = "Loading..."'))
+        self.assertTrue(check_strings._kt_line_has_translatable_literal('Text("مرحبا $userName")'))
+
+        # 2. Windows Gradle daemon alignment scans up to 32 logs (even >24h old live Android Studio daemon behind 20 dead logs)
+        #    and extracts immutable `-Dfile.encoding` / `-Duser.*` properties!
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            proj = root / "proj"
+            gu_home = root / "gradle_home"
+            jbr = root / "Android Studio/jbr"
+            (proj / "gradle/wrapper").mkdir(parents=True)
+            (proj / "gradle/wrapper/gradle-wrapper.properties").write_text(
+                "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip\n",
+                encoding="utf-8",
+            )
+            (jbr / "bin").mkdir(parents=True)
+            (jbr / "bin/java.exe").write_text("", encoding="utf-8")
+            (jbr / "bin/java").write_text("", encoding="utf-8")
+
+            d_dir = gu_home / "daemon/8.9"
+            d_dir.mkdir(parents=True)
+            live_log = d_dir / "daemon-1001.out.log"
+            live_log.write_text(
+                f"DefaultDaemonContext[uid=abc,javaHome={jbr},daemonRegistryDir={d_dir},pid=1001,idleTimeout=10800000,"
+                "priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,"
+                "daemonOpts=-Xmx4096m,-Dfile.encoding=UTF-8,-Duser.country=US,-Duser.language=en,-Duser.variant,--add-opens=java.base/java.util=ALL-UNNAMED]\n",
+                encoding="utf-8",
+            )
+            old_ts = time.time() - (48 * 3600)
+            os.utime(live_log, (old_ts, old_ts))
+
+            # Create 20 newer dead daemon logs ahead of PID 1001
+            for idx in range(20):
+                dead_p = d_dir / f"daemon-{2000 + idx}.out.log"
+                dead_p.write_text(f"DefaultDaemonContext[uid=d{idx},javaHome={jbr},pid={2000 + idx}]\n", encoding="utf-8")
+
+            env = {"GRADLE_USER_HOME": str(gu_home)}
+            jh, opts = resolve_compatible_windows_daemon_alignment(
+                proj, env, os_name="nt", pid_alive_fn=lambda pid: pid == 1001,
+            )
+            self.assertEqual(str(jbr), jh)
+            self.assertIn("-Dfile.encoding=UTF-8", opts)
+            self.assertIn("-Duser.country=US", opts)
+            self.assertIn("-Duser.language=en", opts)
+            self.assertFalse(any(o.startswith("-Xmx") or o.startswith("--add-opens") for o in opts))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

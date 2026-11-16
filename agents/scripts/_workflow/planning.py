@@ -433,7 +433,8 @@ def _build_and_save_plan(
             f"arch_intent={arch_intent}, layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
             'Define semantic phases, for example --phases "p1:Introduce shared API,p2:Migrate feature callers". '
             "Replace the example titles with the task's semantic boundaries. "
-            "A JSON list with id/title and optional expected_files is also supported; "
+            "Prefer this compact comma-separated 'id:Title' syntax on CLI shells (especially Windows PowerShell/cmd) "
+            "to avoid nested JSON quote-escaping errors; a JSON list is only needed programmatically; "
             "no helper file or shell redirection is needed."
         )
 

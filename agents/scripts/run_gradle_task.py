@@ -276,20 +276,31 @@ def first_build_error(raw_log: str) -> str:
 
 
 def test_failure_only(task: str, raw_log: str) -> bool:
-    """Attribute a nonzero exit to one test task, never to another build failure."""
+    """Attribute a nonzero exit exclusively to requested test task(s), never to another build failure."""
+    expected_tasks = {
+        ":" + tok.strip(":")
+        for tok in str(task or "").split()
+        if tok.strip() and not tok.strip().startswith("-")
+    }
+    if not expected_tasks:
+        return False
     failures = re.findall(r"Execution failed for task ['\"]([^'\"]+)['\"]", raw_log)
     failed_tasks = re.findall(r"(?m)^> Task (\S+) FAILED\s*$", raw_log)
     # A section ends at the next '* ' heading, a blank line or the build result: Gradle 9 prints no
     # '* Try:' after a test failure, so the section would otherwise run to the end of the log.
     sections = re.findall(r"(?ms)^\* What went wrong:[ \t]*\n(.*?)(?=^\* |^[ \t]*$|^BUILD (?:FAILED|SUCCESSFUL)|\Z)", raw_log)
-    if len(sections) != 1 or re.search(r"Build completed with (?:[2-9]|\d{2,}) failures", raw_log):
+    if not sections or len(sections) > len(expected_tasks):
         return False
-    details = [line.strip() for line in sections[0].splitlines() if line.strip()]
-    if len(details) != 2 or not details[0].startswith("Execution failed for task ") or not details[1].startswith("> There were failing tests"):
+    multi_fail_m = re.search(r"Build completed with (\d+) failures", raw_log)
+    if multi_fail_m and int(multi_fail_m.group(1)) != len(sections):
         return False
-    expected = ":" + task.strip(":")
+    for sec in sections:
+        details = [line.strip() for line in sec.splitlines() if line.strip()]
+        if len(details) != 2 or not details[0].startswith("Execution failed for task ") or not details[1].startswith("> There were failing tests"):
+            return False
     return (
-        bool(failures) and all(":" + item.strip(":") == expected for item in failures + failed_tasks)
+        bool(failures)
+        and all(":" + item.strip(":") in expected_tasks for item in failures + failed_tasks)
         and "There were failing tests" in raw_log
         and not parse_compiler_errors(raw_log)
     )

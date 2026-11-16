@@ -163,13 +163,13 @@ def _compact_message() -> str:
         return (
             f"Harness [Task {task_id}: IMPLEMENTING]{mode_tag}: Autonomous execution. Do not create new plans or ask for Proceed. "
             f"Record in-scope developer refinements via `python .agents/harness.py task plan-note --task-id {task_id} --text \"<english summary>\" --source conversation --proof-reference \"<words>\"` before `prepare-verification`. "
-            f"When a background command or subagent is still running, yield immediately with ZERO tool calls and never read `.system_generated/tasks/*.log` or emit '!]', '[Message]', '<SYSTEM_MESSAGE>'.{notes_rem}"
+            f"When a background command or subagent is still running, write at most one short status sentence and end your turn immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` and never simulate or fabricate background completion outputs.{notes_rem}"
         )
     if status == "VERIFYING":
         return (
             f"Harness [Task {task_id}: VERIFYING]: Order: 1. preflight -> 2. unit tests -> 3. routed reviewers -> 4. device install (after ALL reviewers pass) -> 5. immediate `ask_question` first token (zero pre-tool prose, 3-section mobile walkthrough, no `|` tables) -> 6. task complete. "
             f"Run workflow.py resume for fixes; do not stall on follow-ups (phone E2E follows .agents/workflows/phone-e2e.md). "
-            f"When a background command or subagent is running, yield immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` or emit '!]', '[Message]'.{notes_rem}"
+            f"When a background command or subagent is running, write at most one short status sentence and end your turn immediately with ZERO tool calls; never read `.system_generated/tasks/*.log` and never simulate or fabricate subagent/task outputs.{notes_rem}"
         )
     if status == "BLOCKED":
         blocked = plan.get("blocked_reviewers", [])

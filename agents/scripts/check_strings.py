@@ -63,6 +63,25 @@ HARDCODED_XML_TEXT = re.compile(
     re.IGNORECASE,
 )
 HAS_LETTERS = re.compile(r"[A-Za-z\u0600-\u06FF]")
+_KT_TEMPLATE_EXPR_RE = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+_KT_STRING_LIT_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
+
+
+def _kt_line_has_translatable_literal(clean_line: str) -> bool:
+    """True when at least one string literal still contains alphabetic/Arabic prose after stripping `$var` / `${expr}` / `%d`."""
+    if '"""' in clean_line:
+        return True
+    lits = [m.group(1) for m in _KT_STRING_LIT_RE.finditer(clean_line)]
+    if not lits:
+        return False
+    for lit in lits:
+        if len(lit) < 2:
+            continue
+        without_interp = _KT_TEMPLATE_EXPR_RE.sub("", lit)
+        without_fmt = PLACEHOLDER_RE.sub("", without_interp)
+        if HAS_LETTERS.search(without_fmt):
+            return True
+    return False
 RESOURCE_CALL = re.compile(
     r"\b(?:stringResource|pluralStringResource|getString|getText|getQuantityString)\s*\([^)]*\)"
 )
@@ -502,11 +521,11 @@ def check_hardcoded_strings(files: list[Path], lines_map: dict[Path, set[int] | 
                 if SKIP_KT_LINE.search(code_line):
                     continue
                 clean_line = RESOURCE_CALL.sub('""', code_line)
-                is_hardcoded = any(pat.search(clean_line) for pat in HARDCODED_KT)
+                is_hardcoded = any(pat.search(clean_line) for pat in HARDCODED_KT) and _kt_line_has_translatable_literal(clean_line)
                 if not is_hardcoded and i > 1:
                     prev_stripped = _cut_line_comment(content.splitlines()[i - 2]).strip()
                     if re.search(r'\b(?:Text|Button|TextButton|OutlinedButton|ElevatedButton)\s*\(\s*$', prev_stripped):
-                        if re.search(r'^\s*(?:text\s*=\s*)?"[^"]{2,}"', clean_line):
+                        if re.search(r'^\s*(?:text\s*=\s*)?"[^"]{2,}"', clean_line) and _kt_line_has_translatable_literal(clean_line):
                             is_hardcoded = True
                 if is_hardcoded:
                     findings.append(f"{rel}:{i} -> Hardcoded Kotlin UI text: {stripped[:120]}")

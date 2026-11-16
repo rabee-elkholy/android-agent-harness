@@ -175,24 +175,28 @@ def _has_explicit_gradle_java_home(prop_file: Path) -> bool:
     return False
 
 
-def resolve_compatible_windows_daemon_java_home(
+_IMMUTABLE_DAEMON_SYS_PROPS = ("file.encoding", "user.country", "user.language", "user.variant")
+
+
+def resolve_compatible_windows_daemon_alignment(
     cwd: str | Path | None,
     env: dict[str, str],
     *,
     os_name: str | None = None,
     pid_alive_fn: Callable[[int], bool] | None = None,
-) -> str | None:
-    """Match `JAVA_HOME` to a live Gradle daemon of the exact project wrapper version on Windows.
+) -> tuple[str | None, list[str]]:
+    """Match `JAVA_HOME` and immutable client locale/encoding properties to a single live Gradle daemon on Windows.
 
-    When Android Studio already holds a warm out-of-job daemon (e.g. bundled JBR) and the project does not pin
-    `org.gradle.java.home`, aligning `JAVA_HOME` lets `gradlew.bat` attach over localhost TCP to that warm daemon
-    instead of spawning a cold disposable daemon inside Antigravity's `KILL_ON_JOB_CLOSE` Job Object.
+    Gradle's `DaemonCompatibilitySpec` compares both `javaHome` and immutable JVM system properties
+    (`-Dfile.encoding`, `-Duser.country`, `-Duser.language`, `-Duser.variant`). Scanning up to 32 daemon logs
+    by live OS PID first ensures a long-lived Android Studio daemon is still found even after multiple short-lived
+    Job-Object daemons exited, without spawning WMI processes or extra RAM daemons.
     """
     eff_os = os_name if os_name is not None else os.name
     if eff_os != "nt":
-        return None
+        return (None, [])
     if str(env.get("HARNESS_DISABLE_WINDOWS_DAEMON_JAVA_ALIGN") or "").strip().lower() in {"1", "true", "yes"}:
-        return None
+        return (None, [])
     try:
         proj_dir = Path(cwd).resolve() if cwd else Path.cwd().resolve()
         gradle_user_home = Path(
@@ -201,50 +205,77 @@ def resolve_compatible_windows_daemon_java_home(
         if _has_explicit_gradle_java_home(proj_dir / "gradle.properties") or _has_explicit_gradle_java_home(
             gradle_user_home / "gradle.properties"
         ):
-            return None
+            return (None, [])
         wrapper_props = proj_dir / "gradle" / "wrapper" / "gradle-wrapper.properties"
         if not wrapper_props.is_file():
-            return None
+            return (None, [])
         w_txt = wrapper_props.read_text(encoding="utf-8", errors="ignore")
         m_ver = re.search(r"gradle-([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-rc-\d+)?)-(?:bin|all)\.zip", w_txt)
         if not m_ver:
-            return None
+            return (None, [])
         gradle_ver = m_ver.group(1)
         daemon_dir = gradle_user_home / "daemon" / gradle_ver
         if not daemon_dir.is_dir():
-            return None
+            return (None, [])
         check_alive = pid_alive_fn or _is_windows_pid_alive
-        now = time.time()
         logs = sorted(
             (p for p in daemon_dir.glob("daemon-*.out.log") if p.is_file()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
-        )[:6]
-        live_homes: dict[str, str] = {}
+        )[:32]
+        live_candidates: dict[str, tuple[str, list[str]]] = {}
         java_bin_rel = Path("bin") / ("java.exe" if os.name == "nt" or eff_os == "nt" else "java")
         for lg in logs:
             try:
-                if (now - lg.stat().st_mtime) > 86400:
-                    continue
                 m_pid = re.match(r"^daemon-(\d+)\.out\.log$", lg.name)
                 if not m_pid or not check_alive(int(m_pid.group(1))):
                     continue
                 with lg.open("r", encoding="utf-8", errors="ignore") as fh:
-                    head = fh.read(16384)
-                m_jh = re.search(r"DaemonContext\[[^\]]*?\bjavaHome=([^,\]\r\n]+)", head)
+                    head = fh.read(24576)
+                m_ctx = re.search(r"DaemonContext\[([^\r\n]+)\]", head)
+                if not m_ctx:
+                    continue
+                ctx_body = m_ctx.group(1)
+                m_jh = re.search(r"\bjavaHome=([^,\]]+)", ctx_body)
                 if not m_jh:
                     continue
                 jh_path = Path(m_jh.group(1).strip())
-                if (jh_path / java_bin_rel).is_file() or (jh_path / "bin" / "java").is_file():
-                    norm_key = str(jh_path).replace("\\", "/").rstrip("/").lower()
-                    live_homes[norm_key] = str(jh_path)
+                if not ((jh_path / java_bin_rel).is_file() or (jh_path / "bin" / "java").is_file()):
+                    continue
+                immutable_opts: list[str] = []
+                m_opts = re.search(r"\bdaemonOpts=([^\]]+)", ctx_body)
+                if m_opts:
+                    opts_blob = m_opts.group(1)
+                    for prop in _IMMUTABLE_DAEMON_SYS_PROPS:
+                        m_p = re.search(rf"(?:^|,|\s)(-D{re.escape(prop)}=[^,\s\]]+)", opts_blob)
+                        if m_p:
+                            val = m_p.group(1).strip()
+                            if re.fullmatch(r"-D[a-z.]+=[A-Za-z0-9._-]+", val):
+                                immutable_opts.append(val)
+                norm_key = str(jh_path).replace("\\", "/").rstrip("/").lower()
+                if norm_key not in live_candidates:
+                    live_candidates[norm_key] = (str(jh_path), immutable_opts)
             except OSError:
                 continue
-        if len(live_homes) == 1:
-            return next(iter(live_homes.values()))
-    except Exception:
-        return None
-    return None
+        if len(live_candidates) == 1:
+            return next(iter(live_candidates.values()))
+    except (OSError, ValueError, TypeError, NotImplementedError):
+        return (None, [])
+    return (None, [])
+
+
+def resolve_compatible_windows_daemon_java_home(
+    cwd: str | Path | None,
+    env: dict[str, str],
+    *,
+    os_name: str | None = None,
+    pid_alive_fn: Callable[[int], bool] | None = None,
+) -> str | None:
+    """Match `JAVA_HOME` to a live Gradle daemon of the exact project wrapper version on Windows."""
+    jh, _ = resolve_compatible_windows_daemon_alignment(
+        cwd, env, os_name=os_name, pid_alive_fn=pid_alive_fn,
+    )
+    return jh
 
 
 def _should_try_windows_gradle_breakaway(argv: Sequence[str], env: dict[str, str], label: str) -> bool:
@@ -268,9 +299,17 @@ def _spawn_streaming_process(
         str(label or "").strip().lower() == "gradle"
         and not any(str(a).strip() == "--no-daemon" for a in argv)
     ):
-        aligned_jh = resolve_compatible_windows_daemon_java_home(cwd, env)
+        aligned_jh, aligned_opts = resolve_compatible_windows_daemon_alignment(cwd, env)
         if aligned_jh:
             eff_env = {**env, "JAVA_HOME": aligned_jh}
+            if aligned_opts:
+                cur_gopts = str(eff_env.get("GRADLE_OPTS") or "").strip()
+                extra_opts = [
+                    opt for opt in aligned_opts
+                    if f"{opt.partition('=')[0]}=" not in cur_gopts
+                ]
+                if extra_opts:
+                    eff_env["GRADLE_OPTS"] = (f"{cur_gopts} " + " ".join(extra_opts)).strip()
     base_kwargs: dict[str, object] = {
         "cwd": cwd,
         "stdin": subprocess.DEVNULL,

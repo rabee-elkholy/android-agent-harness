@@ -490,6 +490,29 @@ def _record_cancel_request(task_id: str) -> None:
         pass
 
 
+def _detect_live_verification_or_build_owner(repo: Path, active_tid: str | None) -> int:
+    """Return external live PID holding the workspace build lock or task execution lease, or 0."""
+    try:
+        from _vnext_common import state_root, task_dir
+        from evidence_store import StateLock
+        lock_roots = [state_root(repo) / "android-build-execution"]
+        if active_tid:
+            lock_roots.append(task_dir(repo, active_tid) / "execution")
+        cur_pid = os.getpid()
+        for lr in lock_roots:
+            sl = StateLock(lr, timeout_seconds=0)
+            if not sl.path.is_file():
+                continue
+            live, owner = sl._owner_live()
+            if live and isinstance(owner, dict):
+                opid = int(owner.get("pid") or 0)
+                if opid > 0 and opid != cur_pid:
+                    return opid
+    except (ImportError, OSError, ValueError, TypeError, ValidationError):
+        return 0
+    return 0
+
+
 def _pending_cancel(task_id: str) -> bool:
     if not task_id:
         return False
@@ -1044,6 +1067,27 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             task_id=active_tid,
         )
         return
+    if not re.search(r"(?:^|\s)(?:-h|--help)(?:\s|$)", command) and re.search(
+        r"(?:harness(?:\.py)?\s+(?:verify-steps|test|compile|assemble|review\s+package|task\s+(?:prepare-verification|checkpoint-phase))|"
+        r"(?:verification_steps|run_tests_gate|run_gradle_task|review_package)\.py|"
+        r"workflow\.py\s+(?:prepare-verification|checkpoint-phase))\b",
+        command,
+        re.I,
+    ):
+        busy_pid = _detect_live_verification_or_build_owner(REPO, active_tid)
+        if busy_pid:
+            emit(
+                "deny",
+                f"CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS: Background verification/Gradle process (PID {busy_pid}) "
+                "is still actively running for this workspace. Do NOT launch overlapping `verify-steps`, `prepare-verification`, "
+                "`review package`, or Gradle commands — output one short status sentence and wait for the background task notification "
+                "(or inspect via `manage_task(Action='list')` if stuck).",
+                tool="run_command",
+                command=command,
+                reason_code="CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS",
+                task_id=active_tid,
+            )
+            return
     # Google Workspace skill CLIs (gdrive, gdocs, gsheets, ...) are external integrations, not project
     # mutations: their readonly namespace is allowed and their mutate namespace asks the developer,
     # whatever state the code task plan is in. Chained or redirected commands are never recognized.
@@ -1471,12 +1515,19 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
         emit("deny", str(exc), tool=name, reason_code="HOST_SESSION_MISMATCH")
         return
 
-    # Zero-polling invariant: block busy-waiting loops
+    # Zero-polling invariant: block busy-waiting loops while allowing list/kill in all states (including IDLE)
     if name == "manage_task":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
         if act == "status":
             emit("deny", "ZERO-POLLING INVARIANT: manage_task(Action='status') is blocked to prevent polling loops. Background tasks notify you reactively upon completion. Yield execution now without calling tools.", tool=name)
             return
+        emit(
+            "allow",
+            f"Background task management (`Action='{act or 'list'}'`) is permitted across all task states.",
+            tool=name,
+            reason_code="MANAGE_TASK_ALLOWED",
+        )
+        return
     elif name == "manage_subagents":
         act = str(args.get("Action") or args.get("action") or "").strip().lower()
         if act in {"kill_all", "kill"}:

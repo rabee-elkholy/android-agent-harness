@@ -4827,7 +4827,11 @@ def main(argv: list[str] | None = None) -> int:
             print("AUTO_ADVANCED_PHASES=" + ",".join(str(x) for x in result["auto_advanced_phases"]))
             try:
                 _nxt_cp = resolve_next_action(Path(args.repo).resolve(), str(args.task_id))
-                if _nxt_cp.get("code") and _nxt_cp.get("command"):
+                if _nxt_cp.get("code") == "PREPARE_VERIFICATION":
+                    print(
+                        f"NEXT_ACTION=VERIFY_STEPS: python .agents/harness.py verify-steps --task-id {args.task_id} --host antigravity"
+                    )
+                elif _nxt_cp.get("code") and _nxt_cp.get("command"):
                     print(f"NEXT_ACTION={_nxt_cp['code']}: {_nxt_cp['command']}")
             except (OSError, ValueError, KeyError, TypeError, ValidationError):
                 _nxt_cp = {}
@@ -4835,14 +4839,33 @@ def main(argv: list[str] | None = None) -> int:
             # Real app: approve printed only the status, the agent started editing, and the test record
             # the router asks for before the first edit never happened; an old failing test in another
             # feature then stopped verification and cost two approvals.
+            _repo_resolved = Path(args.repo).resolve()
+            _tid_str = str(result["task_id"])
             try:
-                upcoming = resolve_next_action(Path(args.repo).resolve(), str(result["task_id"]), result)
+                upcoming = resolve_next_action(_repo_resolved, _tid_str, result)
             except Exception:
                 upcoming = {}
-            if upcoming.get("before_first_edit"):
-                print(f"BEFORE_FIRST_EDIT={upcoming['before_first_edit'].get('command')}")
-            if upcoming.get("reason"):
-                print(f"NEXT_REASON={upcoming['reason']}")
+            _pre_web_pack_cmd = ""
+            try:
+                from execution_mode import inspect_web_phase_progress, resolve_effective_execution_mode
+                _em_app = resolve_effective_execution_mode(_repo_resolved, task_id=_tid_str, plan=result)
+                if _em_app.get("mode") == "web" and not _em_app.get("conflict_auto_local_override"):
+                    _wp_app = inspect_web_phase_progress(_repo_resolved, result)
+                    if not _wp_app.get("has_applied_web_changes"):
+                        _pre_web_pack_cmd = f"python .agents/harness.py web-pack --task-id {_tid_str}"
+            except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+                _pre_web_pack_cmd = ""
+            if _pre_web_pack_cmd:
+                print(f"NEXT_ACTION=WEB_RELAY_PACK: {_pre_web_pack_cmd}")
+                print(
+                    "NEXT_REASON=Web execution mode is active; build the Context Pack for Gemini Web first "
+                    "(co-authored BUG regression tests are validated automatically on web-apply and verify-steps)."
+                )
+            else:
+                if upcoming.get("before_first_edit"):
+                    print(f"BEFORE_FIRST_EDIT={upcoming['before_first_edit'].get('command')}")
+                if upcoming.get("reason"):
+                    print(f"NEXT_REASON={upcoming['reason']}")
         for item in result.get("next_actions") or []:
             item_cmd = item.get("command")
             if not item_cmd and item.get("tool") == "ask_question":

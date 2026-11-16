@@ -151,6 +151,19 @@ def _attach_rotation_advisory(repo: Path, task_id: str, plan: dict | None, actio
     return action
 
 
+def _is_pre_apply_web_execution_mode(repo, task_id: str, plan: dict) -> bool:
+    """True when Web execution mode is active and no Web-Relay pack has been applied yet."""
+    try:
+        from execution_mode import inspect_web_phase_progress, resolve_effective_execution_mode
+        eff_em = resolve_effective_execution_mode(repo, task_id=task_id, plan=plan)
+        if eff_em.get("mode") != "web" or eff_em.get("conflict_auto_local_override"):
+            return False
+        wp_prog = inspect_web_phase_progress(repo, plan)
+        return not bool(wp_prog.get("has_applied_web_changes"))
+    except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
+        return False
+
+
 def _next_implementation(repo, task_id, plan, host, identity, run_host, state, session):
     tdir = _engine.task_dir(repo, task_id)
     from change_decision import decisions
@@ -199,8 +212,10 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             }
     from final_verifier import alternate_reproduction_recorded, bug_requires_executable_red
     red_evidence_file = tdir / "red-evidence.json"
+    pre_apply_web_mode = _is_pre_apply_web_execution_mode(repo, task_id, plan)
     if (
         not red_evidence_file.is_file()
+        and not pre_apply_web_mode
         and bug_requires_executable_red(
             plan, plan.get("expected_surfaces") or [], alternate_reproduction=alternate_reproduction_recorded(tdir),
         )
@@ -337,7 +352,7 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
         except (OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
             relay_receipt_path = None
         action["on_complete"] = {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND", "command": done_command}
-    elif _engine._should_record_task_start(repo, task_id, plan):
+    elif _engine._should_record_task_start(repo, task_id, plan) and not pre_apply_web_mode:
         # O64: without a record, an old failing test in another feature blocks the gate later and
         # has to go to the developer; one run on the untouched tree settles it up front.
         record = "python .agents/harness.py test --record-start"
