@@ -237,6 +237,7 @@ def wait_for_workflow(
     the PR's base and the PR's merge result was this same tree; re-running CI would test identical code.
     """
     deadline = time.monotonic() + timeout
+    transient_err_streak = 0
     while True:
         command = [
             "gh", "run", "list", "--workflow", workflow, "--commit", sha, "--limit", "50",
@@ -246,8 +247,14 @@ def wait_for_workflow(
             command[7:7] = ["--branch", branch] + ([] if accept_dispatch or accept_workflow_run else ["--event", "push"])
         result = run_cmd(command, check=False)
         if result.returncode != 0:
+            transient_err_streak += 1
+            if transient_err_streak <= 10 and time.monotonic() < deadline:
+                print(f"[WARN] Transient gh error checking {workflow} (attempt {transient_err_streak}/10): {result.stderr.strip()}")
+                time.sleep(10)
+                continue
             print(f"[FAIL] Cannot verify {workflow}: {result.stderr.strip()}")
             return False
+        transient_err_streak = 0
         try:
             runs = [
                 run for run in json.loads(result.stdout)

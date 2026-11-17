@@ -205,6 +205,7 @@ def is_quirk_enabled(
     *,
     repo: Path | None = None,
     env: Mapping[str, str] | None = None,
+    respect_platform: bool = False,
 ) -> bool:
     environ = env if env is not None else os.environ
     disabled = _disabled_tokens(repo=repo, env=environ)
@@ -219,9 +220,10 @@ def is_quirk_enabled(
         spec = PLATFORM_QUIRKS[qid]
         if qid in disabled or any(_normalize_token(iss) in disabled for iss in (spec.get("issues") or ())):
             return False
-        plats = tuple(str(p).lower() for p in (spec.get("platforms") or ("all",)))
-        if "all" not in plats and not any(active_plat.startswith(p) for p in plats):
-            continue
+        if respect_platform:
+            plats = tuple(str(p).lower() for p in (spec.get("platforms") or ("all",)))
+            if "all" not in plats and not any(active_plat.startswith(p) for p in plats):
+                continue
         if bool(spec.get("default_enabled", True)):
             return True
     return False

@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "78b591400c56b7b67b8cb3b2b8a8e65e9093897f02ce0878e6b5405c68620fa7",
+    "agents/VERSION": "eedecd84892bf6a901baa3b19fd5b23d1571e61e0bd32c9e032603e893a6ad4d",
     "agents/harness.py": "583e73da2f503e5d245eb96e77076005ef2993aa1efb211627bf63635e4fbe43",
     "agents/harness_shared/__init__.py": "123d7a509cad95f35619ff1849fcfc990205aca7e77fcdc2460a27acb029118c",
     "agents/harness_shared/commands.py": "d8ad09f4367d64ca83488e0a86489a6299697425cb38397c7f2624c46fd9d9f4",
@@ -160,7 +160,7 @@
     "agents/scripts/plan_authority.py": "2c41416f1bcb65a11a18e5e2e1d018dd1d8ecd196e54c083bac085f3ec0e0092",
     "agents/scripts/plan_document.py": "897a21db3b3295e53e21d66c6c88a488ba08ce62f0fe079bd270dc6e97daf578",
     "agents/scripts/plan_notes.py": "c99899782bbbed1be96be43d34b8178bfec0bbee503b2dc00adbf44f90c78df5",
-    "agents/scripts/platform_quirks.py": "ffccf201a78f201abea8bd7f21b4b4456cf7c0521eda99868a0e62c162d73685",
+    "agents/scripts/platform_quirks.py": "6f3613699280f124359723aa1da7dfd32abe1429b0c5cf4cce5649b99392b202",
     "agents/scripts/pm_discovery.py": "09e770efd3364075003bc0fb69113fef2b3b324ca67c55bcb2973e15fe991690",
     "agents/scripts/pm_github.py": "2501e140c9e0111859f7d129c4ea2515724d2d88d22bdc93263e35a3da44959e",
     "agents/scripts/pm_policy.py": "56af70851c3a9776ffbd2ee7f9bbe0c7fa925e06f7335d8ccb7503bd358f44b8",
