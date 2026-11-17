@@ -479,6 +479,8 @@ def refresh_kit(kit: Path, target_version: str | None = None) -> None:
             f"[ERROR] After pinning, kit reports v{found} but {tag} was requested. "
             "Refusing to continue. " + _manual_remediation(want)
         )
+    import importlib
+    importlib.invalidate_caches()
     print(f"[OK] Kit pinned at {tag}")
 
 
@@ -498,6 +500,7 @@ def run_engine_script(
     target = _script_root(kit) / script
     if not target.is_file():
         raise SystemExit(f"[ERROR] Engine script missing: {target}")
+    run_env = {**(env if env is not None else os.environ), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     proc = subprocess.run(
         [sys.executable, "-u", str(target), *args],
         check=False,
@@ -505,7 +508,7 @@ def run_engine_script(
         text=True,
         encoding="utf-8",
         errors="replace",
-        env=env,
+        env=run_env,
     )
     if capture and proc.stdout:
         sys.stdout.write(proc.stdout)
@@ -988,6 +991,10 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     try:
         task_id = getattr(args, "task_id", None) or getattr(args, "task", None)
         forward_args = ["--task-id", task_id] if task_id else []
+        extra_pf = list(getattr(args, "preflight_args", None) or [])
+        if extra_pf[:1] == ["--"]:
+            extra_pf = extra_pf[1:]
+        forward_args.extend(extra_pf)
         if client_script.is_file():
             proc = subprocess.run(
                 [sys.executable, str(client_script), *forward_args],
@@ -1085,7 +1092,22 @@ def cmd_commands(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(_script_root(kit)))
     from _public_commands import get_public_commands
     cmds = get_public_commands()
+    kw = (str(getattr(args, "filter_opt", "") or getattr(args, "filter_kw", "") or "")).strip().lower()
+    if kw:
+        cmds = [
+            row for row in cmds
+            if kw in str(row.get("command") or "").lower() or kw in str(row.get("description") or "").lower()
+        ]
     print(json.dumps(cmds, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_update_info(args: argparse.Namespace) -> int:
+    kit = ensure_kit(getattr(args, "kit", None))
+    repo = find_repo(args.repo) if getattr(args, "repo", None) else Path.cwd().resolve()
+    sys.path.insert(0, str(_script_root(kit)))
+    from check_kit_update import update_instructions
+    print(update_instructions(repo, force=not getattr(args, "offline", False)))
     return 0
 
 
@@ -1327,7 +1349,8 @@ def _record_full_pass(kit: Path, tree_at_start: str = "") -> None:
 
 
 def _run_suite(runner_code: str, capture: bool, env: dict[str, str]):
-    kwargs = {"text": True, "encoding": "utf-8", "errors": "replace", "env": env}
+    child_env = {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    kwargs = {"text": True, "encoding": "utf-8", "errors": "replace", "env": child_env}
     if capture:
         kwargs["stdout"] = subprocess.PIPE
         kwargs["stderr"] = subprocess.STDOUT
@@ -1865,7 +1888,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("task_args", nargs=argparse.REMAINDER, help="Arguments passed to workflow.py")
     sp.set_defaults(func=cmd_task)
 
-    sp = sub.add_parser("doctor", help="12-dimension diagnostic for an Android checkout.")
+    sp = sub.add_parser("doctor", help="13-dimension diagnostic for an Android checkout.")
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--json", action="store_true", help="Machine-readable JSON report.")
     sp.add_argument("--device", action="store_true", help="Include ADB device diagnostics.")
@@ -1890,6 +1913,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
     sp.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID for preflight validation.")
     sp.add_argument("--kit", help="Kit checkout providing the engine.")
+    sp.add_argument("preflight_args", nargs=argparse.REMAINDER, help="Extra arguments forwarded to preflight_check.py")
     sp.set_defaults(func=cmd_preflight)
 
     sp = sub.add_parser("test", help="Run test gates (unit/instrumented) via run_tests_gate.py.")
@@ -2004,6 +2028,10 @@ def build_parser() -> argparse.ArgumentParser:
         ("diagnose-session", "session_forensics.py", "Session hook-streak and token forensics with Zero-PII bundle export."),
         ("web-relay", "web_relay.py", "Optional Manual Web-Relay Bridge (`pack`, `apply`, `status`)."),
         ("execution-mode", "execution_mode.py", "Interactive execution mode selector (`show`, `set`: normal vs web)."),
+        ("pm", "pm_discovery.py", "Project management tracker discovery and read-only lookups."),
+        ("zoho", "zoho_sync.py", "Zoho Sprints report preparation, authorization, and sync recording."),
+        ("e2e", "phone_e2e.py", "Physical/emulator end-to-end Android UI flow runner."),
+        ("report-issue", "incident_reporter.py", "Inspect or submit sanitized harness incident reports."),
     ):
         sp_ext = sub.add_parser(sub_name, help=help_txt)
         sp_ext.add_argument("--repo", help="Android project root.")
@@ -2123,9 +2151,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_verify)
 
     sp = sub.add_parser(
+        "update-info",
+        help="Check whether a newer kit release is available for this checkout.",
+    )
+    sp.add_argument("--repo", help="Android/KMP project root (default: cwd).")
+    sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
+    sp.add_argument("--offline", action="store_true", help="Use cached release check without network call.")
+    sp.set_defaults(func=cmd_update_info)
+
+    sp = sub.add_parser(
         "commands",
         help="Print machine-readable catalog of public harness commands as JSON.",
     )
+    sp.add_argument("filter_kw", nargs="?", default="", help="Optional keyword filter.")
+    sp.add_argument("--filter", "--grep", "-k", dest="filter_opt", default="", help="Filter commands by keyword.")
     sp.add_argument("--json", action="store_true", default=True, help="Output format as JSON (default: true).")
     sp.add_argument("--kit", help="Kit checkout (default: auto-discover).")
     sp.set_defaults(func=cmd_commands)

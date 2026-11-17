@@ -7146,7 +7146,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                     "--tests", "فتح عرض الخصم من الرئيسية ثم الضغط على رجوع والتأكد من العودة للرئيسية مباشرة",
                     "--tests", "إتمام تفعيل الباقة المخفضة والتأكد من تحديث حالة الاشتراك فوراً",
                 ],
-                cwd=str(repo), capture_output=True, text=True, check=True,
+                cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
             )
             rep_json = json.loads(rep_proc.stdout)
             self.assertEqual("PREPARED", rep_json["status"])
@@ -7160,7 +7160,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             # Retired `review-diff` command must fail closed with exit code 2
             ret_cli = subprocess.run(
                 [sys.executable, str(repo / ".agents/harness.py"), "review-diff"],
-                cwd=str(repo), capture_output=True, text=True, check=False,
+                cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
             )
             self.assertEqual(2, ret_cli.returncode)
 

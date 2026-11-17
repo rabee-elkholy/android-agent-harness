@@ -2948,6 +2948,239 @@ class CommandEfficiencySelftest(unittest.TestCase):
             self.assertEqual(0, rc)
             rec_pass.assert_not_called()
 
+    def test_express_quick_start_fast_verify_escalation_and_compound_ship(self):
+        _copy_kit_tree(KIT / "agents", self.repo / ".agents", dirs_exist_ok=True)
+        _setup_fake_gradlew(self.repo)
+        if (self.repo / "agents").exists():
+            shutil.rmtree(self.repo / "agents", ignore_errors=True)
+        run_git(self.repo, "add", "-A")
+        run_git(self.repo, "commit", "-m", "install harness test fixture")
+        sub_env = {**os.environ, "_IN_HOOK_SELFTEST": "1"}
+
+        # 1. T0_TRIVIAL Express quick-start (`strings.xml` + `values-ar/strings.xml`) -> 1-command ship -> commit -> 1-command ship -> DELIVERED!
+        base_str = self.repo / "app/src/main/res/values/strings.xml"
+        ar_str = self.repo / "app/src/main/res/values-ar/strings.xml"
+        base_str.parent.mkdir(parents=True, exist_ok=True)
+        ar_str.parent.mkdir(parents=True, exist_ok=True)
+        base_str.write_text('<resources>\n    <string name="app_name">Demo</string>\n</resources>\n', encoding="utf-8")
+        ar_str.write_text('<resources>\n    <string name="app_name">ديمو</string>\n</resources>\n', encoding="utf-8")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "seed bilingual strings")
+
+        qs_proc = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/harness.py"),
+                "task", "quick-start",
+                "--outcome", "Add save button label",
+                "--files", "app/src/main/res/values/strings.xml,app/src/main/res/values-ar/strings.xml",
+                "--source", "conversation",
+                "--proof-reference", "Add save button label in English and Arabic",
+                "--json",
+            ],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertEqual(0, qs_proc.returncode, qs_proc.stderr + "\n" + qs_proc.stdout)
+        qs_doc = json.loads(qs_proc.stdout)
+        self.assertEqual("IMPLEMENTING", qs_doc["status"])
+        self.assertTrue(qs_doc["express_track"])
+        self.assertTrue(qs_doc["express_eligible"])
+        self.assertEqual("T0_TRIVIAL", qs_doc["express_risk_tier"])
+        tid_t0 = qs_doc["task_id"]
+
+        base_str.write_text(
+            '<resources>\n    <string name="app_name">Demo</string>\n    <string name="btn_save">Save</string>\n</resources>\n',
+            encoding="utf-8",
+        )
+        ar_str.write_text(
+            '<resources>\n    <string name="app_name">ديمو</string>\n    <string name="btn_save">حفظ</string>\n</resources>\n',
+            encoding="utf-8",
+        )
+
+        ship_proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "task", "ship", "--json"],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertEqual(0, ship_proc.returncode, ship_proc.stderr + "\n" + ship_proc.stdout)
+        ship_doc = json.loads(ship_proc.stdout)
+        self.assertEqual("READY_FOR_DELIVERY", ship_doc["status"])
+        self.assertEqual("AWAITING_GIT_COMMIT", ship_doc["ship_outcome"])
+        self.assertTrue(ship_doc.get("suggested_commit_block"))
+        self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", ship_doc["next_action"]["code"])
+
+        # Developer commits -> second `task ship` seals DELIVERED!
+        run_git(self.repo, "add", "app/src/main/res/values/strings.xml", "app/src/main/res/values-ar/strings.xml")
+        run_git(self.repo, "commit", "-m", "feat(strings): add save button label")
+        ship2_proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "task", "ship", "--task-id", tid_t0, "--json"],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertEqual(0, ship2_proc.returncode, ship2_proc.stderr + "\n" + ship2_proc.stdout)
+        ship2_doc = json.loads(ship2_proc.stdout)
+        self.assertEqual("DELIVERED", ship2_doc["status"])
+        self.assertEqual("DELIVERED", ship2_doc["ship_outcome"])
+
+        # 2. T1_LOW_RISK Express quick-start with companion unit test (`reviewers == []`, `unit_tests` required) + Escalation Guard!
+        qs_t1 = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/harness.py"),
+                "task", "quick-start",
+                "--task-id", "qs-t1-card",
+                "--outcome", "Add helper greeting on MainActivity",
+                "--files", "app/src/main/kotlin/com/example/MainActivity.kt,app/src/test/kotlin/com/example/MainActivityTest.kt",
+                "--source", "conversation",
+                "--proof-reference", "Add helper greeting on MainActivity with unit test",
+                "--json",
+            ],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertEqual(0, qs_t1.returncode, qs_t1.stderr + "\n" + qs_t1.stdout)
+        t1_doc = json.loads(qs_t1.stdout)
+        self.assertEqual("IMPLEMENTING", t1_doc["status"])
+        self.assertTrue(t1_doc["express_track"])
+        self.assertEqual("T1_LOW_RISK", t1_doc["express_risk_tier"])
+        self.assertIn("unit_tests", t1_doc["express_gates"])
+
+        # Sneak `@Entity` Room schema surface into MainActivity.kt -> `prepare-verification` MUST block & demote!
+        main_kt = self.repo / "app/src/main/kotlin/com/example/MainActivity.kt"
+        orig_main = main_kt.read_text(encoding="utf-8")
+        main_kt.write_text(
+            orig_main + "\nimport androidx.room.Entity\n@Entity(tableName = \"sneaky\")\ndata class SneakyEntity(val id: Long)\n",
+            encoding="utf-8",
+        )
+        esc_proc = subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "task", "prepare-verification", "--task-id", "qs-t1-card"],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertNotEqual(0, esc_proc.returncode)
+        self.assertIn("EXPRESS_SCOPE_ESCALATED_APPROVAL_REQUIRED", esc_proc.stderr + esc_proc.stdout)
+        demoted_plan = json.loads((self.repo / ".agents/state/tasks/qs-t1-card/plan.json").read_text(encoding="utf-8"))
+        self.assertEqual("AWAITING_DEVELOPER_APPROVAL", demoted_plan["status"])
+        self.assertIsNone(demoted_plan.get("approval"))
+        self.assertFalse(bool(demoted_plan.get("express_track")))
+
+        # Clean up escalated task and verify automatic fallback on sensitive `AUTH` request
+        main_kt.write_text(orig_main, encoding="utf-8")
+        subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "task", "cancel", "--task-id", "qs-t1-card"],
+            cwd=str(self.repo), env=sub_env, capture_output=True, check=False,
+        )
+        fb_proc = subprocess.run(
+            [
+                sys.executable, str(self.repo / ".agents/harness.py"),
+                "task", "quick-start",
+                "--task-id", "qs-auth-fallback",
+                "--outcome", "Update OAuth biometric login token refresh",
+                "--files", "app/src/main/kotlin/com/example/MainActivity.kt",
+                "--source", "conversation",
+                "--proof-reference", "Update OAuth biometric login token refresh",
+            ],
+            cwd=str(self.repo), env=sub_env, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        )
+        self.assertEqual(0, fb_proc.returncode, fb_proc.stderr + "\n" + fb_proc.stdout)
+        self.assertIn("EXPRESS_FALLBACK_REASON=", fb_proc.stdout)
+        self.assertIn("TASK_STATUS=AWAITING_DEVELOPER_APPROVAL", fb_proc.stdout)
+        self.assertIn("APPROVAL_QUESTION:", fb_proc.stdout)
+        subprocess.run(
+            [sys.executable, str(self.repo / ".agents/harness.py"), "task", "cancel", "--task-id", "qs-auth-fallback"],
+            cwd=str(self.repo), capture_output=True, check=False,
+        )
+
+    def test_deep_audit_safety_guards_and_legacy_client_upgrade(self):
+        import lifecycle
+        from doctor.engine import HarnessDoctor
+
+        # 1. Verify PreToolUse safety fixes: audit path in `.agents/state/`, `--repo .` flag-stripping guard, case-insensitive `.HARNESS-SETUP`, and `move_file` destination check
+        env_hook = {**os.environ, "HARNESS_REPO": str(self.repo)}
+
+        def _hook(tool_name: str, args_dict: dict) -> dict:
+            p = subprocess.run(
+                [sys.executable, str(KIT / "agents/scripts/pre_tool_safety.py")],
+                input=json.dumps({"conversationId": "conv-audit-check", "toolCall": {"name": tool_name, "args": args_dict}}),
+                capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_hook, check=False,
+            )
+            self.assertEqual(0, p.returncode, p.stderr)
+            return json.loads(p.stdout.strip())
+
+        self.assertEqual("deny", _hook("run_command", {"CommandLine": "python .agents/harness.py task quick-start --outcome x --files app/src/main/res/values/strings.xml --source developer_terminal --proof-reference x"})["decision"])
+        self.assertEqual("deny", _hook("run_command", {"CommandLine": "python .agents/scripts/web_relay.py --repo . apply"})["decision"])
+        self.assertEqual("deny", _hook("run_command", {"CommandLine": "python .agents/harness.py task review-budget --task-id t1 --limit 24 --source developer_terminal --proof-reference x"})["decision"])
+        self.assertEqual("deny", _hook("write_file", {"Path": str(self.repo / ".HARNESS-SETUP" / "answers.json"), "Content": "{}"})["decision"])
+        self.assertEqual("deny", _hook("move_file", {"Source": str(self.repo / "README.md"), "Destination": str(self.repo / ".agents/scripts/injected.py")})["decision"])
+        self.assertTrue((self.repo / ".agents/state/audit_log.jsonl").is_file())
+        self.assertFalse((KIT / "agents/scripts/state").exists())
+
+        # 2. Verify `lifecycle.py update` on a legacy v1.3.21 client repo with merged `CLAUDE.md`, `.cursor/...`, `.claude/settings.json`, and retired `harness-worker-agent`
+        with tempfile.TemporaryDirectory() as td:
+            u_repo = Path(td) / "legacy_rashaqa_app"
+            shutil.copytree(self.repo, u_repo)
+            shutil.rmtree(u_repo / "agents", ignore_errors=True)
+            shutil.rmtree(u_repo / ".agents", ignore_errors=True)
+            shutil.rmtree(u_repo / ".harness-setup", ignore_errors=True)
+            _setup_fake_gradlew(u_repo)
+            run_git(u_repo, "add", "-A")
+            run_git(u_repo, "commit", "-m", "seed gradle wrapper")
+
+            ans_f = u_repo / ".harness-setup/answers.json"
+            ans_f.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(ans_f, {
+                "schema": 2,
+                "confirm_installation": True,
+                "product_name": "RashaqaTest",
+                "tools": "antigravity",
+                "device_policy": "allow",
+                "git_gate": False,
+                "pm_tracker": "zoho_sprints",
+                "pm_language": "en_titles_ar_comments",
+            })
+            lifecycle.install(u_repo, KIT)
+            # Simulate pre-upgrade v1.3.21 installation state with legacy multi-host files
+            (u_repo / ".agents/VERSION").write_text("1.3.21\n", encoding="utf-8")
+            ans_obj = json.loads(ans_f.read_text(encoding="utf-8"))
+            ans_obj["tools"] = "antigravity,claude,cursor"
+            atomic_write_json(ans_f, ans_obj)
+
+            # Merged CLAUDE.md with user-authored notes outside managed markers
+            (u_repo / "CLAUDE.md").write_text(
+                "# Rashaqa Team Custom Notes\nKeep custom architecture note.\n\n"
+                "<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->\nManaged legacy Claude block\n<!-- END ANDROID-HARNESS MANAGED BLOCK -->\n",
+                encoding="utf-8",
+            )
+            # Whole-file managed `.cursor/rules/android-harness.mdc`
+            cursor_mdc = u_repo / ".cursor/rules/android-harness.mdc"
+            cursor_mdc.parent.mkdir(parents=True, exist_ok=True)
+            cursor_mdc.write_text("<!-- managed-by: android-agent-harness -->\nLegacy cursor rule\n", encoding="utf-8")
+            # `.claude/settings.json` with both a legacy harness hook AND a user-owned hook
+            claude_cfg = u_repo / ".claude/settings.json"
+            claude_cfg.parent.mkdir(parents=True, exist_ok=True)
+            claude_cfg.write_text(json.dumps({
+                "hooks": {
+                    "PreToolUse": [{"_harnessManaged": True, "hooks": [{"type": "command", "command": "python .agents/scripts/cc_pre_tool_safety.py"}]}],
+                    "PostToolUse": [{"hooks": [{"type": "command", "command": "echo custom-user-hook"}]}],
+                }
+            }, indent=2), encoding="utf-8")
+            # Retired `harness-worker-agent` wrapper
+            worker_md = u_repo / ".agents/agents/harness-worker-agent/agent.md"
+            worker_md.parent.mkdir(parents=True, exist_ok=True)
+            worker_md.write_text("<!-- managed-by: android-agent-harness -->\n---\nname: harness-worker-agent\n---\n", encoding="utf-8")
+            own_prev = json.loads((u_repo / lifecycle.OWNERSHIP_RELATIVE).read_text(encoding="utf-8"))
+            lifecycle._write_ownership(u_repo, version="1.3.21", before={}, backup=None, previous=own_prev)
+
+            upd_res = lifecycle.update(u_repo, KIT)
+            self.assertEqual("PASS", upd_res["status"])
+            self.assertTrue((u_repo / "CLAUDE.md").is_file())
+            claude_after = (u_repo / "CLAUDE.md").read_text(encoding="utf-8")
+            self.assertIn("Keep custom architecture note.", claude_after)
+            self.assertNotIn("BEGIN ANDROID-HARNESS MANAGED BLOCK", claude_after)
+            self.assertFalse(cursor_mdc.exists())
+            self.assertFalse(worker_md.exists())
+            claude_cfg_after = json.loads(claude_cfg.read_text(encoding="utf-8"))
+            self.assertNotIn("PreToolUse", claude_cfg_after.get("hooks", {}))
+            self.assertIn("PostToolUse", claude_cfg_after.get("hooks", {}))
+
+            doc_results = HarnessDoctor(u_repo, run_selftest=False, live_stream=False).run_all()
+            fails = [r for r in doc_results if r.status == "FAIL"]
+            self.assertEqual([], fails, f"Unexpected doctor failures after upgrade: {fails}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

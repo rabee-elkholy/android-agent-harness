@@ -9,14 +9,23 @@ from _vnext_common import (ValidationError, canonical_sha256, read_json, state_r
                            utc_now, validate_id, validate_repo_path_containment)
 
 
+def _valid_in_place_plan_shas(plan: dict) -> set[str]:
+    shas = {str(plan.get("plan_sha256") or "")}
+    for item in plan.get("in_place_absorbed_plan_shas") or []:
+        if isinstance(item, str) and item:
+            shas.add(item)
+    return shas
+
+
 def decisions(plan):
+    valid_shas = _valid_in_place_plan_shas(plan)
     for row in plan.get("change_decisions") or []:
         if not isinstance(row, dict) or row.get("receipt_sha256") != canonical_sha256(
                 {k: v for k, v in row.items() if k != "receipt_sha256"}):
             raise ValidationError("invalid task change decision receipt")
         if row.get("task_id") != plan.get("task_id"):
             raise ValidationError("task change decision identity mismatch")
-        if (row.get("plan_sha256") == plan.get("plan_sha256")
+        if (str(row.get("plan_sha256") or "") in valid_shas
                 and row.get("execution_nonce") == plan.get("execution_nonce")):
             yield row
 

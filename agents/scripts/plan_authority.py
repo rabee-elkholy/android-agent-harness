@@ -218,6 +218,8 @@ def plan_payload(plan: dict) -> dict:
         payload["verification_contract"] = plan["verification_contract"]
     if "merged_from" in plan:
         payload["merged_from"] = plan["merged_from"]
+    if plan.get("express_track") is True:
+        payload["express_track"] = True
     return payload
 
 

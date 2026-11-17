@@ -181,17 +181,23 @@ def _disabled_tokens(repo: Path | None = None, env: Mapping[str, str] | None = N
     return disabled
 
 
-def resolve_quirk_id(quirk_id_or_issue: str) -> str | None:
+def _matching_quirk_ids(quirk_id_or_issue: str) -> list[str]:
     needle = _normalize_token(quirk_id_or_issue)
     if not needle:
-        return None
+        return []
     if needle in PLATFORM_QUIRKS:
-        return needle
+        return [needle]
+    hits: list[str] = []
     for qid, spec in PLATFORM_QUIRKS.items():
         issue_nums = {_normalize_token(i) for i in spec.get("issues") or ()}
         if needle in issue_nums or f"_{needle}_" in f"_{qid}_":
-            return qid
-    return None
+            hits.append(qid)
+    return hits
+
+
+def resolve_quirk_id(quirk_id_or_issue: str) -> str | None:
+    hits = _matching_quirk_ids(quirk_id_or_issue)
+    return hits[0] if hits else None
 
 
 def is_quirk_enabled(
@@ -200,21 +206,25 @@ def is_quirk_enabled(
     repo: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> bool:
-    disabled = _disabled_tokens(repo=repo, env=env)
+    environ = env if env is not None else os.environ
+    disabled = _disabled_tokens(repo=repo, env=environ)
     if "ALL" in disabled or "*" in disabled:
         return False
-    qid = resolve_quirk_id(quirk_id_or_issue)
-    if qid is None:
+    hits = _matching_quirk_ids(quirk_id_or_issue)
+    if not hits:
         return _normalize_token(quirk_id_or_issue) not in disabled
-    spec = PLATFORM_QUIRKS[qid]
-    if not disabled:
-        return bool(spec.get("default_enabled", True))
-    if qid in disabled:
-        return False
-    for iss in spec.get("issues") or ():
-        if _normalize_token(iss) in disabled:
+    sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
+    active_plat = sim_plat or sys.platform.lower()
+    for qid in hits:
+        spec = PLATFORM_QUIRKS[qid]
+        if qid in disabled or any(_normalize_token(iss) in disabled for iss in (spec.get("issues") or ())):
             return False
-    return bool(spec.get("default_enabled", True))
+        plats = tuple(str(p).lower() for p in (spec.get("platforms") or ("all",)))
+        if "all" not in plats and not any(active_plat.startswith(p) for p in plats):
+            continue
+        if bool(spec.get("default_enabled", True)):
+            return True
+    return False
 
 
 def list_platform_quirks(

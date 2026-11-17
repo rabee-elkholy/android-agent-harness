@@ -506,9 +506,11 @@ DIRTY_SOURCE_SUFFIXES = frozenset({
 })
 
 
-def get_web_relay_status(repo: Path) -> dict[str, Any]:
+def get_web_relay_status(repo: Path, *, task_id: str = "") -> dict[str, Any]:
     st_dir = _web_relay_state_dir(repo)
     latest_f = st_dir / "latest-pack.json"
+    if task_id and (state_root(repo) / "tasks" / task_id / "latest-web-pack.json").is_file():
+        latest_f = state_root(repo) / "tasks" / task_id / "latest-web-pack.json"
     latest = read_json(latest_f) if latest_f.is_file() else None
     packs_count = len(list((st_dir / "packs").glob("*.json"))) if (st_dir / "packs").is_dir() else 0
     return {
@@ -620,6 +622,7 @@ def main(argv: list[str] | None = None) -> int:
                 staged_phase=ns.staged_phase,
                 auto_red_green=not ns.no_auto_red,
                 dry_run=ns.dry_run,
+                task_id=ns.task_id,
             )
             if ns.json:
                 print(json.dumps(res, indent=2, ensure_ascii=False))
@@ -650,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return 0
 
-        res = get_web_relay_status(repo)
+        res = get_web_relay_status(repo, task_id=getattr(ns, "task_id", ""))
         if ns.json:
             print(json.dumps(res, indent=2, ensure_ascii=False))
         else:

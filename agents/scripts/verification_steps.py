@@ -32,7 +32,14 @@ def _dispatch(repo: Path, script: str, arguments: list[str], *, quiet_stdout: bo
                           cwd=str(repo), env=env, check=False).returncode
 
 
-def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: bool = False) -> tuple[int, dict]:
+def run_steps(
+    repo: Path,
+    task_id: str,
+    host: str | None = None,
+    *,
+    json_only: bool = False,
+    include_assemble: bool = False,
+) -> tuple[int, dict]:
     from _vnext_common import ValidationError
     from evidence_store import StateLock
     from host_continuation import assert_execution_session
@@ -97,11 +104,18 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
                     "RUN_ROOM_GUARD": "room_guard.py",
                     "RUN_UNIT_TESTS": "run_tests_gate.py",
                     "BUILD_REVIEW_PACKAGE": "review_package.py",
+                    **({"ASSEMBLE": "run_gradle_task.py"} if include_assemble else {}),
                 }.get(code, "")
                 if script in {"preflight_check.py", "review_package.py"}:
                     arguments = ["--repo", str(repo), "--task-id", task_id]
                 elif script == "room_guard.py":
                     arguments = ["--repo", str(repo)]
+                elif script == "run_gradle_task.py" and code == "ASSEMBLE":
+                    asm_task = str((action.get("inputs") or {}).get("assemble_task") or "").strip()
+                    if not asm_task:
+                        from _variants import resolve_assemble_task
+                        asm_task = resolve_assemble_task(repo)
+                    arguments = [asm_task]
             if not script:
                 summary["next_action"] = _compact_for_host(action)
                 return 0, summary
@@ -122,7 +136,7 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
                 if not web_active:
                     try:
                         from execution_mode import resolve_effective_execution_mode
-                        web_active = resolve_effective_execution_mode(repo, task_id=task_id).get("effective_mode") == "web"
+                        web_active = resolve_effective_execution_mode(repo, task_id=task_id).get("mode") == "web"
                     except (ImportError, OSError, ValueError, ValidationError):
                         web_active = False
                 if web_active:

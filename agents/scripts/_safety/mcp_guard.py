@@ -127,7 +127,7 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         return
 
     # WRITE, HIGH_IMPACT and UNKNOWN calls never carry a credential or signing file off the machine.
-    secrets = sensitive_values([tool_args])
+    secrets = sensitive_values([tool_args, raw_tool_args])
     if secrets:
         _engine.emit(
             "deny",

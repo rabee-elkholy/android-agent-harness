@@ -17,6 +17,9 @@ def load_plan_notes(directory, plan):
     notes_dir = directory / "plan-notes"
     if not notes_dir.is_dir():
         return notes
+    valid_shas = {str(plan.get("plan_sha256") or "")} | {
+        str(x) for x in (plan.get("in_place_absorbed_plan_shas") or []) if isinstance(x, str) and x
+    }
     for path in sorted(notes_dir.glob("*.json")):
         row = read_json(path)
         if (not isinstance(row, dict) or row.get("schema_version") != 1 or row.get("task_id") != plan["task_id"]
@@ -25,7 +28,7 @@ def load_plan_notes(directory, plan):
                 or not isinstance(row.get("proof_reference"), str) or not row["proof_reference"].strip()
                 or row.get("receipt_sha256") != canonical_sha256({k: v for k, v in row.items() if k != "receipt_sha256"})):
             raise ValidationError("invalid plan clarification receipt")
-        if row.get("plan_sha256") == plan.get("plan_sha256"):
+        if str(row.get("plan_sha256") or "") in valid_shas:
             notes.append((str(row.get("created_at") or ""), path.name, row))
     notes.sort(key=lambda item: (item[0], item[1]))
     return [item[2] for item in notes]

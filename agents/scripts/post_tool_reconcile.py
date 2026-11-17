@@ -112,7 +112,10 @@ def main() -> int:
                 if not _is_invalid_conversation_id(cid)
             }
             for execution_id in matched_ids:
-                reviewer_context(repo, execution_id, bind=True)
+                try:
+                    reviewer_context(repo, execution_id, bind=True)
+                except Exception:
+                    continue
             if call_name_low in {"invoke_subagent", ""}:
                 try:
                     from delegation_policy import (

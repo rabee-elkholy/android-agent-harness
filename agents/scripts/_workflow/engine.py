@@ -38,7 +38,13 @@ from _vnext_common import (  # noqa: E402
     validate_repo_path_containment,
 )
 from _variants import resolve_assemble_task  # noqa: E402
-from change_classifier import PRESENTATIONAL_ASSET_EXTENSIONS, classify, is_documentation_path  # noqa: E402
+from change_classifier import (  # noqa: E402
+    CRITICAL_SURFACES,
+    HIGH_SURFACES,
+    PRESENTATIONAL_ASSET_EXTENSIONS,
+    classify,
+    is_documentation_path,
+)
 from delivery_manifest import (  # noqa: E402
     assert_no_unresolved_conflicts,
     build_manifest,
@@ -375,7 +381,13 @@ def _find_uncommitted_task_files(repo: Path, task_id: str, plan: dict, live_mani
     return sorted(expected & effective_changes)
 
 
-from delivery_manifest import LIVE_TASK_STATUSES, live_task_plans, assert_disjoint_task_scope, TaskConflictError
+from delivery_manifest import (
+    LIVE_TASK_STATUSES,
+    TaskConflictError,
+    assert_disjoint_task_scope,
+    disjoint_sibling_file_sets,
+    live_task_plans,
+)
 
 TERMINAL_TASK_STATUSES = frozenset({"CANCELLED", "DELIVERED"})
 
@@ -477,6 +489,217 @@ def draft(args: argparse.Namespace) -> dict:
         pass
     _write_plan_document(repo, task_id, plan)
     return plan
+
+
+EXPRESS_DISALLOWED_SURFACES = frozenset(
+    set(CRITICAL_SURFACES)
+    | set(HIGH_SURFACES)
+    | {
+        "ROOM_SCHEMA",
+        "BUILD_CONFIG",
+        "MANIFEST_PERMISSION",
+        "SECURITY",
+        "AUTH",
+        "BILLING",
+        "SENSITIVE_DATA",
+        "CRYPTO",
+        "PUBLIC_API",
+        "UNKNOWN",
+        "DEVICE_API",
+        "PERSISTENCE",
+        "NETWORK",
+        "NATIVE_CODE",
+        "NAVIGATION",
+    }
+)
+
+
+_EXPRESS_OUTCOME_SENSITIVE_RE = re.compile(
+    r"\b(?:oauth|auth|authentication|login|signup|signin|credential|password|biometric|"
+    r"billing|payment|subscription|purchase|revenuecat|paywall|iap|"
+    r"room|migration|schema|datastore|sharedpreferences|sqlite|"
+    r"retrofit|okhttp|graphql|websocket|endpoint|"
+    r"permission|permissions|androidmanifest|keystore|crypto|encrypt|decrypt|"
+    r"navhost|navgraph|deeplink|jni|ndk)\b",
+    re.IGNORECASE,
+)
+
+
+def _auto_quick_start_task_id(repo: Path, outcome: str, files_raw: str) -> str:
+    base_txt = str(outcome or "").strip() or Path(str(files_raw or "micro-task").split(",")[0].strip()).stem
+    slug = re.sub(r"[^a-z0-9]+", "-", base_txt.lower()).strip("-")[:28].strip("-")
+    if len(slug) < 3:
+        slug = "micro-task"
+    cand = f"qs-{slug}"
+    if not (state_root(repo) / "tasks" / cand).exists():
+        return cand
+    suffix = canonical_sha256({"outcome": outcome, "files": files_raw, "ts": utc_now()})[:6]
+    return f"qs-{slug[:22].rstrip('-')}-{suffix}"
+
+
+def _partition_express_files(norm_files: list[str]) -> tuple[list[str], list[str]]:
+    from _modules import is_kmp_or_android_test_path
+    primary: list[str] = []
+    companion: list[str] = []
+    for rel in norm_files:
+        clean = str(rel).replace("\\", "/").strip("/")
+        is_test = is_kmp_or_android_test_path(clean)
+        is_locale_parity = bool("/res/values-" in f"/{clean}" and clean.endswith(".xml"))
+        if is_test or is_locale_parity:
+            companion.append(clean)
+        else:
+            primary.append(clean)
+    if not primary and companion:
+        # Pure unit-test or pure localized strings update: count those directly as primary targets
+        return companion, []
+    return primary, companion
+
+
+@_serialize_task_scope
+def quick_start(args: argparse.Namespace) -> dict:
+    """Single-command Express Track for bounded direct-request T0/T1 micro-tasks with safe fallback to AWAITING_DEVELOPER_APPROVAL."""
+    repo = Path(args.repo).resolve()
+    source = str(getattr(args, "source", "") or "").strip().lower()
+    proof_ref = str(getattr(args, "proof_reference", "") or "").strip()
+    enforcement_tier = str(getattr(args, "enforcement_tier", "RULE_ENFORCED") or "RULE_ENFORCED").strip().upper()
+    if source not in ("conversation", "developer_terminal", "host_native"):
+        raise ValidationError("DEVELOPER_AUTHORITY_REQUIRED: `task quick-start` requires `--source conversation` (or `developer_terminal`).")
+    if not proof_ref or len(proof_ref) < 2:
+        raise ValidationError("DEVELOPER_AUTHORITY_REQUIRED: `task quick-start` requires a non-empty `--proof-reference \"<developer request>\"`.")
+    if proof_ref.rstrip().endswith(("?", "\u061f")) and not any(
+        tok in proof_ref.lower() for tok in ("fix", "add", "update", "change", "remove", "\u0639\u062f\u0644", "\u0636\u064a\u0641", "\u0627\u0635\u0644\u062d", "\u0635\u0644\u062d", "\u062d\u062f\u062b", "\u063a\u064a\u0631")
+    ):
+        raise ValidationError(
+            "DEVELOPER_AUTHORITY_REQUIRED: `--proof-reference` appears to be a question rather than an explicit implementation request."
+        )
+    raw_outcome = str(getattr(args, "outcome", "") or "").strip()
+    if not raw_outcome:
+        raise ValidationError("`task quick-start` requires `--outcome \"<requested change>\"`.")
+    raw_files = str(getattr(args, "expected_files", "") or "").strip()
+    if not raw_files:
+        raise ValidationError("`task quick-start` requires `--files <1-2 target files>` (or `--expected-files`).")
+    norm_files = normalize_expected_files(repo, raw_files)
+    if not norm_files:
+        raise ValidationError("`task quick-start` requires at least one valid repository-relative target file.")
+
+    raw_tid = str(getattr(args, "task_id", "") or "").strip()
+    task_id = validate_id(raw_tid, "task id") if raw_tid else _auto_quick_start_task_id(repo, raw_outcome, raw_files)
+    args.task_id = task_id
+    if not str(getattr(args, "approach", "") or "").strip():
+        args.approach = f"Apply bounded update to {', '.join(Path(f).name for f in norm_files[:3])} for: {raw_outcome[:140]}"
+
+    assert_single_live_task(repo, allowed_task_id=task_id)
+    proposed_scope = {"expected_files": norm_files}
+    assert_disjoint_task_scope(repo, task_id, proposed_scope)
+
+    existing_p = _plan_path(repo, task_id)
+    if existing_p.is_file():
+        existing_plan = read_json(existing_p)
+        if str(existing_plan.get("status") or "") == "IMPLEMENTING" and existing_plan.get("express_track") is True:
+            return existing_plan
+        raise ValidationError(
+            f"TASK_PLAN_ALREADY_EXISTS: task '{task_id}' already exists with status '{existing_plan.get('status')}'. "
+            "Pass a distinct `--task-id` or manage the existing task."
+        )
+
+    plan = _build_and_save_plan(repo, args, task_id, is_revision=False)
+    directory = task_dir(repo, task_id)
+    prelim_cls_file = directory / "preliminary-classification.json"
+    prelim_pol_file = directory / "preliminary-policy.json"
+    prelim_cls = read_json(prelim_cls_file) if prelim_cls_file.is_file() else {"surfaces": plan.get("expected_surfaces") or [], "severity": "LOW", "changed_files": len(norm_files), "changed_lines": 20}
+
+    primary_files, _companion_files = _partition_express_files(list(plan.get("expected_files") or norm_files))
+    fallback_reasons: list[str] = []
+    if len(primary_files) > 2:
+        fallback_reasons.append(f"primary_files={len(primary_files)} exceeds Express limit of 2")
+    if len(plan.get("expected_files") or []) > 4:
+        fallback_reasons.append(f"total_files={len(plan.get('expected_files') or [])} exceeds Express limit of 4")
+    if plan.get("external_writes"):
+        fallback_reasons.append("external_writes require explicit plan approval")
+    if plan.get("phases"):
+        fallback_reasons.append("multi-phase plans require explicit plan approval")
+    if str(plan.get("planning_depth") or "BOUNDED").upper() == "ARCHITECTURAL":
+        fallback_reasons.append("ARCHITECTURAL planning_depth requires explicit plan approval")
+    if str(plan.get("task_kind") or "").upper() in {"CONFLICT", "FIX_CONFLICT", "MERGE"}:
+        fallback_reasons.append(f"task_kind={plan.get('task_kind')} requires standard workflow")
+    if len(plan.get("expected_modules") or []) > 1:
+        fallback_reasons.append("cross-module scope requires explicit plan approval")
+    arch_status = str((plan.get("architecture_contract") or {}).get("status") or "")
+    if arch_status == "ARCHITECTURE_DECISION_REQUIRED":
+        fallback_reasons.append("ARCHITECTURE_DECISION_REQUIRED")
+    gaps = list((plan.get("readiness_assessment") or {}).get("gaps") or [])
+    if gaps:
+        fallback_reasons.append(f"plan_gaps={','.join(str(g) for g in gaps[:3])}")
+
+    cand_plan = {**plan, "express_track": True, "changed_modules": list(plan.get("expected_modules") or [])}
+    cand_cls = {
+        **prelim_cls,
+        "changed_files": max(1, len(primary_files)),
+        "changed_lines": min(int(prelim_cls.get("changed_lines") or 20), 60) if int(prelim_cls.get("changed_lines") or 0) == 0 else int(prelim_cls.get("changed_lines") or 20),
+    }
+    cand_policy = decide(
+        cand_cls,
+        skills_root(repo),
+        project_kind=project_kind(repo),
+        task_kind=str(plan.get("task_kind") or "FEATURE"),
+        plan=cand_plan,
+    )
+    all_surfs = set(cand_policy.get("surfaces") or []) | set(plan.get("expected_surfaces") or [])
+    blocked_surfs = sorted(all_surfs & EXPRESS_DISALLOWED_SURFACES)
+    if blocked_surfs:
+        fallback_reasons.append(f"sensitive_or_structural_surfaces={','.join(blocked_surfs)}")
+    kw_hits = sorted({m.group(0).lower() for m in _EXPRESS_OUTCOME_SENSITIVE_RE.finditer(f"{raw_outcome} {raw_files}")})
+    if kw_hits:
+        fallback_reasons.append(f"sensitive_or_structural_keywords={','.join(kw_hits[:5])}")
+    if cand_policy.get("risk_tier") not in {"T0_TRIVIAL", "T1_LOW_RISK"} or not cand_policy.get("micro_eligible") or cand_policy.get("reviewers"):
+        fallback_reasons.append(f"policy_risk_tier={cand_policy.get('risk_tier')}")
+
+    try:
+        from execution_mode import bind_pending_execution_mode_to_task
+        bind_pending_execution_mode_to_task(repo, task_id)
+    except (ImportError, OSError, ValueError, ValidationError):
+        pass
+
+    if fallback_reasons:
+        _write_plan_document(repo, task_id, plan)
+        return {
+            **plan,
+            "express_track": False,
+            "express_eligible": False,
+            "express_fallback_reason": "; ".join(fallback_reasons),
+        }
+
+    with StateLock(directory / ".lock"):
+        plan["express_track"] = True
+        if isinstance(plan.get("readiness_assessment"), dict):
+            plan["readiness_assessment"]["risk_tier"] = cand_policy.get("risk_tier", "T1_LOW_RISK")
+        plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+        atomic_write_json(prelim_pol_file, cand_policy)
+        plan = approve_and_begin(
+            repo,
+            plan,
+            source=source,
+            proof_reference=proof_ref,
+            enforcement_tier=enforcement_tier,
+        )
+        save_plan(existing_p, plan)
+        atomic_write_json(state_root(repo) / "active-task.json", {
+            "task_id": task_id,
+            "plan_path": str(existing_p),
+            "updated_at": utc_now(),
+        })
+        try:
+            from self_heal import save_stable_snapshot
+            save_stable_snapshot(repo, task_id, "approved", plan=plan)
+        except (OSError, ValueError, ImportError, ValidationError):
+            pass
+    _write_plan_document(repo, task_id, plan)
+    return {
+        **plan,
+        "express_eligible": True,
+        "express_risk_tier": cand_policy.get("risk_tier"),
+        "express_gates": cand_policy.get("gates") or [],
+    }
 
 
 def _write_plan_document(repo: Path, task_id: str, plan: dict, previous: dict | None = None) -> Path:
@@ -914,6 +1137,7 @@ def revise(args: argparse.Namespace) -> dict:
     else:
         parked_run_file.unlink(missing_ok=True)
         carry_path.unlink(missing_ok=True)
+        (directory / "reopen-carry.json").unlink(missing_ok=True)
     _write_plan_document(repo, task_id, result, previous=old_plan)
     if carry_path.is_file():
         result = {**result, "verification_carry": {
@@ -1458,6 +1682,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 history_dir.mkdir(parents=True, exist_ok=True)
                 atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
                 plan["supersedes_plan_sha256"] = old_plan_sha
+                plan["in_place_absorbed_plan_shas"] = sorted(set(plan.get("in_place_absorbed_plan_shas") or []) | {old_plan_sha})
             plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(pre_extra_files))
             plan.pop("material_drift", None)
             plan.pop("material_drift_causes", None)
@@ -1538,6 +1763,48 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
         if round_block:
             raise ValidationError(round_block["reason"])
     actual_task_paths = changed_file_paths(manifest)
+    if plan.get("express_track") is True:
+        primary_actual, _ = _partition_express_files(actual_task_paths)
+        actual_surfs = set(policy.get("surfaces") or [])
+        escalated_surfs = sorted(actual_surfs & EXPRESS_DISALLOWED_SURFACES)
+        actual_lines = int(classification.get("changed_lines") or 0)
+        actual_mods = changed_modules(repo, manifest)
+        esc_reasons: list[str] = []
+        if escalated_surfs:
+            esc_reasons.append(f"disallowed_surfaces={','.join(escalated_surfs)}")
+        if len(primary_actual) > 2:
+            esc_reasons.append(f"primary_changed_files={len(primary_actual)} (>2)")
+        if len(actual_task_paths) > 4:
+            esc_reasons.append(f"total_changed_files={len(actual_task_paths)} (>4)")
+        if actual_lines > 100:
+            esc_reasons.append(f"changed_lines={actual_lines} (>100)")
+        if len(actual_mods) > 1:
+            esc_reasons.append(f"changed_modules={','.join(actual_mods)}")
+        if policy.get("risk_tier") not in {"T0_TRIVIAL", "T1_LOW_RISK"} or policy.get("reviewers"):
+            esc_reasons.append(f"risk_tier={policy.get('risk_tier')}")
+        if esc_reasons:
+            old_sha = str(plan.get("plan_sha256") or "")
+            if old_sha:
+                history_dir = task_dir(repo, args.task_id) / "plan-history"
+                history_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(history_dir / f"{old_sha}.json", dict(plan))
+                plan["supersedes_plan_sha256"] = old_sha
+            plan.pop("express_track", None)
+            plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(actual_task_paths))
+            plan["expected_surfaces"] = sorted(set(plan.get("expected_surfaces") or []) | actual_surfs)
+            if actual_mods:
+                plan["expected_modules"] = sorted(set(plan.get("expected_modules") or []) | set(actual_mods))
+            plan["status"] = "AWAITING_DEVELOPER_APPROVAL"
+            plan["approval"] = None
+            plan["execution_nonce"] = None
+            plan["plan_sha256"] = canonical_sha256(plan_payload(plan))
+            save_plan(_plan_path(repo, args.task_id), plan)
+            _write_plan_document(repo, args.task_id, plan)
+            raise ValidationError(
+                f"EXPRESS_SCOPE_ESCALATED_APPROVAL_REQUIRED: Actual changes exceeded Express Track micro-task bounds "
+                f"({'; '.join(esc_reasons)}). Task '{args.task_id}' has been demoted to AWAITING_DEVELOPER_APPROVAL "
+                f"(PLAN_HASH={plan['plan_sha256'][:12]}). Present PLAN_SUMMARY via ask_question and obtain explicit developer approval."
+            )
     drift = check_material_drift(plan, policy.get("surfaces") or [], changed_modules(repo, manifest), actual_files=actual_task_paths, repo=repo)
     from final_verifier import unplanned_mandatory_skills
     drift = [*drift, *(f"skill:{skill}" for skill in unplanned_mandatory_skills(plan, policy))]
@@ -1551,6 +1818,7 @@ def prepare_verification(args_or_repo: argparse.Namespace | Path | str, task_id_
                 history_dir.mkdir(parents=True, exist_ok=True)
                 atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
                 plan["supersedes_plan_sha256"] = old_plan_sha
+                plan["in_place_absorbed_plan_shas"] = sorted(set(plan.get("in_place_absorbed_plan_shas") or []) | {old_plan_sha})
             plan["expected_files"] = sorted(set(plan.get("expected_files") or []) | set(extra_files))
             plan.pop("material_drift", None)
             plan.pop("material_drift_causes", None)
@@ -1854,6 +2122,102 @@ def complete(args: argparse.Namespace) -> dict:
     return plan
 
 
+def ship_task(args: argparse.Namespace) -> dict:
+    """Compound verification-to-commit-card pipeline: runs verify-steps (including assemble), seals complete when ready, or stops safely at any review/human checkpoint."""
+    import contextlib
+    import io
+
+    repo = Path(args.repo).resolve()
+    tid = str(getattr(args, "task_id", "") or "").strip()
+    if not tid:
+        active_file = state_root(repo) / "active-task.json"
+        if active_file.is_file():
+            tid = str(read_json(active_file).get("task_id") or "").strip()
+    if not tid:
+        raise ValidationError("no active task found; pass --task-id <id>")
+    args.task_id = tid
+    host = getattr(args, "host", None)
+    want_json = bool(getattr(args, "json", False))
+
+    plan = _load_plan(repo, tid)
+    cur_status = str(plan.get("status") or "")
+    if cur_status == "DELIVERED":
+        return {"status": "DELIVERED", "ship_outcome": "ALREADY_DELIVERED", "task_id": tid}
+    if cur_status not in {"IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"}:
+        raise ValidationError(
+            f"TASK_SHIP_INVALID_STATE: `task ship` requires IMPLEMENTING, VERIFYING, or READY_FOR_DELIVERY (current status: {cur_status})."
+        )
+
+    steps_report: dict[str, Any] = {}
+    if cur_status in {"IMPLEMENTING", "VERIFYING"}:
+        from verification_steps import run_steps
+        buf = io.StringIO()
+        if want_json:
+            with contextlib.redirect_stdout(buf):
+                rc, steps_report = run_steps(repo, tid, host=host, json_only=True, include_assemble=True)
+        else:
+            rc, steps_report = run_steps(repo, tid, host=host, json_only=False, include_assemble=True)
+        if rc != 0:
+            plan_after = _load_plan(repo, tid)
+            try:
+                fail_act = resolve_next_action(repo, tid, plan_after, host=host)
+            except Exception:
+                fail_act = {}
+            return {
+                "status": "BLOCKED",
+                "ship_outcome": "VERIFICATION_STEP_FAILED",
+                "exit_code": rc,
+                "task_id": tid,
+                "task_state": plan_after.get("status"),
+                "verification_steps": steps_report,
+                "next_action": _compact_for_host(fail_act) if isinstance(fail_act, dict) and fail_act else {},
+            }
+
+    plan = _load_plan(repo, tid)
+    act = resolve_next_action(repo, tid, plan, host=host)
+    if plan.get("status") == "VERIFYING" and act.get("code") in {"COMPLETE_TASK", "FINAL_VERIFY"}:
+        complete(argparse.Namespace(repo=str(repo), task_id=tid))
+        plan = _load_plan(repo, tid)
+        act = resolve_next_action(repo, tid, plan, host=host)
+
+    if plan.get("status") == "READY_FOR_DELIVERY":
+        if act.get("code") == "DELIVER":
+            delivered_plan = deliver_task(
+                argparse.Namespace(
+                    repo=str(repo),
+                    task_id=tid,
+                    allow_dirty_tree=False,
+                    developer_allow_dirty_tree=False,
+                    source=None,
+                )
+            )
+            return {
+                "status": "DELIVERED",
+                "ship_outcome": "DELIVERED",
+                "task_id": tid,
+                "delivery_commit_sha": delivered_plan.get("delivery_commit_sha"),
+            }
+        return {
+            "status": "READY_FOR_DELIVERY",
+            "ship_outcome": "AWAITING_GIT_COMMIT",
+            "task_id": tid,
+            "express_track": bool(plan.get("express_track")),
+            "suggested_commit": act.get("suggested_commit"),
+            "suggested_commit_block": act.get("suggested_commit_block"),
+            "dirty_task_files": (act.get("inputs") or {}).get("dirty_task_files") or [],
+            "verification_steps": steps_report or None,
+            "next_action": _compact_for_host(act),
+        }
+
+    return {
+        "status": str(plan.get("status") or "VERIFYING"),
+        "ship_outcome": "STOPPED_AT_CHECKPOINT",
+        "task_id": tid,
+        "verification_steps": steps_report or None,
+        "next_action": _compact_for_host(act),
+    }
+
+
 @_serialize_task_scope
 def cancel(args: argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
@@ -1963,25 +2327,31 @@ def _next_actions(repo: Path, task_id: str, plan: dict) -> list[dict[str, Any]]:
             "command": f"{base} begin {identity}",
             "reason": "Start the approved implementation.",
         }]
-    if state == "IMPLEMENTING":
+    if state == "IMPLEMENTING" and plan.get("phases"):
         phases = plan.get("phases") or []
-        if phases and "active_phase_index" in plan:
-            try:
-                requested_index = int(plan.get("active_phase_index") or 0)
-            except (TypeError, ValueError):
-                requested_index = 0
-            index = max(0, min(requested_index, len(phases) - 1))
-            active_phase = phases[index] if isinstance(phases[index], dict) else {}
-            phase_id = str(active_phase.get("id") or "")
-            if phase_id:
+        idx = int(plan.get("active_phase_index") or 0)
+        if not repo.is_dir() or not (task_dir(repo, task_id) / "phase-state.json").is_file():
+            if 0 <= idx < len(phases) and isinstance(phases[idx], dict):
+                pid = str(phases[idx].get("id") or f"p{idx + 1}")
                 return [{
                     "action": "checkpoint-phase",
                     "code": "CHECKPOINT_PHASE",
                     "kind": "HARNESS_COMMAND",
-                    "command": f'{base} checkpoint-phase {identity} --phase-id "{phase_id}"',
-                    "reason": "Validate the active implementation phase before advancing.",
+                    "command": f"{base} checkpoint-phase {identity} --phase-id {pid}",
+                    "reason": f"Complete and checkpoint active phase '{pid}'.",
                 }]
-    act = resolve_next_action(repo, task_id, plan)
+    try:
+        act = resolve_next_action(repo, task_id, plan)
+    except HarnessError:
+        if state == "IMPLEMENTING":
+            return [{
+                "action": "prepare-verification",
+                "code": "PREPARE_VERIFICATION",
+                "kind": "HARNESS_COMMAND",
+                "command": f"{base} prepare-verification {identity}",
+                "reason": "Prepare verification when implementation is complete.",
+            }]
+        raise
     legacy_action = {
         "RUN_PREFLIGHT": "preflight",
         "RUN_UNIT_TESTS": "test",
@@ -2179,7 +2549,7 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     )
     command.add_argument("--architecture-target-scope", default="", help="Target component or screen path for architecture resolution")
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
-    command.add_argument("--expected-files", help="Comma-separated expected target files")
+    command.add_argument("--expected-files", "--files", dest="expected_files", help="Comma-separated expected target files")
     command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
     command.add_argument("--verification-contract", help="Repository-relative JSON file or inline JSON with optional approved criteria and journeys")
     command.add_argument("--task-context-id", default=None, help="Explicit Task Context ID for collision-safe scope binding")
@@ -2264,7 +2634,7 @@ def cmd_plan_check(args: argparse.Namespace) -> dict:
     directory = task_dir(repo, tid)
     policy_file = directory / "preliminary-policy.json"
     policy: dict[str, Any] = {}
-    current_file = directory / "current.json"
+    current_file = directory / "current-run.json"
     if current_file.is_file():
         try:
             cur_pol_raw = str(read_json(current_file).get("policy") or "").strip()
@@ -2285,7 +2655,7 @@ def cmd_plan_check(args: argparse.Namespace) -> dict:
         fallback_tier = str(
             (plan.get("readiness_assessment") or {}).get("risk_tier")
             or plan.get("risk_tier")
-            or "T1_LOW"
+            or "T1_LOW_RISK"
         )
         policy = {"risk_tier": fallback_tier}
 
@@ -2355,6 +2725,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Adopt pre-existing uncommitted WIP edits in expected_files into this task's delta rather than isolating them in task-baseline.json",
     )
     draft_cmd.set_defaults(handler=draft)
+    qs_cmd = sub.add_parser(
+        "quick-start",
+        help="Single-command Express Track for direct developer requests on bounded 1-2 file T0/T1 micro-tasks (falls back to AWAITING_DEVELOPER_APPROVAL if ineligible)",
+    )
+    qs_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    qs_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task ID (auto-generated from outcome/files when omitted)")
+    _add_plan_arguments(qs_cmd, is_revision=False)
+    qs_cmd.add_argument(
+        "--adopt-dirty",
+        action="store_true",
+        help="Adopt pre-existing uncommitted WIP edits in expected_files into this task's delta",
+    )
+    qs_cmd.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
+    qs_cmd.add_argument("--proof-reference", required=True, help="Exact developer words requesting this bounded change")
+    qs_cmd.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), default="RULE_ENFORCED")
+    qs_cmd.set_defaults(handler=quick_start)
     revise_cmd = sub.add_parser("revise", parents=[common])
     _add_plan_arguments(revise_cmd, is_revision=True)
     revise_cmd.add_argument("--material-change-reason", help="Concrete requirement expansion when revising only approved plan prose")
@@ -2424,6 +2810,14 @@ def build_parser() -> argparse.ArgumentParser:
     pv_cmd.set_defaults(handler=prepare_verification)
     sub.add_parser("verify", parents=[common]).set_defaults(handler=verify_task)
     sub.add_parser("complete", parents=[common]).set_defaults(handler=complete)
+    ship_cmd = sub.add_parser(
+        "ship",
+        help="Run verification steps (including assemble), seal task complete to READY_FOR_DELIVERY when ready, or seal deliver after git commit",
+    )
+    ship_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    ship_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to focused active task if omitted)")
+    ship_cmd.add_argument("--host", default=None, help="Host environment for reviewer/router resolution")
+    ship_cmd.set_defaults(handler=ship_task)
     command = sub.add_parser("deliver", parents=[common])
     command.add_argument("--allow-dirty-tree", action="store_true", help="Explicit developer override to deliver while verified task files remain uncommitted")
     command.add_argument("--developer-allow-dirty-tree", action="store_true", help="Explicit developer-terminal override to deliver while verified task files remain uncommitted")
@@ -2494,7 +2888,7 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_cmd.add_argument("--next-outcome", default="", help="Follow-up task outcome or request to carry into the new conversation")
     bridge_cmd.add_argument("--summary", default="", help="Concise summary of architectural decisions and task context")
     bridge_cmd.add_argument("--expected-files", default="", help="Comma-separated target files to seed into the bridged Discovery Receipt")
-    bridge_cmd.add_argument("--host", default=None, help="Host environment (antigravity, claude, codex)")
+    bridge_cmd.add_argument("--host", default=None, help="Host environment (antigravity or generic)")
     bridge_cmd.set_defaults(handler=cmd_task_bridge)
     parser.add_argument("--json", action="store_true")
     for subparser in sub.choices.values():
@@ -2586,24 +2980,29 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     args = parser.parse_args(argv)
     try:
-        if args.action not in {"continue", "bridge", "status", "coverage", "metrics", "draft", "recover-stale", "merge", "heal", "plan-check"}:
+        if args.action == "ship" and not getattr(args, "task_id", ""):
+            act_f = state_root(Path(args.repo).resolve()) / "active-task.json"
+            if act_f.is_file():
+                args.task_id = str(read_json(act_f).get("task_id") or "").strip()
+        if args.action not in {"continue", "bridge", "status", "coverage", "metrics", "draft", "quick-start", "recover-stale", "merge", "heal", "plan-check"}:
             from host_continuation import assert_execution_session
             assert_execution_session(Path(args.repo).resolve(), args.task_id)
-        if args.action in {"continue", "merge", "bridge", "prepare-verification"} and args.json:
+        if args.action in {"continue", "merge", "bridge", "prepare-verification", "quick-start"} and args.json:
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
                 result = args.handler(args)
         else:
             result = args.handler(args)
-        if args.action == "approve" and result.get("status") == "IMPLEMENTING":
+        if args.action in ("approve", "quick-start") and result.get("status") == "IMPLEMENTING":
             from review_sources import detected_current_host
             from host_continuation import continue_task, load_session
             current_host = detected_current_host()
             repo = Path(args.repo).resolve()
-            if current_host and load_session(repo, args.task_id) is None:
+            bound_tid = str(result.get("task_id") or args.task_id)
+            if current_host and bound_tid and load_session(repo, bound_tid) is None:
                 import contextlib
                 with contextlib.redirect_stdout(sys.stderr):
-                    continue_task(argparse.Namespace(repo=str(repo), task_id=args.task_id, host=current_host,
+                    continue_task(argparse.Namespace(repo=str(repo), task_id=bound_tid, host=current_host,
                                                      source_stopped=False, expect_session=None))
     except (ValidationError, OSError) as exc:
         if args.action == "bridge" and getattr(args, "json", False):
@@ -2781,8 +3180,27 @@ def main(argv: list[str] | None = None) -> int:
         print(f"NEXT_REASON={upcoming.get('reason') or ''}")
         if upcoming.get("inputs"):
             print("NEXT_ACTION_INPUTS=" + json.dumps(upcoming["inputs"], ensure_ascii=False))
+    elif args.action == "ship":
+        if args.json:
+            print(json.dumps(_compact_plan_json_for_cli_stdout(result) if isinstance(result, dict) else result, ensure_ascii=False, indent=2))
+        else:
+            print(f"TASK_STATUS={result.get('status', 'READY')}")
+            print(f"SHIP_OUTCOME={result.get('ship_outcome', '')}")
+            if result.get("suggested_commit"):
+                print(f"SUGGESTED_COMMIT={result['suggested_commit']}")
+            nxt = result.get("next_action") or {}
+            if nxt.get("code"):
+                cmd_s = nxt.get("command") or ("invoke ask_question tool in this turn (DEVELOPER_ACTION)" if nxt.get("tool") == "ask_question" else "")
+                print(f"NEXT_ACTION={nxt['code']}: {cmd_s}")
+                if nxt.get("reason"):
+                    print(f"NEXT_REASON={nxt['reason']}")
+                if nxt.get("instructions") and (nxt.get("tool") == "ask_question" or nxt.get("kind") == "DEVELOPER_ACTION"):
+                    print(f"NEXT_INSTRUCTIONS={nxt['instructions']}")
+                if nxt.get("code") in {"DISPATCH_REVIEWERS", "DISPATCH_PHASE_REVIEWERS"} and nxt.get("inputs"):
+                    print("NEXT_ACTION_INPUTS=" + json.dumps(nxt["inputs"], ensure_ascii=False))
+        return int(result.get("exit_code") or (1 if result.get("status") == "BLOCKED" else 0))
     elif args.json:
-        if args.action in ("draft", "revise") or (args.action == "merge" and args.apply):
+        if args.action in ("draft", "revise") or (args.action == "quick-start" and result.get("status") == "AWAITING_DEVELOPER_APPROVAL") or (args.action == "merge" and args.apply):
             # A live run passed --json to draft and revise and got none of this, so the agent wrote the
             # approval question itself (no Cancel option, no files).
             lines = approval_material_lines(Path(args.repo).resolve(), result, args.action)
@@ -2797,10 +3215,15 @@ def main(argv: list[str] | None = None) -> int:
             for consequence in result["consequences"]:
                 print(consequence)
             print("NEXT_ACTION=CONFIRM_PLAN_MERGE: present the preview and wait for the developer's merge choice.")
-        if args.action in ("draft", "revise") or (args.action == "merge" and args.apply):
-            for line in approval_material_lines(Path(args.repo).resolve(), result, args.action):
+        if args.action in ("draft", "revise") or (args.action == "quick-start" and result.get("status") == "AWAITING_DEVELOPER_APPROVAL") or (args.action == "merge" and args.apply):
+            if args.action == "quick-start" and result.get("express_fallback_reason"):
+                print(f"EXPRESS_FALLBACK_REASON={result['express_fallback_reason']}")
+            for line in approval_material_lines(Path(args.repo).resolve(), result, "draft" if args.action == "quick-start" else args.action):
                 print(line)
-        if args.action == "approve":
+        if args.action in ("approve", "quick-start") and result.get("status") == "IMPLEMENTING":
+            print(f"TASK_ID={result.get('task_id')}")
+            if result.get("express_track"):
+                print(f"EXPRESS_TRACK=true RISK_TIER={result.get('express_risk_tier', 'T1_LOW_RISK')}")
             print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
         print(f"TASK_STATUS={result.get('status', 'READY')}")
         if args.action == "checkpoint-phase" and result.get("auto_advanced_phases"):
@@ -2815,7 +3238,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"NEXT_ACTION={_nxt_cp['code']}: {_nxt_cp['command']}")
             except (OSError, ValueError, KeyError, TypeError, ValidationError):
                 _nxt_cp = {}
-        if args.action == "approve" and result.get("task_id"):
+        if args.action in ("approve", "quick-start") and result.get("status") == "IMPLEMENTING" and result.get("task_id"):
             # Real app: approve printed only the status, the agent started editing, and the test record
             # the router asks for before the first edit never happened; an old failing test in another
             # feature then stopped verification and cost two approvals.
@@ -2875,7 +3298,7 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"CONTEXT_ROTATION_INSTRUCTIONS={rot_adv.get('instructions')}")
             except (ImportError, OSError, ValueError, ValidationError):
                 pass
-    if args.action in ("draft", "revise", "recover-active", "reconcile-delivery"):
+    if args.action in ("draft", "quick-start", "revise", "recover-active", "reconcile-delivery"):
         return 0 if result.get("status") not in ("BLOCKED", "STALE", "USER_DECISION_REQUIRED") else 1
     return 0 if result.get("status") not in ("BLOCKED", "STALE", "PLAN_APPROVAL_REQUIRED", "USER_DECISION_REQUIRED") else 1
 

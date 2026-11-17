@@ -258,6 +258,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
         restored.append(rel_installed)
 
     # Prune retired legacy files from older client installs so doctor/ownership stay clean
+    pruned_retired: set[str] = set()
     for retired_rel in (
         ".agents/scripts/human_review_cockpit.py",
         ".agents/scripts/cc_pre_tool_safety.py",
@@ -270,10 +271,29 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
         if ret_p.is_file():
             try:
                 ret_p.unlink()
+                pruned_retired.add(retired_rel)
                 if ret_p.parent.name == "harness-worker-agent" and not any(ret_p.parent.iterdir()):
                     ret_p.parent.rmdir()
             except OSError:
                 pass
+        else:
+            pruned_retired.add(retired_rel)
+    cmd_packs_dir = root / ".agents" / "command-packs"
+    if cmd_packs_dir.is_dir():
+        for cp_file in cmd_packs_dir.rglob("*"):
+            if cp_file.is_file():
+                pruned_retired.add(cp_file.relative_to(root).as_posix())
+        shutil.rmtree(cmd_packs_dir, ignore_errors=True)
+    client_ta_dir = root / ".agents" / "tool-adapters"
+    kit_ta_dir = kit / "agents" / "tool-adapters"
+    if client_ta_dir.is_dir() and kit_ta_dir.is_dir():
+        for ta_file in sorted(client_ta_dir.iterdir()):
+            if ta_file.is_file() and not (kit_ta_dir / ta_file.name).exists():
+                try:
+                    pruned_retired.add(ta_file.relative_to(root).as_posix())
+                    ta_file.unlink()
+                except OSError:
+                    pass
 
     # Re-render Antigravity agent markdown wrappers when present so subagent updates propagate
     # while preserving role-specific tool allowlists for utility and specialist subagents.
@@ -353,12 +373,32 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
             if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
                 raise ValidationError("Ownership entries must be objects in a list")
             updated = False
+            kept_entries: list[dict] = []
+            seen_entry_paths: set[str] = set()
             for entry in entries:
-                p = entry.get("path")
-                if p in restored:
-                    entry["post_install_sha256"] = sha256_file(root / p)
+                p = str(entry.get("path") or "")
+                if p in pruned_retired or (p.startswith(".agents/command-packs/") and not (root / p).exists()):
+                    updated = True
+                    continue
+                if p in restored and (root / p).is_file():
+                    new_sha = sha256_file(root / p)
+                    if entry.get("post_install_sha256") != new_sha:
+                        entry["post_install_sha256"] = new_sha
+                        updated = True
+                seen_entry_paths.add(p)
+                kept_entries.append(entry)
+            for rel_restored in restored:
+                if rel_restored not in seen_entry_paths and (root / rel_restored).is_file():
+                    kept_entries.append({
+                        "path": rel_restored,
+                        "pre_install_sha256": None,
+                        "post_install_sha256": sha256_file(root / rel_restored),
+                        "ownership": "created",
+                    })
+                    seen_entry_paths.add(rel_restored)
                     updated = True
             if updated:
+                manifest_data["entries"] = sorted(kept_entries, key=lambda item: str(item.get("path") or ""))
                 manifest_data["ownership_sha256"] = canonical_sha256({
                     k: v for k, v in manifest_data.items() if k != "ownership_sha256"
                 })

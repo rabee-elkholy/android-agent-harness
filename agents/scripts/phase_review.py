@@ -17,6 +17,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _vnext_common import (
+    HarnessError,
     ValidationError,
     atomic_write_bytes,
     atomic_write_json,
@@ -671,12 +672,24 @@ def _narrow_phase_review_roster(
     if not finding_owners or not passed_reviewers:
         return selected_reviewers, []
 
-    prev_states = prev_run.get("phase_path_states") or {}
-    if not isinstance(prev_states, dict) or not prev_states:
+    def _as_state_map(raw_st: Any) -> dict[str, Any]:
+        if isinstance(raw_st, dict):
+            return raw_st
+        if isinstance(raw_st, list):
+            return {
+                str(item["path"]): item
+                for item in raw_st
+                if isinstance(item, dict) and item.get("path")
+            }
+        return {}
+
+    prev_states = _as_state_map(prev_run.get("phase_path_states"))
+    live_states_map = _as_state_map(live_states)
+    if not prev_states:
         return selected_reviewers, []
 
-    all_paths = set(prev_states.keys()) | set(live_states.keys())
-    modified_since_prev = sorted(p for p in all_paths if prev_states.get(p) != live_states.get(p))
+    all_paths = set(prev_states.keys()) | set(live_states_map.keys())
+    modified_since_prev = sorted(p for p in all_paths if prev_states.get(p) != live_states_map.get(p))
     if not modified_since_prev:
         return selected_reviewers, []
 
@@ -788,6 +801,11 @@ def _verified_phase_checkpoint_gate_lines(repo: Path, tdir: Path, phase_id: str,
                 for g_name, g_val in gates_map.items():
                     if g_val == "PASS" or (isinstance(g_val, dict) and g_val.get("status") == "PASS"):
                         passed.append(str(g_name))
+                for top_gate in ("preflight", "compile", "tests"):
+                    gv = ckpt.get(top_gate)
+                    if gv == "PASS" or (isinstance(gv, dict) and gv.get("status") == "PASS"):
+                        if top_gate not in passed:
+                            passed.append(top_gate)
                 if not passed:
                     passed.append("phase_checkpoint")
         except (OSError, ValueError, ValidationError):
@@ -1857,7 +1875,7 @@ def _main(argv: list[str] | None = None) -> int:
     complete_cmd.add_argument("--reviewer", action="append", required=True, help="Reviewer role (repeatable for batch completion)")
     complete_cmd.add_argument("--execution-id", action="append", required=True, help="Trusted execution transcript ID (repeatable, matched in order with --reviewer)")
     complete_cmd.add_argument("--host")
-    complete_cmd.add_argument("--response-file", help="Unchanged reviewer response for hosts without a trusted transcript source; on Claude Code the subagent transcript path (JSONL)")
+    complete_cmd.add_argument("--response-file", help="Unchanged reviewer response for generic CLI hosts without a native subagent transcript source")
 
     complete_all_cmd = sub.add_parser("complete-all")
     complete_all_cmd.add_argument("--repo", default=".")

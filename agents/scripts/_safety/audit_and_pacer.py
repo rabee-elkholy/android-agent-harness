@@ -9,7 +9,10 @@ from . import engine as _engine
 
 def _audit_path() -> Path:
     override = _engine.os.environ.get("HARNESS_HOOK_STATE")
-    base = Path(override) if override else Path(__file__).resolve().parent.parent / "state" / "hook-state.json"
+    if override:
+        base = Path(override)
+    else:
+        base = _engine.state_root(_engine.REPO) / "hook-state.json"
     return base.with_name("audit_log.jsonl")
 def _audit(
     decision: str,
@@ -181,9 +184,8 @@ def check_and_apply_hydrogen_burst_pacer(
             store["coalesced_parallel_calls"] = int(store.get("coalesced_parallel_calls") or 0) + (1 if coalesced else 0)
             store["sessions"] = sessions
 
-            tmp = pacer_path.with_suffix(f".{_engine.os.getpid()}.tmp")
-            tmp.write_text(_engine.json.dumps(store), encoding="utf-8")
-            _engine.os.replace(tmp, pacer_path)
+            from _vnext_common import atomic_write_json
+            atomic_write_json(pacer_path, store)
 
         if delay_sec > 0.0 and eff_mode == "enforce":
             sleeper(delay_sec)

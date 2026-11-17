@@ -454,6 +454,7 @@ def apply_web_merge(
     staged_phase: bool = False,
     auto_red_green: bool = True,
     dry_run: bool = False,
+    task_id: str = "",
 ) -> dict[str, Any]:
     eff_source = str(source or "").strip().lower()
     eff_proof = str(proof_reference or "").strip()
@@ -471,7 +472,7 @@ def apply_web_merge(
     # Handle applying pre-staged phase operations (`p2..pN`) on an active multi-phase task
     if staged_phase:
         from mutation_guard import active_plan
-        plan_doc = active_plan(repo)
+        plan_doc = _engine.read_json(_engine.task_dir(repo, task_id) / "plan.json") if task_id and (_engine.task_dir(repo, task_id) / "plan.json").is_file() else active_plan(repo)
         tid = str(plan_doc.get("task_id") or "")
         phases = plan_doc.get("phases") or []
         p_idx = int(plan_doc.get("active_phase_index") or 0)
@@ -559,11 +560,17 @@ def apply_web_merge(
 
     # Check active task alignment (`Safeguard #7`)
     active_doc: dict[str, Any] | None = None
-    try:
-        from mutation_guard import active_plan
-        active_doc = active_plan(repo, allow_missing=True)
-    except (ImportError, OSError, ValueError, _engine.ValidationError):
-        active_doc = None
+    if task_id and (_engine.state_root(repo) / "tasks" / task_id / "plan.json").is_file():
+        try:
+            active_doc = _engine.read_json(_engine.state_root(repo) / "tasks" / task_id / "plan.json")
+        except (OSError, ValueError, _engine.ValidationError):
+            active_doc = None
+    if active_doc is None:
+        try:
+            from mutation_guard import active_plan
+            active_doc = active_plan(repo, allow_missing=True)
+        except (ImportError, OSError, ValueError, _engine.ValidationError):
+            active_doc = None
     if active_doc and active_doc.get("task_id") and str(active_doc.get("status") or "") not in {"", "DELIVERED", "CANCELLED"}:
         act_tid = str(active_doc.get("task_id") or "")
         pack_tid = str(pack_doc.get("task_id") or "")
@@ -681,17 +688,25 @@ def apply_web_merge(
                 raise _engine.ValidationError(b_old_msg)
             if old_rel not in editable_files:
                 raise _engine.ValidationError(f"UNSCOPED_RENAME_BLOCKED: '{old_rel}' was not in `EDITABLE_FILES` of pack `{pack_id}`.")
+            if (repo / rel_path).exists() and rel_path != old_rel and rel_path not in planned_deletes:
+                raise _engine.ValidationError(
+                    f"RENAME_DESTINATION_EXISTS: Cannot rename '{old_rel}' onto existing file '{rel_path}' unless '{rel_path}' is explicitly deleted first."
+                )
             base_meta = editable_files[old_rel]
             base_txt = str(base_meta.get("base_text") or "")
-            eol = str(base_meta.get("eol") or "lf")
+            old_disk_f = repo / old_rel
+            cur_old_bytes = old_disk_f.read_bytes() if old_disk_f.is_file() else b""
+            eol = _engine._detect_eol(cur_old_bytes) if cur_old_bytes else str(base_meta.get("eol") or "lf")
+            cur_old_txt = cur_old_bytes.decode("utf-8", errors="replace") if cur_old_bytes else ""
             if op.get("hunks"):
-                raw_new = _engine._apply_hunks(old_rel, base_txt, list(op["hunks"]))
+                raw_new = _engine._apply_hunks(old_rel, _engine._redact_inline_secrets(base_txt, dict(vault)), list(op["hunks"]))
+                web_target = _engine._restore_inline_secrets(raw_new, vault)
             elif "content" in op:
-                raw_new = str(op["content"])
+                web_target = _engine._restore_inline_secrets(str(op["content"]), vault)
             else:
-                raw_new = base_txt
-            restored = _engine._restore_inline_secrets(raw_new, vault)
-            _engine._validate_code_integrity(rel_path, restored, base_txt)
+                web_target = base_txt
+            _engine._validate_code_integrity(rel_path, web_target, base_txt)
+            restored = _engine._three_way_merge_if_needed(repo, old_rel, cur_old_txt, base_txt, web_target) if old_disk_f.is_file() else web_target
             planned_deletes.append(old_rel)
             planned_writes.append({"path": rel_path, "content": restored, "eol": eol, "is_test": _engine.is_kmp_or_android_test_path(rel_path)})
             _reg_scope(old_rel)
@@ -1001,11 +1016,14 @@ def apply_web_merge(
         except (ImportError, OSError, ValueError, _engine.ValidationError):
             bind_pending_execution_mode_to_task = None
         active_doc = _engine.read_json(_engine.task_dir(repo, tid) / "plan.json")
+        initial_approval_in_this_apply = True
     else:
         tid = str(active_doc.get("task_id") or "")
         st_cur = str(active_doc.get("status") or "").upper()
+        initial_approval_in_this_apply = False
         import contextlib, io
         if st_cur in {"PLAN_DRAFTED", "AWAITING_DEVELOPER_APPROVAL"}:
+            initial_approval_in_this_apply = True
             # Revise scope if needed before approving
             cur_exp = set(active_doc.get("expected_files") or [])
             merged_exp = sorted(cur_exp | set(all_scope_paths))
@@ -1316,47 +1334,67 @@ def apply_web_merge(
         planned_surfs = set(active_doc.get("expected_surfaces") or [])
         extra_surfs = set(detected_surfaces) - planned_surfs
         if extra_surfs and not staged_phases_summary:
-            import contextlib, io
-            merged_surfs = sorted(planned_surfs | set(detected_surfaces))
-            arch_c = active_doc.get("architecture_contract") or {}
-            rev_surf_ns = _engine.argparse.Namespace(
-                repo=str(repo),
-                task_id=tid,
-                outcome=active_doc.get("requested_outcome") or active_doc.get("outcome"),
-                kind=active_doc.get("task_kind") or "FEATURE",
-                expected_files=",".join(active_doc.get("expected_files") or []),
-                expected_modules=",".join(active_doc.get("expected_modules") or []) or None,
-                expected_surfaces=",".join(merged_surfs),
-                approach=str(active_doc.get("approach") or "Web-Relay implementation"),
-                risks=",".join(active_doc.get("risks") or ["Verify gates"]),
-                rollback=active_doc.get("rollback") or "git checkout",
-                test_strategy=active_doc.get("test_strategy") or "Unit tests",
-                device_strategy=active_doc.get("device_strategy") or "Manual",
-                phases=active_doc.get("phases") or None,
-                architecture_intent=("NEW_FEATURE" if arch_c.get("mode") == "NEW" else None),
-                architecture_target_scope=arch_c.get("target_scope"),
-                architecture_target_family=arch_c.get("target_family_id"),
-                verification_contract=None,
-                external_writes=None,
-                material_change_reason="Sync detected surfaces and skills from applied Web-Relay files",
-                json=True,
+            from policy_vocab import CRITICAL_SURFACES, HIGH_SURFACES
+            escalating_surfs = extra_surfs & (
+                set(CRITICAL_SURFACES) | set(HIGH_SURFACES) | {"ROOM_SCHEMA", "MANIFEST_PERMISSION", "PERSISTENCE", "NETWORK"}
             )
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                wf.revise(rev_surf_ns)
-            rev_s_doc = _engine.read_json(_engine.task_dir(repo, tid) / "plan.json")
-            app_surf_ns = _engine.argparse.Namespace(
-                repo=str(repo),
-                task_id=tid,
-                source=eff_source,
-                proof_reference=eff_proof,
-                enforcement_tier="RULE_ENFORCED",
-                plan_hash=str(rev_s_doc.get("plan_sha256") or ""),
-                approval_token=None,
-                json=True,
-            )
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                wf.record_approval(app_surf_ns)
-            active_doc = _engine.read_json(_engine.task_dir(repo, tid) / "plan.json")
+            if initial_approval_in_this_apply:
+                import contextlib, io
+                merged_surfs = sorted(planned_surfs | set(detected_surfaces))
+                arch_c = active_doc.get("architecture_contract") or {}
+                rev_surf_ns = _engine.argparse.Namespace(
+                    repo=str(repo),
+                    task_id=tid,
+                    outcome=active_doc.get("requested_outcome") or active_doc.get("outcome"),
+                    kind=active_doc.get("task_kind") or "FEATURE",
+                    expected_files=",".join(active_doc.get("expected_files") or []),
+                    expected_modules=",".join(active_doc.get("expected_modules") or []) or None,
+                    expected_surfaces=",".join(merged_surfs),
+                    approach=str(active_doc.get("approach") or "Web-Relay implementation"),
+                    risks=",".join(active_doc.get("risks") or ["Verify gates"]),
+                    rollback=active_doc.get("rollback") or "git checkout",
+                    test_strategy=active_doc.get("test_strategy") or "Unit tests",
+                    device_strategy=active_doc.get("device_strategy") or "Manual",
+                    phases=active_doc.get("phases") or None,
+                    architecture_intent=("NEW_FEATURE" if arch_c.get("mode") == "NEW" else None),
+                    architecture_target_scope=arch_c.get("target_scope"),
+                    architecture_target_family=arch_c.get("target_family_id"),
+                    verification_contract=None,
+                    external_writes=None,
+                    material_change_reason="Sync detected surfaces and skills from applied Web-Relay files",
+                    json=True,
+                )
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    wf.revise(rev_surf_ns)
+                rev_s_doc = _engine.read_json(_engine.task_dir(repo, tid) / "plan.json")
+                app_surf_ns = _engine.argparse.Namespace(
+                    repo=str(repo),
+                    task_id=tid,
+                    source=eff_source,
+                    proof_reference=eff_proof,
+                    enforcement_tier="RULE_ENFORCED",
+                    plan_hash=str(rev_s_doc.get("plan_sha256") or ""),
+                    approval_token=None,
+                    json=True,
+                )
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    wf.record_approval(app_surf_ns)
+                active_doc = _engine.read_json(_engine.task_dir(repo, tid) / "plan.json")
+            elif not escalating_surfs and int(active_doc.get("review_rounds") or 0) == 0:
+                from plan_authority import compute_plan_hash, save_plan
+                old_sha = str(active_doc.get("plan_sha256") or "")
+                active_doc["expected_surfaces"] = sorted(planned_surfs | set(detected_surfaces))
+                if old_sha:
+                    absorbed = list(active_doc.get("in_place_absorbed_plan_shas") or [])
+                    if old_sha not in absorbed:
+                        absorbed.append(old_sha)
+                    active_doc["in_place_absorbed_plan_shas"] = absorbed
+                    active_doc["supersedes_plan_sha256"] = old_sha
+                new_sha = compute_plan_hash(active_doc)
+                active_doc["plan_sha256"] = new_sha
+                if isinstance(active_doc.get("approval"), dict):
+                    active_doc["approval"]["plan_sha256"] = new_sha
+                save_plan(_engine.task_dir(repo, tid) / "plan.json", active_doc)
     except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
         pass
 

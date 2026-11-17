@@ -20,29 +20,38 @@ def reconcile_completed_async_utility_waves(repo: Path) -> list[str]:
     if not open_entries:
         return []
     now_ts = _engine.time.time()
-    changed = False
+    updates_by_exec: dict[str, dict[str, Any]] = {}
     closed_ids: list[str] = []
+    check_empty_payload = _engine.is_quirk_enabled("201209", repo=repo)
     for item in open_entries:
         cid_b = str(item.get("execution_id") or "").strip()
         t_st = _engine._child_transcript_terminal_state(cid_b)
-        if t_st == "EMPTY_DONE":
-            item["dispatch_failed"] = True
-            item["empty_terminal_response"] = True
-            item["failure_code"] = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
-            item["completed_at"] = _engine.utc_now()
-            item["completed_at_epoch"] = now_ts
-            changed = True
+        if t_st == "EMPTY_DONE" and check_empty_payload:
+            updates_by_exec[cid_b] = {
+                "dispatch_failed": True,
+                "empty_terminal_response": True,
+                "failure_code": "EMPTY_SUBAGENT_TERMINAL_RESPONSE",
+                "completed_at": _engine.utc_now(),
+                "completed_at_epoch": now_ts,
+            }
             closed_ids.append(cid_b)
-        elif t_st == "COMPLETED_DONE":
-            item["wave_completed"] = True
-            item["completed_at"] = _engine.utc_now()
-            item["completed_at_epoch"] = now_ts
-            changed = True
+        elif t_st in {"COMPLETED_DONE", "EMPTY_DONE"}:
+            updates_by_exec[cid_b] = {
+                "wave_completed": True,
+                "completed_at": _engine.utc_now(),
+                "completed_at_epoch": now_ts,
+            }
             closed_ids.append(cid_b)
-    if changed:
+    if updates_by_exec:
         try:
             with _engine.StateLock(_engine.state_root(repo)):
-                _engine._save_utility_ledger(repo, ledger)
+                fresh_ledger = _engine._load_utility_ledger(repo)
+                for fe in fresh_ledger.get("entries") or []:
+                    if isinstance(fe, dict):
+                        ex_id = str(fe.get("execution_id") or "").strip()
+                        if ex_id in updates_by_exec:
+                            fe.update(updates_by_exec[ex_id])
+                _engine._save_utility_ledger(repo, fresh_ledger)
         except (OSError, _engine.ValidationError):
             pass
     return closed_ids
@@ -407,11 +416,12 @@ def record_specialist_dispatch(
     for item in raw_subs:
         if not isinstance(item, dict):
             continue
-        t_name = str(item.get("TypeName") or item.get("typeName") or item.get("Role") or item.get("role") or "").strip()
+        raw_t_name = str(item.get("TypeName") or item.get("typeName") or item.get("Role") or item.get("role") or "").strip()
+        t_name = _engine.canonical_utility_or_reviewer_role(raw_t_name)
         prompt = str(item.get("Prompt") or item.get("prompt") or "").strip()
         if not t_name or not prompt or t_name in _engine.CORE_ROUTED_REVIEWERS or t_name in _engine.CORE_UTILITY_AGENTS:
             continue
-        is_ro = t_name in _engine.ON_DEMAND_SPECIALIST_AGENTS
+        is_ro = True
         _engine.record_utility_dispatch(
             repo,
             agent_type=_engine.SPECIALIST_AGENT,
@@ -716,7 +726,7 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                         item["inspected_files"] = tx_files
                         changed = True
                 t_state = _engine._child_transcript_terminal_state(cid_bound) if (cid_bound and tx_b is not None) else "HEADER_ONLY"
-                if t_state == "EMPTY_DONE":
+                if t_state == "EMPTY_DONE" and _engine.is_quirk_enabled("201209", repo=repo):
                     item["dispatch_failed"] = True
                     item["empty_terminal_response"] = True
                     item["failure_code"] = "EMPTY_SUBAGENT_TERMINAL_RESPONSE"
@@ -726,7 +736,7 @@ def bind_utility_from_post_tool(repo: Path, payload: dict[str, Any]) -> list[str
                     continue
                 child_ready_to_close = (
                     tx_b is None
-                    or t_state == "COMPLETED_DONE"
+                    or t_state in {"COMPLETED_DONE", "EMPTY_DONE"}
                     or ((wave_size == 1 or cid_bound in returned_cids) and t_state != "ACTIVE")
                 )
                 if not item.get("wave_completed") and child_ready_to_close:
@@ -1495,12 +1505,14 @@ def check_and_record_lead_post_subagent_read(
             if isinstance(inf, str) and inf.strip():
                 wave_inspected_files.add(inf.strip())
     rel_target = _engine._normalize_repo_rel(repo, str(target)) if (is_view and target) else ""
+    wave_inspected_cmp = {p.lower() for p in wave_inspected_files} if _engine.os.name == "nt" else wave_inspected_files
+    rel_target_cmp = rel_target.lower() if _engine.os.name == "nt" else rel_target
     is_unread_gap_target = bool(
         a_type in {_engine.SCOUT_AGENT, _engine.SPECIALIST_AGENT}
         and is_view
         and rel_target
         and wave_inspected_files
-        and rel_target not in wave_inspected_files
+        and rel_target_cmp not in wave_inspected_cmp
     )
     if is_unread_gap_target:
         unread_used = max(int(e.get("lead_unread_post_reads") or 0) for e in wave_entries)

@@ -207,7 +207,7 @@ def _evaluate_plan_readiness(
     repo: Path | None = None,
 ) -> dict[str, Any]:
     """Compute advisory architecture, grounding & specification readiness diagnostics for a plan."""
-    risk_tier = str((policy or {}).get("risk_tier") or "T1_LOW")
+    risk_tier = str((policy or {}).get("risk_tier") or "T1_LOW_RISK")
     planning_depth = str(plan.get("planning_depth") or "BOUNDED").upper()
     is_high_risk = risk_tier in {"T3_HIGH", "T3_SUBSYSTEM", "T4_DATA_DEVICE", "T4_SENSITIVE", "T5_CRITICAL"}
     is_architectural = planning_depth == "ARCHITECTURAL"
@@ -957,7 +957,7 @@ def _save_initial_baseline(repo, task_id, directory, plan, parsed_phases, *, ado
     }
     try:
         live_sibs, _ = _engine.disjoint_sibling_file_sets(repo, task_id, plan=plan)
-    except Exception:
+    except (OSError, ValueError, _engine.ValidationError):
         live_sibs = set()
     adoptable_planned = planned_rel_norm - set(live_sibs)
     raw_base_changes = list(base_man.get("changes") or [])

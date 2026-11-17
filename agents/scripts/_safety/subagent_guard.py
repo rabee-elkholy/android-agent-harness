@@ -41,7 +41,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
     briefs = dict(act.get("briefs") or {})
     is_unbound_replay = bool(act.get("_unbound_replay"))
     if is_single_top_level and len(raw_subs) == 1 and isinstance(raw_subs[0], dict):
-        hint_role = str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip()
+        hint_role = _engine._canonical_subagent_role(str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip())
         if hint_role and hint_role not in dispatchable:
             try:
                 from _vnext_common import task_dir as _tdir
@@ -102,8 +102,9 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             return
         if allowed_native_model == "flash" or "gemini-4-hydrogen" in resolved_m:
             from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
+            from platform_quirks import is_quirk_enabled
             rem_active, rem_signals = detect_antigravity_remote_mode()
-            if rem_active and not remote_subagents_explicitly_allowed():
+            if is_quirk_enabled("198819", repo=_engine.REPO) and rem_active and not remote_subagents_explicitly_allowed():
                 _engine.emit(
                     "deny",
                     (
@@ -164,7 +165,9 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             _engine.emit("deny", "Subagent entry TypeName is empty.", tool=tool_name, reason_code="MISSING_SUBAGENT_TYPENAME")
             return
 
-        if r_type != r_role:
+        canon_type = _engine._canonical_subagent_role(r_type)
+        canon_role = _engine._canonical_subagent_role(r_role)
+        if canon_type != canon_role:
             _engine.emit(
                 "deny",
                 f"Reviewer invocation mismatch: TypeName '{r_type}' does not match Role '{r_role}'. Both must refer to the same reviewer.",
@@ -173,35 +176,35 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
             )
             return
 
-        if r_role not in dispatchable:
+        if canon_role not in dispatchable:
             _engine.emit(
                 "deny",
-                f"Reviewer '{r_role}' is not in dispatchable reviewers: {sorted(dispatchable)}.",
+                f"Reviewer '{canon_role}' is not in dispatchable reviewers: {sorted(dispatchable)}.",
                 tool=tool_name,
                 reason_code="REVIEWER_ROSTER_EXTRA",
             )
             return
 
-        if r_role in actual:
-            _engine.emit("deny", f"Reviewer batch contains duplicate reviewer: '{r_role}'.", tool=tool_name, reason_code="DUPLICATE_REVIEWER")
+        if canon_role in actual:
+            _engine.emit("deny", f"Reviewer batch contains duplicate reviewer: '{canon_role}'.", tool=tool_name, reason_code="DUPLICATE_REVIEWER")
             return
-        actual.append(r_role)
+        actual.append(canon_role)
 
         if "Prompt" not in item:
             _engine.emit("deny", "Subagent entry missing mandatory Prompt.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
             return
         supplied_prompt = str(item["Prompt"]).replace("\r\n", "\n").strip()
         if not supplied_prompt:
-            _engine.emit("deny", "Subagent entry Prompt is empty.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
+            _engine.emit("deny", "Subagent entry missing mandatory Prompt.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
             return
 
-        brief_val = briefs.get(r_role)
+        brief_val = briefs.get(canon_role)
         if brief_val and Path(str(brief_val)).is_file():
             expected_prompt = Path(str(brief_val)).read_text(encoding="utf-8").replace("\r\n", "\n").strip()
         elif isinstance(brief_val, str) and brief_val.strip():
             expected_prompt = brief_val.replace("\r\n", "\n").strip()
         else:
-            _engine.emit("deny", f"Reviewer brief missing or unreadable for '{r_role}'.", tool=tool_name, reason_code="REVIEW_PROFILE_BLOCKED")
+            _engine.emit("deny", f"Reviewer brief missing or unreadable for '{canon_role}'.", tool=tool_name, reason_code="REVIEW_PROFILE_BLOCKED")
             return
 
         from review_execution import pointer_matches
@@ -580,24 +583,41 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 )
                 _engine.emit("allow" if ok_u else "deny", reason_u, tool=name, reason_code=code_u)
                 return
-            raw_subs = args.get("Subagents") or args.get("subagents") or []
-            if isinstance(raw_subs, list) and len(raw_subs) > 5:
-                _engine.emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
+            if len(norm_subs) > 5:
+                _engine.emit("deny", f"Subagent batch size {len(norm_subs)} exceeds the safety limit of 5.", tool=name)
                 return
             from delegation_policy import is_utility_agent_unloaded_in_session as _is_unloaded_u
-            if name == "invoke_subagent" and norm_subs and any(
-                isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
-                for s in norm_subs
-            ) and (_engine.REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file() and not _is_unloaded_u(_engine.REPO, parent_conversation_id, "harness-scout-agent"):
-                _engine.emit(
-                    "deny",
-                    "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' is blocked on Antigravity. "
-                    "Use TypeName='harness-scout-agent', Role='harness-scout-agent', Workspace='inherit' instead.",
-                    tool=name,
-                    reason_code="USE_HARNESS_SCOUT_AGENT",
-                )
-                return
-            if name == "invoke_subagent" and norm_subs:
+            if name == "invoke_subagent":
+                if not norm_subs:
+                    _engine.emit("deny", "No subagent entry specified in invoke_subagent.", tool=name, reason_code="SUBAGENT_ROSTER_EMPTY")
+                    return
+                if any(
+                    isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
+                    for s in norm_subs
+                ) and (_engine.REPO / ".agents" / "agents" / "harness-scout-agent" / "agent.md").is_file() and not _is_unloaded_u(_engine.REPO, parent_conversation_id, "harness-scout-agent"):
+                    _engine.emit(
+                        "deny",
+                        "USE_HARNESS_SCOUT_AGENT: Built-in TypeName='research'/'explore' is blocked on Antigravity. "
+                        "Use TypeName='harness-scout-agent', Role='harness-scout-agent', Workspace='inherit' instead.",
+                        tool=name,
+                        reason_code="USE_HARNESS_SCOUT_AGENT",
+                    )
+                    return
+                blocked_impl_clones = {"self", "harness-worker-agent"}
+                for s in norm_subs:
+                    if not isinstance(s, dict):
+                        _engine.emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
+                        return
+                    raw_t = str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip()
+                    canon_t = _engine._canonical_subagent_role(raw_t)
+                    if canon_t.lower() in blocked_impl_clones or raw_t.lower() in blocked_impl_clones:
+                        _engine.emit(
+                            "deny",
+                            f"WORKER_SUBAGENT_FORBIDDEN_INLINE_LEAD_ONLY: Subagent '{raw_t}' is forbidden during IMPLEMENTING. Implement code inline on the warm Lead session (`INLINE_LEAD_DIRECT`), or use `harness-scout-agent` / read-only specialists.",
+                            tool=name,
+                            reason_code="WORKER_SUBAGENT_FORBIDDEN_INLINE_LEAD_ONLY",
+                        )
+                        return
                 try:
                     from delegation_policy import record_specialist_dispatch
                     record_specialist_dispatch(_engine.REPO, plan, norm_subs, parent_conversation_id=parent_conversation_id)
@@ -694,7 +714,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         dispatchable = list(required_reviewers)
                         is_unbound_replay = True
                 if is_single_top_level and len(raw_subs) == 1 and isinstance(raw_subs[0], dict):
-                    hint_role = str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip()
+                    hint_role = _engine._canonical_subagent_role(str(raw_subs[0].get("Role") or raw_subs[0].get("TypeName") or "").strip())
                     rev_entry = revs.get(hint_role) or {}
                     if hint_role and hint_role not in dispatchable and rev_entry.get("state") == "DISPATCHED" and not rev_entry.get("execution_id"):
                         dispatchable.append(hint_role)
@@ -792,8 +812,9 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 return
             if allowed_native_model == "flash" or "gemini-4-hydrogen" in resolved_m:
                 from antigravity_runtime import detect_antigravity_remote_mode, remote_subagents_explicitly_allowed
+                from platform_quirks import is_quirk_enabled
                 rem_active, rem_signals = detect_antigravity_remote_mode()
-                if rem_active and not remote_subagents_explicitly_allowed():
+                if is_quirk_enabled("198819", repo=_engine.REPO) and rem_active and not remote_subagents_explicitly_allowed():
                     _engine.emit(
                         "deny",
                         (
@@ -1120,6 +1141,13 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
         or args.get("enable_write_tools")
     ):
         return (False, f"Subagent `{raw_sub_name}` is strictly read-only (`EnableWriteTools` must be False).", "READ_ONLY_SUBAGENT_WRITE_FORBIDDEN")
+    if bool(
+        args.get("EnableMCPTools")
+        or args.get("enableMcpTools")
+        or args.get("enableMCPTools")
+        or args.get("enable_mcp_tools")
+    ):
+        return (False, f"Subagent `{raw_sub_name}` cannot enable external MCP tools (`EnableMCPTools` must be False).", "READ_ONLY_SUBAGENT_MCP_FORBIDDEN")
     sys_prompt = str(args.get("SystemPrompt") or args.get("systemPrompt") or args.get("system_prompt") or "")
     json_spec = (_engine.REPO / ".agents" / "subagents" / f"{sub_name}.json")
     if not json_spec.is_file():

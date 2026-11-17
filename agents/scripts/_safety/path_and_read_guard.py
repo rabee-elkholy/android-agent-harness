@@ -91,25 +91,27 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
         if _engine._is_ide_artifact(resolved) or _engine._is_external_user_doc(raw, resolved):
             return True, str(resolved), True
         return False, f"Target path '{raw_target}' is outside the repository boundary.", False
+    rel_lower = relative.lower()
     if (
-        relative == ".agents/project-context/project-notes.md"
-        or relative == ".agents/project-context/developer-instructions.json"
-        or relative == ".agents/project-context/architecture-policy.json"
-        or relative.startswith(".agents/project-context/legacy-overrides/")
+        rel_lower == ".agents/project-context/project-notes.md"
+        or rel_lower == ".agents/project-context/developer-instructions.json"
+        or rel_lower == ".agents/project-context/architecture-policy.json"
+        or rel_lower == ".agents/project-context/quirks.json"
+        or rel_lower == "agents/project-context/quirks.json"
+        or rel_lower.startswith(".agents/project-context/legacy-overrides/")
     ):
         return False, "Project context notes, instructions, and architecture policies are developer-owned and immutable to model file tools to prevent context poisoning.", False
     if (
-        relative.startswith(".agents/state/web-relay/inbox/")
+        rel_lower.startswith(".agents/state/web-relay/inbox/")
         and len(Path(relative).parts) == 5
         and resolved.suffix.lower() in {".json", ".md", ".txt"}
         and not resolved.is_symlink()
     ):
         return True, str(resolved), True
-    if any(relative == r or relative.startswith(r + "/") for r in _engine.PROTECTED_ROOTS):
+    if any(rel_lower == r.lower() or rel_lower.startswith(r.lower() + "/") for r in _engine.PROTECTED_ROOTS):
         return False, "Harness engine, state, and ownership evidence are immutable to agent file tools.", False
     is_kit_dev = (root / "harness_cli.py").is_file() and (root / "scripts_dev").is_dir()
     if not is_kit_dev:
-        rel_lower = relative.lower()
         rel_name = Path(relative).name.lower()
         if (
             rel_name in _engine.IMMUTABLE_ADAPTER_FILES
@@ -486,10 +488,11 @@ def _handle_search(name: str, args: dict, *, conversation: str = "", is_utility_
 def _conversation_started_at(payload: dict) -> float | None:
     """First time this hook saw the calling conversation; None when the host sends no identity."""
     conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
-    if not conversation or conversation == "claude-session":
+    if not conversation:
         return None
     try:
         import time
+        from _vnext_common import atomic_write_json
         from evidence_store import StateLock
         path = _engine._audit_path().with_name("hook-conversations.json")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,10 +507,7 @@ def _conversation_started_at(payload: dict) -> float | None:
                 return float(seen[conversation])
             seen[conversation] = time.time()
             newest = sorted(seen.items(), key=lambda item: float(item[1]))[-_engine.CONVERSATION_LIMIT:]
-            fd, temp_name = _engine.tempfile.mkstemp(prefix=".conversations-", suffix=".tmp", dir=str(path.parent))
-            with _engine.os.fdopen(fd, "w", encoding="utf-8") as handle:
-                _engine.json.dump(dict(newest), handle)
-            _engine.os.replace(temp_name, path)
+            atomic_write_json(path, dict(newest))
             return float(seen[conversation])
     except Exception:
         return None

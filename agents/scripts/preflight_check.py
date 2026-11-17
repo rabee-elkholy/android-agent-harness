@@ -73,9 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         _buf = io.StringIO()
         with contextlib.redirect_stdout(_buf), contextlib.redirect_stderr(_buf):
             _rc = main([a for a in args_list if a != "--json"])
-        from _gate_results import GATE_RESULTS_DIR
-        _gr = repo_target / ".agents" / "state" / "gate-results" / "preflight.json"
-        _payload = read_json(_gr) if _gr.is_file() else {"status": "PASS" if _rc == 0 else "FAIL", "exit_code": _rc}
+        from _gate_results import read_gate_result
+        _gr_dir = repo_target / ".agents" / "state" / "results"
+        _payload = read_gate_result("preflight", results_dir_override=_gr_dir) or {"status": "PASS" if _rc == 0 else "FAIL", "exit_code": _rc}
         _payload = dict(_payload, exit_code=_rc)
         if _rc != 0:
             _payload["log_tail"] = "\n".join(_buf.getvalue().splitlines()[-25:])

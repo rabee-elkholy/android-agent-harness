@@ -252,9 +252,26 @@ def is_managed_file(path: Path) -> bool:
         return False
     try:
         content = path.read_text(encoding="utf-8")
-        return MANAGED.strip() in content or MANAGED_START in content
+        return (
+            MANAGED.strip() in content
+            or "<!-- managed-by: android-harness-kit -->" in content
+            or MANAGED_START in content
+        )
     except OSError:
         return False
+
+
+def has_legacy_harness_claude_hook(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+        return False
+    raw = json.dumps(data.get("hooks"))
+    return '"_harnessManaged": true' in raw or "cc_pre_tool_safety.py" in raw
 
 
 def parse_tools(raw: str) -> set[str]:
@@ -427,58 +444,116 @@ def keep_set(selected: set[str]) -> set[str]:
     return keep
 
 
+def _strip_or_delete_managed_file(path: Path, repo: Path, *, dry_run: bool) -> str | None:
+    if not is_managed_file(path):
+        return None
+    rel_s = rel_of(path, repo)
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    whole_file_markers = (MANAGED.strip(), "<!-- managed-by: android-harness-kit -->")
+    if (
+        MANAGED_START in content
+        and MANAGED_END in content
+        and not content.lstrip().startswith(whole_file_markers)
+    ):
+        start_idx = content.find(MANAGED_START)
+        end_idx = content.find(MANAGED_END) + len(MANAGED_END)
+        prefix = content[:start_idx].rstrip()
+        suffix = content[end_idx:].strip()
+        remaining = (prefix + ("\n\n" if prefix and suffix else "") + suffix).strip()
+        if remaining:
+            if dry_run:
+                return f"dry-run strip-managed-block {rel_s}"
+            path.write_bytes((remaining + "\n").encode("utf-8"))
+            return f"stripped managed block from {rel_s}"
+    if dry_run:
+        return f"dry-run delete {rel_s}"
+    path.unlink()
+    return f"deleted {rel_s}"
+
+
+def _prune_legacy_claude_settings(repo: Path, *, dry_run: bool) -> str | None:
+    settings_path = repo / ".claude" / "settings.json"
+    if not has_legacy_harness_claude_hook(settings_path):
+        return None
+    rel_s = rel_of(settings_path, repo)
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return None
+    changed = False
+    for event_name in list(hooks.keys()):
+        entries = hooks.get(event_name)
+        if not isinstance(entries, list):
+            continue
+        kept = []
+        for entry in entries:
+            if isinstance(entry, dict) and (
+                entry.get("_harnessManaged") is True
+                or "cc_pre_tool_safety.py" in json.dumps(entry)
+            ):
+                changed = True
+                continue
+            kept.append(entry)
+        if kept:
+            hooks[event_name] = kept
+        else:
+            hooks.pop(event_name, None)
+    if not changed:
+        return None
+    if not hooks:
+        data.pop("hooks", None)
+    if not data:
+        if dry_run:
+            return f"dry-run delete {rel_s}"
+        settings_path.unlink()
+        return f"deleted {rel_s}"
+    if dry_run:
+        return f"dry-run prune-hooks {rel_s}"
+    settings_path.write_bytes((json.dumps(data, indent=2) + "\n").encode("utf-8"))
+    return f"pruned legacy hooks from {rel_s}"
+
+
 def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run: bool) -> list[str]:
     logs: list[str] = []
-    catalog = {"AGENTS.md", "GEMINI.md", *LEGACY_PRUNABLE_ADAPTER_PATHS}
+    catalog = {"AGENTS.md", "GEMINI.md", *LEGACY_PRUNABLE_ADAPTER_PATHS, ".cursorrules", ".cursor/mcp.json"}
     for rel in sorted(catalog):
         if rel in keep:
             continue
-        path = repo / rel
-        if not is_managed_file(path):
-            continue
-        rel_s = rel_of(path, repo)
-        if dry_run:
-            logs.append(f"dry-run delete {rel_s}")
-            continue
-        path.unlink()
-        logs.append(f"deleted {rel_s}")
+        msg = _strip_or_delete_managed_file(repo / rel, repo, dry_run=dry_run)
+        if msg:
+            logs.append(msg)
     for legacy_glob in (".claude/agents/*.md", ".claude/commands/*.md", ".github/prompts/*.prompt.md", ".codex/prompts/*.md"):
         for path in sorted(repo.glob(legacy_glob)):
-            if not is_managed_file(path):
-                continue
-            rel_s = rel_of(path, repo)
-            if dry_run:
-                logs.append(f"dry-run delete {rel_s}")
-                continue
-            path.unlink()
-            logs.append(f"deleted {rel_s}")
+            msg = _strip_or_delete_managed_file(path, repo, dry_run=dry_run)
+            if msg:
+                logs.append(msg)
+    claude_msg = _prune_legacy_claude_settings(repo, dry_run=dry_run)
+    if claude_msg:
+        logs.append(claude_msg)
     ag_agents_dir = repo / ".agents" / "agents"
     if not ({"antigravity", "gemini"} & set(selected)):
         for r in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
-            path = ag_agents_dir / r / "agent.md"
-            if not is_managed_file(path):
-                continue
-            rel_s = rel_of(path, repo)
-            if dry_run:
-                logs.append(f"dry-run delete {rel_s}")
-                continue
-            path.unlink()
-            logs.append(f"deleted {rel_s}")
+            msg = _strip_or_delete_managed_file(ag_agents_dir / r / "agent.md", repo, dry_run=dry_run)
+            if msg:
+                logs.append(msg)
     if ag_agents_dir.is_dir():
         for child in sorted(ag_agents_dir.iterdir()):
             if not child.is_dir():
                 continue
             if ({"antigravity", "gemini"} & set(selected)) and child.name in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
                 continue
-            path = child / "agent.md"
-            if not is_managed_file(path):
-                continue
-            rel_s = rel_of(path, repo)
-            if dry_run:
-                logs.append(f"dry-run delete {rel_s}")
-                continue
-            path.unlink()
-            logs.append(f"deleted {rel_s}")
+            msg = _strip_or_delete_managed_file(child / "agent.md", repo, dry_run=dry_run)
+            if msg:
+                logs.append(msg)
+            if not dry_run and child.is_dir() and not any(child.iterdir()):
+                child.rmdir()
+                logs.append(f"removed empty {rel_of(child, repo)}")
     if dry_run:
         return logs
     for rel in EMPTY_DIR_CANDIDATES:

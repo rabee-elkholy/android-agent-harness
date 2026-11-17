@@ -17,7 +17,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from _vnext_common import ValidationError, atomic_write_json, canonical_sha256, read_json, state_root, utc_now, validate_id
+from _vnext_common import (
+    ValidationError,
+    atomic_write_json,
+    canonical_sha256,
+    configure_utf8_output,
+    read_json,
+    state_root,
+    utc_now,
+    validate_id,
+)
 from integrations.zoho_sprints.policy import ZohoPolicyResolver
 from zoho_grant import active_grant, authorize_command, record_grant
 
@@ -65,6 +74,7 @@ def prepare_report_command(task_id: str) -> str:
 
 
 def cmd_prepare_report(args: argparse.Namespace) -> int:
+    configure_utf8_output()
     repo = Path(args.repo).resolve()
     task_id = validate_id(args.task_id, "task id")
     from workflow import task_dir
@@ -290,8 +300,9 @@ def cmd_start(args: argparse.Namespace) -> int:
             # O67: the agent continued silently, then called the Zoho MCP tool directly (denied).
             "next": (
                 f"Tell the developer now that Zoho item {item_id} was not moved to In progress: {exc}. "
-                "Do not call Zoho MCP tools directly. Continue the task; after the developer fixes this, run "
-                f"`python .agents/harness.py zoho start-sync --task-id {task_id}` again."
+                "Do not call Zoho MCP tools directly unless `update zoho` is granted via `pm authorize`; after syncing via external MCP, "
+                f"record completion with `python .agents/harness.py zoho record-sync --task-id {task_id} --stage start --status PASS --reference \"<mcp-call>\"` "
+                f"(or re-run `python .agents/harness.py zoho start-sync --task-id {task_id}`)."
             ),
         }, indent=2) + "\n")
         return 0
@@ -530,6 +541,70 @@ def cmd_authorize(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_record_sync(args: argparse.Namespace) -> int:
+    """Record completion of an authorized external Zoho MCP sync (`start` or `delivery`)."""
+    configure_utf8_output()
+    repo = Path(args.repo).resolve()
+    task_id = validate_id(args.task_id, "task id")
+    from workflow import task_dir
+    tdir = task_dir(repo, task_id)
+    plan_path = tdir / "plan.json"
+    if not plan_path.is_file():
+        sys.stderr.write(f"ERROR: plan.json not found for task '{task_id}'\n")
+        return 1
+    plan = read_json(plan_path)
+    zoho_link = plan.get("zoho_link")
+    if not zoho_link:
+        sys.stderr.write(f"ERROR: Task '{task_id}' has no linked Zoho item.\n")
+        return 1
+    external_writes = list(plan.get("external_writes") or [])
+    if "zoho_sprints" not in external_writes and not active_grant(repo):
+        sys.stderr.write(
+            f"ERROR: EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho sync recording requires `zoho_sprints` in plan external_writes or `{authorize_command()}`.\n"
+        )
+        return 1
+    stage = str(args.stage or "").strip().lower()
+    rec_status = str(args.status or "PASS").strip().upper()
+    ref_text = str(args.reference or "").strip()
+    if not ref_text:
+        sys.stderr.write("ERROR: --reference must be non-empty.\n")
+        return 1
+    item_id = str(zoho_link.get("item_id") or "")
+    sprint_id = str(zoho_link.get("sprint_id") or "")
+    if stage == "start":
+        sync_file = tdir / "zoho-start-sync.json"
+        payload = {
+            "task_id": task_id,
+            "status": rec_status,
+            "item_id": item_id,
+            "sprint_id": sprint_id,
+            "target_status": "In progress",
+            "external_mcp_reference": ref_text[:240],
+            "updated_at": utc_now(),
+        }
+    else:
+        if str(plan.get("status") or "") != "DELIVERED":
+            sys.stderr.write("ERROR: TASK_NOT_DELIVERED: Delivery sync requires task status DELIVERED.\n")
+            return 1
+        if rec_status == "PASS" and not (tdir / "zoho-delivery-report.json").is_file():
+            sys.stderr.write("ERROR: DELIVERY_REPORT_MISSING: Run `zoho prepare-report` before recording PASS delivery sync.\n")
+            return 1
+        sync_file = tdir / "zoho-delivery-sync.json"
+        payload = {
+            "task_id": task_id,
+            "status": rec_status,
+            "commit_sha": str(plan.get("delivery_commit_sha") or ""),
+            "item_id": item_id,
+            "sprint_id": sprint_id,
+            "target_status": "Ready To ReTest",
+            "external_mcp_reference": ref_text[:240],
+            "updated_at": utc_now(),
+        }
+    atomic_write_json(sync_file, payload)
+    sys.stdout.write(json.dumps({"status": rec_status, "stage": stage, "task_id": task_id}, indent=2) + "\n")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -555,6 +630,12 @@ def build_parser() -> argparse.ArgumentParser:
     status_cmd = sub.add_parser("status", parents=[common])
     status_cmd.set_defaults(handler=cmd_status)
 
+    rec_cmd = sub.add_parser("record-sync", parents=[common], help="Record external Zoho MCP sync result")
+    rec_cmd.add_argument("--stage", choices=("start", "delivery"), required=True)
+    rec_cmd.add_argument("--status", choices=("PASS", "ENV"), default="PASS")
+    rec_cmd.add_argument("--reference", required=True, help="External MCP tool call / confirmation summary")
+    rec_cmd.set_defaults(handler=cmd_record_sync)
+
     auth_cmd = sub.add_parser("authorize", help="Record the developer's explicit `update zoho` (30 minutes)")
     auth_cmd.add_argument("--repo", default=".", help="Repository root")
     auth_cmd.add_argument("--source", choices=["conversation", "developer_terminal"], default="conversation")
@@ -565,6 +646,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     handler = getattr(args, "handler", None)

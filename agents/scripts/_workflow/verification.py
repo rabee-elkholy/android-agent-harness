@@ -52,23 +52,18 @@ def deterministic_action(context: VerificationContext) -> dict | None:
                 "expected": {"success_exit_codes": [0]},
             }
 
-    # 2. Specialized deterministic gates
-    specialized = [
-        ("check_strings", "python .agents/scripts/check_strings.py", "RUN_CHECK_STRINGS"),
-        ("fast_kt_lint", "python .agents/scripts/fast_kt_lint.py", "RUN_FAST_KT_LINT"),
-        ("room_guard", "python .agents/scripts/room_guard.py", "RUN_ROOM_GUARD"),
-    ]
-    for g_name, g_cmd, g_code in specialized:
-        if g_name in policy_gates and not has_pass_evidence(g_name):
-            failed = failed_gate_action(g_name)
+    # 2. Localization & Room gates (recorded into EvidenceStore by `preflight_check.py`)
+    for ev_gate in ("localization", "room"):
+        if ev_gate in policy_gates and not has_pass_evidence(ev_gate):
+            failed = failed_gate_action(ev_gate)
             if failed:
                 return failed
             return {
-                "code": g_code,
+                "code": "RUN_PREFLIGHT",
                 "kind": "HARNESS_COMMAND",
-                "command": g_cmd,
+                "command": "python .agents/harness.py preflight",
                 "blocking": True,
-                "reason": f"The active verification policy requires {g_name} evidence.",
+                "reason": f"The active verification policy requires {ev_gate} gate evidence (recorded via preflight).",
                 "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
                 "expected": {"success_exit_codes": [0]},
             }
@@ -893,8 +888,10 @@ def completion_action(context: VerificationContext) -> dict | None:
             "blocking": True,
             "reason": (
                 "This BUG task has no failing-test RED reproduction captured before the fix, so it cannot complete. "
-                "Ask the developer: if the task is not a bug, correct the task kind through workflow.py revise; "
-                "otherwise cancel and restart the task, capturing RED before changing production code."
+                "Resume implementation to add a co-authored regression unit test (or record alternate reproduction via "
+                "debug-evidence when JVM reproduction is impossible), or ask the developer: if the task is not a bug, "
+                "correct the task kind through workflow.py revise; otherwise cancel and restart the task, capturing RED "
+                "before changing production code."
             ),
             "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
             "expected": {},

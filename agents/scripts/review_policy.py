@@ -190,16 +190,21 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
         surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
     if not surfaces:
         return False
+    is_express = bool((plan or {}).get("express_track"))
     disallowed = (
-        CRITICAL_SURFACES | {"ROOM_SCHEMA", "BUILD_CONFIG", "MANIFEST_PERMISSION", "TEST_ONLY",
+        CRITICAL_SURFACES | {"ROOM_SCHEMA", "BUILD_CONFIG", "MANIFEST_PERMISSION",
                              "SECURITY", "AUTH", "BILLING", "SENSITIVE_DATA", "CRYPTO", "PUBLIC_API",
                              "UNKNOWN", "DEVICE_API", "PERSISTENCE", "NETWORK", "NATIVE_CODE"}
     )
+    if not is_express:
+        disallowed = disallowed | {"TEST_ONLY"}
+    else:
+        disallowed = disallowed | {"NAVIGATION"}
     if bool(surfaces & disallowed):
         return False
-    if int(classification.get("changed_files") or 0) > 8:
+    if int(classification.get("changed_files") or 0) > (4 if is_express else 8):
         return False
-    if int(classification.get("changed_lines") or 0) > 120:
+    if int(classification.get("changed_lines") or 0) > (100 if is_express else 120):
         return False
     if bool(classification.get("has_delete_or_rename")):
         return False
@@ -208,7 +213,7 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
         if planning_depth == "ARCHITECTURAL":
             return False
         arch_intent = str(plan.get("architecture_intent") or "").upper()
-        if arch_intent == "MIGRATION":
+        if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM"):
             return False
         changed_modules = plan.get("changed_modules") or []
         if isinstance(changed_modules, list) and len(changed_modules) > 1:
@@ -221,6 +226,19 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
     effective_kind = str((plan or {}).get("task_kind") or task_kind or "").upper()
     if effective_kind in ("CONFLICT", "FIX_CONFLICT", "MERGE"):
         return False
+
+    # Express Track (`task quick-start`): bounded 1-2 primary file micro-tasks (+ companion unit tests)
+    if is_express:
+        severity = str(classification.get("severity") or "").upper()
+        if severity in ("CRITICAL", "HIGH"):
+            return False
+        if surfaces <= {"DOCS", "TEST_ONLY"}:
+            return int(classification.get("changed_lines") or 0) <= 80
+        if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC", "COROUTINES", "ANALYTICS", "TEST_ONLY"}:
+            c_details = ((classification.get("details") or {}).get("COROUTINES") or {}).get("reasons") or []
+            if any("HAZARD" in str(r).upper() or "DISPATCHER" in str(r).upper() for r in c_details):
+                return False
+            return int(classification.get("changed_lines") or 0) <= 100
 
     # Tier 1 (Visual): Visual Compose / UI
     if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI"}:
@@ -271,6 +289,7 @@ CANONICAL_TIERS = {
     "T0_TRIVIAL": "T0_TRIVIAL",
     "TRIVIAL": "T0_TRIVIAL",
     "T1": "T1_LOW_RISK",
+    "T1_LOW": "T1_LOW_RISK",
     "T1_LOW_RISK": "T1_LOW_RISK",
     "LOW_RISK": "T1_LOW_RISK",
     "T2": "T2_FEATURE",
@@ -482,7 +501,11 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             require_gate("localization", surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"})
         if "ROOM_SCHEMA" in surfaces:
             require_gate("room", {"ROOM_SCHEMA"})
-        if risk_tier != "T0_TRIVIAL" and (surfaces - {"DOCS"}):
+        if (
+            risk_tier != "T0_TRIVIAL"
+            and (surfaces - {"DOCS"})
+            and not (bool((plan or {}).get("express_track")) and surfaces <= {"DOCS", "TEST_ONLY"} and not device_required)
+        ):
             require_gate("assemble", {"NONTRIVIAL_DELIVERY_CHANGE"})
     # Explicit approved criteria survive the lightweight merge defaults.
     if device_required:

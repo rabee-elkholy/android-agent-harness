@@ -605,6 +605,7 @@ def checkpoint_phase(args: _engine.argparse.Namespace) -> dict:
                         history_dir.mkdir(parents=True, exist_ok=True)
                         _engine.atomic_write_json(history_dir / f"{old_plan_sha}.json", dict(plan))
                         plan["supersedes_plan_sha256"] = old_plan_sha
+                        plan["in_place_absorbed_plan_shas"] = sorted(set(plan.get("in_place_absorbed_plan_shas") or []) | {old_plan_sha})
                     plan["expected_files"] = sorted(set(cur_exp) | {change_path})
                     plan["plan_sha256"] = _engine.canonical_sha256(_engine.plan_payload(plan))
                     if isinstance(plan.get("approval"), dict):

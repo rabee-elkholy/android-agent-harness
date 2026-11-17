@@ -406,7 +406,7 @@ def _verify_app_snapshot(repo: Path, before: dict[str, str], allowed_adapter_rel
         )
 
 
-def _candidate_adapter_paths(repo: Path) -> list[Path]:
+def _active_adapter_paths(repo: Path) -> list[Path]:
     candidates = [
         "AGENTS.md",
         "GEMINI.md",
@@ -430,6 +430,64 @@ def _candidate_adapter_paths(repo: Path) -> list[Path]:
     return result
 
 
+def _candidate_adapter_paths(repo: Path) -> list[Path]:
+    seen_rels: set[str] = set()
+    result: list[Path] = []
+
+    def _add(p: Path) -> None:
+        try:
+            rel = p.resolve().relative_to(repo.resolve()).as_posix()
+        except ValueError:
+            return
+        if rel not in seen_rels:
+            seen_rels.add(rel)
+            result.append(repo / rel)
+
+    for p in _active_adapter_paths(repo):
+        _add(p)
+
+    try:
+        from install_tool_adapters import (
+            LEGACY_PRUNABLE_ADAPTER_PATHS,
+            has_legacy_harness_claude_hook,
+            is_managed_file,
+        )
+        for rel in (*LEGACY_PRUNABLE_ADAPTER_PATHS, ".cursorrules", ".cursor/mcp.json"):
+            cand = repo / rel
+            if is_managed_file(cand):
+                _add(cand)
+        for pattern in (
+            ".claude/agents/*.md",
+            ".claude/commands/*.md",
+            ".github/prompts/*.prompt.md",
+            ".codex/prompts/*.md",
+            ".agents/agents/*/agent.md",
+        ):
+            for cand in sorted(repo.glob(pattern)):
+                if is_managed_file(cand):
+                    _add(cand)
+        claude_settings = repo / ".claude" / "settings.json"
+        if has_legacy_harness_claude_hook(claude_settings):
+            _add(claude_settings)
+        for own_rel in (OWNERSHIP_RELATIVE, ".harness-setup/ownership-v1.json"):
+            own_file = repo / own_rel
+            if own_file.is_file():
+                try:
+                    own_data = read_json(own_file)
+                    for entry in own_data.get("entries") or []:
+                        if isinstance(entry, dict):
+                            ep = str(entry.get("path") or "").strip()
+                            if ep and not ep.startswith(".agents/"):
+                                ecand = repo / ep
+                                if is_managed_file(ecand) or has_legacy_harness_claude_hook(ecand):
+                                    _add(ecand)
+                except (OSError, ValueError, ValidationError):
+                    pass
+    except ImportError:
+        pass
+    return result
+
+
 def _rollback_adapters(repo: Path, backup: Path, before: dict[str, str | None]) -> None:
     for path in _candidate_adapter_paths(repo):
         rel = path.relative_to(repo).as_posix()
@@ -449,7 +507,7 @@ def _managed_exclude(repo: Path, *, remove: bool = False) -> None:
         end += len(EXCLUDE_END)
         text = (text[:start].rstrip() + "\n" + text[end:].lstrip("\r\n")).strip("\n")
     if not remove:
-        adapter_paths = tuple(path.relative_to(repo).as_posix() for path in _candidate_adapter_paths(repo))
+        adapter_paths = tuple(path.relative_to(repo).as_posix() for path in _active_adapter_paths(repo))
         patterns = tuple(sorted(set((*INTERNAL_EXCLUDE_PATTERNS, *adapter_paths))))
         block = "\n".join((EXCLUDE_BEGIN, *patterns, EXCLUDE_END))
         text = f"{text.rstrip()}\n\n{block}\n" if text.strip() else f"{block}\n"

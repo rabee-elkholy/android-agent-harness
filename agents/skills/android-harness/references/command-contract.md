@@ -1,4 +1,4 @@
-# Android Agent Harness â€” Public Command Contract
+# Android Agent Harness — Public Command Contract
 
 > **Core Invariant**: During normal Android application tasks, installed harness engine source under `.agents/scripts/**` is an implementation detail. Do not inspect or recursively read harness Python implementation before executing a documented harness command. Use this documented public command contract and its output directly.
 
@@ -11,7 +11,7 @@ Resolve project topology, feature boundaries, callers, callees, UI screens, View
 
 ### Command
 ```bash
-# Public faÃ§ade (preferred)
+# Public facade (preferred)
 python .agents/harness.py graph --feature <feature_name> --json
 python .agents/harness.py graph --find <SymbolName> --json
 python .agents/harness.py task-context --file <path> --json   # or --symbol <name>
@@ -108,6 +108,12 @@ python .agents/harness.py task revise --repo . --task-id <id> [any draft flag to
 
 # 2. Record developer approval (atomically transitions directly to IMPLEMENTING)
 python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<developer_confirmation>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH>
+
+# 2a. Express Micro-Task Quick-Start (direct 1-2 file T0/T1 developer request; falls back to AWAITING_DEVELOPER_APPROVAL if T2+)
+python .agents/harness.py task quick-start --repo . --outcome "<requested outcome>" --files "<1-2 expected files>" --source conversation --proof-reference "<developer_request>"
+
+# 2aa. Compound Verification-to-Commit-Card Ship (runs verify-steps + assemble + task complete when ready, or stops at review/device checkpoint)
+python .agents/harness.py task ship --repo . --task-id <id> --host antigravity
 
 # Authoritative next action at any point (the router)
 python .agents/harness.py task status --task-id <id> --next --brief --json

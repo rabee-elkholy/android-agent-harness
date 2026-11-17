@@ -178,7 +178,10 @@ def _review_budget_decision(repo, plan):
         raise ValidationError("review budget decision integrity mismatch")
     if record.get("task_id") != plan.get("task_id") or record.get("repository") != plan.get("repository"):
         raise ValidationError("review budget decision task identity mismatch")
-    if record.get("plan_sha256") != plan.get("plan_sha256"):
+    valid_shas = {str(plan.get("plan_sha256") or "")} | {
+        str(x) for x in (plan.get("in_place_absorbed_plan_shas") or []) if isinstance(x, str) and x
+    }
+    if str(record.get("plan_sha256") or "") not in valid_shas:
         return None
     limit = record.get("limit")
     proof_hash = record.get("proof_reference_sha256")

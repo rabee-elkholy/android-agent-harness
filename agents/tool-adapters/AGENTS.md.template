@@ -14,8 +14,8 @@ Read `.agents/rules/harness-rules.md`; it is the authoritative safety contract.
 | Step | Command |
 |---|---|
 | Discovery | `{{PY}} .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` |
-| Draft / Approve | `{{PY}} .agents/harness.py task draft --task-id <id> --kind FEATURE --outcome "..." --expected-files <paths> --expected-surfaces <SURFACES>` -> `task approve --task-id <id> --plan-hash <hash from PLAN_HASH> --source conversation --proof-reference <msg-id> --enforcement-tier RULE_ENFORCED` |
-| Gates / Reviews | `{{PY}} .agents/harness.py verify-steps --task-id <id>` / `review complete-all --task <id>` |
+| Draft / Express | `{{PY}} .agents/harness.py task quick-start --outcome "..." --files <1-2-paths> --source conversation --proof-reference "<request>"` (bounded `T0`/`T1`) or `{{PY}} .agents/harness.py task draft --task-id <id> --kind FEATURE --outcome "..." --expected-files <paths> --expected-surfaces <SURFACES>` -> `task approve --task-id <id> --plan-hash <hash from PLAN_HASH> --source conversation --proof-reference <msg-id> --enforcement-tier RULE_ENFORCED` |
+| Gates / Ship | `{{PY}} .agents/harness.py task ship --task-id <id>` (or `verify-steps --task-id <id>` / `review complete-all --task <id>`) |
 | Device / Verify | `{{PY}} .agents/harness.py assemble` -> `device install-start` -> `verify --task-id <id>` |
 
 Python: `{{PY}}`. Device: {{DEVICE_POLICY}} {{GIT_POLICY}} | Exit 30/`[ENV-FAILURE]` is an environment blocker. Tracker: {{PM_TRIGGER}}. {{PM_LANG_NOTE}}

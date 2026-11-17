@@ -11,12 +11,22 @@ AGENTS_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = AGENTS_ROOT.parent
 SCRIPTS = AGENTS_ROOT / "scripts"
 TASK_SUBCOMMANDS = frozenset({
-    "draft", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
-    "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
+    "draft", "quick-start", "revise", "checkpoint-phase", "begin-next-phase", "present-plan", "approve", "approve-sensitive",
+    "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "ship", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
     "heal", "plan-check", "plan-note", "bridge",
 })
+
+
+def _with_repo_arg(args_list: list[str]) -> list[str]:
+    forwarded = list(args_list)
+    if {"-h", "--help"} & set(forwarded) or "--repo" in forwarded or any(a.startswith("--repo=") for a in forwarded):
+        return forwarded
+    if "--" in forwarded:
+        sep_idx = forwarded.index("--")
+        return [*forwarded[:sep_idx], "--repo", str(REPO_ROOT), *forwarded[sep_idx:]]
+    return [*forwarded, "--repo", str(REPO_ROOT)]
 
 
 def _run(script: str, args: list[str]) -> int:
@@ -48,9 +58,10 @@ def _run(script: str, args: list[str]) -> int:
         or (script == "session_forensics.py")
         or (script == "web_relay.py" and (args[:1] in (["pack"], ["status"]) or (args[:1] == ["apply"] and "--dry-run" in args)))
     )
-    # The bounded verification runner owns its execution lease, including when
-    # invoked directly; taking it here too would create a nested lock.
-    if script != "verification_steps.py" and not read_only and not {"--help", "-h"} & set(args):
+    # The bounded verification runner (and `task ship`, which invokes it) owns its
+    # execution lease; taking it here too would create a nested lock.
+    owns_own_lease = script == "verification_steps.py" or (script == "workflow.py" and args[:1] == ["ship"])
+    if not owns_own_lease and not read_only and not {"--help", "-h"} & set(args):
         active = AGENTS_ROOT / "state/active-task.json"
         task_id = ""
         for index, argument in enumerate(args):
@@ -113,7 +124,7 @@ def _run(script: str, args: list[str]) -> int:
     try:
         with lease:
             proc = subprocess.run([sys.executable, "-u", str(target), *args], cwd=str(REPO_ROOT), check=False,
-                                  env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                                  env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     except ValidationError as exc:
         print(f"[FAIL] {exc}", file=sys.stderr)
         return 1
@@ -322,19 +333,19 @@ def _main(argv: list[str] | None = None) -> int:
     if command == "debug":
         return _run("debug_instrumentation.py", args)
     if command == "android-inspect":
-        return _run("android_inspect.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("android_inspect.py", _with_repo_arg(args))
     if command == "android-ui":
-        return _run("android_ui.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("android_ui.py", _with_repo_arg(args))
     if command == "policy":
-        return _run("review_policy.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("review_policy.py", _with_repo_arg(args))
     if command == "verify-steps":
-        return _run("verification_steps.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("verification_steps.py", _with_repo_arg(args))
     if command == "task" and args and args[0] in {"coverage", "bind-evidence", "metrics"}:
-        return _run("workflow.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("workflow.py", _with_repo_arg(args))
     if command == "journey":
-        return _run("journey_runner.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("journey_runner.py", _with_repo_arg(args))
     if command == "e2e":
-        return _run("phone_e2e.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("phone_e2e.py", _with_repo_arg(args))
     if command == "version":
         version_file = AGENTS_ROOT / "VERSION"
         if not version_file.is_file():
@@ -381,15 +392,15 @@ def _main(argv: list[str] | None = None) -> int:
             forwarded_em = ["--repo", str(REPO_ROOT), *forwarded_em]
         return _run("execution_mode.py", ["show", *forwarded_em])
     if command == "symbol":
-        return _run("symbol_edit.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("symbol_edit.py", _with_repo_arg(args))
     if command == "health":
-        return _run("static_health_bridge.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("static_health_bridge.py", _with_repo_arg(args))
     if command == "roborazzi":
-        return _run("roborazzi_gate.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("roborazzi_gate.py", _with_repo_arg(args))
     if command == "maestro":
-        return _run("maestro_bridge.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("maestro_bridge.py", _with_repo_arg(args))
     if command == "diagnose-session":
-        return _run("session_forensics.py", [*args, "--repo", str(REPO_ROOT)])
+        return _run("session_forensics.py", _with_repo_arg(args))
     if command == "web-pack":
         forwarded = list(args)
         if not {"-h", "--help"} & set(forwarded) and "--repo" not in forwarded and not any(a.startswith("--repo=") for a in forwarded):
@@ -408,15 +419,9 @@ def _main(argv: list[str] | None = None) -> int:
             rest_args = ["--repo", str(REPO_ROOT), *rest_args]
         return _run("web_relay.py", [sub_cmd, *rest_args])
     if command == "graph":
-        forwarded = list(args)
-        if "--repo" not in forwarded:
-            forwarded.extend(["--repo", str(REPO_ROOT)])
-        return _run("project_graph.py", forwarded)
+        return _run("project_graph.py", _with_repo_arg(args))
     if command == "task":
-        forwarded = list(args)
-        if "--repo" not in forwarded:
-            forwarded.extend(["--repo", str(REPO_ROOT)])
-        return _run("workflow.py", forwarded)
+        return _run("workflow.py", _with_repo_arg(args))
     if command == "doctor":
         return _run("harness_doctor.py", ["--repo", str(REPO_ROOT), *args])
     if command == "repair":

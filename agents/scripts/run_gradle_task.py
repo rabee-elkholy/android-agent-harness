@@ -511,7 +511,7 @@ def _run_gradle_locked(task_args: list[str], *, outcome: dict | None = None, cwd
         emit_env_failure(verdict, "run_gradle_task.py")
         return EXIT_ENV
     if wrapper.name == "gradlew":
-        if os.name == "nt" and not shutil.which("bash") and not shutil.which("sh"):
+        if os.name == "nt" and not posix_shell_candidates():
             msg = "gradlew.bat is missing on Windows and neither bash nor sh was found in PATH to execute gradlew. Please restore gradlew.bat or install Git Bash."
             live_print(f"[!] {msg}", err=True)
             verdict = FailureVerdict(CLASS_ENV, msg)

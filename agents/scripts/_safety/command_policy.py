@@ -44,6 +44,25 @@ def _lifecycle_calls(command: str) -> list[tuple[str, list[str]]]:
             continue  # reading usage changes nothing
         calls.append((subcommand, rest))
     return calls
+def _strip_leading_cli_flags(tokens: list[str]) -> list[str]:
+    idx = 0
+    value_flags = {"--repo", "--task-id", "--task", "--kit"}
+    while idx < len(tokens):
+        tok = tokens[idx]
+        low = tok.lower()
+        if low == "--json":
+            idx += 1
+            continue
+        if low in value_flags and idx + 1 < len(tokens):
+            idx += 2
+            continue
+        if any(low.startswith(f + "=") for f in value_flags):
+            idx += 1
+            continue
+        break
+    return tokens[idx:]
+
+
 def _developer_authority_violation(command: str) -> str:
     """Cancel, and approval from any source other than the conversation, belong to the developer.
 
@@ -61,24 +80,31 @@ def _developer_authority_violation(command: str) -> str:
             # The developer asked in chat: the agent runs it with their words as proof, like an approval.
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "cancel"
-        if subcommand in ("approve", "approve-sensitive"):
-            if _engine._flag(rest, "--source").lower() != "conversation":
+        if subcommand in ("approve", "approve-sensitive", "quick-start"):
+            if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "approve"
+        if subcommand == "review-budget":
+            if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                return "review-budget"
     tokens = _engine._split_command_tokens(command)
     for pos, token in enumerate(tokens):
         name = token.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        rest = tokens[pos + 1:]
+        rest = _strip_leading_cli_flags(tokens[pos + 1:])
         is_models = name == "review_models.py" or (name in _engine.TASK_ENTRYPOINTS and rest[:2] == ["review", "models"])
-        if is_models and "set" in rest and not any(flag in rest for flag in ("-h", "--help")):
-            if _engine._flag(rest, "--source") != "conversation" or not _engine._flag(rest, "--proof-reference"):
-                return "review-models"
+        if is_models:
+            sub_rest = _strip_leading_cli_flags(rest[2:] if name in _engine.TASK_ENTRYPOINTS else rest)
+            if sub_rest[:1] == ["set"] and not any(flag in rest for flag in ("-h", "--help")):
+                if _engine._flag(rest, "--source") != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                    return "review-models"
         is_exec_mode = (
             name == "execution_mode.py"
             or (name in _engine.TASK_ENTRYPOINTS and rest[:1] == ["execution-mode"])
         )
-        if is_exec_mode and "set" in rest and not any(flag in rest for flag in ("-h", "--help")):
-            if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
-                return "execution-mode"
+        if is_exec_mode:
+            sub_rest = _strip_leading_cli_flags(rest[1:] if name in _engine.TASK_ENTRYPOINTS else rest)
+            if sub_rest[:1] == ["set"] and not any(flag in rest for flag in ("-h", "--help")):
+                if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                    return "execution-mode"
         is_web_apply = (
             (name == "web_relay.py" and rest[:1] == ["apply"])
             or (name in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-apply"] or rest[:2] == ["web-relay", "apply"]))
@@ -86,6 +112,13 @@ def _developer_authority_violation(command: str) -> str:
         if is_web_apply and not any(flag in rest for flag in ("-h", "--help", "--dry-run")):
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "web-apply"
+        is_ctx_instruct = (
+            (name == "generate_project_context.py" and rest[:1] == ["instruct"])
+            or (name in _engine.TASK_ENTRYPOINTS and rest[:2] == ["context", "instruct"])
+        )
+        if is_ctx_instruct and not any(flag in rest for flag in ("-h", "--help")):
+            if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                return "context-instruct"
     return ""
 def _flag(rest: list[str], name: str) -> str:
     for pos, part in enumerate(rest):
@@ -172,7 +205,7 @@ def _check_web_mode_direct_write_guard(
                 f"(batch {prog.get('batch_index')}/{prog.get('total_batches')}) is awaiting external AI chat reply on task `{tid}`. "
                 "Do NOT re-run `web-pack` or edit files directly — wait for the developer reply and run "
                 '`python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` '
-                "(or switch to local mode via `execution-mode set --choice normal-task --source conversation --proof-reference "<words>"`).",
+                '(or switch to local mode via `execution-mode set --choice normal-task --source conversation --proof-reference "<words>"`).',
                 "WEB_EXECUTION_MODE_PACK_FIRST",
             )
         if prog.get("has_staged_phase"):
@@ -195,16 +228,19 @@ def _check_web_mode_direct_write_guard(
     except (ImportError, OSError, ValueError, _engine.ValidationError):
         return True, "", ""
 def _extract_execution_mode_kickoff(command: str) -> tuple[str, str, str]:
-    """Return `(kickoff_kind, task_id, task_kind)` when `command` starts a new task (`draft` or `web-pack`), else `('', '', '')`."""
+    """Return `(kickoff_kind, task_id, task_kind)` when `command` starts a new task (`draft`, `quick-start`, or `web-pack`), else `('', '', '')`."""
     cmd = str(command or "").strip()
     if not cmd or any(h in cmd for h in (" --help", " -h")):
         return ("", "", "")
     tokens = _engine._split_command_tokens(cmd)
     for pos, tok in enumerate(tokens):
         base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        rest = tokens[pos + 1:]
-        if (base == "workflow.py" and rest[:1] == ["draft"]) or (base in _engine.TASK_ENTRYPOINTS and rest[:2] == ["task", "draft"]):
-            return ("draft", _engine._flag(rest, "--task-id"), _engine._flag(rest, "--kind").upper())
+        rest = _strip_leading_cli_flags(tokens[pos + 1:])
+        if (base == "workflow.py" and rest[:1] in (["draft"], ["quick-start"])) or (
+            base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["task"] and _strip_leading_cli_flags(rest[1:])[:1] in (["draft"], ["quick-start"])
+        ):
+            sub_k = rest[0] if base == "workflow.py" else _strip_leading_cli_flags(rest[1:])[0]
+            return (sub_k, _engine._flag(rest, "--task-id"), _engine._flag(rest, "--kind").upper())
         if (base == "web_relay.py" and rest[:1] == ["pack"]) or (
             base in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-pack"] or rest[:2] == ["web-relay", "pack"])
         ):
@@ -293,11 +329,14 @@ def _read_only_adb_command(command: str) -> bool:
         saw_adb = True
     return saw_adb
 def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '') -> None:
-    from mutation_guard import _split_segments, _tokens
+    from mutation_guard import _is_read_only, _split_segments, _tokens
+    from platform_quirks import is_quirk_enabled
     read_commands = {
         "cat", "type", "more", "less", "head", "tail", "sed", "awk", "gawk",
-        "wc", "nl", "rg", "grep", "get-content", "gc", "select-string", "sls",
+        "wc", "nl", "rg", "grep", "findstr", "get-content", "gc", "select-string", "sls",
+        "get-childitem", "gci", "dir", "ls",
     }
+    git_read_subs = {"show", "grep", "diff", "log", "blame", "ls-files"}
     for segment in _split_segments(command) or []:
         tokens = _tokens(segment)
         if not tokens:
@@ -307,12 +346,22 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             if any(_engine._installed_engine_target(token, recursive=True) for token in tokens[1:]):
                 _engine._deny_engine_read("run_command", command)
                 return
-        elif cmd0 == "git" and len(tokens) >= 3 and tokens[1].lower() == "show":
-            for token in tokens[2:]:
-                git_rel = token.split(":", 1)[1] if ":" in token and not token.startswith("-") else token
-                if _engine._installed_engine_target(git_rel, recursive=True):
-                    _engine._deny_engine_read("run_command", command)
-                    return
+        elif cmd0 == "git" and len(tokens) >= 3:
+            g_idx = 1
+            while g_idx < len(tokens):
+                gt = tokens[g_idx].lower()
+                if gt == "--no-pager":
+                    g_idx += 1
+                elif gt in {"-c", "-C"} and g_idx + 1 < len(tokens):
+                    g_idx += 2
+                else:
+                    break
+            if g_idx < len(tokens) and tokens[g_idx].lower() in git_read_subs:
+                for token in tokens[g_idx + 1:]:
+                    git_rel = token.split(":", 1)[1] if ":" in token and not token.startswith("-") else token
+                    if _engine._installed_engine_target(git_rel, recursive=True):
+                        _engine._deny_engine_read("run_command", command)
+                        return
     active_tid = ""
     try:
         p = _engine.active_plan(_engine.REPO)
@@ -333,7 +382,13 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         return
     for code, pattern in _engine.DANGEROUS:
         if pattern.search(command):
+            if code == "agy_headless_loop_tos_guard" and not (
+                is_quirk_enabled("199748", repo=_engine.REPO) or is_quirk_enabled("201582", repo=_engine.REPO)
+            ):
+                continue
             if code in ("tracker_write", "git_mutation", "raw_adb", "agy_headless_loop_tos_guard") and _engine._audited_harness_command(command):
+                continue
+            if code == "tracker_write" and _is_read_only(command, _engine.REPO):
                 continue
             if code == "git_mutation" and _engine._read_only_git_branch_command(command):
                 continue
@@ -444,7 +499,8 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         except (ImportError, OSError, ValueError, _engine.ValidationError):
             pass
     if (
-        _engine.os.environ.get("HARNESS_HOST", "").strip().lower() == "antigravity"
+        is_quirk_enabled("201209", repo=_engine.REPO)
+        and _engine.os.environ.get("HARNESS_HOST", "").strip().lower() == "antigravity"
         and _engine._is_live_interactive_antigravity_lead(conversation, transcript_hint=transcript_hint)
         and _engine.re.search(
             r"(?:^|[;&|\r\n]\s*)(?:rg(?:\.exe)?|ripgrep(?:\.exe)?)\b|(?:^|[;&|\r\n]\s*)git(?:\.exe)?\s+diff\s+[^;&|\r\n]*--check\b",
@@ -463,7 +519,7 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             task_id=active_tid,
         )
         return
-    if _engine.re.search(
+    if is_quirk_enabled("200632", repo=_engine.REPO) and _engine.re.search(
         r"(?:^|[;&|\r\n]\s*)(?:(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-\S+\s+)*-c\b|(?:powershell|pwsh)(?:\.exe)?\s+(?:-\S+\s+)*(?:-c|-command)\b)",
         command,
         _engine.re.I | _engine.re.M,

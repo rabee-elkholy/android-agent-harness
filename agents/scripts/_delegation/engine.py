@@ -45,6 +45,7 @@ from antigravity_runtime import (  # noqa: E402
     resolve_transcript,
 )
 from evidence_store import StateLock  # noqa: E402
+from platform_quirks import is_quirk_enabled  # noqa: E402
 from policy_vocab import (  # noqa: E402
     ANTIGRAVITY_SCOUT_TOOLS,
     CORE_ROUTED_REVIEWERS,
@@ -303,9 +304,11 @@ def resolve_utility_scout_model(
 
 
 def _sync_single_utility_agent_model(repo: Path, role: str, target_model: str) -> bool:
-    dest = repo / ".agents" / "agents" / role / "agent.md"
-    if not dest.parent.is_dir() or dest.is_file():
+    agents_dir = repo / ".agents" / "agents"
+    dest = agents_dir / role / "agent.md"
+    if not agents_dir.is_dir() or dest.is_file():
         return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         from install_tool_adapters import with_managed_marker
         from _vnext_common import canonical_sha256, sha256_file
@@ -492,7 +495,11 @@ def evaluate_delegation_policy(
         return ctx_summary
 
     is_remote_mode, remote_signals = detect_antigravity_remote_mode()
-    block_remote_subagents = is_remote_mode and not remote_subagents_explicitly_allowed()
+    block_remote_subagents = (
+        is_remote_mode
+        and not remote_subagents_explicitly_allowed()
+        and is_quirk_enabled("198819", repo=repo)
+    )
 
     if not plan:
         if block_remote_subagents:
@@ -839,7 +846,7 @@ def validate_utility_dispatch(
     ]
 
     is_remote_m, rem_sigs = detect_antigravity_remote_mode()
-    if is_remote_m and not remote_subagents_explicitly_allowed():
+    if is_remote_m and not remote_subagents_explicitly_allowed() and is_quirk_enabled("198819", repo=repo):
         return (
             False,
             f"REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD (#198819): Antigravity Remote Mode detected ({', '.join(rem_sigs)}). "
@@ -972,18 +979,17 @@ def _normalize_repo_rel(repo: Path, raw_target: str) -> str:
     try:
         root = repo.resolve()
         root_posix = root.as_posix().rstrip("/")
-        norm_slashes = cleaned.replace("\\", "/")
-        if re.match(r"^[A-Za-z]:/", norm_slashes) and re.match(r"^[A-Za-z]:/", root_posix):
-            if norm_slashes.lower().startswith(root_posix.lower() + "/"):
-                return norm_slashes[len(root_posix) + 1 :].lstrip("/")
-            if norm_slashes.lower() == root_posix.lower():
-                return ""
         cand = Path(cleaned).resolve() if Path(cleaned).is_absolute() else (root / cleaned).resolve()
+        if cand == root:
+            return ""
         if cand.is_relative_to(root):
             return cand.relative_to(root).as_posix()
         cand_posix = cand.as_posix()
-        if os.name == "nt" and cand_posix.lower().startswith(root_posix.lower() + "/"):
-            return cand_posix[len(root_posix) + 1 :].lstrip("/")
+        if os.name == "nt":
+            if cand_posix.lower() == root_posix.lower():
+                return ""
+            if cand_posix.lower().startswith(root_posix.lower() + "/"):
+                return cand_posix[len(root_posix) + 1 :].lstrip("/")
     except OSError:
         pass
     return cleaned.replace("\\", "/").lstrip("./")

@@ -127,14 +127,15 @@ def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
             _u_err = True
     # 2) Unbound V2 final or phase reviewer when a different Lead conversation is recorded
     lead_cids: set[str] = set()
-    lsm_f = st_dir / "live-session-models.json"
-    if lsm_f.is_file():
-        try:
-            ldoc = json.loads(lsm_f.read_text(encoding="utf-8"))
-            if isinstance(ldoc, dict) and ldoc.get("latest_lead_cid"):
-                lead_cids.add(str(ldoc["latest_lead_cid"]).strip())
-        except (OSError, ValueError):
-            _l_err = True
+    for lead_file, lead_key in (("live-session-models.json", "latest_lead_cid"), ("active-conversation.json", "conversation_id")):
+        lf_p = st_dir / lead_file
+        if lf_p.is_file():
+            try:
+                ldoc = json.loads(lf_p.read_text(encoding="utf-8"))
+                if isinstance(ldoc, dict) and ldoc.get(lead_key):
+                    lead_cids.add(str(ldoc[lead_key]).strip())
+            except (OSError, ValueError):
+                _l_err = True
     if lead_cids and conversation_id not in lead_cids:
         act_f = st_dir / "active-task.json"
         if act_f.is_file():
@@ -150,6 +151,14 @@ def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
                             revs = (json.loads(led_f.read_text(encoding="utf-8")).get("reviewers") or {})
                             if any(isinstance(v, dict) and v.get("state") == "DISPATCHED" and not v.get("execution_id") for v in revs.values()):
                                 return True
+                    ps_f = tdir / "phase-state.json"
+                    if ps_f.is_file():
+                        cur_pid = str(json.loads(ps_f.read_text(encoding="utf-8")).get("current_phase_id") or "").strip()
+                        pled_f = tdir / "phases" / cur_pid / "review" / "ledger.json" if cur_pid else None
+                        if pled_f and pled_f.is_file():
+                            prevs = (json.loads(pled_f.read_text(encoding="utf-8")).get("reviewers") or {})
+                            if any(isinstance(v, dict) and v.get("state") == "DISPATCHED" and not v.get("execution_id") for v in prevs.values()):
+                                return True
             except (OSError, ValueError, TypeError):
                 _r_err = True
     return False
@@ -159,7 +168,7 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str, payload: dict | 
     """Prevent injecting implementer workflow/ask_question prompts into isolated reviewer or utility subagents.
 
     Also enforces byte-identical Turn-0 systemInstruction+tools prefix stability (#200026) across
-    Scout, Worker, Specialist, and Reviewer subagents before PostToolUse execution_id binding finishes.
+    Scout, Specialist, and Reviewer subagents before PostToolUse execution_id binding finishes.
     """
     if isinstance(payload, dict):
         if payload.get("isSubagent") is True or payload.get("parentConversationId") or payload.get("parent_conversation_id") or payload.get("subagentType"):
@@ -185,6 +194,17 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str, payload: dict | 
             return False
         if ctx.get("role"):
             return True
+        if ctx.get("unverified_reviewer"):
+            st_dir = state_root(repo)
+            lead_f = st_dir / "live-session-models.json"
+            lead_cid = ""
+            if lead_f.is_file():
+                try:
+                    lead_cid = str(json.loads(lead_f.read_text(encoding="utf-8")).get("latest_lead_cid") or "").strip()
+                except (OSError, ValueError):
+                    lead_cid = ""
+            if lead_cid and conversation_id != lead_cid:
+                return True
         return False
     except Exception:
         return False
@@ -221,7 +241,8 @@ def _compact_message() -> str:
         mode_tag = ""
     try:
         from antigravity_runtime import inspect_nov15_antigravity_hazards
-        nov15 = inspect_nov15_antigravity_hazards(REPO)
+        from platform_quirks import is_quirk_enabled
+        nov15 = inspect_nov15_antigravity_hazards(REPO) if is_quirk_enabled("200467", repo=REPO) else {}
         if nov15.get("hydrogen_extra_leak_active"):
             mode_tag += (
                 f" [QUOTA-LEAK GUARD #200467: Active model `{nov15.get('active_lead_model')}` (`Hydrogen Extra` / `xhigh`) "
@@ -320,9 +341,8 @@ def _record_seen_state(conversation_id: str, state_key: str) -> None:
                 except (OSError, ValueError):
                     data = {}
             data[conversation_id] = state_key
-            tmp_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
-            tmp_path.write_text(json.dumps(data), encoding="utf-8")
-            os.replace(tmp_path, cache_path)
+            from _vnext_common import atomic_write_json
+            atomic_write_json(cache_path, data)
     except (OSError, ValueError, ImportError):
         return
 

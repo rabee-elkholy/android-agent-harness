@@ -22,7 +22,7 @@ VERIFICATION_SCRIPTS = {
     "maestro_bridge",
 }
 BOOTSTRAP_ACTIONS = {
-    "draft", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
+    "draft", "quick-start", "revise", "begin", "status", "approve", "approve-sensitive", "prepare-verification",
     "deliver", "debug-evidence", "recover-stale", "recover-active", "validate-finding", "reconcile-delivery", "switch", "merge",
     "checkpoint-phase", "begin-next-phase", "handoff", "reconcile-handoff", "review-budget", "continue", "change-decision", "plan-note",
     "heal", "bridge",
@@ -141,19 +141,22 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
     if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap"}:
         executable = executable[:-4]
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
-        if len(tokens) < 2:
+        py_idx = 1
+        while py_idx < len(tokens) and re.fullmatch(r"-(?:3(?:\.\d+)?|u|B|S|E)", tokens[py_idx]):
+            py_idx += 1
+        if len(tokens) <= py_idx:
             return "", []
-        if tokens[1] == "-m" and len(tokens) >= 3 and tokens[2] == "compileall":
-            return "compileall", tokens[3:]
-        path = tokens[1].replace("\\", "/")
+        if tokens[py_idx] == "-m" and len(tokens) > py_idx + 1 and tokens[py_idx + 1] == "compileall":
+            return "compileall", tokens[py_idx + 2:]
+        path = tokens[py_idx].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
         known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "zoho_sync", "web_relay"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
-            return "harness_cli", tokens[2:]
+            return "harness_cli", tokens[py_idx + 1:]
         if name.endswith(".py") and name[:-3] in known:
-            return name[:-3], tokens[2:]
+            return name[:-3], tokens[py_idx + 1:]
         return "", []
     if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap"}:
         return executable, tokens[1:]
@@ -321,8 +324,15 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             or (args[:2] == ["task", "bridge"] and "--status" in args)):
         return True
     if name == "git":
-        if args[:1] == ["-C"] and len(args) >= 3:
-            args = args[2:]
+        while args:
+            if args[0] == "--no-pager":
+                args = args[1:]
+            elif args[0] == "-C" and len(args) >= 3:
+                args = args[2:]
+            elif args[0] == "-c" and len(args) >= 3 and args[1].lower().startswith(("core.quotepath=", "color.ui=", "pager.")):
+                args = args[2:]
+            else:
+                break
         if is_read_only_git_branch(args):
             return True
         if not args or args[0] not in {"status", "diff", "log", "show", "ls-files", "rev-parse", "symbolic-ref", "check-ignore", "describe", "grep", "blame", "merge-base", "rev-list", "for-each-ref", "merge-tree"}:
@@ -1164,9 +1174,24 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         if "--source" in model_args and model_args[model_args.index("--source") + 1:model_args.index("--source") + 2] == ["conversation"] and "--proof-reference" in model_args:
             return True, "explicit developer reviewer resume; command validates native cancellation and execution"
         return False, "reviewer resume requires explicit conversation authority"
-    if entry in {"harness_cli", "android-harness"} and model_args[:1] == ["execution-mode"]:
-        entry, model_args = "execution_mode", model_args[1:]
-    if entry == "execution_mode" and model_args[:1] == ["set"]:
+    def _strip_top_opts(seq: list[str]) -> list[str]:
+        i = 0
+        while i < len(seq):
+            a = seq[i].lower()
+            if a == "--json":
+                i += 1
+            elif a in {"--repo", "--task-id", "--task", "--kit"} and i + 1 < len(seq):
+                i += 2
+            elif any(a.startswith(f + "=") for f in ("--repo", "--task-id", "--task", "--kit")):
+                i += 1
+            else:
+                break
+        return seq[i:]
+
+    model_args_clean = _strip_top_opts(model_args)
+    if entry in {"harness_cli", "android-harness"} and model_args_clean[:1] == ["execution-mode"]:
+        entry, model_args_clean = "execution_mode", _strip_top_opts(model_args_clean[1:])
+    if entry == "execution_mode" and model_args_clean[:1] == ["set"]:
         def _em_val(flag):
             for index, arg in enumerate(model_args):
                 if arg.startswith(flag + "="):
@@ -1177,9 +1202,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         if _em_val("--source").lower() == "conversation" and _em_val("--proof-reference").strip():
             return True, "explicit developer execution-mode decision; command validates tamper-evident state"
         return False, "execution-mode changes require `--source conversation` and a non-empty `--proof-reference`"
-    if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "models"]:
-        entry, model_args = "review_models", model_args[2:]
-    if entry == "review_models" and model_args[:1] == ["set"]:
+    if entry in {"harness_cli", "android-harness"} and model_args_clean[:2] == ["review", "models"]:
+        entry, model_args_clean = "review_models", _strip_top_opts(model_args_clean[2:])
+    if entry == "review_models" and model_args_clean[:1] == ["set"]:
         def value(flag):
             for index, arg in enumerate(model_args):
                 if arg.startswith(flag + "="):
@@ -1297,13 +1322,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return True, f"command authorized by approved plan {plan.get('plan_id')}"
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
-        or action in {"verify", "complete", "bind-evidence"}
+        or action in {"verify", "complete", "bind-evidence", "ship"}
         or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["roborazzi"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"], ["maestro"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status == "READY_FOR_DELIVERY" and (
         entry in {"run_device", "phone_e2e", "maestro_bridge", "run_gradle_task"}
-        or action in {"verify"}
+        or action in {"verify", "ship"}
         or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["device"], ["assemble"], ["e2e"], ["maestro"], ["verify"]))
     ):
         return True, f"post-verification device/build command authorized for ready plan {plan.get('plan_id')}"

@@ -12,7 +12,7 @@ Authoritative always-loaded contract. Detailed domain guides load on demand from
 - Read-only inquiries inspect and answer in chat without drafting or mutating; align on ambiguity before planning.
 - Code/config writes, deletions, builds/installs, Git changes, tracker writes, and publication require an approved plan bound to task, plan hash, repository, worktree, and base snapshot. Silence is never approval (`workflow.py approve --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED`; never ask the developer to run shell commands).
 - **6-Tier Dynamic Risk Model**: Policy assigns `RISK_TIER` (`T0_TRIVIAL` to `T5_CRITICAL`), gates, reviewers, device requirement, and skill routing.
-- **Single-shot Proceed invariant**: Proceed appears only on initial task approval and authorizes all stated phases without inter-phase stops.
+- **Single-shot Proceed invariant**: Proceed appears only on initial task approval and authorizes all stated phases without inter-phase stops. For a direct, unambiguous `1–2` primary-file `T0_TRIVIAL`/`T1_LOW_RISK` developer request (strings, UI tweak, small helper/ViewModel fix, or unit test — zero Room/DB/Auth/Billing/Manifest/Network/Navigation surfaces), run `task quick-start --outcome "<goal>" --files <paths> --source conversation --proof-reference "<developer request>"` (falls back cleanly to `AWAITING_DEVELOPER_APPROVAL` if ineligible; escalates on `prepare-verification` if diff exceeds bounds).
 - **Direct follow-up execution**: Approved in-scope fixes execute immediately (`task plan-note` before `prepare-verification`); new plan/Proceed only on material scope/contract/sensitive expansion.
 - **Review corrections & Continuation**: Resume the same task (`workflow.py resume`) before fixes; never edit `plan.md` manually (`revise` on approved plans requires `--material-change-reason`). Use `task continue` / `task bridge --save` seamlessly without asking the developer to run CLI commands (`.agents/rules/pm-and-context-bridge.md`).
 - Durable context (`context note` / `context instruct`) is saved in clear English; follow `.agents/project-context/project-notes.md` and `developer-instructions.json`. Git, release, tracker closure, uninstall/data clear, downgrade, and purchases are never implicit.
@@ -43,7 +43,7 @@ Authoritative always-loaded contract. Detailed domain guides load on demand from
 | Task context / graph | `python .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` |
 | Context note / bridge | `python .agents/harness.py context note "<english-note>"` / `task bridge --save` |
 | Task guidance | `python .agents/harness.py task status --task-id <id> --next` |
-| Consecutive verification | `python .agents/harness.py verify-steps --task-id <id> --host antigravity` |
+| Consecutive verification / Ship | `python .agents/harness.py verify-steps --task-id <id> --host antigravity` / `task ship --task-id <id> --host antigravity` |
 | Preflight / Unit tests | `python .agents/harness.py preflight` / `python .agents/harness.py test` |
 | Review package | `python .agents/harness.py review package --task-id <id>` |
 | Record review | Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>` (or `review complete-all --task <id>`); V1: `record_review.py` per host rules |

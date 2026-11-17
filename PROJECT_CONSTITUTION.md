@@ -89,6 +89,14 @@ Ordinary bug fixes, implementation details, refactors that preserve these invari
   through a preview-bound `change-decision` receipt without replacing the plan.
   File membership alone is not material expansion; new behavior, sensitive
   surfaces, modules and contracts still require revised approval. See ADR-016.
+- A direct, unambiguous developer request in conversation for a bounded `T0_TRIVIAL`
+  or `T1_LOW_RISK` single-module micro-task (`1–2` primary files, zero critical/high,
+  persistence, network, permission, device-API, or navigation surfaces) may use
+  `task quick-start` (`express_track: true`) to bind that explicit developer request
+  as the plan's approval proof (`source=conversation`, `proof_reference`). If scope
+  exceeds Express bounds at intake or during `prepare-verification`
+  (`EXPRESS_SCOPE_ESCALATED_APPROVAL_REQUIRED`), it falls back to explicit
+  `AWAITING_DEVELOPER_APPROVAL`. The maintainer explicitly approved this amendment.
 
 Do not add repeated approval gates merely to feel safer.
 

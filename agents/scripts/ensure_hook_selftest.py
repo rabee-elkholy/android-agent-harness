@@ -157,6 +157,12 @@ def _is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
     try:
+        sys.path.insert(0, str(AGENTS))
+        from harness_shared.processes import pid_alive
+        return bool(pid_alive(pid))
+    except Exception:
+        pass
+    try:
         os.kill(pid, 0)
         return True
     except ProcessLookupError:
@@ -268,11 +274,14 @@ def _failure_hook_response() -> str:
 
 def main() -> int:
     enable_line_buffered_stdio()
-    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
-        print("[OK] Hook selftest already running (recursion guard).", flush=True)
-        return 0
     raw = _read_stdin_safe()
     as_hook = _is_hook_payload(raw)
+    if os.environ.get("HARNESS_HOOK_SELFTEST_ACTIVE") == "1":
+        if as_hook:
+            print("{}", flush=True)
+        else:
+            print("[OK] Hook selftest already running (recursion guard).", flush=True)
+        return 0
 
     fingerprint = harness_fingerprint()
     if cache_is_fresh(fingerprint):

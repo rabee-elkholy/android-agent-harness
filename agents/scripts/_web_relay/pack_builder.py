@@ -815,6 +815,8 @@ def build_web_pack(
     editable_meta: dict[str, dict[str, Any]] = {}
     file_blocks_md: list[str] = []
     prev_editable = (prev_pack.get("editable_files") or {}) if prev_pack else {}
+    has_chat_baseline = bool(prev_pack or post_apply_hashes)
+    use_delta_retry_failure = bool(retry_failure and has_chat_baseline)
 
     for rel in active_batch_files:
         fp = repo / rel
@@ -825,16 +827,14 @@ def build_web_pack(
             sha = _engine._sha256_lf(raw_txt)
             redacted_txt = _engine._redact_inline_secrets(raw_txt, vault)
             editable_meta[rel] = {"exists": True, "sha256": sha, "eol": eol, "base_text": raw_txt}
-            if retry_failure:
+            if use_delta_retry_failure:
                 # Zero-reupload mode: `known_chat_sha` is the exact file state already present in the external AI chat
                 # (`post_apply_hashes[rel]` if modified/created by `web-apply`, else `prev_editable[rel].sha256`).
                 # Emit full body ONLY if manually edited since then, unseen in chat, or explicitly added via `--add-files`!
                 known_chat_sha = post_apply_hashes.get(rel) or str((prev_editable.get(rel) or {}).get("sha256") or "")
-                has_chat_baseline = bool(prev_pack or post_apply_hashes)
                 include_full = bool(
                     rel in explicit_added_set
-                    or (has_chat_baseline and known_chat_sha != sha)
-                    or (not has_chat_baseline and rel not in retry_implicated_set and not diagnostics)
+                    or known_chat_sha != sha
                 )
             else:
                 include_full = bool(
@@ -848,13 +848,14 @@ def build_web_pack(
                 file_blocks_md.append(f"### FILE: `{rel}` (`sha256={sha[:12]}`, `{len(raw_txt.splitlines())}` lines)\n```{ext}\n{redacted_txt.rstrip()}\n```")
         else:
             editable_meta[rel] = {"exists": False, "sha256": "", "eol": "lf", "base_text": ""}
-            if not retry_failure or rel in explicit_added_set:
+            if not use_delta_retry_failure or rel in explicit_added_set:
                 file_blocks_md.append(f"### PLANNED NEW FILE: `{rel}` (does not exist yet)")
 
-    neighbors = [] if eff_retry else _engine._extract_neighbor_signatures(repo, active_batch_files, vault)
-    proj_summary = "" if eff_retry else _engine._load_project_summary(repo, vault)
-    resource_inventory = "" if eff_retry else _engine._collect_module_resource_inventory(repo, active_batch_files)
-    surgical_excerpts = _extract_surgical_failure_excerpts(repo, active_batch_files, diagnostics, vault) if retry_failure else []
+    use_compact_retry = bool(retry or use_delta_retry_failure)
+    neighbors = [] if use_compact_retry else _engine._extract_neighbor_signatures(repo, active_batch_files, vault)
+    proj_summary = "" if use_compact_retry else _engine._load_project_summary(repo, vault)
+    resource_inventory = "" if use_compact_retry else _engine._collect_module_resource_inventory(repo, active_batch_files)
+    surgical_excerpts = _extract_surgical_failure_excerpts(repo, active_batch_files, diagnostics, vault) if use_delta_retry_failure else []
 
     suggested_tid = eff_tid or _engine.re.sub(r"[^a-z0-9-]+", "-", eff_prompt.lower())[:28].strip("-") or f"web-task-{pack_id[-6:]}"
     if len(suggested_tid) < 3:
@@ -901,7 +902,7 @@ def build_web_pack(
         else f" | **Files in Pack**: `{len(active_batch_files)}`"
     )
 
-    if retry_failure:
+    if use_delta_retry_failure:
         scope_short = ", ".join(f"`{p}`" for p in active_batch_files[:12])
         if len(active_batch_files) > 12:
             scope_short += f" (+{len(active_batch_files) - 12} more)"
@@ -1061,7 +1062,13 @@ def build_web_pack(
         pass
 
     clip_info = {"copied": False, "mode": "skipped"} if no_clipboard else _engine._copy_to_clipboard(bundle_file, bundle_text)
-    new_chat_recommended = not bool(eff_retry or add_files or cur_batch_num > 1 or had_prior_task_pack)
+    new_chat_recommended = not bool(
+        (retry and has_chat_baseline)
+        or use_delta_retry_failure
+        or add_files
+        or cur_batch_num > 1
+        or had_prior_task_pack
+    )
     web_chat_instruction = (
         "Open a NEW external AI chat, attach or paste the Context Pack (Ctrl+V), and send."
         if new_chat_recommended

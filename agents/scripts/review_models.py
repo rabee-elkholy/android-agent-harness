@@ -532,7 +532,7 @@ def validate_policy(value: object) -> dict:
     if not isinstance(default_val, str) or default_val not in MODEL_CHOICES:
         raise ValidationError(
             "review_model_policy default must be a supported model choice "
-            "(inherit, sonnet, opus, haiku, flash-dynamic, gemini-3.8-flash-*, gemini-4-argon-*, gemini-4-carbon-*, gemini-3.1-pro-*)"
+            "(inherit, hydrogen-dynamic, safe-cache-hybrid, flash-dynamic, gemini-4-hydrogen-*, gemini-4-argon-*, gemini-4-carbon-*, gemini-3.8-flash-*)"
         )
     overrides = value["overrides"]
     if not isinstance(overrides, dict):
@@ -709,9 +709,10 @@ def _compute_efforts_by_role(
                         policy_data = read_json(pol_p)
                 except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
                     policy_data = {}
-            elif (tdir / "policy.json").is_file():
+            elif (tdir / "preliminary-policy.json").is_file() or (tdir / "policy.json").is_file():
                 try:
-                    policy_data = read_json(tdir / "policy.json")
+                    p_cand = (tdir / "preliminary-policy.json") if (tdir / "preliminary-policy.json").is_file() else (tdir / "policy.json")
+                    policy_data = read_json(p_cand)
                 except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
                     policy_data = {}
             elif (tdir / "phase-state.json").is_file():
@@ -806,8 +807,9 @@ def compute_task_complexity_tier(
                     pol_p = Path(str(read_json(crun).get("policy") or ""))
                     if pol_p.is_file():
                         policy_data = read_json(pol_p)
-                elif (tdir / "policy.json").is_file():
-                    policy_data = read_json(tdir / "policy.json")
+                elif (tdir / "preliminary-policy.json").is_file() or (tdir / "policy.json").is_file():
+                    p_cand = (tdir / "preliminary-policy.json") if (tdir / "preliminary-policy.json").is_file() else (tdir / "policy.json")
+                    policy_data = read_json(p_cand)
                 elif (tdir / "phase-state.json").is_file():
                     cur_phase = str(read_json(tdir / "phase-state.json").get("current_phase_id") or "").strip()
                     ckpt_f = tdir / "phases" / cur_phase / "checkpoint.json"
@@ -820,10 +822,12 @@ def compute_task_complexity_tier(
                                 "surfaces": ckpt_surfaces,
                                 "severity": "CRITICAL" if (set(ckpt_surfaces) & _CRITICAL_COMPLEXITY_SURFACES) else "MEDIUM",
                             }
-            if (tdir / "classification.json").is_file():
-                raw_cls = read_json(tdir / "classification.json")
-                if isinstance(raw_cls, dict):
-                    cls_doc = raw_cls
+            for cls_cand in (tdir / "classification.json", tdir / "preliminary-classification.json"):
+                if cls_cand.is_file():
+                    raw_cls = read_json(cls_cand)
+                    if isinstance(raw_cls, dict):
+                        cls_doc = raw_cls
+                        break
         except (OSError, ValueError, RuntimeError, KeyError, ImportError, ValidationError):
             pass
 

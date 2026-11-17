@@ -483,11 +483,16 @@ def get_touched_string_keys(repo: Path) -> tuple[dict[Path, set[str]], bool]:
     return touched_by_base, any_changed
 
 
-def check_hardcoded_strings(files: list[Path], lines_map: dict[Path, set[int] | None] | None = None) -> list[str]:
+def check_hardcoded_strings(
+    files: list[Path],
+    lines_map: dict[Path, set[int] | None] | None = None,
+    repo_root: Path | None = None,
+) -> list[str]:
+    base_repo = repo_root or REPO
     findings: list[str] = []
     for path in files:
         try:
-            rel = path.relative_to(REPO).as_posix()
+            rel = path.relative_to(base_repo).as_posix()
         except ValueError:
             rel = str(path)
         if path.suffix == ".xml" and "/values" in f"/{rel}":
@@ -555,7 +560,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
     res_dirs = RES_DIRS
     if repo:
         prim = r.joinpath(*ANDROID_SRC) / "res"
-        res_dirs = [prim] if prim.is_dir() else [r / "app/src/main/res"]
+        res_dirs = discover_res_dirs(r, primary_res=prim)
 
     pairs = discover_locale_pairs(res_dirs=res_dirs, repo=r)
     errors = 0
@@ -707,7 +712,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
                 b_file = baseline_dir / rel
                 if b_file.is_file() and p.is_file():
                     lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
-        hardcoded = check_hardcoded_strings(modified_src, lines_map=lines_map)
+        hardcoded = check_hardcoded_strings(modified_src, lines_map=lines_map, repo_root=r)
         if hardcoded:
             print(f"[!] Hardcoded strings found in modified lines ({len(hardcoded)}):")
             for item in hardcoded:

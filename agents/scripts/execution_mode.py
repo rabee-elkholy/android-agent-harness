@@ -565,8 +565,11 @@ def _resolve_effective_execution_mode_unlocked(
             ch = str(pend_rec.get("choice") or f"{cfg_pm}-task")
             auto_ptrig = ""
             p_conf = False
+            p_conf_sig = ""
             if cfg_pm == "auto":
                 eff_pm, auto_ptrig, p_conf = evaluate_smart_auto_routing(repo, tid or intended_tid, resolved_plan, candidate_files)
+                if p_conf:
+                    _, p_conf_sig = has_conflict_signals(repo, resolved_plan, candidate_files)
             else:
                 eff_pm = cfg_pm
             return {
@@ -581,8 +584,8 @@ def _resolve_effective_execution_mode_unlocked(
                 "task_status": plan_status,
                 "project_default": proj_mode or None,
                 "project_choice": proj_choice or None,
-                "conflict_auto_local_override": False,
-                "conflict_signal": "",
+                "conflict_auto_local_override": p_conf,
+                "conflict_signal": p_conf_sig,
                 "integrity_error": "; ".join(integrity_errors),
                 "updated_at": str(pend_rec.get("updated_at") or ""),
                 "reason": f"Pending single-task choice `{ch}` (`{eff_pm}`) ready to bind to upcoming task.",
@@ -749,6 +752,16 @@ def _restore_web_pack_visibility_on_web_switch(repo: Path, tid: str) -> None:
                 atomic_write_json(t_ptr, ptr_data)
         except (OSError, ValueError, ValidationError):
             pass
+    g_ptr = state_root(repo) / "web-relay" / "latest-pack.json"
+    if g_ptr.is_file():
+        try:
+            g_data = read_json(g_ptr)
+            if isinstance(g_data, dict) and str(g_data.get("task_id") or "") == tid and g_data.get("superseded_by_normal_mode"):
+                g_data.pop("superseded_by_normal_mode", None)
+                g_data.pop("superseded_at", None)
+                atomic_write_json(g_ptr, g_data)
+        except (OSError, ValueError, ValidationError):
+            pass
 
 
 def set_execution_mode(
@@ -845,13 +858,12 @@ def set_execution_mode(
                     bound_tid = live_tid
                     # Remove any prior single-task override so the new project choice governs immediately
                     task_mode_file(repo, live_tid).unlink(missing_ok=True)
-            if bound_tid:
-                if resolved_mode == "normal":
-                    superseded_packs = _supersede_unapplied_web_pack_on_normal_switch(repo, bound_tid)
-                elif resolved_mode == "web":
-                    _restore_web_pack_visibility_on_web_switch(repo, bound_tid)
-
             eff = resolve_effective_execution_mode(repo, task_id=explicit_tid or None)
+            if bound_tid:
+                if eff["mode"] == "normal":
+                    superseded_packs = _supersede_unapplied_web_pack_on_normal_switch(repo, bound_tid)
+                elif eff["mode"] == "web":
+                    _restore_web_pack_visibility_on_web_switch(repo, bound_tid)
             out: dict[str, Any] = {
                 "status": "EXECUTION_MODE_SAVED",
                 "choice": canonical_choice,
@@ -890,13 +902,12 @@ def set_execution_mode(
             atomic_write_json(t_file, t_record)
             pending_task_mode_file(repo).unlink(missing_ok=True)
 
-            superseded_packs = []
-            if resolved_mode == "normal":
-                superseded_packs = _supersede_unapplied_web_pack_on_normal_switch(repo, target_tid)
-            elif resolved_mode == "web":
-                _restore_web_pack_visibility_on_web_switch(repo, target_tid)
-
             eff = resolve_effective_execution_mode(repo, task_id=target_tid)
+            superseded_packs = []
+            if eff["mode"] == "normal":
+                superseded_packs = _supersede_unapplied_web_pack_on_normal_switch(repo, target_tid)
+            elif eff["mode"] == "web":
+                _restore_web_pack_visibility_on_web_switch(repo, target_tid)
             res: dict[str, Any] = {
                 "status": "EXECUTION_MODE_SAVED",
                 "choice": canonical_choice,

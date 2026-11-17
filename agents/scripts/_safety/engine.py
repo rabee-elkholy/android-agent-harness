@@ -113,7 +113,7 @@ KNOWN_MCP_MUTATION_KEYWORDS = (
     "close", "trigger", "resolve", "execute", "destroy", "set_", "add_", "remove_",
 )
 PROTECTED_ROOTS = (
-    ".agents", "agents/scripts", "agents/state", ".harness-setup/ownership-v1.json",
+    ".agents", "agents/scripts", "agents/state", ".harness-setup",
     ".git", ".gradle", ".idea",
 )
 EPHEMERAL_GENERATED_RE = re.compile(
@@ -154,7 +154,7 @@ WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id"}
 
 
 AUDITED_HARNESS_ENTRY = re.compile(
-    r"^\s*(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py)\s+\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode)\.py\s", re.I,
+    r"^\s*(?:\"[^\"]+\"|'[^']+'|\S+)?(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?)\s+(?:-(?:3(?:\.\d+)?|u|B|S|E)\s+)*(?:\"[^\"]*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py\"|'[^']*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py'|\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py)\s", re.I,
 )
 
 
@@ -256,8 +256,20 @@ def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
     return name, args if isinstance(args, dict) else {}
 
 
+_ALL_ENDPOINT_KEYS = (
+    "TargetFile", "targetFile", "Path", "path", "AbsolutePath", "absolutePath",
+    "file_path", "filePath", "source", "source_path", "sourcePath", "old_path", "oldPath",
+    "from", "from_path", "fromPath", "destination", "destination_path", "destinationPath",
+    "new_path", "newPath", "to", "to_path", "toPath", "target_path", "targetPath",
+)
+_PATCH_FILE_HEADER_RE = re.compile(
+    r"^(?:\+\+\+\s+(?:b/)?|---\s+(?:a/)?|\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*|\*\*\*\s+Move\s+to:\s*)(.+)$",
+    re.MULTILINE,
+)
+
+
 def _target(args: dict) -> str:
-    for key in ("TargetFile", "targetFile", "Path", "path", "AbsolutePath", "absolutePath", "file_path", "filePath"):
+    for key in _ALL_ENDPOINT_KEYS:
         if args.get(key):
             return str(args[key]).replace("\\", "/")
     return ""
@@ -265,9 +277,10 @@ def _target(args: dict) -> str:
 
 def _extract_all_targets(args: dict) -> list[str]:
     targets = []
-    single = _target(args)
-    if single:
-        targets.append(single)
+    for key in _ALL_ENDPOINT_KEYS:
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            targets.append(val.strip().replace("\\", "/"))
     for key in ("files", "Files", "paths", "Paths", "targets", "Targets", "edits", "Edits"):
         val = args.get(key)
         if isinstance(val, list):
@@ -275,10 +288,25 @@ def _extract_all_targets(args: dict) -> list[str]:
                 if isinstance(item, str) and item.strip():
                     targets.append(item.replace("\\", "/"))
                 elif isinstance(item, dict):
-                    t = _target(item)
-                    if t:
-                        targets.append(t)
+                    for ek in _ALL_ENDPOINT_KEYS:
+                        ev = item.get(ek)
+                        if isinstance(ev, str) and ev.strip():
+                            targets.append(ev.strip().replace("\\", "/"))
+    for pkey in ("patch", "Patch", "diff", "Diff", "patch_text", "patchText"):
+        pval = args.get(pkey)
+        if isinstance(pval, str) and pval.strip():
+            for m in _PATCH_FILE_HEADER_RE.finditer(pval):
+                cand = m.group(1).strip().split("\t", 1)[0].strip()
+                if cand and cand != "/dev/null":
+                    targets.append(cand.replace("\\", "/"))
     return list(dict.fromkeys(targets))
+
+
+def _resolve_hook_cwd(raw_cwd: Any) -> Path:
+    if not raw_cwd:
+        return REPO.resolve()
+    p = Path(str(raw_cwd)).expanduser()
+    return p.resolve() if p.is_absolute() else (REPO / p).resolve()
 
 
 def _handle_stop() -> None:
@@ -344,7 +372,7 @@ def _main() -> None:
             if reviewer:
                 if name == "run_command":
                     command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-                    cwd = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                    cwd = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                     if cwd != REPO.resolve() or not discovery_command_allowed(command):
                         emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                         return
@@ -398,7 +426,7 @@ def _main() -> None:
                     pass
                 if name == "run_command":
                     cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-                    cwd_p = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                    cwd_p = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                     if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
                         emit(
                             "deny",
@@ -456,7 +484,7 @@ def _main() -> None:
                 if utility_ctx.get("read_only_specialist"):
                     if name == "run_command":
                         cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-                        cwd_p = Path(str(args.get("Cwd") or args.get("cwd") or REPO)).resolve()
+                        cwd_p = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                         if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
                             emit(
                                 "deny",
@@ -531,17 +559,27 @@ def _main() -> None:
                 return
         if name in WRITE_TOOLS:
             targets = _extract_all_targets(args)
+            if name in {"move_file", "rename_file"} and len(targets) < 2:
+                emit(
+                    "deny",
+                    f"{name} must expose both source and destination paths for boundary validation.",
+                    tool=name,
+                    reason_code="PROTECTED_PATH",
+                )
+                return
             if not targets:
                 targets = [""]
             all_safe = True
             all_temp = True
             first_detail = ""
+            resolved_details: list[str] = []
             for t in targets:
                 safe, detail, is_temp = _safe_target(t)
                 if not safe:
                     all_safe = False
                     first_detail = detail
                     break
+                resolved_details.append(str(detail).replace("\\", "/").lower())
                 if not is_temp:
                     all_temp = False
             if not all_safe:
@@ -549,7 +587,7 @@ def _main() -> None:
                 return
             if all_temp:
                 if (utility_ctx is not None or reviewer) and any(
-                    ".agents/state/web-relay/inbox/" in str(t).replace("\\", "/") for t in targets
+                    "/.agents/state/web-relay/inbox/" in ("/" + d.lstrip("/")) for d in resolved_details
                 ):
                     emit(
                         "deny",
@@ -570,7 +608,7 @@ def _main() -> None:
                 emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
-            if allowed and utility_ctx is None and not reviewer:
+            if allowed and not reviewer:
                 w_ok, w_reason, w_code = _check_web_mode_direct_write_guard(
                     REPO, targets, conversation=conversation, transcript_hint=transcript_hint,
                 )

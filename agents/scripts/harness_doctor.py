@@ -1,6 +1,6 @@
 """Android Agent Harness System Diagnostic & Health Check Engine.
 
-Comprehensive 12-Dimension diagnostic suite inspecting every layer of the
+Comprehensive 13-Dimension diagnostic suite inspecting every layer of the
 installed harness: Host & Environment, File Structure, Subagent Roster,
 Product Configuration, Template Leakage, Domain Skills & Workflows, Multi-IDE
 Adapters, Safety Hooks & State Locking, Live Process Streaming, Preflight
@@ -53,7 +53,7 @@ __all__ = [
 def print_report(results: list[CheckResult], already_streamed: bool = False) -> int:
     if not already_streamed:
         print("==================================================", flush=True)
-        print("  Android Agent Harness: 12-Dimension Diagnostic Report", flush=True)
+        print("  Android Agent Harness: 13-Dimension Diagnostic Report", flush=True)
         print("==================================================", flush=True)
 
         current_cat = ""
@@ -85,7 +85,7 @@ def print_report(results: list[CheckResult], already_streamed: bool = False) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Android Agent Harness 12-Dimension Diagnostic Engine")
+    parser = argparse.ArgumentParser(description="Android Agent Harness 13-Dimension Diagnostic Engine")
     parser.add_argument("--repo", default=str(REPO), help="Path to Android project root")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON report")
     parser.add_argument("--device", action="store_true", help="Include connected ADB device diagnostics")

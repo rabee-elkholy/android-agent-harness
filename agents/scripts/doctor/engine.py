@@ -1,4 +1,4 @@
-"""Harness Doctor 12-Dimension diagnostic engine implementation."""
+"""Harness Doctor 13-Dimension diagnostic engine implementation."""
 from __future__ import annotations
 
 import json
@@ -1882,7 +1882,7 @@ class HarnessDoctor:
         except Exception:
             note = ""
         if note:
-            self.log("File Structure", "Update Journal", "FAIL", note, ["See: python .agents/harness.py update-info"])
+            self.log("2. File Structure & Version", "Update Journal", "FAIL", note, ["See: python .agents/harness.py update-info"])
 
     def run_all(self) -> list[CheckResult]:
         if self.live_stream:

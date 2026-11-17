@@ -687,7 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--response", action="append", default=[], metavar="REVIEWER=PATH", help="Ingest an unchanged reviewer response with its evidence footer")
     parser.add_argument("--response-text", action="append", default=[], metavar="REVIEWER=TEXT", help="Ingest an unchanged reviewer response text with its evidence footer")
-    parser.add_argument("--from-subagent", action="append", default=[], metavar="REVIEWER=CONV_ID_OR_PATH", help="Auto-harvest subagent transcript and record review; on Claude Code pass the subagent transcript path (JSONL)")
+    parser.add_argument("--from-subagent", action="append", default=[], metavar="REVIEWER=CONV_ID_OR_PATH", help="Auto-harvest trusted Antigravity subagent transcript and record review")
     parser.add_argument("--subagent-id", default="", help="Subagent conversation ID or execution reference proving independent reviewer run")
     parser.add_argument("--verdict", action="append", default=[], metavar="[REVIEWER=]VERDICT", help="Record a reviewer verdict directly (e.g. bug-test-reviewer-agent=PASS, or PASS with --reviewer)")
     parser.add_argument("--reviewer", help="Reviewer name when recording a single verdict with --verdict")
