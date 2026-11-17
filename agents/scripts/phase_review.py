@@ -44,10 +44,7 @@ from review_orchestrator import (
 )
 from review_policy import canonical_risk_tier, decide
 from review_sources import (
-    find_claude_subagent_transcript,
     has_trusted_review_source,
-    is_claude_transcript,
-    read_claude_subagent_transcript,
     resolve_review_host,
     resolve_trusted_review_source,
 )
@@ -1936,26 +1933,17 @@ def _main(argv: list[str] | None = None) -> int:
         for rev_name, exec_id in zip(revs, exec_ids):
             raw_response, response_source = None, None
             if not args.response_file:
-                if run_file.is_file() and not has_trusted_review_source(run_host):
-                    # Claude Code: the execution id is the subagent's agent id; read its transcript.
-                    found = find_claude_subagent_transcript(exec_id)
-                    if found:
-                        raw_response, response_source = read_claude_subagent_transcript(found)
-                elif run_file.is_file() and has_trusted_review_source(run_host):
+                if run_file.is_file() and has_trusted_review_source(run_host):
                     from record_review import wait_for_live_subagent_transcript
                     wait_for_live_subagent_transcript(run_host, exec_id)
             else:
                 response_path = Path(args.response_file).expanduser()
                 if not response_path.is_file():
                     raise ValidationError(
-                        f"--response-file must be the path of a file holding the unchanged reviewer reply "
-                        f"(on Claude Code, the reviewer's subagent transcript); '{args.response_file}' is not a file"
+                        f"--response-file must be the path of a file holding the unchanged reviewer reply; "
+                        f"'{args.response_file}' is not a file"
                     )
-                if is_claude_transcript(response_path):
-                    # Claude Code: the reviewer's last reply, read unchanged from its subagent transcript.
-                    raw_response, response_source = read_claude_subagent_transcript(response_path)
-                else:
-                    raw_response = response_path.read_text(encoding="utf-8")
+                raw_response = response_path.read_text(encoding="utf-8")
             res = complete_phase_review(
                 repo,
                 args.task_id,

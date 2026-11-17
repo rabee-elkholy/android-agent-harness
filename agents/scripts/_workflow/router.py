@@ -22,8 +22,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
     run_host = _engine.resolve_review_host(repo, host)
     from host_continuation import CONTINUABLE_STATES, load_session
     session = load_session(repo, task_id)
-    actor_id = _engine.os.environ.get("CODEX_THREAD_ID", "").strip() if run_host == "codex" else ""
-    if state in CONTINUABLE_STATES and session and (session["host"] != run_host or (actor_id and session.get("actor_id") and actor_id != session["actor_id"])):
+    if state in CONTINUABLE_STATES and session and session["host"] != run_host:
         return {"code": "CONTINUE_ON_CURRENT_HOST", "kind": "HARNESS_COMMAND", "blocking": True,
                 "command": f"python .agents/harness.py task continue {identity} --host {run_host} --source-stopped --expect-session {session['session_id']}",
                 "reason": "Stop the former executor, then continue the same approved task on this host.",
@@ -33,7 +32,7 @@ def resolve_next_action(repo: Path, task_id: str, plan: dict | None = None, host
     mismatch = review_host_mismatch_action(repo, task_id, plan, run_host, session) if (host or session or detected_current_host()) else None
     if mismatch:
         return mismatch
-    if host is None and session is None and not _engine.os.environ.get("HARNESS_HOST") and not _engine.os.environ.get("HARNESS_HOOK_HOST") and not _engine.os.environ.get("CODEX_THREAD_ID"):
+    if host is None and session is None and not _engine.os.environ.get("HARNESS_HOST"):
         from phase_review import phase_run_file
         for phase in reversed(plan.get("phases") or []):
             run_file = phase_run_file(_engine.task_dir(repo, task_id), str(phase.get("id") or ""))

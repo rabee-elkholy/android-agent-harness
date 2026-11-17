@@ -662,7 +662,7 @@ class HarnessDoctor:
         token_re = re.compile(r"\{\{[A-Z0-9_]+\}\}")
         for path in self.agents_dir.rglob("*"):
             if not path.is_file() or any(
-                x in path.parts for x in {"__pycache__", "state", "tool-adapters", "command-packs"}
+                x in path.parts for x in {"__pycache__", "state", "tool-adapters"}
             ):
                 continue
             try:
@@ -990,13 +990,7 @@ class HarnessDoctor:
             self.log(category, "Root AGENTS.md", "WARN", "Root AGENTS.md missing. Run install_tool_adapters.py.")
 
         known_adapters = [
-            (".cursor/rules/android-harness.mdc", "Cursor"),
-            ("CLAUDE.md", "Claude Code"),
-            (".github/copilot-instructions.md", "GitHub Copilot"),
-            (".windsurf/rules/android-harness.md", "Windsurf"),
             ("GEMINI.md", "Google Antigravity"),
-            ("CODEX.md", "Codex"),
-            ("QWEN.md", "Qwen Code"),
         ]
         found_adapters = [name for rel, name in known_adapters if (self.repo / rel).is_file()]
         if found_adapters:
@@ -1863,6 +1857,22 @@ class HarnessDoctor:
                     )
         except Exception as exc:
             self.log(category, "Windows Go GC & AcceptEx Guard", "WARN", f"Could not inspect Windows Go GC / AcceptEx health: {exc}")
+
+        # 9g. Platform Quirks Registry Status
+        try:
+            from platform_quirks import list_platform_quirks
+            q_rows = list_platform_quirks(repo=self.repo)
+            q_active = sum(1 for r in q_rows if r["enabled"])
+            q_off = [r["id"] for r in q_rows if not r["enabled"]]
+            off_note = f" (disabled: {', '.join(q_off[:5])})" if q_off else ""
+            self.log(
+                category,
+                "Platform Quirks Registry",
+                "PASS",
+                f"{q_active}/{len(q_rows)} isolated Antigravity/Windows quirks active{off_note} (toggle via HARNESS_DISABLE_QUIRKS=<id>).",
+            )
+        except Exception as exc:
+            self.log(category, "Platform Quirks Registry", "WARN", f"Could not load platform_quirks registry: {exc}")
 
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""

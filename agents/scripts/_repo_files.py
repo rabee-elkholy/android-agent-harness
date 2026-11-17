@@ -413,24 +413,8 @@ HARNESS_INTERNAL_EXCLUSIONS = [
 
 def _harness_adapter_exclusions(repo: Path) -> list[str]:
     """Return exact generated adapter paths; never hide a user's whole tool directory."""
-    paths = {
-        "AGENTS.md", "CLAUDE.md", "CODEX.md", "GEMINI.md", "QWEN.md",
-        ".cursorrules", ".clinerules", ".windsurfrules", ".goosehints",
-        ".cursor/rules/android-harness.mdc", ".cursor/mcp.json",
-        ".claude/settings.json", ".github/copilot-instructions.md",
-        ".github/instructions/android-harness.instructions.md",
-        ".github/hooks/android-harness-pre-tool-use.json",
-        ".windsurf/rules/android-harness.md", ".roo/rules/android-harness.md",
-        ".amazonq/rules/android-harness.md", ".continue/rules/android-harness.md",
-        ".junie/guidelines.md", ".kilocode/rules/android-harness.md",
-    }
-    agents_root = repo / ".agents"
-    for template in (agents_root / "command-packs").glob("*.md.template"):
-        name = template.name.removesuffix(".md.template")
-        paths.update((f".claude/commands/{name}.md", f".github/prompts/{name}.prompt.md", f".codex/prompts/{name}.md"))
-    for spec in (agents_root / "subagents").glob("*.json"):
-        paths.add(f".claude/agents/{spec.stem}.md")
-    return sorted(paths)
+    _ = repo
+    return ["AGENTS.md", "GEMINI.md"]
 
 
 STRAY_CLEANUP_MARKERS = ("android-agent-harness", "android agent harness")

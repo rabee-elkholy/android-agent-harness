@@ -7,7 +7,7 @@ or the requirement for independent review proof.
 | Host | Supported choices | Enforcement |
 |---|---|---|
 | **Google Antigravity** (Primary Runtime) | `inherit`, `hydrogen-argon-hybrid`, `hydrogen-dynamic`, `hydrogen-risk-hybrid`, `flash-argon-hybrid`, `risk-hybrid`, `flash-dynamic`, `argon-dynamic`, `hybrid-smart`, `gemini-4-hydrogen-low`, `gemini-4-hydrogen-medium`, `gemini-4-hydrogen-high`, `gemini-4-hydrogen-xhigh` (`extra`), `gemini-4-argon-low`, `gemini-4-argon-medium`, `gemini-4-argon-high`, `carbon-dynamic`, `gemini-4-carbon-low`, `gemini-4-carbon-medium`, `gemini-4-carbon-high`, `gemini-3.8-flash-fast`, `gemini-3.8-flash-low`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `gemini-3.1-pro-low`, `gemini-3.1-pro-high` (or `<model>@<fast\|low\|medium\|high\|xhigh\|extra\|hybrid\|dynamic>`) | Synced into `.agents/agents/<role>/agent.md` YAML frontmatter (`model:`); `invoke_subagent` omits `Model` for `hydrogen`/`argon`/`carbon`/`inherit` (passing `Model="flash"` only for legacy `gemini-3.8-flash-*`); native SQLite metadata verified |
-| Legacy / Compatibility Adapters (Claude Code, etc.) | `inherit` (`sonnet`, `opus`, `haiku` on Claude Code) | Host-managed or rule-enforced native Agent/Task model argument |
+| **Standard `AGENTS.md` CLI Fallback** (`generic`) | `inherit` | Inherits active CLI host model (`RULE_ENFORCED`) |
 
 ## Antigravity pre-review interactive choices (`SELECT_REVIEW_MODEL`)
 
@@ -40,21 +40,6 @@ Or configure per-reviewer overrides and thinking levels (`low`, `medium`, `high`
 
 ```bash
 python .agents/harness.py review models set --host antigravity --task-id <id> --default hydrogen@medium --reviewer security-perf-reviewer-agent=argon@low --scope task --source conversation --proof-reference "Use Hydrogen Medium by default and Argon Low for security"
-```
-
-## Claude Code configuration
-
-During Claude-only setup, choose a common alias or `custom` for a complete policy:
-
-```json
-{"schema_version":1,"default":"sonnet","overrides":{"security-perf-reviewer-agent":"opus"}}
-```
-
-After setup, inspect support and record a developer-requested project choice:
-
-```bash
-python .agents/harness.py review models show --host claude
-python .agents/harness.py review models set --host claude --default sonnet --reviewer security-perf-reviewer-agent=opus --source conversation --proof-reference "Use Sonnet for reviewers and Opus for security"
 ```
 
 Precedence: run-scoped decision (`--scope run`, bound to current `run_id`), task decision (`--scope task`), project decision, setup answer, inheritance.

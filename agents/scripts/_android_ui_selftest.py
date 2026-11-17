@@ -103,7 +103,7 @@ class AndroidUiTests(unittest.TestCase):
             invoke.assert_not_called()
 
     def test_non_antigravity_and_unapproved_states_rejected(self):
-        with patch("review_sources.resolve_review_host", return_value="codex"), self.assertRaisesRegex(ValidationError, "UNSUPPORTED"):
+        with patch("review_sources.resolve_review_host", return_value="generic"), self.assertRaisesRegex(ValidationError, "UNSUPPORTED"):
             ui.authorize(self.repo, "render")
         with patch("review_sources.resolve_review_host", return_value="antigravity"), \
              patch("mutation_guard.active_plan", return_value={"status": "AWAITING_DEVELOPER_APPROVAL"}), \

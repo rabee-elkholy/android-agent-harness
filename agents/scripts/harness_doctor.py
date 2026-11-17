@@ -91,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", action="store_true", help="Include connected ADB device diagnostics")
     parser.add_argument("--no-selftest", action="store_true", help="Skip re-running full hook selftest suite")
     parser.add_argument("--install-check", action="store_true", help="Run a fast post-install structural check")
+    parser.add_argument("--quirks", action="store_true", help="List isolated Antigravity/Windows platform quirks and their active/disabled status")
     parser.add_argument("--inspect-file", help="Inspect one exact engine Python file relative to the engine root")
     parser.add_argument("--inspection-reason", choices=("unexpected_failure", "contract_violation", "doctor_issue", "developer_request"))
     parser.add_argument("--reference", help="Concrete failed-command/Doctor output or developer request for inspection")
@@ -99,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_path = Path(args.repo).resolve()
+    if args.quirks:
+        from platform_quirks import main as quirks_main
+        q_argv = ["--repo", str(repo_path)] + (["--json"] if args.json else [])
+        return quirks_main(q_argv)
     if args.inspect_file:
         if not args.inspection_reason or not str(args.reference or "").strip():
             parser.error("engine inspection needs --inspection-reason and --reference; ordinary gate FAIL is not permission to browse the engine")

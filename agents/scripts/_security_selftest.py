@@ -14,8 +14,6 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 ENGINE = SCRIPTS / "pre_tool_safety.py"
-CLAUDE = SCRIPTS / "cc_pre_tool_safety.py"
-COPILOT = SCRIPTS / "copilot_pre_tool_safety.py"
 
 
 class SecurityTests(unittest.TestCase):
@@ -128,152 +126,6 @@ class SecurityTests(unittest.TestCase):
                         write_gate_result("preflight", {"status": "FAIL"}, results_dir_override=state / "results")
                 self.assertFalse((state / "results/preflight.json").exists())
 
-    def test_claude_bridge_denies(self):
-        proc = subprocess.run(
-            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
-            capture_output=True, text=True, env=self.env, check=False, timeout=15,
-        )
-        result = json.loads(proc.stdout)["hookSpecificOutput"]
-        self.assertEqual("deny", result["permissionDecision"])
-
-    def claude_bridge(self, command: str) -> dict:
-        proc = subprocess.run(
-            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
-            capture_output=True, text=True, env=self.env, check=False, timeout=15,
-        )
-        return json.loads(proc.stdout)["hookSpecificOutput"]
-
-    def claude_tool(self, tool_name: str, tool_input: dict) -> dict:
-        proc = subprocess.run(
-            [sys.executable, str(CLAUDE)], input=json.dumps({"tool_name": tool_name, "tool_input": tool_input}),
-            capture_output=True, text=True, env=self.env, check=False, timeout=15,
-        )
-        return json.loads(proc.stdout)["hookSpecificOutput"]
-
-    def test_claude_bridge_guards_file_edits(self):
-        # DEFECT-CLAUDE-EDIT-01 (round 5): only Bash reached the engine, so Edit/Write were never
-        # checked against the approved plan on Claude Code.
-        self._reset_active_task()
-        target = str(self.repo / "app/src/main/kotlin/A.kt")
-        for tool, tool_input in (
-            ("Edit", {"file_path": target, "old_string": "a", "new_string": "b"}),
-            ("Write", {"file_path": target, "content": "class A"}),
-            ("MultiEdit", {"file_path": target, "edits": []}),
-            ("NotebookEdit", {"notebook_path": str(self.repo / "n.ipynb"), "new_source": "x"}),
-        ):
-            with self.subTest(tool=tool):
-                self.assertEqual("deny", self.claude_tool(tool, tool_input)["permissionDecision"])
-        self.assertEqual("allow", self.claude_tool("Read", {"file_path": target})["permissionDecision"])
-
-    def test_claude_settings_hook_covers_edit_tools_and_widens_old_installs(self):
-        from install_tool_adapters import ensure_cc_hooks
-        ensure_cc_hooks(self.repo, "python", dry_run=False)
-        settings = self.repo / ".claude/settings.json"
-        group = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"][0]
-        for tool in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"):
-            self.assertIn(tool, group["matcher"].split("|"))
-        group["matcher"] = "Bash"
-        settings.write_text(json.dumps({"hooks": {"PreToolUse": [group]}}), encoding="utf-8")
-        ensure_cc_hooks(self.repo, "python", dry_run=False)
-        widened = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
-        self.assertEqual(1, len(widened))
-        self.assertIn("Edit", widened[0]["matcher"].split("|"))
-
-    def test_claude_bridge_requires_its_own_review_host(self):
-        # DEFECT-HOST-01 (round 5): a Claude Code install could never prepare verification,
-        # because the engine demanded --host antigravity from every host.
-        prepare = "python .agents/harness.py task prepare-verification --repo . --task-id t"
-        denied = self.claude_bridge(f"{prepare} --host antigravity")
-        self.assertEqual("deny", denied["permissionDecision"])
-        self.assertIn("--host claude", denied["permissionDecisionReason"])
-        self.assertEqual("deny", self.claude_bridge(prepare)["permissionDecision"])
-        self.assertNotIn("REVIEW_HOST_REQUIRED", self.claude_bridge(f"{prepare} --host claude")["permissionDecisionReason"])
-        # Antigravity, which calls the engine without a host marker, is unchanged.
-        engine = self.engine(f"{prepare} --host claude")
-        self.assertEqual("deny", engine["decision"])
-        self.assertIn("--host antigravity", engine["reason"])
-
-    def test_C_D3_claude_single_quoted_text_is_not_a_shell_operator(self):
-        # Certification C-D3: a reviewer reply in single quotes was denied for its backticks, `|`
-        # and `<`, although bash treats them as literal text there.
-        record = f"python {SCRIPTS / 'record_review.py'} --task t --response-text"
-        quoted = f"{record} 'bug-test-reviewer-agent=Checked `run()` | callers < 3 > 2 & $HOME'"
-        self.assertEqual("allow", self.claude_bridge(quoted)["permissionDecision"])
-        for command in (
-            f'{record} "bug-test-reviewer-agent=$(touch owned)"',
-            f'{record} "bug-test-reviewer-agent=`touch owned`"',
-            f"{record} 'bug-test-reviewer-agent=x' | tee owned",
-            f"{record} 'bug-test-reviewer-agent=x' > owned",
-            f"{record} bug-test-reviewer-agent=x`touch owned`",
-            f"{record} 'unterminated",
-        ):
-            with self.subTest(command=command):
-                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"])
-        # Single-quoted text is literal in PowerShell too, so since O7 Antigravity reads it the same way;
-        # the operators outside the quotes above stay denied there.
-        self.assertEqual("allow", self.engine(quoted)["decision"])
-        self.assertEqual("deny", self.engine(f"{record} 'bug-test-reviewer-agent=x' | tee owned")["decision"])
-
-    def test_C5_claude_bounded_shell_ergonomics(self):
-        # Claude habitually writes `cd <repo> && ...`, `2>&1` and `| tail -20`; each denial cost a retry.
-        # Only the exact repository root, stderr merge and read-only filters are accepted.
-        repo = str(self.repo)
-        record = f"python {SCRIPTS / 'record_review.py'} --task t --status"
-        allowed = (
-            "git status 2>&1 | tail -5",
-            f"cd {repo} && git log --oneline -3 | head -2",
-            f"cd {repo} && {record} 2>&1 | grep -i staged",
-            "git diff --stat | rg -n 'app/'",
-            "git log --oneline | grep 'fix | refactor'",
-        )
-        for command in allowed:
-            with self.subTest(command=command):
-                self.assertEqual("allow", self.claude_bridge(command)["permissionDecision"], command)
-        denied = (
-            "cd /tmp && git status",
-            f"cd {repo}/app && git status",
-            "git status | xargs rm -rf app",
-            "git status | tail -5 > out.txt",
-            "git status | sh",
-            "git status 2>out.txt",
-            "git status 2>&1 >out.txt",
-            "git status | grep x $(touch owned)",
-            "git status | rg --pre cat x",
-            f"cd {repo} && touch owned",
-        )
-        for command in denied:
-            with self.subTest(command=command):
-                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"], command)
-        # Antigravity keeps its character check.
-        self.assertEqual("deny", self.engine("git status 2>&1 | tail -5")["decision"])
-        self.assertEqual("deny", self.engine(f"cd {repo} && git status")["decision"])
-
-    def test_N10_claude_double_quoted_operators_are_text(self):
-        # Certification N10 (T3, T5): `|`, `>` and `^` inside double quotes were read as shell operators,
-        # so `grep -E "13[5-9]|140"` and a draft outcome saying "search->discover" were denied. In bash
-        # only `$` and backticks expand inside double quotes; those stay denied.
-        record = f"python {SCRIPTS / 'record_review.py'} --task t --status"
-        allowed = (
-            'git log --oneline | grep -E "fix|refactor"',
-            'git log --oneline | grep -n "^Merge" | head -5',
-            f'{record} "search->discover < 3 & more"',
-        )
-        for command in allowed:
-            with self.subTest(command=command):
-                self.assertEqual("allow", self.claude_bridge(command)["permissionDecision"], command)
-        denied = (
-            f'{record} "x$(touch owned)"',
-            f'{record} "x`touch owned`"',
-            f'{record} "a|b" > owned',
-            'git log | grep "a" | sh',
-            f'{record} "unterminated',
-        )
-        for command in denied:
-            with self.subTest(command=command):
-                self.assertEqual("deny", self.claude_bridge(command)["permissionDecision"], command)
-        # Antigravity keeps its character check.
-        self.assertEqual("deny", self.engine('git log --oneline | grep -E "fix|refactor"')["decision"])
-
     def test_O7_antigravity_quoted_operators_are_text_in_every_shell(self):
         # Certification O7 (Antigravity round): `Select-String -Pattern "a|b"`, a `<receiver` search and a
         # revise outcome saying "db < 19" were denied as pipes/redirections. Quoted text is literal in
@@ -300,11 +152,6 @@ class SecurityTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual("deny", self.engine(command)["decision"], command)
 
-    def test_copilot_bridge_denies_and_malformed_fails_closed(self):
-        proc = subprocess.run(
-            [sys.executable, str(COPILOT)], input=json.dumps({"toolName": "bash", "toolArgs": {"command": "adb root"}}),
-            capture_output=True, text=True, env=self.env, check=False, timeout=15,
-        )
     def test_raw_gradle_commands_are_denied(self):
         for command in ("gradle assembleDebug", "gradle.bat assembleDebug", "./gradlew assembleDebug", "gradlew test"):
             with self.subTest(command=command):
@@ -2500,8 +2347,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
     def test_REASON_INSTALL_001_questions_payload_has_no_review_model_policy(self):
         from wizard import questions
         qs = questions.questions_payload(self.repo, "en")
-        q = next(q for q in qs if q.get("id") == "review_model_policy")
-        self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
+        self.assertFalse(any(q.get("id") == "review_model_policy" for q in qs))
 
     def test_REASON_INSTALL_002_questions_payload_streamlines_budget_and_merges_i10_into_i22(self):
         from wizard import questions
@@ -2509,7 +2355,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         self.assertFalse(any(q.get("id") == "review_call_budget" for q in qs))
         self.assertFalse(any(q.get("id") == "i10" for q in qs))
         i14 = next(q for q in qs if q.get("id") == "i14")
-        self.assertIn("claude", [opt["id"] for opt in i14["options"]])
+        self.assertEqual(["antigravity", "gemini", "generic"], [opt["id"] for opt in i14["options"]])
         i22 = next(q for q in qs if q.get("id") == "i22")
         self.assertEqual(["manual_only", "manual_auto", "disabled"], [opt["id"] for opt in i22["options"]])
 

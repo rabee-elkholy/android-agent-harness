@@ -27,40 +27,16 @@ SKIP_DIRS = {
 
 TOOL_IDS = (
     "antigravity",
-    "cursor",
-    "claude",
-    "copilot",
     "gemini",
-    "codex",
-    "qwen",
-    "windsurf",
-    "cline",
-    "roo",
-    "amazonq",
-    "continue",
-    "junie",
-    "kilo",
-    "goose",
+    "generic",
 )
 
 TOOL_LABELS = {
     "en": {
         "antigravity": "Google Antigravity",
-        "cursor": "Cursor",
-        "claude": "Claude Code",
-        "copilot": "GitHub Copilot",
         "gemini": "Gemini CLI",
-        "codex": "Codex",
-        "qwen": "Qwen Code",
-        "windsurf": "Windsurf",
-        "cline": "Cline",
-        "roo": "Roo",
-        "amazonq": "Amazon Q",
-        "continue": "Continue",
-        "junie": "Junie",
-        "kilo": "Kilo",
-        "goose": "Goose",
-        "all": "All of them",
+        "generic": "Standard AGENTS.md Only",
+        "all": "Google Antigravity + Standard AGENTS.md",
     },
 }
 
@@ -149,8 +125,7 @@ T = {
         "i13_tests": "Tests only (selftest + preflight) (Recommended)",
         "i13_asm": "Yes, run :assembleDebug at the end",
         "i14": (
-            "Which programs do you open this project in? Select every one you use. "
-            "If you use Cursor, you must select Cursor so its rules get written."
+            "Which AI host should manage this project? Google Antigravity installs native PreToolUse/PostToolUse hooks and V2 subagents."
         ),
         "i16": (
             "Does this project use Zoho Sprints? The helper can list and update sprint items. "
@@ -189,7 +164,6 @@ T = {
         "review_call_budget": (
             "Maximum reviewer calls shared by all phases and final review of one task before developer intervention?"
         ),
-        "review_models": "Choose the reviewer model for Claude Code. Native aliases depend on your account; no fallback is applied.",
         "review_call_budget_20": (
             "20 — Review-heavy / large critical work (Recommended)"
         ),
@@ -272,7 +246,6 @@ T = {
         "need_repo": "Need --repo pointing at an Android checkout with gradlew.",
     },
     "ar": {
-        "review_models": "اختر موديل المراجعين في Claude Code. توفر الموديل يعتمد على حسابك، ولن يُستبدل تلقائياً بموديل آخر.",
         "pref_arch_family": "ما هي المعمارية المفضلة للشاشات والميزات الجديدة (NEW)؟",
         "pref_arch_family_none": "لا شيء / التحديد لاحقاً",
         "update_context_mode": "كيف ترغب في التعامل مع سياق المشروع (Project Context) أثناء هذا التحديث؟",

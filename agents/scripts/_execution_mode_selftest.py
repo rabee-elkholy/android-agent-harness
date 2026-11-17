@@ -205,14 +205,13 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", reason)
 
-        # Edge Case 9a: Non-Antigravity host (`claude`) and synthetic non-transcript CLI calls are NOT blocked
-        res_claude = _run_pre_tool_hook(
+        # Edge Case 9a: Synthetic non-transcript CLI calls (empty conversationId) are NOT blocked
+        res_non_tx = _run_pre_tool_hook(
             repo,
-            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": "python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt"}},
+            {"conversationId": "", "toolName": "run_command", "toolArgs": {"CommandLine": "python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt"}},
             brain_root=brain,
-            extra_env={"HARNESS_HOOK_HOST": "claude"},
         )
-        self.assertEqual((res_claude.get("hookSpecificOutput") or {}).get("permissionDecision") or res_claude.get("decision"), "allow")
+        self.assertEqual((res_non_tx.get("hookSpecificOutput") or {}).get("permissionDecision") or res_non_tx.get("decision"), "allow")
 
         # Authority enforcement: `execution-mode set` without `--source conversation` / `--proof-reference` is denied
         res_unauth = _run_pre_tool_hook(

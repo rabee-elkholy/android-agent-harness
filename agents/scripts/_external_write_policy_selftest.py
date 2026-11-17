@@ -18,8 +18,6 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 ENGINE = SCRIPTS / "pre_tool_safety.py"
-CC_BRIDGE = SCRIPTS / "cc_pre_tool_safety.py"
-COPILOT_BRIDGE = SCRIPTS / "copilot_pre_tool_safety.py"
 
 GDRIVE_CMD = r'& "C:\Users\dev\.gemini\config\plugins\gdrive\skills\gdrive\scripts\gdrive.cmd"'
 
@@ -186,22 +184,6 @@ class ExternalWritePolicyTests(unittest.TestCase):
     def test_zoho_keeps_its_update_zoho_rule(self) -> None:
         out = self.mcp("zoho-sprints", "zoho_update_task_status", {"item_id": "1", "status": "In progress"})
         self.assertEqual("deny", out["decision"])
-
-    # --- Host bridges -----------------------------------------------------------------------------
-
-    def test_claude_bridge_turns_prompts_into_claude_ask(self) -> None:
-        env = {**self.env}
-        payload = {"tool_name": "Bash", "tool_input": {"command": "gdrive mutate upload notes.md"}}
-        out = self._run(CC_BRIDGE, payload, env)["hookSpecificOutput"]
-        self.assertEqual("ask", out["permissionDecision"])
-        payload = {"tool_name": "Bash", "tool_input": {"command": "gdrive mutate trash FILE1"}}
-        self.assertEqual("ask", self._run(CC_BRIDGE, payload, env)["hookSpecificOutput"]["permissionDecision"])
-
-    def test_copilot_bridge_denies_prompts_it_cannot_show(self) -> None:
-        payload = {"toolName": "bash", "toolArgs": {"command": "gdrive mutate upload notes.md"}}
-        out = self._run(COPILOT_BRIDGE, payload)
-        self.assertEqual("deny", out["permissionDecision"])
-        self.assertIn("confirmation", out["permissionDecisionReason"])
 
     # --- Classifier units -------------------------------------------------------------------------
 

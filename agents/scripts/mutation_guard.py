@@ -845,37 +845,8 @@ def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[
     return f"{missing_text} Revise the plan in one command: {command}"
 
 
-def join_continuations(command: str) -> str:
-    """Replace backslash-newline outside quotes with a space, as a POSIX shell does.
-
-    Agents wrap long harness commands over several lines; each line is not a separate command.
-    """
-    out, quote, i = [], "", 0
-    while i < len(command):
-        ch = command[i]
-        if quote:
-            if ch == quote:
-                quote = ""
-        elif ch in "\"'":
-            quote = ch
-        elif ch == "\\" and command.startswith(("\\\n", "\\\r\n"), i):
-            out.append(" ")
-            i += 3 if command[i + 1] == "\r" else 2
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
 def _split_segments(command: str) -> list[str] | None:
-    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote.
-
-    On the Claude bridge (Bash), backslash-newline outside quotes is a line continuation. Other
-    hosts may run PowerShell or cmd, where a trailing backslash ends a Windows path, so every
-    newline stays a command boundary there.
-    """
-    if _posix_shell_host():
-        command = join_continuations(command)
+    """Split on &&, ||, ; and newlines outside quotes; None for an unterminated quote."""
     segments, current, quote, i = [], [], "", 0
     while i < len(command):
         ch = command[i]
@@ -1085,64 +1056,6 @@ def _strip_adb_logcat_pipes(command: str, repo: Path | str = ".") -> str | None:
     return "; ".join(cleaned) if saw_pipe else None
 
 
-READ_ONLY_FILTERS = {"head", "tail", "grep", "rg"}
-
-
-def _is_read_only_filter(stage: str) -> bool:
-    import shlex
-    visible = _without_single_quoted_text(stage)
-    if visible is None or SHELL_LAUNDERING.search(visible) or re.search(r"[;&\n]", visible):
-        return False
-    try:
-        tokens = shlex.split(stage, posix=True)
-    except ValueError:
-        return False
-    if not tokens or tokens[0] not in READ_ONLY_FILTERS:
-        return False
-    return not any(token.startswith(("--pre", "--hostname-bin")) for token in tokens[1:])
-
-
-def _claude_shell_core(repo: Path | str, command: str) -> str | None:
-    """Strip the bounded Bash conveniences Claude writes around a harness command.
-
-    Accepted only on the Claude bridge: a leading `cd <repository root> &&`, `2>&1`, and trailing
-    pipes into read-only filters (head, tail, grep, rg). Returns the core command to check, or None
-    when anything else is present, so the ordinary checks deny it.
-    """
-    mask = _quote_mask(command)
-    if mask is None:
-        return None
-    # Trailing pipes into read-only filters.
-    cuts = [m.start() for m in re.finditer(r"(?<!\|)\|(?!\|)", mask)]
-    core = command
-    if cuts:
-        stages = [command[start + 1:end] for start, end in zip(cuts, cuts[1:] + [len(command)])]
-        if not all(_is_read_only_filter(stage.strip()) for stage in stages):
-            return None
-        core, mask = command[:cuts[0]], mask[:cuts[0]]
-    # Stderr merged into stdout changes no file.
-    for match in reversed(list(re.finditer(r"(?:(?<=\s)|^)2>&1(?=\s|$)", mask))):
-        core, mask = core[:match.start()] + core[match.end():], mask[:match.start()] + mask[match.end():]
-    # `cd` to the repository root only.
-    lead = re.match(r"\s*cd\s+(\S+)\s*&&", mask)
-    if lead:
-        target = core[lead.start(1):lead.end(1)].strip("'\"")
-        try:
-            same = Path(os.path.expanduser(target)).resolve() == Path(repo).resolve()
-        except OSError:
-            same = False
-        if not same:
-            return None
-        core = core[lead.end():]
-    return core.strip()
-
-
-def _posix_shell_host() -> bool:
-    # Claude Code runs Bash on every platform; its bridge marks the host. Antigravity calls the
-    # engine without a marker and may run PowerShell or cmd, so it keeps the character check.
-    return os.environ.get("HARNESS_HOOK_HOST", "").strip().lower() == "claude"
-
-
 # Router-issued Zoho lifecycle commands and the plan states they belong to (None: read-only, any state).
 ZOHO_LIFECYCLE_STATES = {
     "start": {"APPROVED", "IMPLEMENTING"},
@@ -1204,16 +1117,10 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     normalized = str(command or "").strip()
     if not normalized:
         return True, "empty command"
-    if _posix_shell_host():
-        core = _claude_shell_core(repo, normalized)
-        if core and core != normalized:
-            return command_allowed(repo, core)
     adb_core = _strip_adb_logcat_pipes(normalized, repo)
     if adb_core and adb_core != normalized:
         return command_allowed(repo, adb_core)
-    operator_text = (
-        _without_single_quoted_text(normalized) if _posix_shell_host() else _operator_text_any_shell(normalized)
-    )
+    operator_text = _operator_text_any_shell(normalized)
     if operator_text is None:
         return False, "unterminated quote in command"
     if GIT_RANGE_READ.match(normalized) and not re.search(r"[;&|\n]", operator_text):

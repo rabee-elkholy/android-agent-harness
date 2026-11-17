@@ -55,11 +55,8 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
     ]
     tool_opts = [
         {"id": "antigravity", "label": f"{labels['antigravity']} (Recommended)"},
-        {"id": "claude", "label": labels["claude"]},
-        {"id": "cursor", "label": labels["cursor"]},
-        {"id": "codex", "label": labels["codex"]},
         {"id": "gemini", "label": labels["gemini"]},
-        {"id": "all", "label": labels["all"]},
+        {"id": "generic", "label": labels["generic"]},
     ]
     qs.append(
         {
@@ -536,17 +533,7 @@ def questions_payload(repo: Path, lang: str, facts: dict | None = None) -> list[
         }
     )
 
-    # --- Station 5: Host Reviewer Models (Claude Code) ---
     # Reviewer Call Safety Cap: review_call_budget defaults automatically to 20 in normalize() (configurable via answers.json).
-    qs.append({
-        "id": "review_model_policy", "station": 5, "station_title": "Reviewer Models",
-        "required": False, "allow_multiple": False,
-        "depends_on": {"id": "i14", "equals": ["claude"]},
-        "prompt": t(lang, "review_models"),
-        "options": [{"id": model, "label": model} for model in ("inherit", "sonnet", "opus", "haiku", "custom")],
-        "conditional_text_input": {"when_option": "custom", "answer_key": "review_model_policy_text",
-                                   "prompt": 'Enter policy JSON: {"schema_version":1,"default":"sonnet","overrides":{"security-perf-reviewer-agent":"opus"}}', "required": True},
-    })
     return _reorder_with_previous_answers(qs, repo, lang, d)
 
 

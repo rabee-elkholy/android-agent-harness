@@ -1,10 +1,11 @@
 # Continue a task across AI hosts
 
-An approved task belongs to its repository/worktree, not to one chat provider.
-Use the same checkout when moving between Codex, Antigravity, or another supported
-host. Stop the former chat's execution before the receiving chat takes over.
-No commit, branch switch, new task, or repeat plan approval is required merely
-because the executor changed. Scope changes still follow normal revision rules.
+An approved task belongs to its repository/worktree, not to one chat session.
+Use the same checkout when moving between Antigravity sessions or a standard
+`AGENTS.md` CLI fallback (`generic`). Stop the former chat's execution before the
+receiving chat takes over. No commit, branch switch, new task, or repeat plan
+approval is required merely because the executor changed. Scope changes still
+follow normal revision rules.
 
 In the receiving chat, the agent runs:
 
@@ -15,12 +16,12 @@ python .agents/harness.py task continue --task-id <task-id> --host <actual-host>
 
 Use the exact `--expect-session` value when the router supplies it. This rejects a
 takeover based on an old observation. Repeating continuation on the same host and
-session is idempotent. For example, replace `<actual-host>` with `codex` or
-`antigravity`; never declare the preferred host instead of the host executing the
-command. Codex's process-local thread identity is detected automatically. Native
-hook adapters identify their hook host; other launchers can declare `HARNESS_HOST`.
-When no current host is available, the active continuation or project preference
-is only a routing fallback, not independently verified host identity.
+session is idempotent. For example, replace `<actual-host>` with `antigravity` or
+`generic`; never declare the preferred host instead of the host executing the
+command. Native hook execution sets `HARNESS_HOST=antigravity`; external CLI
+launchers can declare `HARNESS_HOST=generic`. When no current host is available,
+the active continuation or project preference is only a routing fallback, not
+independently verified host identity.
 
 The returned brief links the original plan, notes and developer instructions and
 reports current phase, completed phases, recorded review spending, pending finding

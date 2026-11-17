@@ -897,6 +897,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         cli_args.append("--device")
     if getattr(args, "install_check", False):
         cli_args.append("--install-check")
+    if getattr(args, "quirks", False):
+        cli_args.append("--quirks")
     for name in ("inspect_file", "inspection_reason", "reference", "inspect_start_line", "inspect_lines"):
         value = getattr(args, name, None)
         if value is not None:
@@ -1209,6 +1211,7 @@ SELFTEST_SHARDS = {
     "_ecosystem_upgrades_selftest.py": 5,
     "_vnext_selftest.py": 4,
     "_phase_review_v2_selftest.py": 4,
+    "_web_relay_selftest.py": 4,
     "_worktree_handoff_selftest.py": 2,
     "_stabilization_v41_selftest.py": 2,
     "_android_scenarios_selftest.py": 2,
@@ -1223,12 +1226,12 @@ SELFTEST_EXPECTED_SECONDS = {
     "_antigravity_stability_selftest.py": 2000,
     "_ecosystem_upgrades_selftest.py": 1400,
     "_vnext_selftest.py": 455,
+    "_web_relay_selftest.py": 440,
     "_phase_review_v2_selftest.py": 380,
     "_task_isolation_selftest.py": 205,
     "_host_continuation_selftest.py": 200,
     "_worktree_handoff_selftest.py": 160,
     "_review_models_selftest.py": 150,
-    "_web_relay_selftest.py": 140,
     "_stabilization_v41_selftest.py": 140,
     "_verification_value_selftest.py": 130,
     "_android_scenarios_selftest.py": 125,
@@ -1256,9 +1259,6 @@ def _selftest_env() -> dict[str, str]:
     """Suite environment. Update checks never touch the network in suites. HARNESS_SELFTEST_TMP points
     temporary fixtures at a dedicated directory (for example one excluded from antivirus scanning)."""
     env = dict(os.environ)
-    # Fixtures choose their own hosts; the maintainer's Codex session is not
-    # the executor of each simulated client task.
-    env.pop("CODEX_THREAD_ID", None)
     env.pop("HARNESS_HOST", None)
     env["HARNESS_UPDATE_CHECK"] = "off"
     root = env.get("HARNESS_SELFTEST_TMP", "").strip()
@@ -1334,6 +1334,169 @@ def _run_suite(runner_code: str, capture: bool, env: dict[str, str]):
     return subprocess.run([sys.executable, "-c", runner_code], **kwargs)
 
 
+def _resolve_changed_paths_for_selftest(kit: Path, base_ref: str = "") -> list[str]:
+    changed: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw_p: str) -> None:
+        norm = raw_p.strip().strip('"').replace("\\", "/")
+        if " -> " in norm:
+            norm = norm.split(" -> ", 1)[1].strip().strip('"')
+        if norm and norm not in seen:
+            seen.add(norm)
+            changed.append(norm)
+
+    if base_ref:
+        diff_out = _git_output(kit, "-c", "core.quotepath=false", "diff", "--name-only", f"{base_ref}...HEAD")
+        for ln in diff_out.splitlines():
+            _add(ln)
+    porcelain = _git_output(kit, "-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=normal")
+    for ln in porcelain.splitlines():
+        if len(ln) > 3:
+            _add(ln[3:])
+    if not changed and not base_ref:
+        head_diff = _git_output(kit, "-c", "core.quotepath=false", "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")
+        for ln in head_diff.splitlines():
+            _add(ln)
+    return changed
+
+
+def resolve_affected_selftest_suites(kit: Path, changed_paths: list[str]) -> tuple[str, ...]:
+    """Map modified kit files via AST reverse-imports & filename references to affected FULL_SELFTEST_SUITES."""
+    import ast
+
+    meaningful = [
+        p for p in changed_paths
+        if p not in {"CHANGELOG.md", "CITATION.cff", "agents/release_checksums.json"}
+    ]
+    if not meaningful:
+        return ()
+
+    core_broad_triggers = {
+        "harness_cli.py",
+        "agents/harness.py",
+        "agents/scripts/_vnext_common.py",
+        "agents/scripts/policy_vocab.py",
+    }
+    matched: set[str] = set()
+    if any(p in core_broad_triggers for p in meaningful):
+        matched.update(QUICK_SELFTEST_SUITES)
+        matched.add("_public_cli_selftest.py")
+
+    if any(
+        p in {"README.md", "SECURITY.md", "pyproject.toml", "agents/VERSION"}
+        or p.startswith(("scripts_dev/", "docs/", ".github/"))
+        for p in meaningful
+    ):
+        matched.add("_release_safety_selftest.py")
+
+    sroot = _script_root(kit)
+    all_py = sorted(sroot.rglob("*.py"))
+    mod_to_rel: dict[str, str] = {}
+    for py_p in all_py:
+        rel_s = py_p.relative_to(sroot).as_posix()
+        dotted = rel_s[:-3].replace("/", ".")
+        if dotted.endswith(".__init__"):
+            dotted = dotted[:-9]
+        mod_to_rel[dotted] = rel_s
+        if "/" not in rel_s:
+            mod_to_rel[py_p.stem] = rel_s
+
+    rev_deps: dict[str, set[str]] = {}
+    suite_texts: dict[str, str] = {}
+    py_script_mentions = [Path(f).name for f in mod_to_rel.values() if f.endswith(".py")]
+
+    for py_p in all_py:
+        rel_s = py_p.relative_to(sroot).as_posix()
+        try:
+            src = py_p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if rel_s in FULL_SELFTEST_SUITES:
+            suite_texts[rel_s] = src
+        deps: set[str] = set()
+        try:
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for al in node.names:
+                        for cand in (al.name, al.name.split(".")[0]):
+                            if cand in mod_to_rel:
+                                deps.add(mod_to_rel[cand])
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    for cand in (node.module, node.module.split(".")[0]):
+                        if cand in mod_to_rel:
+                            deps.add(mod_to_rel[cand])
+                    for al in node.names:
+                        sub_cand = f"{node.module}.{al.name}"
+                        if sub_cand in mod_to_rel:
+                            deps.add(mod_to_rel[sub_cand])
+        except SyntaxError:
+            pass
+        if rel_s in FULL_SELFTEST_SUITES:
+            for fname in py_script_mentions:
+                if fname != py_p.name and fname in src:
+                    deps.add(fname)
+        for dep in deps:
+            if dep != rel_s:
+                rev_deps.setdefault(dep, set()).add(rel_s)
+
+    hub_catalogs = {"doctor/models.py", "_public_commands.py"}
+    frontier: list[tuple[str, int]] = []
+    non_py_basenames: list[str] = []
+    for ch in meaningful:
+        if ch.startswith("agents/scripts/"):
+            sub_rel = ch[len("agents/scripts/"):]
+            if sub_rel in FULL_SELFTEST_SUITES:
+                matched.add(sub_rel)
+            frontier.append((sub_rel, 0))
+            if "/" in sub_rel:
+                pkg_init = sub_rel.split("/", 1)[0] + "/__init__.py"
+                frontier.append((pkg_init, 0))
+                frontier.append((sub_rel.split("/", 1)[0] + ".py", 0))
+        else:
+            bname = Path(ch).name
+            if bname:
+                non_py_basenames.append(bname)
+            if ch.startswith(("agents/subagents/", "agents/skills/", "agents/workflows/", "agents/tool-adapters/", "agents/rules/")):
+                matched.add("_portability_selftest.py")
+
+    visited = {f for f, _ in frontier}
+    while frontier:
+        cur, depth = frontier.pop()
+        for caller in rev_deps.get(cur, ()):
+            if caller in FULL_SELFTEST_SUITES:
+                matched.add(caller)
+            elif depth < 2 and caller not in hub_catalogs and caller not in visited:
+                visited.add(caller)
+                frontier.append((caller, depth + 1))
+
+    for bname in non_py_basenames:
+        for s_name, s_txt in suite_texts.items():
+            if bname in s_txt:
+                matched.add(s_name)
+
+    if not matched:
+        matched.add("_hook_selftest.py")
+    return tuple(s for s in FULL_SELFTEST_SUITES if s in matched)
+
+
+def _filter_suites_by_pattern(raw_patterns: list[str]) -> tuple[str, ...]:
+    tokens = [
+        tok.strip().lower().removeprefix("_").removesuffix("_selftest.py").removesuffix(".py")
+        for item in raw_patterns
+        for tok in item.split(",")
+        if tok.strip()
+    ]
+    if not tokens:
+        return ()
+    selected = [
+        s for s in FULL_SELFTEST_SUITES
+        if any(tok == s.removeprefix("_").removesuffix("_selftest.py") or tok in s.lower() for tok in tokens)
+    ]
+    return tuple(selected)
+
+
 def cmd_selftest(args: argparse.Namespace) -> int:
     kit = ensure_kit(args.kit)
     prev_cwd = Path.cwd()
@@ -1347,9 +1510,30 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     _live = _lp_mod.live_print
     try:
         quick = bool(getattr(args, "quick", False))
-        scripts = QUICK_SELFTEST_SUITES if quick else FULL_SELFTEST_SUITES
-        mode = "QUICK" if quick else "FULL"
-        tree_at_start = "" if quick else working_tree_id(kit)
+        changed = bool(getattr(args, "changed", False))
+        base_ref = str(getattr(args, "base", "") or "").strip()
+        suite_filters = list(getattr(args, "suite", None) or [])
+        is_partial = bool(quick or changed or suite_filters)
+        if suite_filters:
+            scripts = _filter_suites_by_pattern(suite_filters)
+            if not scripts:
+                print(f"[FAIL] No selftest suite matched --suite {suite_filters}", file=sys.stderr)
+                return 2
+            mode = f"SUITE ({len(scripts)} selected)"
+        elif changed:
+            ch_paths = _resolve_changed_paths_for_selftest(kit, base_ref=base_ref)
+            scripts = resolve_affected_selftest_suites(kit, ch_paths)
+            if not scripts:
+                _live("✅ selftest --changed: no runtime-affecting file changes detected (0 suites needed).")
+                return 0
+            mode = f"CHANGED ({len(scripts)}/{len(FULL_SELFTEST_SUITES)} suites from {len(ch_paths)} path(s))"
+        elif quick:
+            scripts = QUICK_SELFTEST_SUITES
+            mode = "QUICK"
+        else:
+            scripts = FULL_SELFTEST_SUITES
+            mode = "FULL"
+        tree_at_start = "" if is_partial else working_tree_id(kit)
         jobs = _selftest_jobs(getattr(args, "jobs", None))
         # Work items: (script, shard index, shard count). One process per item.
         items = [(script, 0, 1) for script in scripts]
@@ -1463,7 +1647,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
                 _live(f"\nselftest failed: {', '.join(label for label, _ in failures)}")
                 return failures[0][1]
         _live(f"\n✅ All {len(scripts)} selftest suites passed ({total} processes).")
-        if not quick:
+        if not is_partial:
             _record_full_pass(kit, tree_at_start)
         timings.sort(key=lambda x: x[1], reverse=True)
         _live("Slowest suites:")
@@ -1686,6 +1870,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--json", action="store_true", help="Machine-readable JSON report.")
     sp.add_argument("--device", action="store_true", help="Include ADB device diagnostics.")
     sp.add_argument("--install-check", action="store_true", help="Fast post-install structural validation.")
+    sp.add_argument("--quirks", action="store_true", help="List isolated Antigravity/Windows platform quirks and their active/disabled status.")
     sp.add_argument("--inspect-file", help="Inspect one exact engine Python file for a documented diagnostic exception.")
     sp.add_argument("--inspection-reason", choices=("unexpected_failure", "contract_violation", "doctor_issue", "developer_request"))
     sp.add_argument("--reference", help="Concrete diagnostic output or developer request.")
@@ -1877,6 +2062,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--quick",
         action="store_true",
         help="Run high-value developer-loop selftest subset.",
+    )
+    sp.add_argument(
+        "--changed",
+        action="store_true",
+        help="Run only selftest suites affected by uncommitted or --base diff changes (<30s iterative loop).",
+    )
+    sp.add_argument(
+        "--base",
+        default="",
+        help="Optional Git base ref for --changed diff comparison (e.g. main or HEAD~1).",
+    )
+    sp.add_argument(
+        "--suite",
+        action="append",
+        default=[],
+        help="Run specific selftest suite(s) by name or comma-separated list (e.g. --suite hook,web_relay).",
     )
     sp.add_argument(
         "--jobs",

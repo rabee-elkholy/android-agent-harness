@@ -117,8 +117,22 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
                 exit_code = _dispatch(repo, script, arguments, quiet_stdout=True) if json_only else _dispatch(repo, script, arguments)
             timings.append({"step": code, "duration_seconds": round(time.monotonic() - started, 3), "exit_code": exit_code})
             if exit_code:
-                summary.update(status="FAILED", failed_step=code, exit_code=exit_code,
-                               reason="The step failed. Diagnose its output; no later step was executed.")
+                reason_msg = "The step failed. Diagnose its output; no later step was executed."
+                web_active = (tdir / "web-relay-receipt.json").is_file() or (tdir / "latest-web-pack.json").is_file()
+                if not web_active:
+                    try:
+                        from execution_mode import resolve_effective_execution_mode
+                        web_active = resolve_effective_execution_mode(repo, task_id=task_id).get("effective_mode") == "web"
+                    except (ImportError, OSError, ValueError, ValidationError):
+                        web_active = False
+                if web_active:
+                    retry_cmd = f"python .agents/harness.py web-pack --task-id {task_id} --retry-failure"
+                    summary["web_retry_command"] = retry_cmd
+                    reason_msg += (
+                        f" Web-Relay active: for non-trivial compile/test/gate repairs, run `{retry_cmd}` "
+                        "to emit a compact failure-only delta for the SAME external AI chat (zero full-file re-upload)."
+                    )
+                summary.update(status="FAILED", failed_step=code, exit_code=exit_code, reason=reason_msg)
                 return exit_code, summary
             completed.append(code)
 

@@ -1,23 +1,15 @@
-"""Write entry files for the coding agents the developer actually uses.
+"""Write entry files for Google Antigravity and the universal AGENTS.md fallback.
 
-Canonical rules stay in `.agents/rules/harness-rules.md`. This script writes thin
-adapters only for `--tools` (and always `AGENTS.md`). Re-run with a new list to
-add a tool. Managed files for tools that were not selected are removed.
-
-Usage (from an installed app checkout):
-
-    python .agents/scripts/install_tool_adapters.py --product MyApp --py python --assemble :app:assembleDebug --tools cursor,gemini
-
-Usage (from the kit, targeting an app):
-
-    python agents/scripts/install_tool_adapters.py --repo /path/to/app --product MyApp --py python3 --assemble :<module>:assembleDebug --tools all
+Canonical rules stay in `.agents/rules/harness-rules.md`. This script writes
+`AGENTS.md`, `GEMINI.md` (when Antigravity/Gemini is selected), `.agents/agents/*/agent.md`,
+and syncs `.agents/hooks.json` with the configured Python interpreter. Legacy managed
+files from pre-v1.4 multi-host installs are pruned automatically on update.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,19 +18,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _live_process import enable_line_buffered_stdio  # noqa: E402
 from _repo_files import ensure_local_git_privacy  # noqa: E402
-from policy_vocab import ANTIGRAVITY_REVIEWER_TOOLS, ANTIGRAVITY_SCOUT_TOOLS, CORE_ROUTED_REVIEWERS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS  # noqa: E402
+from harness_shared.commands import configured_python_command  # noqa: E402
+from policy_vocab import (  # noqa: E402
+    ANTIGRAVITY_REVIEWER_TOOLS,
+    ANTIGRAVITY_SCOUT_TOOLS,
+    CORE_ROUTED_REVIEWERS,
+    CORE_UTILITY_AGENTS,
+    ON_DEMAND_SPECIALIST_AGENTS,
+)
 
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = AGENTS_DIR / "tool-adapters"
-COMMAND_PACKS_DIR = AGENTS_DIR / "command-packs"
 MANAGED = "<!-- managed-by: android-agent-harness -->\n"
-SKIP_SUBAGENTS = {
-    "code-review-guard-agent",
-    "review-prompt",
-    "re-review-prompt",
-    *CORE_UTILITY_AGENTS,
-}
+MANAGED_START = "<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->"
+MANAGED_END = "<!-- END ANDROID-HARNESS MANAGED BLOCK -->"
 
 DEVICE_TEXT = {
     "allow": (
@@ -66,46 +60,45 @@ GIT_TEXT = {
     ),
 }
 
-CLAUDE_READ_TOOLS = "Read, Grep, Glob"
-
 TOOL_ALIASES = {
     "google-antigravity": "antigravity",
-    "vscode": "copilot",
-    "github-copilot": "copilot",
-    "amazon-q": "amazonq",
-    "q": "amazonq",
 }
 
-# Files the installer may create. Shared AGENTS.md is always kept when any tool is selected.
+# Supported host targets: Antigravity (primary) and Standard AGENTS.md CLI fallback.
 TOOL_FILES: dict[str, tuple[str, ...]] = {
-    "cursor": (".cursor/rules/android-harness.mdc",),
-    "claude": ("CLAUDE.md",),
-    "gemini": ("GEMINI.md",),
     "antigravity": ("GEMINI.md",),
-    "codex": ("CODEX.md",),
-    "qwen": ("QWEN.md",),
-    "copilot": (
-        ".github/copilot-instructions.md",
-        ".github/instructions/android-harness.instructions.md",
-        ".github/hooks/android-harness-pre-tool-use.json",
-    ),
-    "windsurf": (".windsurf/rules/android-harness.md", ".windsurfrules"),
-    "cline": (".clinerules",),
-    "roo": (".roo/rules/android-harness.md",),
-    "amazonq": (".amazonq/rules/android-harness.md",),
-    "continue": (".continue/rules/android-harness.md",),
-    "junie": (".junie/guidelines.md",),
-    "kilo": (".kilocode/rules/android-harness.md",),
-    "goose": (".goosehints",),
+    "gemini": ("GEMINI.md",),
+    "generic": (),
 }
 
 KNOWN_TOOLS = tuple(TOOL_FILES)
 
-COMMAND_DIRS: dict[str, tuple[str, str]] = {
-    "claude": (".claude/commands", "{}.md"),
-    "copilot": (".github/prompts", "{}.prompt.md"),
-    "codex": (".codex/prompts", "{}.md"),
-}
+# Legacy pre-v1.4 multi-host tool IDs mapped gracefully to `generic` (`AGENTS.md` only)
+# so upgrading an older client checkout never crashes on historical `answers.json` values
+# and automatically prunes retired vendor-specific adapter files.
+_RETIRED_TOOL_IDS = frozenset({
+    "cursor", "claude", "codex", "qwen", "copilot", "vscode", "github-copilot",
+    "windsurf", "cline", "roo", "amazonq", "amazon-q", "q", "continue", "junie", "kilo", "goose",
+})
+
+LEGACY_PRUNABLE_ADAPTER_PATHS = (
+    "CLAUDE.md",
+    "CODEX.md",
+    "QWEN.md",
+    ".cursor/rules/android-harness.mdc",
+    ".github/copilot-instructions.md",
+    ".github/instructions/android-harness.instructions.md",
+    ".github/hooks/android-harness-pre-tool-use.json",
+    ".windsurf/rules/android-harness.md",
+    ".windsurfrules",
+    ".clinerules",
+    ".roo/rules/android-harness.md",
+    ".amazonq/rules/android-harness.md",
+    ".continue/rules/android-harness.md",
+    ".junie/guidelines.md",
+    ".kilocode/rules/android-harness.md",
+    ".goosehints",
+)
 
 EMPTY_DIR_CANDIDATES = (
     ".agents/agents/bug-test-reviewer-agent",
@@ -135,10 +128,25 @@ EMPTY_DIR_CANDIDATES = (
     ".windsurf",
     ".github/instructions",
     ".github/prompts",
+    ".github/hooks",
     ".github",
     ".cursor/rules",
     ".cursor",
 )
+
+_PM_TRIGGERS = {
+    "zoho_sprints": "update zoho",
+    "github_projects": "update github",
+    "jira_mcp": "update jira",
+    "linear_mcp": "update linear",
+    "none": "(no tracker — mutations disabled)",
+}
+
+_PM_LANG_NOTES = {
+    "en_titles_ar_comments": "English task titles, Arabic descriptions/comments.",
+    "all_en": "English task titles, descriptions, and comments.",
+    "all_ar": "Arabic task titles, descriptions, and comments.",
+}
 
 
 def fill(text: str, mapping: dict[str, str]) -> str:
@@ -168,51 +176,7 @@ def read_template(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _pack_name(tmpl: Path) -> str:
-    name = tmpl.name
-    return name[: -len(".md.template")] if name.endswith(".md.template") else tmpl.stem
-
-
-def command_pack_templates() -> list[Path]:
-    if not COMMAND_PACKS_DIR.is_dir():
-        return []
-    return sorted(COMMAND_PACKS_DIR.glob("*.template"))
-
-
-def command_pack_rels(tool: str) -> list[str]:
-    spec = COMMAND_DIRS.get(tool)
-    if not spec:
-        return []
-    base, pattern = spec
-    return [f"{base}/{pattern.format(_pack_name(tmpl))}" for tmpl in command_pack_templates()]
-
-
-def strip_frontmatter(text: str) -> str:
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
-        if end >= 0:
-            return text[end + 4 :].lstrip("\n")
-    return text
-
-
-def generate_command_packs(repo: Path, tool: str, mapping: dict[str, str], *, dry_run: bool) -> list[str]:
-    logs: list[str] = []
-    for tmpl in command_pack_templates():
-        text = tmpl.read_text(encoding="utf-8")
-        if tool == "codex":
-            text = strip_frontmatter(text)
-        base, pattern = COMMAND_DIRS[tool]
-        rel = f"{base}/{pattern.format(_pack_name(tmpl))}"
-        logs.append(write_file(repo / rel, fill(text, mapping), dry_run=dry_run, repo=repo))
-    return logs
-
-
-MANAGED_START = "<!-- BEGIN ANDROID-HARNESS MANAGED BLOCK -->"
-MANAGED_END = "<!-- END ANDROID-HARNESS MANAGED BLOCK -->"
-
-
 def with_managed_marker(body: str) -> str:
-    """Keep YAML frontmatter first; keep @imports first (Claude / Qwen)."""
     marker = MANAGED.strip()
     if marker in body:
         text = body
@@ -223,13 +187,6 @@ def with_managed_marker(body: str) -> str:
             text = body[:insert_at] + "\n" + MANAGED + body[insert_at:].lstrip("\n")
         else:
             text = MANAGED + body
-    elif body.startswith("@"):
-        nl = body.find("\n")
-        if nl >= 0:
-            rest = body[nl + 1 :].lstrip("\n")
-            text = body[: nl + 1] + MANAGED + rest
-        else:
-            text = body + "\n" + MANAGED
     else:
         text = MANAGED + body
     if not text.endswith("\n"):
@@ -305,15 +262,17 @@ def parse_tools(raw: str) -> set[str]:
     if not parts:
         raise SystemExit("Pass --tools with at least one id, or --tools all.")
     if "all" in parts:
-        return set(KNOWN_TOOLS)
+        return {"antigravity"}
     selected: set[str] = set()
     unknown: list[str] = []
     for part in parts:
         name = TOOL_ALIASES.get(part, part)
-        if name not in TOOL_FILES:
+        if name in TOOL_FILES:
+            selected.add(name)
+        elif name in _RETIRED_TOOL_IDS:
+            selected.add("generic")
+        else:
             unknown.append(part)
-            continue
-        selected.add(name)
     if unknown:
         known = ", ".join(KNOWN_TOOLS)
         raise SystemExit(f"Unknown --tools: {', '.join(unknown)}. Known: {known}, all")
@@ -341,57 +300,6 @@ def subagents_dir(repo: Path) -> Path:
     raise SystemExit("No .agents/subagents (or kit agents/subagents) found.")
 
 
-def claude_agent_markdown(data: dict) -> str:
-    name = str(data.get("name") or "").strip()
-    description = str(data.get("description") or name).strip()
-    prompt = str(data.get("system_prompt") or "").strip()
-    tools = CLAUDE_READ_TOOLS
-    if data.get("enable_write_tools"):
-        tools = f"{CLAUDE_READ_TOOLS}, Edit, Write"
-    model = str(data.get("model") or "inherit").strip() or "inherit"
-    return (
-        f"---\n"
-        f"name: {name}\n"
-        f"description: {description}\n"
-        f"tools: {tools}\n"
-        f"model: {model}\n"
-        f"---\n\n"
-        f"{prompt}\n"
-        "\nReviewer discovery: run_command is restricted by the native hook to "
-        "`python .agents/harness.py graph --find <symbol> --json`, "
-        "`graph --feature <name> --json`, and `task-context --file <path> --json` "
-        "or `task-context --symbol <name> --json`. Use these to expand a denied search. "
-        "Never run builds, tests, lifecycle commands, arbitrary shell, writes or reviewer orchestration.\n"
-    )
-
-
-def generate_claude_agents(repo: Path, *, dry_run: bool) -> list[str]:
-    logs: list[str] = []
-    src = subagents_dir(repo)
-    dest = repo / ".claude" / "agents"
-    for json_path in sorted(src.glob("*.json")):
-        stem = json_path.stem
-        if stem in SKIP_SUBAGENTS:
-            continue
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-        name = str(data.get("name") or stem).strip()
-        if name in SKIP_SUBAGENTS:
-            continue
-        if not data.get("system_prompt"):
-            logs.append(f"skip {json_path.name} (no system_prompt)")
-            continue
-        logs.append(
-            write_file(
-                dest / f"{name}.md",
-                claude_agent_markdown(data),
-                dry_run=dry_run,
-                repo=repo,
-                merge_existing=False,
-            )
-        )
-    return logs
-
-
 def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
     name = str(data.get("name") or "").strip()
     if not name:
@@ -404,9 +312,6 @@ def antigravity_agent_markdown(data: dict, *, model: str | None = None) -> str:
     name_yaml = json.dumps(name, ensure_ascii=False)
     description_yaml = json.dumps(description, ensure_ascii=False)
     tools_block = "\n".join(f"  - {t}" for t in ANTIGRAVITY_REVIEWER_TOOLS)
-    # Omit `model:` from `.agents/agents/*/agent.md` YAML frontmatter: Antigravity Desktop's
-    # workspace subagent loader rejects non-enum `gemini-4-*` / `gemini-3.8-*` model slugs in
-    # YAML frontmatter (`not found or not allowed to be invoked`) and inherits parent/dispatch model.
     _ = model
     return (
         f"---\n"
@@ -441,7 +346,7 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
         dest = repo / ".agents" / "agents" / role / "agent.md"
         configured_model = None
         try:
-            from review_models import compute_task_complexity_tier, load_policy, resolve_antigravity_model, CRITICAL_HYBRID_REVIEWERS, frozen_models
+            from review_models import compute_task_complexity_tier, frozen_models, load_policy, resolve_antigravity_model
             from reviewer_host import active_reviews
             from workflow import state_root
             from _vnext_common import read_json
@@ -512,55 +417,10 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
     return logs
 
 
-def bodies_for_tool(tool: str, mapping: dict[str, str], pointer: str) -> dict[str, str]:
-    if tool == "cursor":
-        return {
-            ".cursor/rules/android-harness.mdc": fill(
-                read_template("cursor-android-harness.mdc.template"), mapping
-            )
-        }
-    if tool == "claude":
-        return {"CLAUDE.md": fill(read_template("CLAUDE.md.template"), mapping)}
-    if tool in ("gemini", "antigravity"):
-        return {"GEMINI.md": fill(read_template("GEMINI.md.template"), mapping)}
-    if tool == "codex":
-        return {"CODEX.md": fill(read_template("CODEX.md.template"), mapping)}
-
-    if tool == "qwen":
-        return {"QWEN.md": fill(read_template("QWEN.md.template"), mapping)}
-    if tool == "copilot":
-        return {
-            ".github/copilot-instructions.md": fill(
-                read_template("copilot-instructions.md.template"), mapping
-            ),
-            ".github/instructions/android-harness.instructions.md": fill(
-                read_template("github-instructions.md.template"), mapping
-            ),
-        }
-    if tool == "windsurf":
-        return {
-            ".windsurf/rules/android-harness.md": fill(
-                read_template("windsurf-android-harness.md.template"), mapping
-            ),
-            ".windsurfrules": pointer,
-        }
-    if tool == "continue":
-        return {
-            ".continue/rules/android-harness.md": fill(
-                read_template("continue-android-harness.md.template"), mapping
-            )
-        }
-    out: dict[str, str] = {}
-    for rel in TOOL_FILES[tool]:
-        out[rel] = pointer
-    return out
-
-
 def keep_set(selected: set[str]) -> set[str]:
     keep = {"AGENTS.md"}
     for tool in selected:
-        keep.update(TOOL_FILES[tool])
-        keep.update(command_pack_rels(tool))
+        keep.update(TOOL_FILES.get(tool, ()))
     if {"antigravity", "gemini"} & set(selected):
         for r in (*CORE_ROUTED_REVIEWERS, *ON_DEMAND_SPECIALIST_AGENTS, *CORE_UTILITY_AGENTS):
             keep.add(f".agents/agents/{r}/agent.md")
@@ -569,11 +429,7 @@ def keep_set(selected: set[str]) -> set[str]:
 
 def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run: bool) -> list[str]:
     logs: list[str] = []
-    catalog = {"AGENTS.md"}
-    for files in TOOL_FILES.values():
-        catalog.update(files)
-    for tool in COMMAND_DIRS:
-        catalog.update(command_pack_rels(tool))
+    catalog = {"AGENTS.md", "GEMINI.md", *LEGACY_PRUNABLE_ADAPTER_PATHS}
     for rel in sorted(catalog):
         if rel in keep:
             continue
@@ -586,21 +442,9 @@ def prune_unselected(repo: Path, keep: set[str], selected: set[str], *, dry_run:
             continue
         path.unlink()
         logs.append(f"deleted {rel_s}")
-    claude_dir = repo / ".claude" / "agents"
-    if "claude" not in selected and claude_dir.is_dir():
-        for path in sorted(claude_dir.glob("*.md")):
+    for legacy_glob in (".claude/agents/*.md", ".claude/commands/*.md", ".github/prompts/*.prompt.md", ".codex/prompts/*.md"):
+        for path in sorted(repo.glob(legacy_glob)):
             if not is_managed_file(path):
-                continue
-            rel_s = rel_of(path, repo)
-            if dry_run:
-                logs.append(f"dry-run delete {rel_s}")
-                continue
-            path.unlink()
-            logs.append(f"deleted {rel_s}")
-    elif claude_dir.is_dir():
-        active_stems = {p.stem for p in subagents_dir(repo).glob("*.json") if p.stem not in SKIP_SUBAGENTS}
-        for path in sorted(claude_dir.glob("*.md")):
-            if path.stem in active_stems or not is_managed_file(path):
                 continue
             rel_s = rel_of(path, repo)
             if dry_run:
@@ -665,78 +509,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         i += 1
 
     known = ", ".join(KNOWN_TOOLS)
-    p = argparse.ArgumentParser(description="Install selected Android harness adapters.")
+    p = argparse.ArgumentParser(description="Install Android Agent Harness entry files for Antigravity and AGENTS.md.")
     p.add_argument("--repo", help="Android checkout root. Default: parent of .agents when installed.")
     p.add_argument("--product", required=True, help="Product display name (e.g. MyApp).")
     p.add_argument("--py", required=True, help="Python command that actually runs here (python or python3).")
     p.add_argument("--assemble", required=True, help="Gradle assemble task (e.g. :composeApp:assembleDebug).")
-    p.add_argument(
-        "--unit-test",
-        help="Gradle unit-test task. Default: derived from --assemble (assembleDebug -> testDebugUnitTest).",
-    )
-    p.add_argument(
-        "--pm-provider",
-        choices=sorted(_PM_TRIGGERS),
-        default="zoho_sprints",
-        help="I.20 project tracker id written into AGENTS.md (trigger phrase). Default: zoho_sprints.",
-    )
-    p.add_argument(
-        "--tracker-language",
-        choices=sorted(_PM_LANG_NOTES),
-        default="en_titles_ar_comments",
-        help="I.18 tracker content language written into AGENTS.md. Default: en_titles_ar_comments.",
-    )
-    p.add_argument(
-        "--tools",
-        required=True,
-        help=f"Comma-separated tool ids the developer uses, or 'all'. Known: {known}",
-    )
-    p.add_argument(
-        "--device-policy",
-        choices=sorted(DEVICE_TEXT),
-        default="allow",
-        help="I.4 device policy. Default: allow emulator.",
-    )
-    p.add_argument(
-        "--git-policy",
-        choices=sorted(GIT_TEXT),
-        default="never",
-        help="I.3 git policy. Default: agent never commits.",
-    )
+    p.add_argument("--unit-test", help="Gradle unit-test task. Default: derived from --assemble.")
+    p.add_argument("--pm-provider", choices=sorted(_PM_TRIGGERS), default="zoho_sprints")
+    p.add_argument("--tracker-language", choices=sorted(_PM_LANG_NOTES), default="en_titles_ar_comments")
+    p.add_argument("--tools", default="antigravity", help=f"Comma-separated tool ids or 'all'. Known: {known}")
+    p.add_argument("--device-policy", choices=sorted(DEVICE_TEXT), default="allow")
+    p.add_argument("--git-policy", choices=sorted(GIT_TEXT), default="never")
     p.add_argument("--device-text", help="Override the generated device-policy sentence.")
     p.add_argument("--git-text", help="Override the generated git-policy sentence.")
     p.add_argument("--dry-run", action="store_true", help="Print paths without writing.")
-    p.add_argument("--skip-claude-agents", action="store_true", help="Do not generate .claude/agents/*.md.")
-    p.add_argument(
-        "--keep-extra-adapters",
-        action="store_true",
-        help="Do not delete managed adapters for tools that were not selected.",
-    )
-    p.add_argument(
-        "--git-gate",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-    p.add_argument(
-        "--cc-hooks",
-        action="store_true",
-        help="Register the Claude Code PreToolUse bridge (requires --tools to include claude).",
-    )
-    p.add_argument(
-        "--copilot-hooks",
-        action="store_true",
-        help="Register the GitHub Copilot preToolUse bridge under .github/hooks/ (requires --tools to include copilot).",
-    )
+    p.add_argument("--keep-extra-adapters", action="store_true", help="Do not delete managed legacy adapters.")
+    p.add_argument("--git-gate", action=argparse.BooleanOptionalAction, default=False, help=argparse.SUPPRESS)
     return p.parse_args(cleaned_argv)
 
 
 def _derive_unit_test(assemble: str) -> str:
-    """Derive the unit-test task from the assemble task (I.5).
-
-    `:app:assembleDebug` -> `:app:testDebugUnitTest`; KMP
-    `:composeApp:assembleDebug` -> `:composeApp:testDebugUnitTest`.
-    """
     task = str(assemble or "").strip()
     if "assemble" not in task:
         return task
@@ -746,29 +538,10 @@ def _derive_unit_test(assemble: str) -> str:
     return derived
 
 
-_PM_TRIGGERS = {
-    "zoho_sprints": "update zoho",
-    "github_projects": "update github",
-    "jira_mcp": "update jira",
-    "linear_mcp": "update linear",
-    "none": "(no tracker — mutations disabled)",
-}
-
-_PM_LANG_NOTES = {
-    "en_titles_ar_comments": "English task titles, Arabic descriptions/comments.",
-    "all_en": "English task titles, descriptions, and comments.",
-    "all_ar": "Arabic task titles, descriptions, and comments.",
-}
-
-
-from harness_shared.commands import configured_python_command
-
 def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
     unit_test = (args.unit_test or "").strip() or _derive_unit_test(args.assemble)
     provider = str(getattr(args, "pm_provider", "zoho_sprints") or "zoho_sprints").strip()
-    tracker_lang = str(
-        getattr(args, "tracker_language", "en_titles_ar_comments") or "en_titles_ar_comments"
-    ).strip()
+    tracker_lang = str(getattr(args, "tracker_language", "en_titles_ar_comments") or "en_titles_ar_comments").strip()
     if provider not in _PM_TRIGGERS:
         provider = "zoho_sprints"
     if tracker_lang not in _PM_LANG_NOTES:
@@ -787,13 +560,6 @@ def mapping_from_args(args: argparse.Namespace) -> dict[str, str]:
 
 
 def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
-    """Remove only provably harness-owned legacy hooks.
-
-    ``.githooks`` is a common project-owned directory.  Older installers treated
-    the directory name itself as proof of ownership and could delete unrelated
-    hooks.  A hook is now removable only when its content carries an explicit
-    harness marker; mixed or unmarked directories are preserved byte-for-byte.
-    """
     logs: list[str] = []
     githooks_dir = repo / ".githooks"
     marker_tokens = ("managed-by: android-agent-harness", "managed-by: android-harness-kit")
@@ -824,19 +590,16 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
         ["git", "config", "--get", "core.hooksPath"],
         cwd=str(repo),
         capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if proc.returncode == 0 and proc.stdout.strip() in (".githooks", ".githooks/") and not remaining_files:
         if dry_run:
             logs.append("dry-run git config --unset core.hooksPath")
         else:
-            subprocess.run(
-                ["git", "config", "--unset", "core.hooksPath"],
-                cwd=str(repo),
-                capture_output=True,
-                check=False,
-            )
+            subprocess.run(["git", "config", "--unset", "core.hooksPath"], cwd=str(repo), capture_output=True, check=False)
             logs.append("unset git core.hooksPath")
 
     if githooks_dir.is_dir() and not remaining_files:
@@ -849,86 +612,8 @@ def cleanup_legacy_git_gate(repo: Path, *, dry_run: bool = False) -> list[str]:
             except Exception as e:
                 logs.append(f"warning: could not remove {githooks_dir}: {e}")
 
-    privacy_logs = ensure_local_git_privacy(repo)
-    logs.extend(privacy_logs)
+    logs.extend(ensure_local_git_privacy(repo))
     return logs
-
-
-CC_HOOK_COMMAND = "{py} .agents/scripts/cc_pre_tool_safety.py"
-# Shell commands and file edits; keep in sync with FILE_EDIT_TOOLS in cc_pre_tool_safety.py.
-CC_HOOK_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit"
-
-COPILOT_HOOKS_FILE = ".github/hooks/android-harness-pre-tool-use.json"
-
-
-def copilot_hooks_payload(py: str) -> dict:
-    return {
-        "version": 1,
-        "_comment": "<!-- managed-by: android-agent-harness -->",
-        "hooks": {
-            "preToolUse": [
-                {
-                    "type": "command",
-                    "matcher": "bash|powershell",
-                    "command": f"{py} .agents/scripts/copilot_pre_tool_safety.py",
-                    "timeoutSec": 15,
-                }
-            ]
-        },
-    }
-
-
-def ensure_cc_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
-    settings_path = repo / ".claude" / "settings.json"
-    rel = rel_of(settings_path, repo)
-    data: dict = {}
-    if settings_path.is_file():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data = loaded
-        except Exception:
-            return [f"skip {rel}: existing settings.json is not valid JSON; merge the hook manually"]
-
-    groups = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    command = CC_HOOK_COMMAND.format(py=py)
-    for group in groups:
-        if not isinstance(group, dict):
-            continue
-        for hook in group.get("hooks") or []:
-            if isinstance(hook, dict) and "cc_pre_tool_safety.py" in str(hook.get("command", "")):
-                if group.get("_harnessManaged") and group.get("matcher") != CC_HOOK_MATCHER:
-                    # Installs before round 5 registered Bash only, so file edits were never checked.
-                    if dry_run:
-                        return [f"dry-run widen PreToolUse bridge matcher in {rel}"]
-                    group["matcher"] = CC_HOOK_MATCHER
-                    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-                    return [f"widened PreToolUse bridge matcher in {rel}"]
-                return [f"skip {rel}: harness PreToolUse bridge already registered"]
-
-    new_group = {
-        "matcher": CC_HOOK_MATCHER,
-        "_harnessManaged": True,
-        "hooks": [{"type": "command", "command": command, "timeout": 15}],
-    }
-    if dry_run:
-        logs = [f"dry-run merge PreToolUse({CC_HOOK_MATCHER}) into {rel}"]
-        return logs
-    groups.append(new_group)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return [f"merged PreToolUse({CC_HOOK_MATCHER}) bridge into {rel}"]
-
-
-def ensure_copilot_hooks(repo: Path, py: str, *, dry_run: bool) -> list[str]:
-    hooks_path = repo / COPILOT_HOOKS_FILE
-    rel = rel_of(hooks_path, repo)
-    payload = copilot_hooks_payload(py)
-    if dry_run:
-        return [f"dry-run write {rel} (preToolUse -> copilot_pre_tool_safety.py)"]
-    hooks_path.parent.mkdir(parents=True, exist_ok=True)
-    hooks_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
-    return [f"wrote {rel} (Copilot preToolUse bridge)"]
 
 
 def sync_hooks_json(repo: Path, py: str, *, dry_run: bool) -> list[str]:
@@ -952,7 +637,6 @@ def install(args: argparse.Namespace) -> list[str]:
     selected = parse_tools(args.tools)
     repo = find_repo(args.repo)
     mapping = mapping_from_args(args)
-    pointer = fill(read_template("pointer.md.template"), mapping)
     logs: list[str] = []
 
     keep = keep_set(selected)
@@ -975,20 +659,17 @@ def install(args: argparse.Namespace) -> list[str]:
         )
     )
     logs.extend(sync_hooks_json(repo, mapping["PY"], dry_run=args.dry_run))
-    for tool in sorted(selected):
-        for rel, body in bodies_for_tool(tool, mapping, pointer).items():
-            logs.append(write_file(repo / rel, body, dry_run=args.dry_run, repo=repo))
-        if tool in COMMAND_DIRS:
-            logs.extend(generate_command_packs(repo, tool, mapping, dry_run=args.dry_run))
-    if "claude" in selected and not args.skip_claude_agents:
-        logs.extend(generate_claude_agents(repo, dry_run=args.dry_run))
     if {"antigravity", "gemini"} & set(selected):
+        logs.append(
+            write_file(
+                repo / "GEMINI.md",
+                fill(read_template("GEMINI.md.template"), mapping),
+                dry_run=args.dry_run,
+                repo=repo,
+            )
+        )
         logs.extend(generate_antigravity_agents(repo, dry_run=args.dry_run))
     logs.extend(cleanup_legacy_git_gate(repo, dry_run=args.dry_run))
-    if getattr(args, "cc_hooks", False) and "claude" in selected:
-        logs.extend(ensure_cc_hooks(repo, mapping["PY"], dry_run=args.dry_run))
-    if getattr(args, "copilot_hooks", False) and "copilot" in selected:
-        logs.extend(ensure_copilot_hooks(repo, mapping["PY"], dry_run=args.dry_run))
     logs.append(f"tools: {', '.join(sorted(selected))}")
     return logs
 

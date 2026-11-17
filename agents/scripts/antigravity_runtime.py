@@ -1090,6 +1090,12 @@ def inspect_windows_go_gc_and_handle_risk(
     """Check Windows 11 `GOMEMLIMIT` / `GOGC` tuning, `stdio` MCP count, and `AcceptEx` crash fingerprints (#200687/#199301)."""
     import sys as _sys
     environ = env if env is not None else os.environ
+    try:
+        from platform_quirks import is_quirk_enabled
+        if not is_quirk_enabled("200687", repo=repo, env=environ):
+            return {"applicable": False, "at_risk": False, "gc_tuned": True, "quirk_disabled": True}
+    except ImportError:
+        pass
     sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
     sim_mcp = str(environ.get("HARNESS_SIMULATE_WINDOWS_MCP") or "").strip().lower() in {"1", "true", "yes"}
     is_win = sim_plat == "win32" or sim_mcp or (not sim_plat and _sys.platform == "win32")

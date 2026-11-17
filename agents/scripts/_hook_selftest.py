@@ -310,39 +310,9 @@ class HookTests(unittest.TestCase):
         self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
         self.assertIn("workflow.py revise", res["reason"])
 
-    def test_C_D2_backslash_continuations_are_one_command(self):
-        """Certification C-D2: a command wrapped with backslash-newline was split into several
-        "commands" and denied as if the plan state forbade it; the one-line form was allowed.
-        Only the Claude bridge (Bash) treats backslash-newline as a continuation."""
-        self.env["HARNESS_HOOK_HOST"] = "claude"
-        draft = (
-            "python .agents/scripts/workflow.py draft --repo . --task-id t1 \\\n"
-            "  --kind FEATURE \\\n"
-            '  --outcome "Show a toast"'
-        )
-        res = self.call("run_command", {"CommandLine": draft})
-        self.assertEqual("allow", res["decision"], res.get("reason"))
-        self.assertEqual(res["decision"], self.call("run_command", {"CommandLine": draft.replace(" \\\n ", "")})["decision"])
-        # Joined lines still meet the whole-command checks.
-        res = self.call("run_command", {"CommandLine": draft + " \\\n  --force"})
-        self.assertEqual("DRAFT_FORCE", res.get("reason_code"))
-        self.activate(status="AWAITING_DEVELOPER_APPROVAL")
-        revise = (
-            "python .agents/scripts/workflow.py revise --repo . --task-id task-one \\\n"
-            "  --expected-files app/src/main/res/values/strings.xml \\\n"
-            "  --expected-surfaces LOCALIZATION"
-        )
-        res = self.call("run_command", {"CommandLine": revise})
-        self.assertEqual("allow", res["decision"], res.get("reason"))
-        # Real newlines still separate commands, and a denied segment is named in the reason.
-        res = self.call("run_command", {"CommandLine": "git status\ntouch app/owned.txt"})
-        self.assertEqual("deny", res["decision"])
-        self.assertIn("'touch app/owned.txt'", res["reason"])
-
     def test_A1_antigravity_newline_is_always_a_command_boundary(self):
         """PowerShell has no backslash continuation, and Windows paths end with a backslash. A
         trailing backslash must not join the next line into a read-only command on Antigravity."""
-        self.env.pop("HARNESS_HOOK_HOST", None)
         smuggled = "Get-ChildItem C:\\temp\\\nRemove-Item -Recurse app"
         res = self.call("run_command", {"CommandLine": smuggled})
         self.assertEqual("deny", res["decision"], res.get("reason"))
@@ -376,15 +346,11 @@ class HookTests(unittest.TestCase):
         status = "python .agents/scripts/zoho_sync.py status --repo . --task-id task-one"
         self.activate()
         self._link_zoho()
-        for host in ("antigravity", "claude"):
-            self.env["HARNESS_HOOK_HOST"] = host
-            with self.subTest(host=host):
-                self.assertEqual("allow", self.call("run_command", {"CommandLine": start})["decision"])
-                self.assertEqual("allow", self.call("run_command", {"CommandLine": status})["decision"])
-                self.assertEqual("deny", self.call("run_command", {"CommandLine": delivery})["decision"])
-                self.assertEqual("deny", self.call("run_command", {"CommandLine": start.replace("task-one", "other-task")})["decision"])
-                self.assertEqual("deny", self.call("run_command", {"CommandLine": start + " && touch owned"})["decision"])
-        self.env.pop("HARNESS_HOOK_HOST", None)
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": start})["decision"])
+        self.assertEqual("allow", self.call("run_command", {"CommandLine": status})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": delivery})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": start.replace("task-one", "other-task")})["decision"])
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": start + " && touch owned"})["decision"])
         self._link_zoho(approved=False)
         self.assertEqual("deny", self.call("run_command", {"CommandLine": start})["decision"])
         self.activate(status="DELIVERED")

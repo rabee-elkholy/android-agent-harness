@@ -2876,6 +2876,78 @@ class CommandEfficiencySelftest(unittest.TestCase):
             self.assertEqual(0, entry.main(["policy", "--json"]))
         self.assertEqual("review_policy.py", run.call_args.args[0])
 
+    def test_v140_modular_facades_quirks_registry_and_diff_selftest(self) -> None:
+        """v1.4.0: Verify Track 2 modular facades, Track 3 platform_quirks & doctor --quirks, and Track 4 selftest --changed/--suite."""
+        import harness_cli
+        import platform_quirks
+        import pre_tool_safety
+        import web_relay
+        import delegation_policy
+        from unittest import mock
+
+        # 1. Track 2: Modular facades preserve sys.modules identity, __file__ anchor, and mock.patch.object interception
+        self.assertIs(sys.modules["pre_tool_safety"], pre_tool_safety)
+        self.assertTrue(str(pre_tool_safety.__file__).replace("\\", "/").endswith("agents/scripts/pre_tool_safety.py"))
+        self.assertTrue(str(web_relay.__file__).replace("\\", "/").endswith("agents/scripts/web_relay.py"))
+        self.assertTrue(str(delegation_policy.__file__).replace("\\", "/").endswith("agents/scripts/delegation_policy.py"))
+
+        # 2. Track 3: platform_quirks catalog, env/JSON override, search_web bypass when quirk 201621 disabled, and doctor --quirks --json
+        catalog = platform_quirks.list_platform_quirks(self.repo)
+        self.assertGreaterEqual(len(catalog), 15)
+        self.assertTrue(platform_quirks.is_quirk_enabled("201621", repo=self.repo, env={}))
+        self.assertFalse(
+            platform_quirks.is_quirk_enabled(
+                "201621",
+                repo=self.repo,
+                env={"HARNESS_DISABLE_QUIRKS": "199301, 201621"},
+            )
+        )
+        quirks_cfg = self.repo / ".agents" / "project-context" / "quirks.json"
+        quirks_cfg.parent.mkdir(parents=True, exist_ok=True)
+        quirks_cfg.write_text(json.dumps({"disabled": ["#200687"]}), encoding="utf-8")
+        try:
+            self.assertFalse(platform_quirks.is_quirk_enabled("200687", repo=self.repo, env={}))
+        finally:
+            quirks_cfg.unlink(missing_ok=True)
+
+        # Verify `harness_cli.py doctor --quirks --json` subprocess with explicit utf-8 encoding
+        (self.repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+        doc_proc = subprocess.run(
+            [sys.executable, str(KIT / "harness_cli.py"), "doctor", "--repo", str(self.repo), "--quirks", "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=os.environ.copy(),
+            check=False,
+        )
+        self.assertEqual(0, doc_proc.returncode, doc_proc.stderr)
+        doc_data = json.loads(doc_proc.stdout)
+        self.assertEqual(len(catalog), doc_data["total"])
+        all_issues = {iss for q in doc_data["quirks"] for iss in q["issues"]}
+        self.assertIn("#201621", all_issues)
+        self.assertIn("#200687", all_issues)
+
+        # 3. Track 4: Diff-aware selftest mapping & partial `--suite` never stamps `.git/harness-selftest-pass.json`
+        self_only = harness_cli.resolve_affected_selftest_suites(KIT, ["agents/scripts/_adb_core_selftest.py"])
+        self.assertIn("_adb_core_selftest.py", self_only)
+        self.assertLessEqual(len(self_only), 2)
+
+        roborazzi_suites = harness_cli.resolve_affected_selftest_suites(KIT, ["agents/scripts/roborazzi_gate.py"])
+        self.assertGreaterEqual(len(roborazzi_suites), 1)
+        self.assertLess(len(roborazzi_suites), 16, f"Expected <50% suites, got {roborazzi_suites}")
+
+        safety_suites = harness_cli.resolve_affected_selftest_suites(KIT, ["agents/scripts/_safety/command_policy.py"])
+        self.assertIn("_hook_selftest.py", safety_suites)
+        self.assertIn("_antigravity_stability_selftest.py", safety_suites)
+
+        parser = harness_cli.build_parser()
+        ns_partial = parser.parse_args(["selftest", "--kit", str(KIT), "--suite", "env_codes"])
+        with mock.patch("harness_cli._record_full_pass") as rec_pass:
+            rc = ns_partial.func(ns_partial)
+            self.assertEqual(0, rc)
+            rec_pass.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

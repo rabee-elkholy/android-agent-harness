@@ -24,7 +24,7 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
     # Reuse fixture helpers, not the inherited test inventory.
     def setUp(self):
         super().setUp()
-        self.host_env = mock.patch.dict(os.environ, {"HARNESS_HOST": "", "CODEX_THREAD_ID": ""})
+        self.host_env = mock.patch.dict(os.environ, {"HARNESS_HOST": ""})
         self.host_env.start()
 
     def tearDown(self):
@@ -164,10 +164,10 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
             self.assertEqual(before, lifecycle._state_snapshot(self.repo))
             self.assertEqual("COMPLETED", read_json(self.repo / ".harness-setup/update-journal.json")["status"])
 
-    def test_current_codex_session_beats_installed_primary(self):
+    def test_current_declared_host_beats_installed_primary(self):
         write_file(self.repo / ".agents/scripts/_product.py", "PRIMARY_AI_HOST = 'antigravity'\n")
-        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "actual-codex-thread"}):
-            self.assertEqual("codex", resolve_review_host(self.repo))
+        with mock.patch.dict(os.environ, {"HARNESS_HOST": "generic"}):
+            self.assertEqual("generic", resolve_review_host(self.repo))
             self.assertEqual("antigravity", resolve_review_host(self.repo, "antigravity"))
 
     def test_cancelled_task_status_does_not_request_an_impossible_takeover(self):
@@ -397,10 +397,10 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
 
     def test_router_detects_wrong_frozen_host_before_dispatch(self):
         task_id, _, _, _ = self._setup_dispatch_state()
-        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "codex-thread"}):
+        with mock.patch.dict(os.environ, {"HARNESS_HOST": "generic"}):
             action = workflow.resolve_next_action(self.repo, task_id)
         self.assertEqual("CONTINUE_ON_CURRENT_HOST", action["code"])
-        self.assertIn("--host codex", action["command"])
+        self.assertIn("--host generic", action["command"])
 
     def test_reused_evidence_sources_survive_pruning(self):
         store = EvidenceStore(self.repo / ".agents/state")
@@ -493,21 +493,6 @@ class HostContinuationTests(phase_fixtures.PhaseReviewV2Selftest):
         self.assertEqual("BLOCKED", read_json(directory / "plan.json")["status"])
         self.assertIn(role, result["brief"]["blocked_reviewers"])
         self.assertEqual("RESUME_IMPLEMENTATION", result["next_action"]["code"])
-
-    def test_new_codex_chat_is_a_new_executor_on_the_same_host(self):
-        task_id = self.simple_task()
-        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "first-thread"}):
-            code, first = self.cli(task_id, "codex")
-        self.assertEqual(0, code, first)
-        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "second-thread"}):
-            action = workflow.resolve_next_action(self.repo, task_id)
-            self.assertEqual("CONTINUE_ON_CURRENT_HOST", action["code"])
-            code, second = self.cli(task_id, "codex", "--source-stopped", "--expect-session", first["session_id"])
-        self.assertEqual(0, code, second)
-        from host_continuation import assert_execution_session
-        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": "first-thread"}):
-            with self.assertRaises(ValidationError):
-                assert_execution_session(self.repo, task_id)
 
     def test_interrupted_commit_recovers_from_the_routed_command(self):
         task_id, _, _, _ = self._setup_dispatch_state()

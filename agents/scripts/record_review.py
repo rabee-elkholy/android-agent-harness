@@ -15,7 +15,6 @@ from _vnext_common import active_review_package_path as _vnext_active_package_pa
 from evidence_store import EvidenceStore, StateLock  # noqa: E402
 from workflow import SENSITIVE_SURFACES, assert_active_run_fresh
 from _vnext_common import state_root, task_dir  # noqa: E402
-from review_sources import find_claude_subagent_transcript, is_claude_transcript, read_claude_subagent_transcript  # noqa: E402
 
 
 def active_review_package_path(repo: Path, current_run: dict, root: Path | None = None) -> Path:
@@ -885,29 +884,6 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValidationError("--from-subagent must be REVIEWER=CONVERSATION_ID")
             reviewer = reviewer.strip()
             conv_id = conv_id.strip()
-            given = Path(conv_id).expanduser()
-            if not is_claude_transcript(given) and not _find_subagent_transcript(conv_id):
-                # Claude Code reports an agent id for foreground subagents; Antigravity ids resolve first.
-                given = find_claude_subagent_transcript(conv_id) or given
-            if is_claude_transcript(given):
-                # Claude Code: ingest the reviewer's last reply unchanged from Claude's canonical transcript store.
-                extracted_text, identity = read_claude_subagent_transcript(given)
-                rep = response_text_to_report(repo, args.task, reviewer, extracted_text)
-                rep.update(identity)
-                rep["provenance"] = "claude_subagent_transcript"
-                rep["independent_execution_verified"] = True
-                rep["execution_proof"] = {
-                    "verified": True,
-                    "proof_kind": "CLAUDE_SUBAGENT_TRANSCRIPT",
-                    "transcript_sha256": identity.get("transcript_sha256", ""),
-                    "transcript_path": identity.get("transcript_path", ""),
-                    "reviewer": reviewer,
-                    "task_id": args.task,
-                    "run_id": str(current["run_id"]),
-                    "package_sha256": rep.get("package_sha256", ""),
-                }
-                (staging_dir / f"{reviewer}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=2), encoding="utf-8")
-                continue
             transcript_file = _find_subagent_transcript(conv_id)
             if not transcript_file or not transcript_file.is_file():
                 p_cand = Path(conv_id)

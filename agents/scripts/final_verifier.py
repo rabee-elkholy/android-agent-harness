@@ -1099,14 +1099,6 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                                 checks[-1]["status"] = "FAIL"
                                 checks[-1]["detail"] = err_msg
                                 break
-                        if proof.get("proof_kind") == "CLAUDE_SUBAGENT_TRANSCRIPT":
-                            t_sha = str(proof.get("transcript_sha256") or "")
-                            if not re.fullmatch(r"[0-9a-f]{64}", t_sha.lower()) or not str(proof.get("transcript_path") or "").strip():
-                                err_msg = f"reviewer {rev_name} Claude subagent transcript proof is missing or malformed"
-                                reasons.append(err_msg)
-                                checks[-1]["status"] = "FAIL"
-                                checks[-1]["detail"] = err_msg
-                                break
                         if rep.get("provenance") == "subagent_execution" or proof.get("proof_kind") == "ANTIGRAVITY_SUBAGENT_TRANSCRIPT":
                             receipt_file = task_directory / "reviewer-dispatches" / f"{rev_name}.json"
                             if not receipt_file.is_file():

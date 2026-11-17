@@ -1,0 +1,255 @@
+"""Centralized Antigravity & Host Platform Quirks Registry.
+
+Consolidates temporary workarounds and diagnostics for upstream IDE, CLI, and OS bugs
+(#640, #198333..#201621) into one declarative catalog with instant kill-switches via
+`HARNESS_DISABLE_QUIRKS=201621,200687` or `.agents/project-context/quirks.json`.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any, Mapping
+
+
+PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
+    "AGY_640_PRETOOL_SUBAGENT_BYPASS": {
+        "issues": ("#640",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "PostToolUse audit catches executed invoke_subagent calls that bypassed PreToolUse denials.",
+    },
+    "AGY_198333_FLASH_503_BACKOFF": {
+        "issues": ("#198333",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects silent Gemini 3.8 Flash HTTP 503 regional capacity backoff loops.",
+    },
+    "AGY_198417_199301_WIN_STDIO_MCP": {
+        "issues": ("#198417", "#199301"),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "summary": "Warns when multiple high-churn stdio MCP servers risk Win32 pipe-handle collisions.",
+    },
+    "AGY_198689_LANGUAGE_SERVER_LOG_BLOAT": {
+        "issues": ("#198689",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects multi-GB language_server.log WatchVersionControlState spin bloat.",
+    },
+    "AGY_198819_REMOTE_MODE_ARGON_LEAK": {
+        "issues": ("#198819",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Guards against Remote Mode ignoring Model='flash' and draining 3x Argon weekly quota.",
+    },
+    "AGY_199713_ZOMBIE_SUBAGENT_SCHEDULE": {
+        "issues": ("#199713",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Blocks >=180s subagent schedule timers and detects >=2h zombie reactive-wakeup spikes.",
+    },
+    "AGY_199748_199756_HEADLESS_LOOP_TOS": {
+        "issues": ("#199748", "#199756"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Blocks unattended agy -p / --headless loops and UI keystroke injection.",
+    },
+    "AGY_199769_199770_ZERO_QUOTA_429": {
+        "issues": ("#199769", "#199770"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects Managed Agent API zero-quota (limit: 0) HTTP 429 responses on Argon/Carbon.",
+    },
+    "AGY_199971_200029_HYDROGEN_BURST_403": {
+        "issues": ("#199971", "#200029"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Human-cadence burst pacer smoothing rapid sequential tool turns to prevent false 403 bans.",
+    },
+    "AGY_199992_200147_ENTITLEMENT_DESYNC": {
+        "issues": ("#199992", "#200147"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Classifies transient Gemini 4 Hydrogen/Argon entitlement desync Unavailable states.",
+    },
+    "AGY_200026_TURN3_KV_CACHE_DROP": {
+        "issues": ("#200026",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Preserves Turn-0 {} subagent prefix-cache lock and detects Turn-3 +701 cache=0 drops.",
+    },
+    "AGY_200037_WIN11_SAC_ERROR_4551": {
+        "issues": ("#200037",),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "summary": "Detects Windows 11 Smart App Control Error 4551 on unsigned Antigravity v2.7.0 installers.",
+    },
+    "AGY_200144_CLI_SUBAGENT_MODEL_ID": {
+        "issues": ("#200144",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Omits unsupported explicit model IDs from subagent YAML frontmatter for agy CLI compatibility.",
+    },
+    "AGY_200467_HYDROGEN_EXTRA_ARGON_LEAK": {
+        "issues": ("#200467",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when Hydrogen Extra / xhigh silently drains 3x Argon weekly quota.",
+    },
+    "AGY_200619_INLINE_DIFF_AUTO_ACCEPT": {
+        "issues": ("#200619",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when antigravity.autoAcceptOnChat=true risks silent inline diff corruption.",
+    },
+    "AGY_200632_WIN_POWERSHELL_TURBO": {
+        "issues": ("#200632",),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "summary": "Blocks PowerShell pipes, chaining, and inline powershell -c that break Turbo Mode.",
+    },
+    "AGY_200671_CARBON_TOOL_TURN_TRUNCATION": {
+        "issues": ("#200671",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Guides plain-text reasoning summaries before tool batches on standalone Carbon sessions.",
+    },
+    "AGY_200687_200763_WIN_GOGC_ACCEPTEX_995": {
+        "issues": ("#200687", "#199301", "#200763"),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "summary": "Checks GOMEMLIMIT/GOGC tuning and detects post-wipe main.log AcceptEx code-2 crash loops.",
+    },
+    "AGY_201208_PREAMBLE_BOILERPLATE_QUOTA": {
+        "issues": ("#201208",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Keeps adapter templates free of boilerplate preambles that trigger false quota errors.",
+    },
+    "AGY_201209_EMPTY_SUBAGENT_PAYLOAD": {
+        "issues": ("#201209",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects silent DONE subagent turns with empty/<16-char payloads immediately.",
+    },
+    "AGY_201491_201582_NESTED_AGY_CLI_TOS": {
+        "issues": ("#201491", "#201582"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Blocks verb-position agy/antigravity subprocess calls inside run_command (Section 6 ToS).",
+    },
+    "AGY_201621_SEARCH_WEB_PARALLEL_EOF": {
+        "issues": ("#201621",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Caps parallel search_web bursts at <=2 per turn and diagnoses >300s unexpected EOF stalls.",
+    },
+}
+
+
+def _normalize_token(raw: str) -> str:
+    return re.sub(r"^#+", "", str(raw or "").strip()).upper()
+
+
+def _disabled_tokens(repo: Path | None = None, env: Mapping[str, str] | None = None) -> set[str]:
+    environ = env if env is not None else os.environ
+    disabled: set[str] = set()
+    raw_env = str(environ.get("HARNESS_DISABLE_QUIRKS") or "").strip()
+    if raw_env:
+        for part in re.split(r"[,;\s]+", raw_env):
+            tok = _normalize_token(part)
+            if tok:
+                disabled.add(tok)
+    if repo is not None:
+        for rel in (".agents/project-context/quirks.json", "agents/project-context/quirks.json"):
+            cfg_path = repo / rel
+            if cfg_path.is_file():
+                try:
+                    data = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+                    if isinstance(data, dict):
+                        for item in data.get("disabled") or []:
+                            tok = _normalize_token(str(item))
+                            if tok:
+                                disabled.add(tok)
+                except (OSError, ValueError):
+                    pass
+                break
+    return disabled
+
+
+def resolve_quirk_id(quirk_id_or_issue: str) -> str | None:
+    needle = _normalize_token(quirk_id_or_issue)
+    if not needle:
+        return None
+    if needle in PLATFORM_QUIRKS:
+        return needle
+    for qid, spec in PLATFORM_QUIRKS.items():
+        issue_nums = {_normalize_token(i) for i in spec.get("issues") or ()}
+        if needle in issue_nums or f"_{needle}_" in f"_{qid}_":
+            return qid
+    return None
+
+
+def is_quirk_enabled(
+    quirk_id_or_issue: str,
+    *,
+    repo: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    disabled = _disabled_tokens(repo=repo, env=env)
+    if "ALL" in disabled or "*" in disabled:
+        return False
+    qid = resolve_quirk_id(quirk_id_or_issue)
+    if qid is None:
+        return _normalize_token(quirk_id_or_issue) not in disabled
+    spec = PLATFORM_QUIRKS[qid]
+    if not disabled:
+        return bool(spec.get("default_enabled", True))
+    if qid in disabled:
+        return False
+    for iss in spec.get("issues") or ():
+        if _normalize_token(iss) in disabled:
+            return False
+    return bool(spec.get("default_enabled", True))
+
+
+def list_platform_quirks(
+    repo: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for qid, spec in PLATFORM_QUIRKS.items():
+        rows.append({
+            "id": qid,
+            "issues": list(spec.get("issues") or ()),
+            "platforms": list(spec.get("platforms") or ("all",)),
+            "enabled": is_quirk_enabled(qid, repo=repo, env=env),
+            "summary": str(spec.get("summary") or ""),
+        })
+    return rows
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Inspect active and disabled platform quirks.")
+    parser.add_argument("--repo", default=".", help="Repository root")
+    parser.add_argument("--json", action="store_true", help="Output JSON")
+    ns = parser.parse_args(argv)
+    repo = Path(ns.repo).resolve()
+    rows = list_platform_quirks(repo=repo)
+    active_n = sum(1 for r in rows if r["enabled"])
+    if ns.json:
+        print(json.dumps({"total": len(rows), "active": active_n, "disabled": len(rows) - active_n, "quirks": rows}, indent=2))
+    else:
+        print(f"Platform Quirks Registry: {active_n}/{len(rows)} active (disable via HARNESS_DISABLE_QUIRKS=<issue_id>)")
+        for r in rows:
+            st = "ON " if r["enabled"] else "OFF"
+            print(f"  [{st}] {r['id']} ({', '.join(r['issues'])}): {r['summary']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -260,9 +260,11 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
     # Prune retired legacy files from older client installs so doctor/ownership stay clean
     for retired_rel in (
         ".agents/scripts/human_review_cockpit.py",
+        ".agents/scripts/cc_pre_tool_safety.py",
+        ".agents/scripts/copilot_pre_tool_safety.py",
+        ".agents/scripts/_environment.py",
         ".agents/subagents/harness-worker-agent.json",
         ".agents/agents/harness-worker-agent/agent.md",
-        ".claude/agents/harness-worker-agent.md",
     ):
         ret_p = root / retired_rel
         if ret_p.is_file():

@@ -2098,15 +2098,11 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertNotIn("edit_file", rules_md)
         for host_tpl in (
             "GEMINI.md.template",
-            "CLAUDE.md.template",
-            "CODEX.md.template",
-            "QWEN.md.template",
-            "continue-android-harness.md.template",
-            "copilot-instructions.md.template",
+            "AGENTS.md.template",
         ):
             htxt = (kit_root / "agents/tool-adapters" / host_tpl).read_text(encoding="utf-8")
             self.assertIn("--expected-files", htxt, f"{host_tpl} missing --expected-files")
-            self.assertIn("--plan-hash <hash from PLAN_HASH>", htxt, f"{host_tpl} missing --plan-hash")
+            self.assertIn("--plan-hash", htxt, f"{host_tpl} missing --plan-hash")
 
         # 5. Scout & Specialist Turn-1 parallel search/list_dir allowed without DISCOVERY_ANCHOR_REQUIRED while Lead still requires anchor
         env_scout = {**os.environ, "HARNESS_REPO": str(self.repo), "HARNESS_UTILITY_AGENT": "harness-scout-agent"}
@@ -2141,7 +2137,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         ):
             self.assertTrue(scout_command_allowed(win_ro_cmd), f"Expected scout_command_allowed for: {win_ro_cmd}")
 
-        # Verify Claude Edit normalizes CRLF -> LF on authorized target file during IMPLEMENTING (with real UUID session_id)
+        # Verify Antigravity edit_file normalizes CRLF -> LF on authorized target file during IMPLEMENTING
         crlf_rel = "app/src/main/java/com/demo/FoodViewModel.kt"
         crlf_target = self.repo / crlf_rel
         crlf_target.parent.mkdir(parents=True, exist_ok=True)
@@ -2164,22 +2160,24 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             json.dumps({"task_id": "t-cc-crlf", "plan_path": ".agents/state/tasks/t-cc-crlf/plan.json"}),
             encoding="utf-8",
         )
-        cc_res = subprocess.run(
-            [sys.executable, str(kit_root / "agents/scripts/cc_pre_tool_safety.py")],
+        agy_res = subprocess.run(
+            [sys.executable, str(kit_root / "agents/scripts/pre_tool_safety.py")],
             input=json.dumps({
-                "session_id": "ef41a2b0-1234-5678-9abc-def012345678",
-                "tool_name": "Edit",
-                "tool_input": {
-                    "file_path": str(crlf_target),
-                    "old_string": "class FoodViewModel {\n    fun load() = 1\n}",
-                    "new_string": "class FoodViewModel {\n    fun load() = 2\n}",
+                "conversationId": "ef41a2b0-1234-5678-9abc-def012345678",
+                "toolCall": {
+                    "name": "edit_file",
+                    "args": {
+                        "TargetFile": str(crlf_target),
+                        "old_string": "class FoodViewModel {\n    fun load() = 1\n}",
+                        "new_string": "class FoodViewModel {\n    fun load() = 2\n}",
+                    },
                 },
             }),
             capture_output=True, text=True, env={**os.environ, "HARNESS_REPO": str(self.repo)}, check=False,
         )
-        cc_out = json.loads(cc_res.stdout)["hookSpecificOutput"]
-        self.assertEqual("allow", cc_out["permissionDecision"], cc_res.stdout)
-        self.assertNotIn(b"\r\n", crlf_target.read_bytes(), "Claude Edit should normalize CRLF -> LF on multi-line LF old_string")
+        agy_out = json.loads(agy_res.stdout)
+        self.assertEqual("allow", agy_out["decision"], agy_res.stdout)
+        self.assertNotIn(b"\r\n", crlf_target.read_bytes(), "Antigravity edit_file should normalize CRLF -> LF on multi-line LF old_string")
         (self.repo / ".agents/state/active-task.json").unlink(missing_ok=True)
 
         rev_models_doc = (kit_root / "docs/reviewer-models.md").read_text(encoding="utf-8")

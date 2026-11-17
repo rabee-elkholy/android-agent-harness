@@ -870,7 +870,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app/src/main/res/values/two.xml", "<resources/>\n")
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
         product_file = self.repo / ".agents" / "scripts" / "_product.py"
-        for host in ("antigravity", "claude", "codex", "generic"):
+        for host in ("antigravity", "generic"):
             with self.subTest(host=host), mock.patch.dict(os.environ, {"HARNESS_HOST": ""}):
                 write_file(product_file, f"PRIMARY_AI_HOST = {host!r}\n")
                 action = resolve_next_action(self.repo, task_id)
@@ -879,17 +879,17 @@ class PhaseReviewV2Selftest(unittest.TestCase):
 
     def test_HOST_PHASE_002_phase_response_ingestion_freezes_nontrusted_host(self) -> None:
         product_file = self.repo / ".agents" / "scripts" / "_product.py"
-        write_file(product_file, "PRIMARY_AI_HOST = 'codex'\n")
+        write_file(product_file, "PRIMARY_AI_HOST = 'generic'\n")
         task_id, reviewers, _, meta = self._setup_dispatch_state()
         reviewer = reviewers[0]
-        self.assertEqual("codex", meta["review_host"])
+        self.assertEqual("generic", meta["review_host"])
         self.assertEqual(1, meta["review_protocol_version"])
         self.assertEqual("HOST_MANAGED_UNVERIFIED", resolve_next_action(self.repo, task_id)["review_execution_profile"]["model_policy"])
         record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
         with self.assertRaisesRegex(ValidationError, "HOST_REVIEW_RESPONSE_REQUIRED"):
-            complete_phase_review(self.repo, task_id, "p1", reviewer, "codex-review-1")
+            complete_phase_review(self.repo, task_id, "p1", reviewer, "generic-review-1")
         with self.assertRaisesRegex(ValidationError, "host cannot change mid-run"):
-            complete_phase_review(self.repo, task_id, "p1", reviewer, "codex-review-1", host="antigravity")
+            complete_phase_review(self.repo, task_id, "p1", reviewer, "generic-review-1", host="antigravity")
         response = json.dumps({
             "schema_version": 2,
             "task_id": task_id,
@@ -900,15 +900,15 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             "findings": [],
         })
         self.assertEqual("PASS", complete_phase_review(
-            self.repo, task_id, "p1", reviewer, "codex-review-1", raw_response=response,
+            self.repo, task_id, "p1", reviewer, "generic-review-1", raw_response=response,
         )["verdict"])
         result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
         self.assertEqual("reviewer_response_text_unverified", result["provenance"])
         self.assertFalse(result["independent_execution_verified"])
 
-    def test_HOST_PHASE_003_claude_multiphase_freezes_v1_final_run(self) -> None:
+    def test_HOST_PHASE_003_generic_multiphase_freezes_v1_final_run(self) -> None:
         product_file = self.repo / ".agents" / "scripts" / "_product.py"
-        write_file(product_file, "PRIMARY_AI_HOST = 'claude'\n")
+        write_file(product_file, "PRIMARY_AI_HOST = 'generic'\n")
         phases = [
             {"id": "p1", "name": "First", "expected_files": ["app/src/main/res/values/one.xml"]},
             {"id": "p2", "name": "Second", "expected_files": ["app/src/main/res/values/two.xml"]},
@@ -921,11 +921,11 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         checkpoint_phase(argparse.Namespace(repo=str(self.repo), task_id=task_id, phase_id="p2"))
         self.assertEqual("PREPARE_VERIFICATION", resolve_next_action(self.repo, task_id)["code"])
         current = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id=task_id))
-        self.assertEqual("claude", current["review_host"])
+        self.assertEqual("generic", current["review_host"])
         self.assertEqual(1, current["review_protocol_version"])
 
     def test_HOST_PHASE_004_nontrusted_cli_uses_response_file(self) -> None:
-        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'generic'\n")
         task_id, reviewers, _, meta = self._setup_dispatch_state()
         record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
         reviewer = reviewers[0]
@@ -940,74 +940,16 @@ class PhaseReviewV2Selftest(unittest.TestCase):
             exit_code = phase_review.main([
                 "complete", "--repo", str(self.repo), "--task-id", task_id,
                 "--phase-id", "p1", "--reviewer", reviewer,
-                "--execution-id", "claude-review-1", "--response-file", str(response_file),
+                "--execution-id", "generic-review-1", "--response-file", str(response_file),
             ])
         self.assertEqual(0, exit_code)
         result_file = phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json"
         self.assertEqual("reviewer_response_text_unverified", read_json(result_file)["provenance"])
 
-    def test_C_D3_response_file_accepts_claude_subagent_transcript(self) -> None:
-        # Certification C-D3: a Claude reviewer reply could not be handed over unchanged. The
-        # subagent transcript path is read directly; its path and sha256 are recorded, unverified.
-        import hashlib
-        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
-        task_id, reviewers, _, meta = self._setup_dispatch_state()
-        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
-        reviewer = reviewers[0]
-        block = json.dumps({
-            "schema_version": 2, "task_id": task_id, "run_id": meta["phase_review_run_id"],
-            "reviewer": reviewer, "review_package_sha256": meta["package_sha256"],
-            "verdict": "PASS", "findings": [],
-        })
-        claude_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, claude_home, True)
-        transcript = claude_home / "projects/-app/s1/subagents/agent-r1.jsonl"
-        lines = [
-            {"type": "user", "message": {"role": "user", "content": "Review phase p1."}},
-            {"type": "assistant", "message": {"id": "m9", "role": "assistant", "content": [
-                {"type": "text", "text": "Checked `x` | y < z.\n```json\n" + block + "\n```"}]}},
-        ]
-        write_file(transcript, "".join(json.dumps(line) + "\n" for line in lines))
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            exit_code = phase_review.main([
-                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
-                "--reviewer", reviewer, "--execution-id", "agent-r1", "--response-file", str(transcript),
-            ])
-        self.assertEqual(0, exit_code)
-        result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
-        self.assertEqual("PASS", result["result"]["verdict"])
-        self.assertFalse(result["independent_execution_verified"])
-        self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
-        self.assertEqual(hashlib.sha256(transcript.read_bytes()).hexdigest(), result["response_source"]["transcript_sha256"])
-
-    def test_C4_phase_complete_finds_the_claude_transcript_by_execution_id(self) -> None:
-        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
-        task_id, reviewers, _, meta = self._setup_dispatch_state()
-        record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
-        reviewer = reviewers[0]
-        block = json.dumps({
-            "schema_version": 2, "task_id": task_id, "run_id": meta["phase_review_run_id"],
-            "reviewer": reviewer, "review_package_sha256": meta["package_sha256"], "verdict": "PASS", "findings": [],
-        })
-        claude_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, claude_home, True)
-        transcript = claude_home / "projects/-app/s1/subagents/agent-5be09d1.jsonl"
-        write_file(transcript, json.dumps({"type": "assistant", "message": {"id": "m1", "role": "assistant", "content": [
-            {"type": "text", "text": "```json\n" + block + "\n```"}]}}) + "\n")
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude_home)}), mock.patch("builtins.print"):
-            code = phase_review.main([
-                "complete", "--repo", str(self.repo), "--task-id", task_id, "--phase-id", "p1",
-                "--reviewer", reviewer, "--execution-id", "5be09d1",
-            ])
-        self.assertEqual(0, code)
-        result = read_json(phase_review_dir(task_dir(self.repo, task_id), "p1") / "results" / f"{reviewer}.json")
-        self.assertEqual(str(transcript.resolve()), result["response_source"]["transcript_path"])
-        self.assertFalse(result["independent_execution_verified"])
-
     def test_C_D6_response_file_that_is_not_a_file_is_a_usage_error(self) -> None:
         import contextlib
         import io
-        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'claude'\n")
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'generic'\n")
         task_id, reviewers, _, _ = self._setup_dispatch_state()
         record_phase_dispatch_batch(self.repo, task_id, "p1", reviewers)
         err = io.StringIO()
@@ -1021,11 +963,11 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertNotIn("Traceback", err.getvalue())
 
     def test_AUDIT_005_nontrusted_dispatch_has_public_cli(self) -> None:
-        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'codex'\n")
+        write_file(self.repo / ".agents" / "scripts" / "_product.py", "PRIMARY_AI_HOST = 'generic'\n")
         task_id, reviewers, _, meta = self._setup_dispatch_state()
         public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
         status_result = subprocess.run(
-            [*public_cli, "task", "status", "--repo", str(self.repo), "--task-id", task_id, "--next", "--host", "codex"],
+            [*public_cli, "task", "status", "--repo", str(self.repo), "--task-id", task_id, "--next", "--host", "generic"],
             cwd=self.repo, capture_output=True, text=True, check=False,
         )
         self.assertEqual(0, status_result.returncode, status_result.stderr)
@@ -1033,7 +975,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         self.assertIn("phase-review dispatch", status_result.stdout)
         dispatch_result = subprocess.run(
             [*public_cli, "phase-review", "dispatch", "--repo", str(self.repo), "--task-id", task_id,
-             "--phase-id", "p1", "--host", "codex",
+             "--phase-id", "p1", "--host", "generic",
              *(argument for reviewer in reviewers for argument in ("--reviewer", reviewer))],
             cwd=self.repo, capture_output=True, text=True, check=False,
         )
@@ -1251,7 +1193,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         write_file(self.repo / "app/src/main/java/com/example/App.kt",
                    "package com.example\nimport androidx.compose.runtime.Composable\n@Composable fun App() { Text(\"x\") }\n")
         with self.assertRaisesRegex(ValidationError, "skill:compose-inspector"):
-            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="claude"))
+            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="generic"))
         public_cli = [sys.executable, str(Path(__file__).resolve().parents[2] / "harness_cli.py")]
         revised = subprocess.run(
             [*public_cli, "task", "revise", "--repo", str(self.repo), "--task-id", task_id,
@@ -1263,7 +1205,7 @@ class PhaseReviewV2Selftest(unittest.TestCase):
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
         self.assertIn("compose-inspector", {item.get("id") for item in plan.get("skills") or []})
         try:
-            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="claude"))
+            workflow.prepare_verification(self.repo, argparse.Namespace(task_id=task_id, force=False, host="generic"))
         except ValidationError as exc:
             self.assertNotIn("skill:", str(exc))
 

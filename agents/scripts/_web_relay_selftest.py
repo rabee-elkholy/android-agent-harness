@@ -1013,7 +1013,7 @@ class WebRelaySelftest(unittest.TestCase):
         next_c2 = json.loads(r_next_c2.stdout)["next_action"]
         self.assertEqual("p2", next_c2.get("staged_web_phase"))
 
-        # Apply staged p2 in Chat 2, then test cross-host continuation (`task continue --host claude --source-stopped`)!
+        # Apply staged p2 in Chat 2, then test cross-host continuation (`task continue --host generic --source-stopped`)!
         r_p2_c2 = subprocess.run(
             [sys.executable, str(self.repo / ".agents" / "harness.py"), "web-apply", "--staged-phase", "--source", "conversation", "--proof-reference", "apply staged p2 in chat 2", "--json"],
             cwd=str(self.repo), env=chat2_env, capture_output=True, text=True, check=False,
@@ -1021,7 +1021,7 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertEqual(0, r_p2_c2.returncode, r_p2_c2.stderr + "\n" + r_p2_c2.stdout)
 
         r_cont = subprocess.run(
-            [sys.executable, str(self.repo / ".agents" / "harness.py"), "task", "continue", "--task-id", "phased-chat-hop", "--host", "claude", "--source-stopped", "--json"],
+            [sys.executable, str(self.repo / ".agents" / "harness.py"), "task", "continue", "--task-id", "phased-chat-hop", "--host", "generic", "--source-stopped", "--json"],
             cwd=str(self.repo), env=chat2_env, capture_output=True, text=True, check=False,
         )
         self.assertEqual(0, r_cont.returncode, r_cont.stderr + "\n" + r_cont.stdout)
@@ -2042,6 +2042,162 @@ class WebRelaySelftest(unittest.TestCase):
         r_retry_txt = self._run_harness("web-pack", "--retry", "--no-clipboard")
         self.assertEqual(0, r_retry_txt.returncode, r_retry_txt.stderr)
         self.assertIn("Stay in the SAME external AI chat", r_retry_txt.stdout)
+
+    def test_18_retry_failure_surgical_delta_and_verify_steps_hint(self) -> None:
+        """`web-pack --retry-failure` emits zero-reupload surgical excerpts on failures, detects manual post-apply edits, fails closed when clean, and `verify-steps` emits `web_retry_command`."""
+        big_helper = self.repo / "app" / "src" / "main" / "kotlin" / "com" / "demo" / "app" / "OrderPricingTable.kt"
+        big_lines = ["package com.demo.app", "", "/** Large companion pricing table. */", "object OrderPricingTable {"]
+        for idx in range(1, 90):
+            big_lines.append(f"    const val TIER_{idx}: Int = {idx * 10}")
+        big_lines.append("}")
+        big_helper.write_text("\n".join(big_lines) + "\n", encoding="utf-8")
+        _git(self.repo, "add", ".")
+        _git(self.repo, "commit", "-qm", "add large companion OrderPricingTable")
+
+        calc_rel = "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt"
+        table_rel = "app/src/main/kotlin/com/demo/app/OrderPricingTable.kt"
+        r_init = self._run_harness(
+            "web-pack",
+            "--file", calc_rel,
+            "--file", table_rel,
+            "--prompt", "Add tier bonus calculation",
+            "--no-clipboard",
+            "--json",
+        )
+        self.assertEqual(0, r_init.returncode, r_init.stderr)
+        init_doc = json.loads(r_init.stdout)
+        self.assertGreater(init_doc["bundle_bytes"], 3200)
+
+        # 1) Calling `--retry-failure` when all gates are clean fails closed with `WEB_PACK_NO_ACTIVE_FAILURE`!
+        r_clean_err = self._run_harness("web-pack", "--retry-failure", "--no-clipboard", "--json")
+        self.assertNotEqual(0, r_clean_err.returncode)
+        self.assertIn("WEB_PACK_NO_ACTIVE_FAILURE", r_clean_err.stdout + r_clean_err.stderr)
+
+        # 2) Apply Turn-1 external AI output that introduces a broken symbol reference on CheckoutCalculator.kt
+        turn1_merge = {
+            "schema": "HARNESS_WEB_MERGE_V1",
+            "pack_id": init_doc["pack_id"],
+            "status": "READY",
+            "plan_spec": {
+                "task_id": "retry-fail-18",
+                "kind": "FEATURE",
+                "outcome": "Add tier bonus calculation",
+                "approach": "Add bonusTotal helper",
+                "risks": "None",
+            },
+            "operations": [
+                {
+                    "action": "MODIFY",
+                    "path": calc_rel,
+                    "hunks": [
+                        {
+                            "search": "class CheckoutCalculator(private val formatter: PriceFormatter) {",
+                            "replace": "class CheckoutCalculator(private val formatter: PriceFormatter) {\n    /** Compute bonus total. */\n    fun bonusTotal(base: Long): Long = base + OrderPricingTable.MISSING_TIER\n",
+                        }
+                    ],
+                },
+                {
+                    "action": "CREATE",
+                    "path": "app/src/test/kotlin/com/demo/app/CheckoutCalculatorTest.kt",
+                    "content": "package com.demo.app\nimport org.junit.Test\nclass CheckoutCalculatorTest {\n    @Test fun roundingHalfUpWorks() { CheckoutCalculator(object : com.demo.core.PriceFormatter { override fun formatEgp(piastres: Long) = \"$piastres\" }).bonusTotal(10L) }\n}\n",
+                },
+            ],
+        }
+        r_apply1 = self._run_harness(
+            "web-apply", "--stdin", "--source", "conversation", "--proof-reference", "apply turn 1", "--json",
+            stdin_text=json.dumps(turn1_merge),
+        )
+        self.assertEqual(0, r_apply1.returncode, r_apply1.stderr + "\n" + r_apply1.stdout)
+        receipt_doc = read_json(self.repo / ".agents" / "state" / "tasks" / "retry-fail-18" / "web-relay-receipt.json")
+        self.assertIn(calc_rel, receipt_doc.get("post_apply_sha256") or {})
+
+        # Simulate kotlinc compiler failure in `.agents/state/results/gradle-compiledebugkotlin.json` + `.agents/state/logs/gradle/*.log`
+        res_dir = self.repo / ".agents" / "state" / "results"
+        res_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(res_dir / "gradle-compiledebugkotlin.json", {
+            "schema_version": 1,
+            "task": ":app:compileDebugKotlin",
+            "status": "FAIL",
+            "exit_code": 1,
+            "detail": "Compilation error in CheckoutCalculator.kt",
+        })
+        glog_dir = self.repo / ".agents" / "state" / "logs" / "gradle"
+        glog_dir.mkdir(parents=True, exist_ok=True)
+        abs_calc = (self.repo / calc_rel).as_posix()
+        (glog_dir / "20261117-180000-compileDebugKotlin.log").write_text(
+            f"e: file:///{abs_calc}:5:65: Unresolved reference 'MISSING_TIER'.\nFAILURE: Build failed with an exception.\n",
+            encoding="utf-8",
+        )
+
+        # 3) Run `web-pack --task-id retry-fail-18 --retry-failure`:
+        #    - stays in SAME external AI chat (`new_chat_recommended == False`)
+        #    - includes kotlinc error + surgical excerpt of CheckoutCalculator.kt
+        #    - does NOT re-upload the 95-line unchanged `OrderPricingTable.kt` (`TIER_85` absent!)
+        r_rf = self._run_harness("web-pack", "--task-id", "retry-fail-18", "--retry-failure", "--no-clipboard", "--json")
+        self.assertEqual(0, r_rf.returncode, r_rf.stderr + "\n" + r_rf.stdout)
+        rf_doc = json.loads(r_rf.stdout)
+        self.assertTrue(rf_doc["retry_failure"])
+        self.assertFalse(rf_doc["new_chat_recommended"])
+        self.assertGreaterEqual(rf_doc["surgical_excerpts_count"], 1)
+        self.assertLess(rf_doc["bundle_bytes"], 3500)
+        rf_bundle = Path(rf_doc["bundle_file"]).read_text(encoding="utf-8")
+        self.assertIn("Unresolved reference 'MISSING_TIER'", rf_bundle)
+        self.assertIn("### SURGICAL EXCERPT: `app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt`", rf_bundle)
+        self.assertNotIn("TIER_85", rf_bundle)
+
+        # 4) Apply Turn-2 `MODIFY` hunk from the same external AI chat -> succeeds cleanly against post-Turn-1 state!
+        turn2_fix = {
+            "schema": "HARNESS_WEB_MERGE_V1",
+            "pack_id": rf_doc["pack_id"],
+            "status": "READY",
+            "operations": [
+                {
+                    "action": "MODIFY",
+                    "path": calc_rel,
+                    "hunks": [
+                        {
+                            "search": "fun bonusTotal(base: Long): Long = base + OrderPricingTable.MISSING_TIER",
+                            "replace": "fun bonusTotal(base: Long): Long = base + OrderPricingTable.TIER_1",
+                        }
+                    ],
+                }
+            ],
+        }
+        r_apply2 = self._run_harness(
+            "web-apply", "--stdin", "--source", "conversation", "--proof-reference", "apply turn 2 fix", "--json",
+            stdin_text=json.dumps(turn2_fix),
+        )
+        self.assertEqual(0, r_apply2.returncode, r_apply2.stderr + "\n" + r_apply2.stdout)
+        self.assertIn("OrderPricingTable.TIER_1", (self.repo / calc_rel).read_text(encoding="utf-8"))
+
+        # 5) Manual developer edit in Android Studio AFTER `web-apply` (`sha != post_apply_sha256`) IS included automatically!
+        big_helper.write_text(big_helper.read_text(encoding="utf-8") + "// manual IDE tweak\n", encoding="utf-8")
+        r_rf_manual = self._run_harness("web-pack", "--task-id", "retry-fail-18", "--retry-failure", "--no-clipboard", "--json")
+        self.assertEqual(0, r_rf_manual.returncode, r_rf_manual.stderr)
+        rf_manual_bundle = Path(json.loads(r_rf_manual.stdout)["bundle_file"]).read_text(encoding="utf-8")
+        self.assertIn("### FILE: `app/src/main/kotlin/com/demo/app/OrderPricingTable.kt`", rf_manual_bundle)
+
+        # 6) Restore manual tweak on companion file, trigger a real JUnit failure via `EXPECT_ROUNDING_FIX`, and verify `verify-steps` emits `web_retry_command`!
+        _git(self.repo, "checkout", "--", table_rel)
+        test_rel = "app/src/test/kotlin/com/demo/app/CheckoutCalculatorTest.kt"
+        (self.repo / test_rel).write_text(
+            (self.repo / test_rel).read_text(encoding="utf-8") + "// EXPECT_ROUNDING_FIX\n",
+            encoding="utf-8",
+        )
+        r_vs = subprocess.run(
+            [sys.executable, str(self.repo / ".agents" / "harness.py"), "verify-steps", "--task-id", "retry-fail-18", "--host", "antigravity", "--json"],
+            cwd=str(self.repo),
+            env={**self.env, "HARNESS_HOOK_SELFTEST_ACTIVE": "1"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        self.assertNotEqual(0, r_vs.returncode, r_vs.stdout + "\n" + r_vs.stderr)
+        vs_doc = json.loads(r_vs.stdout)
+        self.assertEqual("python .agents/harness.py web-pack --task-id retry-fail-18 --retry-failure", vs_doc.get("web_retry_command"))
+        self.assertIn("--retry-failure", vs_doc.get("reason", ""))
 
 if __name__ == "__main__":
     unittest.main()

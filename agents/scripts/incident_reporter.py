@@ -188,7 +188,7 @@ def _public_incident(incident: dict[str, Any]) -> dict[str, Any]:
         "fingerprint_sha256": fp,
         "harness_version": version("harness_version"),
         "python_version": version("python_version"),
-        "host": choice("host", {"antigravity", "claude", "codex", "cli", "gemini"}),
+        "host": choice("host", {"antigravity", "cli", "gemini", "generic"}),
         "os": os_name if os_name in {"Linux", "Windows", "Darwin"} else "unknown",
         "code": choice("code", {"HARNESS_CONTRADICTION", "AUTO_HEAL_TRIGGERED", "HARNESS_INCIDENT",
                                 "UNEXPECTED_EXCEPTION", "MANUAL_REPORT"}, "HARNESS_INCIDENT"),
@@ -370,7 +370,6 @@ def record_incident(
     incident_id = f"incident-{ts}-{fp[:8]}"
     host = (
         os.environ.get("HARNESS_HOST")
-        or os.environ.get("HARNESS_HOOK_HOST")
         or ("antigravity" if (repo / "GEMINI.md").is_file() else "cli")
     )
     clean_extra: dict[str, Any] = {}

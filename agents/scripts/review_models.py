@@ -1,8 +1,8 @@
 """Developer-owned reviewer model choices and immutable native dispatch settings.
 
 This selects models, never reviewers, risk levels, providers or review proof.
-Claude aliases and Antigravity subagent frontmatter models are documented native
-contracts, not an account entitlement probe.
+Antigravity subagent frontmatter models are documented native contracts, not an
+account entitlement probe.
 """
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ from _vnext_common import (
 from evidence_store import StateLock
 from policy_vocab import CORE_ROUTED_REVIEWERS
 
-CLAUDE_MODEL_CHOICES = ("inherit", "sonnet", "opus", "haiku")
 ANTIGRAVITY_MODEL_CHOICES = (
     "inherit",
     "hydrogen-argon-hybrid",
@@ -86,8 +85,7 @@ _COMPLEXITY_AWARE_PRESETS = (
     "hydrogen-dynamic",
     "flash-argon-hybrid",
 )
-MODEL_CHOICES = tuple(dict.fromkeys((*CLAUDE_MODEL_CHOICES, *ANTIGRAVITY_MODEL_CHOICES)))
-CLAUDE_MODEL_SOURCE = "https://code.claude.com/docs/en/sub-agents#supported-frontmatter-fields"
+MODEL_CHOICES = ANTIGRAVITY_MODEL_CHOICES
 ANTIGRAVITY_MODEL_SOURCE = "https://antigravity.google/docs/subagents/#frontmatter-configuration-yaml"
 
 CRITICAL_HYBRID_REVIEWERS = (
@@ -554,16 +552,6 @@ def default_policy() -> dict:
 
 def host_capability(host: str) -> dict:
     host = str(host).strip().lower()
-    if host == "claude":
-        return {
-            "host": host,
-            "supports_override": True,
-            "choices": list(CLAUDE_MODEL_CHOICES),
-            "argument_name": "model",
-            "source": CLAUDE_MODEL_SOURCE,
-            "availability": "HOST_ACCOUNT_DEPENDENT",
-            "enforcement": "RULE_ENFORCED",
-        }
     if host == "antigravity":
         return {
             "host": host,
@@ -1197,29 +1185,12 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             "settings_sha256": (run.get("review_models") or {}).get("sha256"),
         }
 
-    if host_norm == "claude" and identity.get("transcript_path"):
-        from review_sources import read_claude_subagent_transcript
-        _, observed = read_claude_subagent_transcript(Path(identity["transcript_path"]))
-        if observed["transcript_sha256"] != identity.get("transcript_sha256"):
-            raise ValidationError("reviewer transcript changed after ingestion")
-        identity = observed
-    else:
-        identity = {}  # A report's own model claim is never native evidence.
-    actual = identity.get("host_reported_model") if host_norm == "claude" else None
-    if not isinstance(actual, str) or not actual:
-        actual = None
-    # Aliases identify families, not fixed versions. Only compare an observed
-    # native model ID, never a model name supplied in the review response body.
-    observed_models = identity.get("host_reported_models") or ([actual] if actual else [])
-    pattern = r"claude-(?:[0-9]+(?:-[0-9]+)*-)?" + re.escape(requested) + r"(?:-|$)"
-    if actual and requested != "inherit" and any(not re.match(pattern, model) for model in observed_models):
-        raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} requested {requested}, host reported {actual}")
-    if requested != "inherit" and not actual:
-        raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires its unchanged Claude transcript with native model metadata")
+    if requested != "inherit":
+        raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native Antigravity transcript metadata")
     return {
         "requested_model": requested,
-        "actual_model": actual,
-        "actual_model_status": "HOST_REPORTED_UNVERIFIED" if actual else "UNOBSERVED",
+        "actual_model": None,
+        "actual_model_status": "UNOBSERVED",
         "settings_sha256": (run.get("review_models") or {}).get("sha256"),
     }
 
@@ -1419,9 +1390,7 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
     if not isinstance(evidence, dict) or (
         evidence.get("settings_sha256") != run["review_models"]["sha256"]
         or evidence.get("requested_model") != selection["requested_model"]
-        or evidence.get("actual_model_status") != "HOST_REPORTED_UNVERIFIED"
-        or not isinstance(evidence.get("actual_model"), str)
-        or not re.match(r"claude-(?:[0-9]+(?:-[0-9]+)*-)?" + re.escape(selection["requested_model"]) + r"(?:-|$)", evidence["actual_model"])
+        or selection["requested_model"] != "inherit"
     ):
         raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen model evidence for {role}")
 

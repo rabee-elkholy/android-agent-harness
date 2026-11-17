@@ -1,4 +1,4 @@
-"""Detect the enforcement capability actually installed for each AI host."""
+"""Detect the enforcement capability actually installed for Google Antigravity and CLI fallback."""
 from __future__ import annotations
 
 import json
@@ -6,9 +6,6 @@ import re
 import shlex
 import shutil
 from pathlib import Path
-
-
-RULE_ONLY = {"codex", "cursor", "gemini", "qwen", "windsurf", "continue", "cline", "roo", "junie", "amazonq"}
 
 
 def _antigravity_hooks_valid(root: Path) -> bool:
@@ -44,13 +41,6 @@ def _antigravity_hooks_valid(root: Path) -> bool:
         return False
 
 
-def _contains(path: Path, marker: str) -> bool:
-    try:
-        return marker in path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-
-
 def detect(repo: Path, tools: list[str] | None = None) -> dict:
     root = repo.resolve()
     if tools is None:
@@ -69,10 +59,6 @@ def detect(repo: Path, tools: list[str] | None = None) -> dict:
     for host in selected:
         if host in {"antigravity", "gemini-antigravity"}:
             hard = _antigravity_hooks_valid(root)
-        elif host in {"claude", "claude-code"}:
-            hard = _contains(root / ".claude/settings.json", "cc_pre_tool_safety.py")
-        elif host in {"copilot", "github-copilot"}:
-            hard = _contains(root / ".github/hooks/android-harness-pre-tool-use.json", "copilot_pre_tool_safety.py")
         else:
             hard = False
         by_host[host] = "HARD_ENFORCED" if hard else "RULE_ENFORCED"

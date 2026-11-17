@@ -408,21 +408,10 @@ def _verify_app_snapshot(repo: Path, before: dict[str, str], allowed_adapter_rel
 
 def _candidate_adapter_paths(repo: Path) -> list[Path]:
     candidates = [
-        "AGENTS.md", "CLAUDE.md", "CODEX.md", "GEMINI.md", "QWEN.md",
-        ".cursorrules", ".clinerules", ".windsurfrules", ".goosehints",
-        ".cursor/rules/android-harness.mdc", ".cursor/mcp.json",
-        ".claude/settings.json", ".github/copilot-instructions.md",
-        ".github/instructions/android-harness.instructions.md",
-        ".github/hooks/android-harness-pre-tool-use.json",
-        ".windsurf/rules/android-harness.md", ".roo/rules/android-harness.md",
-        ".amazonq/rules/android-harness.md", ".continue/rules/android-harness.md",
-        ".junie/guidelines.md", ".kilocode/rules/android-harness.md",
+        "AGENTS.md",
+        "GEMINI.md",
     ]
-    command_names = [path.name.removesuffix(".md.template") for path in (Path(__file__).resolve().parents[1] / "command-packs").glob("*.md.template")]
-    for name in command_names:
-        candidates.extend((f".claude/commands/{name}.md", f".github/prompts/{name}.prompt.md", f".codex/prompts/{name}.md"))
     for path in (Path(__file__).resolve().parents[1] / "subagents").glob("*.json"):
-        candidates.append(f".claude/agents/{path.stem}.md")
         candidates.append(f".agents/agents/{path.stem}/agent.md")
     from policy_vocab import CORE_UTILITY_AGENTS
     for u_role in CORE_UTILITY_AGENTS:

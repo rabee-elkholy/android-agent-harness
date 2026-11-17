@@ -2,7 +2,7 @@
 
 Automatically detects all Project Management (PM) MCP servers and plugins
 installed in Antigravity (`~/.gemini/antigravity/mcp/*`, `~/.gemini/config/plugins/*`,
-and project `.agents/mcp_config.json` / `.cursor/mcp.json`) at runtime without
+and project `.agents/mcp_config.json`) at runtime without
 requiring manual setup reconfiguration.
 
 Supports built-in profiles for Zoho Projects, Zoho Sprints, Jira (Atlassian),
@@ -386,7 +386,7 @@ def _active_antigravity_server_names(repo: Path | None = None) -> set[str] | Non
         except OSError:
             pass
     if repo is not None:
-        for cfg_rel in (".agents/mcp_config.json", "agents/mcp_config.json", ".cursor/mcp.json"):
+        for cfg_rel in (".agents/mcp_config.json", "agents/mcp_config.json"):
             rcfg = Path(repo) / cfg_rel
             if rcfg.is_file():
                 try:
@@ -508,9 +508,9 @@ def discover_installed_pm_mcps(
         except OSError:
             continue
 
-    # 3. Scan repository MCP configs (.agents/mcp_config.json, .cursor/mcp.json)
+    # 3. Scan repository MCP configs (.agents/mcp_config.json)
     if repo is not None:
-        for cfg_rel in (".agents/mcp_config.json", "agents/mcp_config.json", ".cursor/mcp.json"):
+        for cfg_rel in (".agents/mcp_config.json", "agents/mcp_config.json"):
             cfg_path = Path(repo) / cfg_rel
             if not cfg_path.is_file():
                 continue
@@ -923,11 +923,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         res = find_pm_items_in_files([Path(f) for f in (args.files or [])], item=args.item, query=args.query)
         if args.json:
-            print(json.dumps(res, indent=2, ensure_ascii=False))
+            print(json.dumps(res, indent=2, ensure_ascii=True))
         else:
             print(f"PM_FIND_STATUS={res['status']} FOUND={res['found_count']}")
             for m in res["matches"]:
-                print("MATCH=" + json.dumps(m, ensure_ascii=False))
+                print("MATCH=" + json.dumps(m, ensure_ascii=True))
             for sf in res["scanned_files"]:
                 print(
                     f"SCANNED={sf.get('file')} items={sf.get('item_count', 0)} "

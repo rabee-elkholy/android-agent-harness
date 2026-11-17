@@ -65,7 +65,7 @@ def _post_subagent_directive(conversation_id: str) -> tuple[str, str]:
 
 def _has_subagent_transcript_signature(conversation_id: str) -> bool:
     """Detect Turn-0 subagent transcripts (#200026 prefix-cache lock) before ledger binding completes."""
-    if not conversation_id or conversation_id == "claude-session":
+    if not conversation_id:
         return False
     try:
         from antigravity_runtime import prefer_full_transcript, resolve_transcript
@@ -78,7 +78,6 @@ def _has_subagent_transcript_signature(conversation_id: str) -> bool:
         return (
             "MESSAGE_PRIORITY_HIGH" in head
             or "HARNESS_SCOUT_FINGERPRINT=" in head
-            or "HARNESS_WORKER_FINGERPRINT=" in head
             or "REVIEWER_FINGERPRINT=" in head
         )
     except Exception:
@@ -86,7 +85,7 @@ def _has_subagent_transcript_signature(conversation_id: str) -> bool:
 
 
 def _has_explicit_user_turn(conversation_id: str) -> bool:
-    if not conversation_id or conversation_id == "claude-session":
+    if not conversation_id:
         return False
     try:
         from antigravity_runtime import prefer_full_transcript, resolve_transcript

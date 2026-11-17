@@ -6,7 +6,7 @@ Printed by `python <kit-dir>/harness_cli.py chat-steps --repo <app-root>` after 
 UPDATE keeps the saved answers; skip to Phase 4.
 Run: `python <kit-dir>/agents/scripts/setup_wizard.py questions --repo <app-root>`
 The setup wizard payload is the sole interview authority. Ask **only** the questions returned; respect `recommended` (1 per question); answers use each option's `id`. Context preview: `python <kit-dir>/harness_cli.py context preview --repo <app-root>`.
-- AI host: default **Google Antigravity** (`antigravity`), whose current reviewer schema supports inheritance only. Claude-only setup can select native reviewer models; see [reviewer models](reviewer-models.md).
+- AI host: default **Google Antigravity** (`antigravity`), with native hooks and Review Protocol V2 subagents.
 - Reviewer Call Safety Cap: the recommended `20`.
 If a question contains `conditional_text_input` and the selected option equals `when_option`, ask exactly that nested prompt and save it under `answer_key`.
 
@@ -14,7 +14,7 @@ If a question contains `conditional_text_input` and the selected option equals `
 **STOP AND WAIT FOR EXPLICIT DEVELOPER APPROVAL.**
 INSTALL: create `<temp-answers>.json` outside `<app-root>`, then run:
 `python <kit-dir>/harness_cli.py init --repo <app-root> --kit <kit-dir> --answers-json <temp-answers>.json`
-It backs up the app, installs `.agents/` and each selected host's files: Antigravity `.agents/hooks.json`, `.agents/agents/<reviewer>/agent.md`, `GEMINI.md`; Claude Code `CLAUDE.md`, `.claude/agents/`, `.claude/settings.json` hook.
+It backs up the app and installs `.agents/` plus Antigravity entry points (`.agents/hooks.json`, `.agents/agents/<reviewer>/agent.md`, `GEMINI.md`, and `AGENTS.md`).
 UPDATE: `python <kit-dir>/harness_cli.py update --repo <app-root> --kit <kit-dir> --no-refresh`
 It keeps state, tasks, answers, notes and developer instructions, and rolls back on failure. If it names user-modified managed files, show them and STOP; never delete or overwrite them. Only when the developer explicitly asks to discard the listed `.agents/` edits, rerun the same command with `--discard-local-edits` (the edited copies stay in `.harness-backup/`; files outside `.agents/` still refuse).
 

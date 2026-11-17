@@ -7097,7 +7097,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
 
             cli_find = subprocess.run(
                 [sys.executable, str(repo / ".agents/harness.py"), "pm", "find-item", "--item", "I1454", "--file", str(step_out), "--json"],
-                cwd=str(repo), capture_output=True, text=True, check=True,
+                cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
             )
             self.assertEqual("FOUND", json.loads(cli_find.stdout)["status"])
 
@@ -7895,7 +7895,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 proc = subprocess.run(
                     [sys.executable, str(REPO_ROOT / "agents" / "scripts" / "pre_tool_safety.py")],
                     input=json.dumps(payload),
-                    capture_output=True, text=True, env=env_hook, check=False,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_hook, check=False,
                 )
                 self.assertEqual(0, proc.returncode, proc.stderr)
                 return json.loads(proc.stdout.strip())

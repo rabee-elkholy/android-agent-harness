@@ -235,12 +235,11 @@ class ChatInstallationDocsTests(unittest.TestCase):
             self.assertIn(marker, self.prompt)
 
     def test_E4_install_prompt_outputs_are_host_specific(self) -> None:
-        # Phases 4 and 5 described only Antigravity outputs, so a Claude Code install looked incomplete.
         phase4 = self.prompt[self.prompt.index("Phase 4:"):self.prompt.index("Phase 5:")]
         phase5 = self.prompt[self.prompt.index("Phase 5:"):]
-        self.assertIn("Claude Code", phase4)
-        self.assertIn("CLAUDE.md", phase4)
-        self.assertIn(".claude/agents/", phase4)
+        self.assertIn("Antigravity", phase4)
+        self.assertIn("GEMINI.md", phase4)
+        self.assertIn("AGENTS.md", phase4)
         self.assertIn(".agents/agents/", phase4)
         self.assertIn("selected host", phase5)
 
@@ -298,8 +297,6 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn("`APPROVAL_QUESTION` line", gemini)
         self.assertIn("`APPROVAL_BRIEF` lines translated, each said once, as markdown with bold labels, never in a code block", gemini)
         self.assertNotIn("artifact directory", gemini)
-        claude = (KIT / "agents/tool-adapters/CLAUDE.md.template").read_text(encoding="utf-8")
-        self.assertIn("each said once, as markdown with bold labels", claude)
         self.assertIn("ask the developer about it with `ask_question`", gemini)
         self.assertIn("an existing destructive fallback, users on older schema versions and downgrade", gemini)
         self.assertIn("Cancel is the developer's", gemini)
@@ -314,14 +311,6 @@ class ChatInstallationDocsTests(unittest.TestCase):
         adapters = [
             "AGENTS.md.template",
             "GEMINI.md.template",
-            "CLAUDE.md.template",
-            "copilot-instructions.md.template",
-            "CODEX.md.template",
-            "cursor-android-harness.mdc.template",
-            "windsurf-android-harness.md.template",
-            "continue-android-harness.md.template",
-            "QWEN.md.template",
-            "github-instructions.md.template",
         ]
         for adapter_name in adapters:
             content = (templates_dir / adapter_name).read_text(encoding="utf-8")
@@ -371,7 +360,7 @@ class ChatInstallationLifecycleTests(RepoCase):
                 "i2": sys.executable,
                 "i5": ":app",
                 "i6": "com.example.fixture.MainActivity",
-                "i14": ["codex"],
+                "i14": ["generic"],
                 "review_call_budget": "12",
                 "i20": "none",
             }),
@@ -392,12 +381,12 @@ class ChatInstallationLifecycleTests(RepoCase):
         write(self.repo / ".harness-setup/answers.json", json.dumps({
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
-            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["generic"],
             "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         temp_answers = self.repo / "update_answers.json"
-        write(temp_answers, json.dumps({"i4": "emulator-only", "i14": ["codex"], "i20": "none"}))
+        write(temp_answers, json.dumps({"i4": "emulator-only", "i14": ["generic"], "i20": "none"}))
         code = harness_cli.cmd_update(Namespace(
             repo=str(self.repo), kit=str(KIT), force=False, no_refresh=True,
             answers_json=str(temp_answers),
@@ -529,7 +518,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         write(self.repo / ".harness-setup/answers.json", json.dumps({
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
-            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["generic"],
             "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         original_install_engine = lifecycle_module._install_engine
@@ -573,7 +562,7 @@ class ChatInstallationLifecycleTests(RepoCase):
         write(self.repo / ".harness-setup/answers.json", json.dumps({
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
-            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["generic"],
             "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         res = install(self.repo, KIT)
@@ -679,7 +668,7 @@ class DiscoveryTests(RepoCase):
 
     def test_emulator_only_is_a_real_answer(self) -> None:
         facts = discover(self.repo)
-        answers = normalize({"i4": "emulator-only", "i14": ["codex"], "i20": "none"}, facts)
+        answers = normalize({"i4": "emulator-only", "i14": ["generic"], "i20": "none"}, facts)
         self.assertEqual("emulator-only", answers["device_policy"])
 
     def test_each_application_launcher_uses_its_own_package(self) -> None:
@@ -1028,7 +1017,7 @@ productFlavors { create("free") { dimension = "tier" }; create("eu") { dimension
 ''')
         facts = discover(self.repo)
         answers = normalize({
-            "i0": "yes", "i14": ["codex"], "i19": "other", "i19_text": "FreeEuStaging",
+            "i0": "yes", "i14": ["generic"], "i19": "other", "i19_text": "FreeEuStaging",
             "i6": "other", "i6_text": "com.example/.MainActivity", "i20": "none",
         }, facts)
         self.assertEqual(":app:assembleFreeEuStaging", answers["assemble"])
@@ -1051,7 +1040,7 @@ android {
         variant_question = next(item for item in questions_payload(self.repo, "en", facts) if item["id"] == "i19")
         self.assertIn("build_type:staging", {item["id"] for item in variant_question["options"]})
         answers = normalize({
-            "i0": "yes", "i14": ["codex"], "i19": "build_type:staging",
+            "i0": "yes", "i14": ["generic"], "i19": "build_type:staging",
             "i6": "other", "i6_text": "com.example/.MainActivity", "i20": "none",
         }, facts)
         self.assertEqual(":app:assembleStaging", answers["assemble"])
@@ -1489,7 +1478,7 @@ class LifecycleTests(RepoCase):
             "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest",
             "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"],
+            "tools": ["generic"],
             "pm_provider": "zoho_sprints",
             "zoho_mcp": "disable",
             "backup": True,
@@ -2078,7 +2067,7 @@ class EndToEndWorkflowTests(RepoCase):
         write(self.repo / ".harness-setup/answers.json", json.dumps({
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
-            "unit_test_task": ":app:testDebugUnitTest", "tools": ["codex"],
+            "unit_test_task": ":app:testDebugUnitTest", "tools": ["generic"],
             "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
@@ -2128,7 +2117,7 @@ class EndToEndWorkflowTests(RepoCase):
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest",
             "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "e2e-approved"
@@ -2147,7 +2136,7 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertEqual("IMPLEMENTING", begin_task(Namespace(**common))["status"])
         write(self.repo / "app/src/main/kotlin/A.kt", "internal class Changed\n")
         current = prepare_verification(Namespace(**common))
-        self.assertEqual("codex", current["review_host"])
+        self.assertEqual("generic", current["review_host"])
         self.assertEqual(1, current["review_protocol_version"])
         package, _ = build_package(self.repo, task_id)
         directory = self.repo / ".harness-setup/reviewer-fixtures"
@@ -2175,27 +2164,27 @@ class EndToEndWorkflowTests(RepoCase):
         self.assertEqual("READY_FOR_DELIVERY", ready["status"])
         self.assertEqual(current["delivery_snapshot_sha256"], ready["ready_delivery_snapshot_sha256"])
 
-    def test_claude_v1_unchanged_response_reaches_final_verifier(self) -> None:
+    def test_generic_v1_unchanged_response_reaches_final_verifier(self) -> None:
         from record_review import response_text_to_report
         write(self.repo / ".harness-setup/answers.json", json.dumps({
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest",
             "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["claude"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
-        task_id = "claude-v1-review"
+        task_id = "generic-v1-review"
         common = {"repo": str(self.repo), "task_id": task_id}
         draft(Namespace(**common, outcome="Change business behavior", expected_surfaces="BUSINESS_LOGIC",
                         expected_modules="app", test_strategy="Unit tests", device_strategy="Policy selected",
                         risks="", rollback="Restore changed source"))
-        record_approval(Namespace(**common, source="conversation", proof_reference="approve-claude-task",
+        record_approval(Namespace(**common, source="conversation", proof_reference="approve-generic-task",
                                   enforcement_tier="RULE_ENFORCED"))
         begin_task(Namespace(**common))
-        write(self.repo / "app/src/main/kotlin/A.kt", "internal class ClaudeChange\n")
+        write(self.repo / "app/src/main/kotlin/A.kt", "internal class GenericChange\n")
         current = prepare_verification(Namespace(**common))
-        self.assertEqual("claude", current["review_host"])
+        self.assertEqual("generic", current["review_host"])
         self.assertEqual(1, current["review_protocol_version"])
         package, _ = build_package(self.repo, task_id)
         package_sha = sha256_file(package)
@@ -2227,7 +2216,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "sensitive-convo-e2e"
@@ -2282,7 +2271,7 @@ class EndToEndWorkflowTests(RepoCase):
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest",
             "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "e2e-review-cli"
@@ -2335,7 +2324,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "test-pkg-dedup"
@@ -2370,7 +2359,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         base_strings = self.repo / "app/src/main/res/values/strings.xml"
@@ -2395,7 +2384,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "test-deliver-lifecycle"
@@ -2449,7 +2438,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task1 = "task-one"
@@ -2526,7 +2515,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "test-device-gate"
@@ -2568,7 +2557,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
 
@@ -2650,7 +2639,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
 
@@ -2688,7 +2677,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
 
@@ -2722,7 +2711,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
 
@@ -2763,7 +2752,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
 
@@ -2994,7 +2983,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         # Fragment file
@@ -3042,7 +3031,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "test-verdict-req-pkg"
@@ -3073,7 +3062,7 @@ class EndToEndWorkflowTests(RepoCase):
             "product": "Fixture", "application_id": "com.example.fixture",
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
-            "tools": ["codex"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
         }))
         install(self.repo, KIT)
         task_id = "test-high-self-review-reject"
@@ -3491,18 +3480,9 @@ class VNextReviewAndDiscoveryResilienceTests(unittest.TestCase):
         files_to_check = [
             KIT / "agents" / "rules" / "harness-rules.md",
             KIT / "agents" / "tool-adapters" / "GEMINI.md.template",
-            KIT / "agents" / "tool-adapters" / "CLAUDE.md.template",
-            KIT / "agents" / "tool-adapters" / "CODEX.md.template",
-            KIT / "agents" / "tool-adapters" / "QWEN.md.template",
             KIT / "agents" / "tool-adapters" / "AGENTS.md.template",
-            KIT / "agents" / "tool-adapters" / "continue-android-harness.md.template",
-            KIT / "agents" / "tool-adapters" / "copilot-instructions.md.template",
             KIT / "agents" / "skills" / "android-harness" / "references" / "command-contract.md",
         ]
-        for optional_name in ("CODEX.md", "QWEN.md"):
-            p = KIT / optional_name
-            if p.is_file():
-                files_to_check.append(p)
         for f in files_to_check:
             self.assertTrue(f.is_file(), f"Missing file {f}")
             text = f.read_text(encoding="utf-8")
@@ -3577,8 +3557,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         import wizard.questions as wq
         qs = wq.questions_payload(self.repo, "en")
         q = next((q for q in qs if q["id"] == "review_model_policy"), None)
-        self.assertIsNotNone(q)
-        self.assertEqual({"id": "i14", "equals": ["claude"]}, q["depends_on"])
+        self.assertIsNone(q)
 
     def test_SETUP_V2_005_questions_payload_omits_interactive_budget_and_merges_i22(self) -> None:
         """Interactive wizard omits review_call_budget (auto-default 20) and merges i10 into i22."""
@@ -3592,7 +3571,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_SETUP_V2_006_normalized_answers_contain_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertNotIn("allow_model_escalation", res)
@@ -3658,14 +3637,14 @@ class CleanInstallV2SpecificationTests(RepoCase):
     # -------------------------------------------------------------
     def test_SETUP_V2_017_git_policy_is_never(self) -> None:
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertEqual("never", res["git_policy"])
 
     def test_SETUP_V2_018_default_model_call_budget_is_20(self) -> None:
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertEqual(20, res["model_call_budget"])
@@ -3673,7 +3652,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
     def test_SETUP_V2_019_default_normalized_answers_have_no_allow_model_escalation(self) -> None:
         """REASON-INSTALL-003: normalized answers contain no allow_model_escalation"""
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertNotIn("allow_model_escalation", res)
@@ -3697,10 +3676,9 @@ class CleanInstallV2SpecificationTests(RepoCase):
         from _installer_config import generate_product_py
         matrix = (
             (["antigravity"], "antigravity", True),
-            (["claude"], "claude", False),
-            (["codex"], "codex", False),
-            (["antigravity", "codex"], "antigravity", True),
-            (["claude", "codex"], "generic", False),
+            (["gemini"], "gemini", False),
+            (["generic"], "generic", False),
+            (["antigravity", "generic"], "antigravity", True),
             ([], "generic", False),
         )
         for tools, primary, trusted in matrix:
@@ -3717,7 +3695,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
         # Real app: a budget of 10 stopped a payment task after one finding (six reviewers per round).
         import wizard.questions as wq
         from wizard.schema import validate_raw_answers
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "30"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none", "review_call_budget": "30"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         self.assertEqual(30, wq.normalize(raw, facts)["model_call_budget"])
         with self.assertRaises(SystemExit):
@@ -3727,21 +3705,21 @@ class CleanInstallV2SpecificationTests(RepoCase):
 
     def test_SETUP_V2_022_budget_20_maps_to_integer_20(self) -> None:
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "20"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none", "review_call_budget": "20"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertEqual(20, res["model_call_budget"])
 
     def test_SETUP_V2_023_custom_12_maps_to_integer_12(self) -> None:
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none", "review_call_budget": "custom", "review_call_budget_text": "12"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none", "review_call_budget": "custom", "review_call_budget_text": "12"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertEqual(12, res["model_call_budget"])
 
     def test_SETUP_V2_024_normalized_output_contains_no_unit_tests(self) -> None:
         import wizard.questions as wq
-        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["codex"], "i20": "none"}
+        raw = {"i0": "yes", "i1": "Test", "i2": sys.executable, "i5": ":app", "i6": "com.example.MainActivity", "i14": ["generic"], "i20": "none"}
         facts = {"repo": ".", "project_name": "Test", "modules": [":app"], "gradle": "gradlew", "python": sys.executable, "launcher": "com.example.MainActivity", "application_id": "com.example"}
         res = wq.normalize(raw, facts)
         self.assertNotIn("unit_tests", res)

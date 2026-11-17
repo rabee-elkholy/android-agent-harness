@@ -6,8 +6,8 @@ Android Agent Harness is purpose-built for **Google Antigravity**, with one dete
 
 | Host | Installed entry points | Effective enforcement |
 |---|---|---|
-| **Google Antigravity** (Dedicated Primary Runtime) | `GEMINI.md`, `AGENTS.md`, `agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Dedicated production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`) and `invoke_subagent` pre/post calls; Review Protocol V2 with 4 custom reviewer subagents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) |
-| Legacy / Optional Compatibility Templates (Claude Code, Codex, Copilot, Cursor, etc.) | `CLAUDE.md`, `CODEX.md`, `.cursor/rules` (when explicitly selected) | `HARD_ENFORCED` only for covered mutations where an installed hook runs; conversational approval and V1 review ingestion remain `RULE_ENFORCED` |
+| **Google Antigravity** (Dedicated Primary Runtime) | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, `.agents/agents/` | `HARD_ENFORCED`: Dedicated production host; native hooks intercept tool write mutations (`write_to_file`, `replace_file_content`, `multi_replace_file_content`, `edit_file`) and `invoke_subagent` pre/post calls; Review Protocol V2 with custom reviewer subagents |
+| **Standard `AGENTS.md` CLI Fallback** (`generic`) | `AGENTS.md` | `RULE_ENFORCED`: Standard CLI workflow over `.agents/harness.py` without vendor-specific hook bridges |
 
 `HARD_ENFORCED` describes only mutation classes actually intercepted by a
 host-native hook. It never means an OS sandbox or cryptographic proof of who
@@ -61,14 +61,10 @@ a stable `operation_id`; terminal states such as Done remain developer-owned.
 
 ## Review behavior
 
-Claude Code also supports developer-selected native reviewer model aliases,
-with project defaults and task/per-role overrides frozen per run. See
-[reviewer models](reviewer-models.md). Other current adapters remain inherit-only.
-
 The final change classification selects the smallest valid reviewer set from the adaptive 6-tier risk policy. Eligible micro-changes use `REVIEW_NOT_REQUIRED_BY_POLICY`. Normal business logic, UI, coroutine, network, persistence, and build changes select their relevant specialist roles. Critical security, billing, authentication, cryptography, or sensitive-data changes select all applicable specialist roles.
 
 On **Google Antigravity**:
-- Four custom reviewer subagents are provisioned under `.agents/agents/<reviewer>/agent.md` (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`).
+- Custom reviewer subagents are provisioned under `.agents/agents/<reviewer>/agent.md` (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`).
 - Routed reviewers execute concurrently in parallel via `invoke_subagent`.
 - Reviewer subagents inherit the parent agent's model by omission (no model override).
 - Review Protocol V2 enforces structured JSON output (`HARNESS_REVIEW_RESULT_V2`). Clean reviews report `findings: []` and `verdict: "PASS"`.
@@ -76,9 +72,7 @@ On **Google Antigravity**:
 - Review results are ingested from trusted conversation transcripts via `review complete` and aggregated via `review finalize`.
 - Total reviewer calls are bounded by the **Reviewer Call Safety Cap** (recommended: 20), shared by phases and final review. Final review defaults to 3 rounds. At the round cap, ask for an explicit developer-approved task round limit and record it through `task review-budget --round-limit <approved limit> --source conversation --proof-reference "<answer>"`. The existing `--limit` controls calls; neither option resets consumption or changes setup answers, frozen policies or reviewer requirements. Both limits can be approved in one command.
 
-On **Claude Code, Codex, and other hosts without a trusted transcript adapter**, the final run freezes Review Protocol V1. Pass the active host to `task status --next --host <host>` and `prepare-verification --host <host>`. On Claude Code, record each reviewer's reply from its subagent transcript with `record_review.py --from-subagent <role>=<transcript-path>` (the transcript path or agent id Claude Code reported); other hosts record the unchanged final reviewer response with `record_review.py --response <role>=<path>`. The evidence identifies independent execution as unverified. For scoped phase reviews, build the package with `phase-review package --host <host>`, launch the exact roster with the generated briefs, then run `phase-review dispatch --host <host> --reviewer <role>` once for each launched reviewer in the same command. Ingest unchanged responses with `phase-review complete --host <host> --response-file <path>`; on Claude Code `<path>` is the reviewer's subagent transcript. These hosts retain deterministic policy, immutable packages, gates, and the final verifier, but the receipt is host-reported rather than trusted execution proof.
-
-Limits on these hosts, because the final verifier requires proven independent review execution for some changes:
+On **Standard `AGENTS.md` CLI Fallback (`--host generic`)**, the final run freezes Review Protocol V1 (`record_review.py --response <role>=<path>` and `phase-review complete --host generic --response-file <path>`). Independent execution is recorded as unverified (`RULE_ENFORCED`):
 
 | Change | What completes it on a V1 host |
 |---|---|

@@ -1038,7 +1038,7 @@ class CriticalSafetyTests(unittest.TestCase):
             # 5. Missing manifest entry (file exists on disk, removed from manifest)
             manifest_path = kit / "agents" / "release_checksums.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            removed_key = "agents/command-packs/debug.md.template"
+            removed_key = "agents/workflows/debug.md"
             del manifest["files"][removed_key]
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaises(SystemExit) as ctx:
@@ -1051,7 +1051,7 @@ class CriticalSafetyTests(unittest.TestCase):
 
             # 6. Manifest entry with a missing file (entry in manifest, deleted from disk)
             shutil.copyfile(fixtures.KIT / "agents" / "release_checksums.json", manifest_path)
-            deleted_file = kit / "agents" / "command-packs" / "debug.md.template"
+            deleted_file = kit / "agents" / "workflows" / "debug.md"
             deleted_file.unlink()
             with self.assertRaises(SystemExit) as ctx:
                 cli._verify_kit_checksums(kit)
@@ -1060,7 +1060,7 @@ class CriticalSafetyTests(unittest.TestCase):
                 lifecycle._validate_kit(kit)
             with self.assertRaisesRegex(ValidationError, "missing"):
                 _verify_kit(kit, current_version)
-            shutil.copyfile(fixtures.KIT / "agents" / "command-packs" / "debug.md.template", deleted_file)
+            shutil.copyfile(fixtures.KIT / "agents" / "workflows" / "debug.md", deleted_file)
 
             # 7. Symlinked payload file fails on platforms that permit symlinks
             symlink_candidate = kit / "agents" / "scripts" / "symlink_test.py"

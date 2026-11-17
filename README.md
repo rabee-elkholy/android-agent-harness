@@ -22,7 +22,7 @@
   <a href="#what-daily-use-looks-like"><b>Daily Workflow</b></a> ·
   <a href="#antigravity-first-architecture--review-protocol-v2"><b>Antigravity &amp; Review V2</b></a> ·
   <a href="#shared-quota-hydrogen-orchestration--frontier-quota-protection"><b>Hydrogen Model Routing</b></a> ·
-  <a href="#domain-skills-workflows--slash-command-packs"><b>Skills &amp; Command Packs</b></a> ·
+  <a href="#domain-skills--workflows"><b>Skills &amp; Workflows</b></a> ·
   <a href="#capability-detected-android-ecosystem-bridges--ast-symbol-surgery"><b>Ecosystem Bridges</b></a> ·
   <a href="#faq"><b>FAQ</b></a>
 </p>
@@ -33,7 +33,7 @@
 
 ---
 
-**Android Agent Harness** upgrades general-purpose AI coding assistants — engineered primary-first for **Google Antigravity**, alongside **Claude Code**, **Codex**, **Cursor**, **GitHub Copilot**, **Windsurf**, and `15` supported AI hosts — into a deterministic, senior-grade Android and KMM/KMP engineering runtime.
+**Android Agent Harness** is an **Antigravity-First** engineering runtime that upgrades **Google Antigravity** (with a lightweight standard `AGENTS.md` CLI compatibility layer for other agents) into a deterministic, senior-grade Native Android and KMM/KMP delivery system.
 
 Prompt rules alone decay as conversations cross `50k+` tokens: agents start reading entire files blindly, editing out-of-scope modules, skipping Room migrations, swallowing coroutine cancellations, leaving debug logs behind, or claiming `"tests pass"` from stale runs. Android Agent Harness moves architectural discovery, scope enforcement, TDD bug reproduction, specialist code review, physical-device QA, and cryptographic delivery proof into a **zero-dependency Python standard-library engine** under `.agents/`.
 
@@ -80,7 +80,7 @@ WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNES
 Open your Android or KMM/KMP repository in **Google Antigravity** (or Claude Code) and paste this single pinned bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.4.0/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.3.21/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 What happens automatically and non-destructively:
@@ -106,7 +106,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or initialize directly from a pinned shallow tag clone with **zero global packages**:
 
 ```bash
-git clone --depth 1 --branch v1.4.0 --single-branch \
+git clone --depth 1 --branch v1.3.21 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -302,7 +302,7 @@ The **Shared-Quota Optimal `Gemini 4 Hydrogen` Engine (`hydrogen-dynamic` / `hyd
 
 ---
 
-## Domain Skills, Workflows & Slash Command Packs
+## Domain Skills & Workflows
 
 Instead of stuffing static rules into every prompt, `skill_router.py` attaches specialized domain skills on demand based on the active task's classified surfaces:
 
@@ -313,9 +313,8 @@ Instead of stuffing static rules into every prompt, `skill_router.py` attaches s
 | **Security, Build & Quality** | `android-security-billing` (`Keystore`, Play Billing, OAuth & Manifest hardening) · `gradle-build-optimizer` (daemon lock, caching & KMP targets) · `test-driven-development` (`RED -> GREEN` & JUnit assertions) · `systematic-debugging` (`debug` probes & crash root-cause) |
 | **Device QA, Git & PM** | `phone-e2e` (live ADB / Maestro hardware walkthroughs) · `git-pr-automator` (Conventional Commits & PR summaries under Human Git Authority) · `pm-tracker` (multi-provider MCP ticket sync & QA handoff reports) |
 
-### 15 Playbook Workflows & 11 Native `/slash` Command Packs
-- **Workflow Playbooks (`.agents/workflows/*.md`)**: `new-feature` (backed by `new_feature_scaffold.py` architecture-matched module/class scaffolding), `crash-triage` (`logcat_doctor.py`), `perf-audit` (`perf_guard.py`), `test-quality-audit`, `android-inspection`, `android-ui`, `check-strings`, `commit-msg`, `debug`, `deliver`, `efficient-context`, `phone-e2e`, `pm-tracker`, `preflight`, and `web-relay` (`web-pack` / `web-apply` manual external AI offload).
-- **Host Slash Commands (`agents/command-packs/`)**: Automatically rendered into `.claude/commands/*.md` (Claude Code), `.github/prompts/*.prompt.md` (GitHub Copilot), and `.codex/prompts/*.md` (Codex) for one-command `/doctor`, `/preflight`, `/new-feature`, `/debug`, `/crash-triage`, `/perf-audit`, `/test-quality-audit`, `/check-strings`, `/pm-tracker`, `/commit-msg`, and `/deliver` invocation.
+### 15 Engineering Playbook Workflows (`.agents/workflows/*.md`)
+- **Workflow Playbooks**: `new-feature` (backed by `new_feature_scaffold.py` architecture-matched module/class scaffolding), `crash-triage` (`logcat_doctor.py`), `perf-audit` (`perf_guard.py`), `test-quality-audit`, `android-inspection`, `android-ui`, `check-strings`, `commit-msg`, `debug`, `deliver`, `efficient-context`, `phone-e2e`, `pm-tracker`, `preflight`, and `web-relay` (`web-pack` / `web-apply` manual external AI offload).
 
 ---
 
@@ -366,14 +365,14 @@ Unconfigured tools add **`0 ms`** runtime overhead; detected project capabilitie
 
 ---
 
-## Supported Hosts & Enforcement Model (`15` AI Coding Hosts)
+## Antigravity-First Host Model & Standard `AGENTS.md` Compatibility
 
-| AI Coding Host | Installed Adapters & Assets | Scope & Mutation Enforcement | Review Protocol | Final Snapshot Verifier |
-|---|---|---|---|---|
-| **Google Antigravity** *(Primary Target)* | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json`, `.agents/agents/*/agent.md` (`8` pre-installed subagents), rules, `13` skills, `15` workflows | **`HARD_ENFORCED`** (`PreToolUse` & `PostToolUse` native hooks) | Trusted transcript `HARNESS_REVIEW_RESULT_V2` | **Yes** (`SHA-256` bound) |
-| **Claude Code** | `CLAUDE.md`, `AGENTS.md`, `.claude/settings.json` hooks, `.claude/agents/*`, `.claude/commands/*` (`11` slash packs) | Hook + Rule enforced | Native subagent transcript verification | **Yes** (`SHA-256` bound) |
-| **GitHub Copilot & Codex** | `AGENTS.md`, `.github/copilot-instructions.md`, `.github/hooks/*`, `.github/prompts/*`, `CODEX.md`, `.codex/prompts/*` | Bridge Hook / **`RULE_ENFORCED`** + CLI gates | Structured response ingestion | **Yes** (`SHA-256` bound) |
-| **Gemini CLI, Cursor, Windsurf, Cline, Roo, Amazon Q, Continue, Junie, Kilo, Goose & Qwen** | `AGENTS.md` + native host rule adapters (`GEMINI.md`, `.cursor/rules`, `.windsurf/rules`, `.clinerules`, `.roo/rules`, `.amazonq/rules`, `.continue/rules`, `.junie/guidelines.md`, `.kilocode/rules`, `.goosehints`, `QWEN.md`) | **`RULE_ENFORCED`** + downstream CLI gates | Structured response ingestion | **Yes** (`SHA-256` bound) |
+Android Agent Harness is purpose-built and battle-tested daily for **Google Antigravity** (`Tier 1 — Official & Hard-Enforced`), while providing a clean standard `AGENTS.md` CLI fallback without maintaining fragile editor-specific workarounds across a dozen untested IDEs:
+
+| Tier & Target | Installed Assets | Enforcement & Review Guarantees |
+|---|---|---|
+| **Tier 1: Google Antigravity** *(Official Primary Target — Battle-Tested)* | `GEMINI.md`, `AGENTS.md`, `.agents/hooks.json` (`PreToolUse`, `PostToolUse`, `PreInvocation`), `.agents/agents/*/agent.md` (`8` pre-installed subagents), rules, `13` skills, `15` workflows | **`HARD_ENFORCED`** native hooks + trusted transcript `HARNESS_REVIEW_RESULT_V2` + `SHA-256` final snapshot verifier |
+| **Tier 2: Standard `AGENTS.md` CLI Fallback** *(Best-Effort Compatibility)* | `AGENTS.md` + `.agents/harness.py` deterministic CLI gates (legacy host templates preserved for existing setups) | **`RULE_ENFORCED`** via `AGENTS.md` + downstream `SHA-256` CLI & final snapshot verifier |
 
 See [AI Tool Support Matrix](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/tool-support.md) and [Cross-Host Continuation](https://github.com/rabee-elkholy/android-agent-harness/blob/main/docs/host-continuation.md).
 
@@ -420,12 +419,11 @@ See [AI Tool Support Matrix](https://github.com/rabee-elkholy/android-agent-harn
 ```text
 agents/
 ├── harness.py             # Fast ~18 ms in-process CLI router & 37-command dispatcher
-├── command-packs/         # 11 /slash prompt templates for Claude Code, Copilot & Codex
-├── rules/                 # Canonical English behavioral kernel (<= 36k combined budget)
-├── scripts/               # Pure Python 3.10–3.14 stdlib governance, AST graph, gates & doctor
+├── rules/                 # Canonical English behavioral kernel (compressed Turn-0 budget)
+├── scripts/               # Modular Python 3.10–3.14 stdlib governance, AST graph, gates & doctor
 ├── skills/                # 13 auto-routed domain skills (Compose, Coroutines, Security, KMP, QA)
-├── subagents/             # 8 isolated V2 reviewer, specialist, Scout & Worker templates
-├── tool-adapters/         # Managed adapters for 15 AI hosts (Antigravity, Claude, Cursor & more)
+├── subagents/             # 7 isolated V2 reviewer, specialist & Scout templates
+├── tool-adapters/         # Antigravity (GEMINI.md + gemini-runtime) & standard AGENTS.md templates
 └── workflows/             # 15 engineering playbooks (new-feature, crash-triage, perf-audit, E2E)
 ```
 

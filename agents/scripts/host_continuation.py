@@ -113,8 +113,7 @@ def assert_execution_session(repo, task_id=None, host=None):
     if session is None:
         return
     actor = resolve_review_host(repo, host)
-    actor_id = os.environ.get("CODEX_THREAD_ID", "").strip() if actor == "codex" else ""
-    if session["host"] != actor or (actor_id and session.get("actor_id") and actor_id != session["actor_id"]):
+    if session["host"] != actor:
         raise ValidationError(f"HOST_SESSION_MISMATCH: task is owned by {session['host']} session {session['session_id']}; "
                               "stop the former executor and use task continue to take over")
 
@@ -278,7 +277,7 @@ def continue_task(args):
         phase, final = _phase_context(repo, task_id, plan), _final_context(repo, task_id, plan)
         run_host = ((phase or {}).get("run") or (final or {}).get("run") or {}).get("review_host")
         source = (previous or {}).get("host") or run_host
-        actor_id = os.environ.get("CODEX_THREAD_ID", "").strip() if host == "codex" else ""
+        actor_id = ""
         switching = bool(source and (source != host or (previous or {}).get("actor_id") not in (None, "", actor_id)))
         if switching and not getattr(args, "source_stopped", False):
             raise ValidationError("host transfer requires --source-stopped after stopping the previous executor")

@@ -103,8 +103,7 @@ def is_documentation_path(relative: str) -> bool:
         "requirements.txt", "constraints.txt", "runtime.txt", "version.txt",
         "lint-baseline.txt", "current.txt", "removed.txt", "public.txt",
         "proguard-android.txt", "proguard-android-optimize.txt",
-        "agents.md", "gemini.md", "claude.md", "copilot-instructions.md",
-        "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md",
+        "agents.md", "gemini.md",
     }:
         return False
     return not ("/src/" in f"/{lower}" and "/assets/" in f"/{lower}/")
@@ -1119,7 +1118,7 @@ def classify(
         if suffix in (".kt", ".java") and not test_path and _is_diagnostic_log_only_diff(diff_text):
             _add(found, "ANALYTICS", rel, "DIAGNOSTIC_LOG_ONLY")
             continue
-        if Path(lower).name in ("agents.md", "gemini.md", "claude.md", "copilot-instructions.md", "continue-android-harness.md", "codex.md", "qwen.md", "github-instructions.md") or ".cursorrules" in lower or ".windsurfrules" in lower or ".github/workflows" in lower:
+        if Path(lower).name in ("agents.md", "gemini.md") or ".github/workflows" in lower:
             _add(found, "HARNESS_CONFIG", rel, "HARNESS_INSTRUCTION_SURFACE")
         elif "/src/" in f"/{lower}" and "/assets/" in f"/{lower}/":
             if suffix in PRESENTATIONAL_ASSET_EXTENSIONS:
