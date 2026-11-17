@@ -86,7 +86,6 @@ ANTIGRAVITY_REVIEWER_TOOLS = (
 
 CORE_UTILITY_AGENTS = (
     "harness-scout-agent",
-    "harness-worker-agent",
 )
 
 # Pure Google Antigravity v2.31.2 built-in tool names only (https://antigravity.google/docs/hooks/#supported-tools).
@@ -98,18 +97,6 @@ ANTIGRAVITY_SCOUT_TOOLS = (
     "find_by_name",
     "list_dir",
     "run_command",
-)
-
-ANTIGRAVITY_WORKER_TOOLS = (
-    "view_file",
-    "write_to_file",
-    "replace_file_content",
-    "multi_replace_file_content",
-    "grep_search",
-    "find_by_name",
-    "list_dir",
-    "run_command",
-    "manage_task",
 )
 
 ANTIGRAVITY_SUBAGENT_ALLOWED_KEYS = (

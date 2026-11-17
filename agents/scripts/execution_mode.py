@@ -3,7 +3,7 @@
 
 Manages per-task and per-project execution mode routing between:
 - `normal` (100% local Antigravity execution with Hydrogen/Carbon orchestration)
-- `web`    (Manual Web-Relay clipboard pack/apply workflow via `gemini.google.com`)
+- `web`    (Manual Web-Relay clipboard pack/apply workflow via external AI web chat)
 
 Supports all 4 canonical developer choices (`normal-task`, `normal-project`,
 `web-task`, `web-project`) plus `ask-every-task` reset, with strict precedence:
@@ -62,7 +62,7 @@ EXECUTION_MODE_CHOICES: dict[str, dict[str, str]] = {
         "scope": "project",
         "label": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
         "label_en": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
-        "description": "Save Smart Auto routing project-wide: compact tasks (<10 files, <80 KB non-test code mass, and single-module or small 2-module <6 files / <48 KB) run locally in Antigravity; large (10+ files or 80+ KB), substantial multi-module (3+ modules, or 2 modules with 6+ files / 48+ KB), multi-phase, T5 critical, or 2-Strike tasks route to Gemini Web.",
+        "description": "Save Smart Auto routing project-wide: compact tasks (<10 files, <80 KB non-test code mass, and single-module or small 2-module <6 files / <48 KB) run locally in Antigravity; large (10+ files or 80+ KB), substantial multi-module (3+ modules, or 2 modules with 6+ files / 48+ KB), multi-phase, T5 critical, or 2-Strike tasks route to external AI web chat (Web-Relay).",
     },
     "auto-task": {
         "mode": "auto",
@@ -88,15 +88,15 @@ EXECUTION_MODE_CHOICES: dict[str, dict[str, str]] = {
     "web-task": {
         "mode": "web",
         "scope": "task",
-        "label": "Web mode — this task only (copy Context Pack for Gemini Web to save quota)",
-        "label_en": "Web mode — this task only (copy Context Pack for Gemini Web to save quota)",
-        "description": "Scope files locally and build a Clipboard Context Pack via `web-pack` for Gemini Web on this task only.",
+        "label": "Web mode — this task only (copy Context Pack for external AI chat to save quota)",
+        "label_en": "Web mode — this task only (copy Context Pack for external AI chat to save quota)",
+        "description": "Scope files locally and build a Clipboard Context Pack via `web-pack` for an external AI chat on this task only.",
     },
     "web-project": {
         "mode": "web",
         "scope": "project",
-        "label": "Web mode — always for this project (use Gemini Web by default)",
-        "label_en": "Web mode — always for this project (use Gemini Web by default)",
+        "label": "Web mode — always for this project (use external AI chat by default)",
+        "label_en": "Web mode — always for this project (use external AI chat by default)",
         "description": "Save Manual Web-Relay mode as the project default and stop asking on future tasks.",
     },
     "ask-every-task": {
@@ -431,16 +431,7 @@ def evaluate_smart_auto_routing(
     plan_status = str((plan or {}).get("status") or "").strip().upper()
     is_live = bool(tid and isinstance(plan, dict) and plan_status and plan_status not in TERMINAL_TASK_STATES)
     if is_live and isinstance(plan, dict):
-        # 1. Unresolved 2-Strike Worker handoff capsule -> offload to Gemini Web Carbon!
-        hf_f = task_dir(repo, tid) / "worker-handoff.json"
-        if hf_f.is_file():
-            try:
-                hf_doc = read_json(hf_f)
-                if isinstance(hf_doc, dict) and str(hf_doc.get("status") or "").upper() not in {"RESOLVED", "CLEARED"}:
-                    return ("web", "AUTO_WEB_2_STRIKE_HANDOFF", False)
-            except (OSError, ValueError, ValidationError):
-                pass
-        # 2. If task already has active Web-Relay state (pack or receipt), keep it on `web` cleanly
+        # 1. If task already has active Web-Relay state (pack or receipt), keep it on `web` cleanly
         tdir = task_dir(repo, tid)
         if (tdir / "web-relay-receipt.json").is_file() or (tdir / "latest-web-pack.json").is_file():
             t_ptr = tdir / "latest-web-pack.json"

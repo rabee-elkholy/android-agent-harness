@@ -1851,11 +1851,6 @@ def complete(args: argparse.Namespace) -> dict:
         save_stable_snapshot(repo, args.task_id, "ready_for_delivery", plan=plan)
     except (OSError, ValueError, ImportError, ValidationError):
         pass
-    try:
-        from human_review_cockpit import generate_human_review_cockpit
-        generate_human_review_cockpit(repo, args.task_id, open_browser=False)
-    except (OSError, ValueError, KeyError, RuntimeError, ImportError, ValidationError):
-        pass
     return plan
 
 
@@ -2687,6 +2682,56 @@ def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: st
     return introduced
 
 
+def _is_non_code_resource_or_schema_path(rel_p: str) -> bool:
+    lp = rel_p.lower()
+    if lp.endswith((".kt", ".java", ".kts", ".swift")):
+        return False
+    return (
+        "/res/" in lp
+        or "/composeresources/" in lp
+        or lp.endswith((".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql", ".proto"))
+    )
+
+
+def _phase_module_skips_unit_tests(repo: Path, module: str, phase_changes: list[Any] | None = None) -> bool:
+    """True when a module has no unit-test sources and all its phase changes are non-code resources/schemas."""
+    module_dir = module.strip(":").replace(":", "/")
+    if not module_dir:
+        return False
+    module_src = repo / module_dir / "src"
+    module_paths = [
+        str(c.get("path") if isinstance(c, dict) else c or "").replace("\\", "/")
+        for c in (phase_changes or [])
+    ]
+    module_paths = [p for p in module_paths if p.startswith(module_dir + "/src/")]
+    return bool(
+        module_paths
+        and all(_is_non_code_resource_or_schema_path(p) for p in module_paths)
+        and not any(d.is_dir() and "test" in d.name.lower() for d in (module_src.iterdir() if module_src.is_dir() else []))
+    )
+
+
+def _has_prerecorded_phase_test_pass(phase_dir: Path, modules: list[str], phase_changes: list[Any] | None = None) -> bool:
+    test_file = phase_dir / "unit_tests.json"
+    if not test_file.is_file():
+        return False
+    try:
+        from phase_review import compute_phase_delta_sha256
+        evidence_identity = canonical_sha256({
+            "phase_delta_sha256": compute_phase_delta_sha256(phase_dir.name, list(phase_changes or [])),
+            "modules": sorted(str(m) for m in modules),
+        })
+        data = read_json(test_file)
+        if not isinstance(data, dict):
+            return False
+        recorded_identity = data.get("evidence_identity_sha256")
+        if recorded_identity is None:
+            return str(data.get("status") or "").upper() == "PASS"
+        return recorded_identity == evidence_identity and str(data.get("status") or "").upper() == "PASS"
+    except (OSError, ValueError, ValidationError):
+        return False
+
+
 def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tests: bool, phase_changes: list[Any] | None = None) -> tuple[bool, str]:
     if not needs_tests:
         return True, "NOT_REQUIRED"
@@ -2735,29 +2780,7 @@ def check_phase_tests(repo: Path, phase_dir: Path, modules: list[str], needs_tes
         # A module with no unit-test sources whose phase changes are all resources cannot produce
         # test evidence; demanding it dead-ends any phase touching a resource-only module (N3).
         # A code change in such a module still runs and needs tests.
-        module_dir = m.strip(":").replace(":", "/")
-        module_src = repo / module_dir / "src"
-        module_paths = [
-            str(c.get("path") if isinstance(c, dict) else c or "").replace("\\", "/")
-            for c in (phase_changes or [])
-        ]
-        module_paths = [p for p in module_paths if p.startswith(module_dir + "/src/")]
-        def _is_non_code_resource_or_schema(rel_p: str) -> bool:
-            lp = rel_p.lower()
-            if lp.endswith((".kt", ".java", ".kts", ".swift")):
-                return False
-            return (
-                "/res/" in lp
-                or "/composeresources/" in lp
-                or lp.endswith((".sq", ".sqm", ".sql", ".graphql", ".graphqls", ".gql", ".proto"))
-            )
-
-        if (
-            module_dir
-            and module_paths
-            and all(_is_non_code_resource_or_schema(p) for p in module_paths)
-            and not any(d.is_dir() and "test" in d.name.lower() for d in (module_src.iterdir() if module_src.is_dir() else []))
-        ):
+        if _phase_module_skips_unit_tests(repo, m, phase_changes):
             aggregated_evidence["modules"][m] = {"status": "SKIPPED_NO_TEST_SOURCES", "executed": 0}
             continue
         try:
@@ -3108,94 +3131,6 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
 
     preflight_status = {"status": "PASS"}
 
-    # 2. Targeted compile only when the central policy calls for a build or
-    # tests. Documentation and other T0 changes must not trigger Gradle.
-    resolved_modules = resolve_phase_modules(repo, manifest)
-    build_gates = {"unit_tests", "instrumented_tests", "assemble"}
-    _gradle_mocked = False
-    try:
-        from run_gradle_task import run_gradle as _rg_probe
-        _gradle_mocked = hasattr(_rg_probe, "assert_called") or hasattr(_rg_probe, "side_effect") or hasattr(_rg_probe, "return_value")
-    except (ImportError, OSError, ValueError):
-        pass
-    _reusable_prev_phase: tuple[str, dict] | None = None
-    if phase_index > 0 and not _gradle_mocked:
-        for _done_id in reversed(list(phase_state.get("completed_phases") or [])):
-            _done_ckpt_f = directory / "phases" / str(_done_id) / "checkpoint.json"
-            if _done_ckpt_f.is_file():
-                try:
-                    _done_ckpt = read_json(_done_ckpt_f)
-                except (OSError, ValueError, ValidationError):
-                    continue
-                if (
-                    isinstance(_done_ckpt, dict)
-                    and _done_ckpt.get("status") == "CHECKPOINT_PASS"
-                    and _done_ckpt.get("delivery_snapshot_sha256") == manifest.get("delivery_snapshot_sha256")
-                ):
-                    _reusable_prev_phase = (str(_done_id), _done_ckpt)
-                    break
-
-    if build_gates.intersection(phase_policy.get("gates") or []):
-        _prev_comp = (_reusable_prev_phase[1].get("compile") or {}) if _reusable_prev_phase else {}
-        if (
-            _reusable_prev_phase is not None
-            and _prev_comp.get("status") == "PASS"
-            and set(resolved_modules) <= set(_prev_comp.get("modules") or [])
-        ):
-            compile_status = {"status": "PASS", "modules": resolved_modules, "reused_from_phase": _reusable_prev_phase[0]}
-        else:
-            try:
-                compile_ok, compile_detail = check_phase_compile(repo, resolved_modules, phase_changes=phase_changes)
-                if not compile_ok:
-                    raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
-                compile_status = {"status": compile_detail, "modules": resolved_modules}
-            except (ImportError, ValidationError):
-                raise
-            except Exception as exc:
-                raise ValidationError(f"phase checkpoint compile exception: {exc}")
-    else:
-        compile_status = {"status": "NOT_REQUIRED", "modules": []}
-
-    # 3. Policy-required tests
-    needs_tests = "unit_tests" in (phase_policy.get("gates") or [])
-    _reused_tests = False
-    if needs_tests and _reusable_prev_phase is not None:
-        _prev_id, _prev_ckpt = _reusable_prev_phase
-        _prev_comp_mods = set((_prev_ckpt.get("compile") or {}).get("modules") or [])
-        _prev_ut_f = directory / "phases" / _prev_id / "unit_tests.json"
-        if (
-            (_prev_ckpt.get("tests") or {}).get("status") == "PASS"
-            and set(resolved_modules) <= _prev_comp_mods
-            and _prev_ut_f.is_file()
-        ):
-            try:
-                _prev_ut = read_json(_prev_ut_f)
-                if isinstance(_prev_ut, dict) and str(_prev_ut.get("status") or "").upper() == "PASS":
-                    from phase_review import compute_phase_delta_sha256 as _cpds
-                    _ev_id = canonical_sha256({
-                        "phase_delta_sha256": _cpds(phase_dir.name, list(phase_changes or [])),
-                        "modules": sorted(str(m) for m in resolved_modules),
-                    })
-                    atomic_write_json(phase_dir / "unit_tests.json", {
-                        **_prev_ut,
-                        "evidence_identity_sha256": _ev_id,
-                        "reused_from_phase": _prev_id,
-                    })
-                    tests_status = {"status": "PASS"}
-                    _reused_tests = True
-            except (OSError, ValueError, ValidationError):
-                _reused_tests = False
-    if not _reused_tests:
-        try:
-            tests_ok, tests_detail = check_phase_tests(repo, phase_dir, resolved_modules, needs_tests, phase_changes=phase_changes)
-            if not tests_ok:
-                raise ValidationError(f"phase checkpoint unit tests failed: {tests_detail}")
-            tests_status = {"status": tests_detail}
-        except (ImportError, ValidationError):
-            raise
-        except Exception as exc:
-            raise ValidationError(f"phase checkpoint unit tests exception: {exc}")
-
     from phase_review import (
         is_phase_review_needed,
         set_phase_substate,
@@ -3222,6 +3157,148 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
         phase_policy=phase_policy,
         diff_stats=diff_stats,
     )
+
+    # 2. Targeted compile & unit tests only when the central policy calls for a build or
+    # tests. Documentation and other T0 changes must not trigger Gradle.
+    resolved_modules = resolve_phase_modules(repo, manifest)
+    build_gates = {"unit_tests", "instrumented_tests", "assemble"}
+    needs_compile = bool(build_gates.intersection(phase_policy.get("gates") or []))
+    needs_tests = "unit_tests" in (phase_policy.get("gates") or [])
+
+    defer_gradle = bool(
+        getattr(args, "defer_gradle_to_final", False)
+        and not review_needed
+        and not bool(plan.get("scoped_phase_review_enabled"))
+        and target_phase.get("scoped_phase_review_enabled") is not True
+    )
+
+    _gradle_mocked = False
+    try:
+        from run_gradle_task import run_gradle as _rg_probe
+        _gradle_mocked = hasattr(_rg_probe, "assert_called") or hasattr(_rg_probe, "side_effect") or hasattr(_rg_probe, "return_value")
+    except (ImportError, OSError, ValueError):
+        pass
+    _phase_hooks_mocked = (
+        _gradle_mocked
+        or any(hasattr(fn, attr) for fn in (check_phase_compile, check_phase_tests) for attr in ("assert_called", "side_effect", "return_value"))
+    )
+    _reusable_prev_phase: tuple[str, dict] | None = None
+    if phase_index > 0 and not _gradle_mocked:
+        for _done_id in reversed(list(phase_state.get("completed_phases") or [])):
+            _done_ckpt_f = directory / "phases" / str(_done_id) / "checkpoint.json"
+            if _done_ckpt_f.is_file():
+                try:
+                    _done_ckpt = read_json(_done_ckpt_f)
+                except (OSError, ValueError, ValidationError):
+                    continue
+                if (
+                    isinstance(_done_ckpt, dict)
+                    and _done_ckpt.get("status") == "CHECKPOINT_PASS"
+                    and _done_ckpt.get("delivery_snapshot_sha256") == manifest.get("delivery_snapshot_sha256")
+                ):
+                    _reusable_prev_phase = (str(_done_id), _done_ckpt)
+                    break
+
+    if defer_gradle:
+        gradle_wrapper_present = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+        if gradle_wrapper_present and needs_compile:
+            for _mod in resolved_modules:
+                resolve_module_gradle_task(repo, _mod, task_type="compile", phase_changes=phase_changes)
+                if needs_tests and not _phase_module_skips_unit_tests(repo, _mod, phase_changes):
+                    resolve_module_gradle_task(repo, _mod, task_type="test", phase_changes=phase_changes)
+        compile_status = (
+            {"status": "DEFERRED_TO_FINAL_VERIFICATION", "modules": resolved_modules}
+            if needs_compile
+            else {"status": "NOT_REQUIRED", "modules": []}
+        )
+        tests_status = (
+            {"status": "DEFERRED_TO_FINAL_VERIFICATION"}
+            if needs_tests
+            else {"status": "NOT_REQUIRED"}
+        )
+    else:
+        _reused_tests = False
+        if needs_tests and _reusable_prev_phase is not None:
+            _prev_id, _prev_ckpt = _reusable_prev_phase
+            _prev_comp_mods = set((_prev_ckpt.get("compile") or {}).get("modules") or [])
+            _prev_ut_f = directory / "phases" / _prev_id / "unit_tests.json"
+            if (
+                (_prev_ckpt.get("tests") or {}).get("status") == "PASS"
+                and set(resolved_modules) <= _prev_comp_mods
+                and _prev_ut_f.is_file()
+            ):
+                try:
+                    _prev_ut = read_json(_prev_ut_f)
+                    if isinstance(_prev_ut, dict) and str(_prev_ut.get("status") or "").upper() == "PASS":
+                        from phase_review import compute_phase_delta_sha256 as _cpds
+                        _ev_id = canonical_sha256({
+                            "phase_delta_sha256": _cpds(phase_dir.name, list(phase_changes or [])),
+                            "modules": sorted(str(m) for m in resolved_modules),
+                        })
+                        atomic_write_json(phase_dir / "unit_tests.json", {
+                            **_prev_ut,
+                            "evidence_identity_sha256": _ev_id,
+                            "reused_from_phase": _prev_id,
+                        })
+                        tests_status = {"status": "PASS"}
+                        _reused_tests = True
+                except (OSError, ValueError, ValidationError):
+                    _reused_tests = False
+
+        gradle_wrapper_present = (repo / "gradlew").is_file() or (repo / "gradlew.bat").is_file()
+        _can_combine_compile_into_tests = bool(
+            needs_compile
+            and needs_tests
+            and gradle_wrapper_present
+            and not _phase_hooks_mocked
+            and not _reused_tests
+            and not _has_prerecorded_phase_test_pass(phase_dir, resolved_modules, phase_changes)
+        )
+
+        if needs_compile:
+            _prev_comp = (_reusable_prev_phase[1].get("compile") or {}) if _reusable_prev_phase else {}
+            if (
+                _reusable_prev_phase is not None
+                and _prev_comp.get("status") == "PASS"
+                and set(resolved_modules) <= set(_prev_comp.get("modules") or [])
+            ):
+                compile_status = {"status": "PASS", "modules": resolved_modules, "reused_from_phase": _reusable_prev_phase[0]}
+            elif _can_combine_compile_into_tests:
+                compile_only_mods = [m for m in resolved_modules if _phase_module_skips_unit_tests(repo, m, phase_changes)]
+                if compile_only_mods:
+                    try:
+                        compile_ok, compile_detail = check_phase_compile(repo, compile_only_mods, phase_changes=phase_changes)
+                        if not compile_ok:
+                            raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
+                    except (ImportError, ValidationError):
+                        raise
+                    except Exception as exc:
+                        raise ValidationError(f"phase checkpoint compile exception: {exc}")
+                compile_status = {"status": "PASS", "modules": resolved_modules, "covered_by_unit_tests": True}
+            else:
+                try:
+                    compile_ok, compile_detail = check_phase_compile(repo, resolved_modules, phase_changes=phase_changes)
+                    if not compile_ok:
+                        raise ValidationError(f"phase checkpoint compile failed: {compile_detail}")
+                    compile_status = {"status": compile_detail, "modules": resolved_modules}
+                except (ImportError, ValidationError):
+                    raise
+                except Exception as exc:
+                    raise ValidationError(f"phase checkpoint compile exception: {exc}")
+        else:
+            compile_status = {"status": "NOT_REQUIRED", "modules": []}
+
+        # 3. Policy-required tests
+        if not _reused_tests:
+            try:
+                tests_ok, tests_detail = check_phase_tests(repo, phase_dir, resolved_modules, needs_tests, phase_changes=phase_changes)
+                if not tests_ok:
+                    raise ValidationError(f"phase checkpoint unit tests failed: {tests_detail}")
+                tests_status = {"status": tests_detail}
+            except (ImportError, ValidationError):
+                raise
+            except Exception as exc:
+                raise ValidationError(f"phase checkpoint unit tests exception: {exc}")
 
     if review_needed:
         review_status = {"status": "REVIEW_PACKAGE_REQUIRED", "reviewers": selected_reviewers}
@@ -3292,6 +3369,8 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
             except (OSError, ValueError, ValidationError):
                 wr_deleted = set()
         for next_ph in phases[curr_idx + 1 :]:
+            if next_ph.get("scoped_phase_review_enabled") is True:
+                break
             next_pid = str(next_ph.get("id") or "").strip()
             if not next_pid:
                 break
@@ -3308,6 +3387,7 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
                         task_id=args.task_id,
                         phase_id=next_pid,
                         advance_all_ready=False,
+                        defer_gradle_to_final=defer_gradle,
                     )
                 )
             except ValidationError:
@@ -3337,6 +3417,130 @@ def checkpoint_phase(args: argparse.Namespace) -> dict:
     if auto_advanced_phases:
         ret_payload["auto_advanced_phases"] = auto_advanced_phases
     return ret_payload
+
+
+def all_remaining_phases_ready_for_final(
+    repo: Path,
+    task_id: str,
+    plan: dict | None = None,
+) -> tuple[bool, str]:
+    """Return (True, current_phase_id) when all remaining phases are already materialized on disk
+    without requiring intermediate scoped phase reviews, allowing `verify-steps` to fast-forward
+    phase checkpoints and run Preflight + Unit Tests + Review Packaging in a single pass."""
+    try:
+        plan_doc = plan if isinstance(plan, dict) and plan else _load_plan(repo, task_id)
+    except (OSError, ValueError, ValidationError):
+        return False, ""
+    if plan_doc.get("status") != "IMPLEMENTING":
+        return False, ""
+    phases = plan_doc.get("phases") or []
+    if not phases or bool(plan_doc.get("scoped_phase_review_enabled")):
+        return False, ""
+    directory = task_dir(repo, task_id)
+    staged_dir = directory / "staged-web-phases"
+    if staged_dir.is_dir() and any(staged_dir.glob("*.json")):
+        return False, ""
+
+    from phase_review import (
+        PHASE_COMPLETE,
+        PHASE_REVIEW_BLOCKED,
+        PHASE_REVIEW_PACKAGE_REQUIRED,
+        PHASE_REVIEWING,
+        get_phase_substate,
+    )
+    phase_state_f = directory / "phase-state.json"
+    p_state = read_json(phase_state_f) if phase_state_f.is_file() else {
+        "current_phase_id": phases[0].get("id"),
+        "completed_phases": [],
+        "phase_checkpoints": {},
+    }
+    completed_set = {str(x) for x in (p_state.get("completed_phases") or []) if str(x)}
+    if all(str(p.get("id") or "") in completed_set for p in phases):
+        return False, ""
+
+    try:
+        active_idx = int(plan_doc.get("active_phase_index") or 0)
+    except (TypeError, ValueError):
+        active_idx = 0
+    active_idx = max(0, min(active_idx, len(phases) - 1))
+    cur_phase = phases[active_idx] if isinstance(phases[active_idx], dict) else {}
+    cur_pid = str(cur_phase.get("id") or p_state.get("current_phase_id") or "").strip()
+    if not cur_pid:
+        return False, ""
+
+    for ph in phases[active_idx:]:
+        if not isinstance(ph, dict) or ph.get("scoped_phase_review_enabled") is True:
+            return False, ""
+        pid = str(ph.get("id") or "").strip()
+        if get_phase_substate(p_state, pid) in (PHASE_REVIEW_BLOCKED, PHASE_REVIEW_PACKAGE_REQUIRED, PHASE_REVIEWING):
+            return False, ""
+
+    wr_complete_task = False
+    wr_deleted: set[str] = set()
+    wr_rec_p = directory / "web-relay-receipt.json"
+    if wr_rec_p.is_file():
+        try:
+            wr_doc = read_json(wr_rec_p)
+            if isinstance(wr_doc, dict) and str(wr_doc.get("task_id") or "") == task_id:
+                if bool(wr_doc.get("incomplete_continuation")):
+                    return False, ""
+                wr_complete_task = True
+                wr_deleted = {str(x).replace("\\", "/").strip("/") for x in (wr_doc.get("files_deleted") or []) if str(x).strip()}
+        except (OSError, ValueError, ValidationError):
+            return False, ""
+
+    try:
+        task_base = load_task_baseline(repo, task_id)
+        plan_owned = normalize_expected_files(repo, plan_doc.get("expected_files") or [])
+        full_manifest = build_task_manifest(repo, task_base, expected_files=plan_owned or None)
+        full_changes = full_manifest.get("task_changes") if "task_changes" in full_manifest else full_manifest.get("changes") or []
+    except (OSError, ValueError, ValidationError):
+        return False, ""
+    if not full_changes:
+        return False, ""
+
+    changed_paths = {
+        str(c.get("path") or "").replace("\\", "/").strip("/")
+        for c in full_changes
+        if isinstance(c, dict) and str(c.get("path") or "").strip()
+    }
+    deleted_paths = wr_deleted | {
+        str(c.get("path") or "").replace("\\", "/").strip("/")
+        for c in full_changes
+        if isinstance(c, dict) and str(c.get("status") or "").upper() == "D"
+    }
+
+    # Verify active phase has changes ready unless already PHASE_COMPLETE (pending begin-next-phase)
+    if get_phase_substate(p_state, cur_pid) != PHASE_COMPLETE:
+        cur_base_f = directory / "phases" / cur_pid / "baseline.json"
+        cur_base = read_json(cur_base_f) if cur_base_f.is_file() else task_base
+        cur_scope = cur_phase.get("expected_files") or plan_doc.get("expected_files")
+        cur_man = build_task_manifest(repo, cur_base, expected_files=cur_scope)
+        cur_changes = cur_man.get("task_changes") if "task_changes" in cur_man else cur_man.get("changes") or []
+        if not cur_changes:
+            return False, ""
+        cur_owned = normalize_expected_files(repo, cur_scope or [])
+        if cur_owned and find_conflict_markers(repo, cur_owned):
+            return False, ""
+
+    for next_ph in phases[active_idx + 1 :]:
+        next_owned = normalize_expected_files(repo, next_ph.get("expected_files") or [])
+        check_files = next_owned or plan_owned
+        if check_files:
+            if not all((repo / rel_p).is_file() or rel_p in deleted_paths for rel_p in check_files):
+                return False, ""
+            if find_conflict_markers(repo, check_files):
+                return False, ""
+        if next_owned:
+            if not wr_complete_task and not (set(next_owned) & changed_paths):
+                return False, ""
+        else:
+            # Compact CLI `--phases "p1:...,p2:..."` shares plan-level expected_files across phases:
+            # only fast-forward when web-apply completed the pack OR every planned file has changes.
+            if not wr_complete_task and (not plan_owned or not (set(plan_owned) <= changed_paths)):
+                return False, ""
+
+    return True, cur_pid
 
 
 def validated_completed_phase_manifest(
@@ -3640,8 +3844,30 @@ def status(args: argparse.Namespace) -> dict:
             "plan_history", "history", "verification_recipes",
         ):
             plan.pop(heavy_key, None)
+    try:
+        from pre_tool_safety import _detect_live_verification_or_build_owner
+        bg_pid = _detect_live_verification_or_build_owner(repo, task_id)
+        if bg_pid > 0:
+            plan["background_execution_active"] = {
+                "pid": bg_pid,
+                "instruction": (
+                    "Background verification or Gradle build is actively running for this task. "
+                    "Do NOT launch overlapping commands or reviewer subagents; wait for background completion."
+                ),
+            }
+    except (ImportError, OSError, ValueError, TypeError, ValidationError):
+        pass
     if bool(getattr(args, "brief", False)):
-        keys = ("task_id", "status", "plan_sha256", "review_rounds", "review_calls_used", "verification_run_id", "next_action")
+        keys = (
+            "task_id",
+            "status",
+            "plan_sha256",
+            "review_rounds",
+            "review_calls_used",
+            "verification_run_id",
+            "background_execution_active",
+            "next_action",
+        )
         plan = {key: plan[key] for key in keys if key in plan}
     return plan
 
@@ -3913,6 +4139,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--advance-all-ready",
         action="store_true",
         help="When subsequent phases already have all expected files materialized at the verified snapshot (and no phase review is required), advance and checkpoint them in one pass",
+    )
+    command.add_argument(
+        "--defer-gradle-to-final",
+        action="store_true",
+        help="Run fast deterministic phase checks and defer Gradle compile/unit-test execution to the immediate final verification pass when no scoped phase review is required",
     )
     command.set_defaults(handler=checkpoint_phase)
     bnp_cmd = sub.add_parser("begin-next-phase", parents=[common])
@@ -4920,7 +5151,7 @@ def main(argv: list[str] | None = None) -> int:
             if _pre_web_pack_cmd:
                 print(f"NEXT_ACTION=WEB_RELAY_PACK: {_pre_web_pack_cmd}")
                 print(
-                    "NEXT_REASON=Web execution mode is active; build the Context Pack for Gemini Web first "
+                    "NEXT_REASON=Web execution mode is active; build the Web-Relay Context Pack first "
                     "(co-authored BUG regression tests are validated automatically on web-apply and verify-steps)."
                 )
             else:

@@ -222,11 +222,9 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         )
         self.assertEqual((res_unauth.get("hookSpecificOutput") or {}).get("permissionDecision") or res_unauth.get("decision"), "deny")
 
-        # Subagent isolation: Scout allows `execution-mode show` only and blocks `execution-mode set`; Worker blocks `execution-mode set`
+        # Subagent isolation: Scout allows `execution-mode show` only and blocks `execution-mode set`
         self.assertTrue(delegation_policy.scout_command_allowed("python .agents/harness.py execution-mode show --json"))
         self.assertFalse(delegation_policy.scout_command_allowed('python .agents/harness.py execution-mode set --choice web-project --source conversation --proof-reference "ok"'))
-        w_ok, _ = delegation_policy.worker_command_allowed('python .agents/harness.py execution-mode set --choice normal-task --source conversation --proof-reference "ok"')
-        self.assertFalse(w_ok)
 
     def test_03_edge_case_3_single_task_override_preserves_project_default(self) -> None:
         repo, brain, cid = self._fresh_repo("ec3")
@@ -316,10 +314,10 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             cwd=repo, check=True, stdout=subprocess.PIPE,
         )
 
-        # Initially in `normal` mode on 4 files -> `DELEGATE_WORKER_SLICE`
+        # Initially in `normal` mode on 4 files -> `INLINE_LEAD_DIRECT`
         adv_normal = delegation_policy.evaluate_delegation_policy(repo, task_id="mid-switch")
-        self.assertEqual(adv_normal["strategy"], "DELEGATE_WORKER_SLICE")
-        self.assertTrue(adv_normal["worker_allowed"])
+        self.assertEqual(adv_normal["strategy"], "INLINE_LEAD_DIRECT")
+        self.assertFalse(adv_normal["worker_allowed"])
 
         # Switch mid-task `normal -> web` without invalidating `plan_sha256`!
         sw_web = execution_mode.set_execution_mode(
@@ -346,8 +344,8 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         self.assertEqual(read_json(repo / ".agents/state/tasks/mid-switch/plan.json")["plan_sha256"], sha_before)
 
         adv_back = delegation_policy.evaluate_delegation_policy(repo, task_id="mid-switch")
-        self.assertEqual(adv_back["strategy"], "DELEGATE_WORKER_SLICE")
-        self.assertTrue(adv_back["worker_allowed"])
+        self.assertEqual(adv_back["strategy"], "INLINE_LEAD_DIRECT")
+        self.assertFalse(adv_back["worker_allowed"])
 
     def test_05_edge_case_5_and_6_bridge_continuity_parallel_switch_and_tamper_guard(self) -> None:
         repo, brain, cid = self._fresh_repo("ec5_ec6")
@@ -682,7 +680,7 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         tid = json.loads(applied.stdout)["task_id"]
         adv_post = delegation_policy.evaluate_delegation_policy(repo, task_id=tid)
         self.assertEqual(adv_post["strategy"], "WEB_RELAY_APPLIED_VERIFY")
-        self.assertEqual(adv_post["worker_mode"], "TESTS_AND_GATES_ONLY")
+        self.assertEqual(adv_post["worker_mode"], "NONE")
 
         # 3) Real `phase-state.json` + `expected_files` multi-phase routing check (`phase_routing.py`)
         plan_mp = dict(read_json(repo / f".agents/state/tasks/{tid}/plan.json"))
@@ -742,16 +740,6 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         self.assertEqual(eff_small["configured_mode"], "auto")
         self.assertTrue(eff_small["auto_routed"])
         self.assertEqual(eff_small["auto_route_trigger"], "AUTO_NORMAL_COMPACT_SCOPE_3_FILES")
-
-        # 2b) Simulate a 2-Strike unresolved `worker-handoff.json` on that exact 3-file task -> Smart Auto escalates to `web`!
-        atomic_write_json(repo / ".agents/state/tasks/auto-small-3/worker-handoff.json", {
-            "status": "OPEN",
-            "takeover_trigger": "TWO_STRIKE_HYDROGEN_HIGH",
-            "summary_for_lead": "Algorithmic edge case failed twice",
-        })
-        eff_handoff = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-small-3", plan=small_plan)
-        self.assertEqual(eff_handoff["mode"], "web")
-        self.assertEqual(eff_handoff["auto_route_trigger"], "AUTO_WEB_2_STRIKE_HANDOFF")
 
         # 3) Large 15-file plan -> Smart Auto promotes to `web` + delegation_policy returns `WEB_RELAY_ACTIVE`!
         large_files = [f"app/src/main/java/com/example/sample/Screen{i}.kt" for i in range(1, 16)]

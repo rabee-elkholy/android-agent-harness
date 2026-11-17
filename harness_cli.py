@@ -1827,7 +1827,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp_ext.set_defaults(func=cmd_passthrough_script, _target_script=script_file)
 
     for alias_name, sub_op, alias_help in (
-        ("web-pack", "pack", "Build an AST-scoped, secret-scrubbed Context Pack for Gemini Web and copy to Clipboard."),
+        ("web-pack", "pack", "Build an AST-scoped, secret-scrubbed Context Pack for an external AI chat and copy to Clipboard."),
         ("web-apply", "apply", "Apply a `HARNESS_WEB_MERGE_V1` payload from Clipboard, Downloads, or `--file` safely."),
     ):
         sp_alias = sub.add_parser(alias_name, help=alias_help)

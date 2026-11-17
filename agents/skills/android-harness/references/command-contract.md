@@ -480,7 +480,7 @@ Identity is confirmed only for matching installed APK hashes. Diagnostic evidenc
 
 ## Optional Manual Web-Relay Bridge (`web-pack` / `web-apply`)
 
-Stateless on-demand bridge for developers who choose to run heavy planning/coding in Gemini Web while keeping 100% local safety, Gradle, ADB, and default Antigravity mode (`hydrogen-dynamic-project`) unchanged:
+Stateless on-demand bridge for developers who choose to run heavy planning/coding in an external AI chat while keeping 100% local safety, Gradle, ADB, and default Antigravity mode (`hydrogen-dynamic-project`) unchanged:
 
 ```bash
 python .agents/harness.py web-pack [--task-id <id>] [--prompt "<goal>"] [--feature <Name>] [--file <path>] [--retry]

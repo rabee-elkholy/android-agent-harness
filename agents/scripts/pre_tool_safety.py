@@ -135,7 +135,7 @@ DENY_HINTS = {
     "raw_adb": "To read logcat without breaking Windows PowerShell Turbo Mode (#200632 — never use PowerShell pipes), run "
                "`python .agents/harness.py debug logs` or standalone `adb logcat -d -t 500`. For device status or app install/launch, use "
                "`python .agents/harness.py device status` or `python .agents/harness.py device install-start`.",
-    "agy_headless_loop_tos_guard": "Unattended `agy -p` / `--headless` CLI loops and programmatic UI keystroke injection trigger automated Google 403 PERMISSION_DENIED anti-abuse suspension (#199748/#199756). Prepare artifacts locally and invoke via an interactive Skill instead.",
+    "agy_headless_loop_tos_guard": "Subprocess invocations of `agy` / `antigravity` CLI and programmatic UI keystroke injection inside `run_command` are blocked because driving `agy` from an agent or testing `AGENTS.md` via nested `agy` triggers automated Google Section 6 ToS 403 PERMISSION_DENIED account suspension (#201582/#201491/#199748/#199756). Validate rules deterministically via `python harness_cli.py selftest` / `validate_release.py` instead.",
 }
 DANGEROUS = (
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)(?![\w-])", re.I)),
@@ -152,7 +152,7 @@ DANGEROUS = (
     ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
     ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
     ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
-    ("agy_headless_loop_tos_guard", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*(?:agy|antigravity)(?:\.exe|\.cmd)?\s+(?:-[a-z]*p\b|--prompt\b|--headless\b)|(?:\b(?:xdotool|pyautogui|sendkeys|wscript\.shell)\b.*\b(?:antigravity|agy)\b)", re.I)),
+    ("agy_headless_loop_tos_guard", re.compile(r"(?:^|[;&|\n]\s*|\b(?:do|then|else|xargs|env|command|exec|start|call)\s+)(?:&\s*)?(?:\"[^\"]*[/\\]|'[^']*[/\\]|[^\s\"';&|]*[/\\])?(?:agy(?:\.exe|\.cmd|\.bat|\.ps1)?|antigravity(?:\.exe|\.cmd|\.bat)?)(?=\s|$|[\"';&|])|(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*(?:agy|antigravity)(?:\.exe|\.cmd)?\s+(?:-[a-z]*p\b|--prompt\b|--headless\b)|(?:\b(?:xdotool|pyautogui|sendkeys|wscript\.shell)\b.*\b(?:antigravity|agy)\b)", re.I)),
 )
 WORKFLOW_ENTRYPOINTS = {"workflow.py", "workflow"}
 TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "android-harness"}
@@ -340,7 +340,7 @@ def _check_web_mode_direct_write_guard(
             return (
                 False,
                 f"WEB_EXECUTION_MODE_PACK_FIRST: Continuation pack `{prog['pending_continuation_pack_id']}` "
-                f"(batch {prog.get('batch_index')}/{prog.get('total_batches')}) is awaiting Gemini Web reply on task `{tid}`. "
+                f"(batch {prog.get('batch_index')}/{prog.get('total_batches')}) is awaiting external AI chat reply on task `{tid}`. "
                 "Do NOT re-run `web-pack` or edit files directly — wait for the developer reply and run "
                 '`python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` '
                 "(or switch to local mode via `execution-mode set --choice normal-task --source conversation --proof-reference "<words>"`).",
@@ -358,7 +358,7 @@ def _check_web_mode_direct_write_guard(
         return (
             False,
             f"WEB_EXECUTION_MODE_PACK_FIRST: Web execution mode (`{eff.get('choice')}`) is active for task `{tid}`. "
-            f"Run `python .agents/harness.py web-pack --task-id {tid}` to copy the Context Pack for Gemini Web "
+            f"Run `python .agents/harness.py web-pack --task-id {tid}` to copy the Context Pack for your external AI chat "
             "(or if the developer asked to switch to local mode, run "
             '`python .agents/harness.py execution-mode set --choice normal-task --source conversation --proof-reference "<words>"` first).',
             "WEB_EXECUTION_MODE_PACK_FIRST",
@@ -1619,6 +1619,25 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
         emit("allow" if ok_def else "deny", reason_def, tool=name, reason_code=code_def)
         return
 
+    if name == "invoke_subagent":
+        _all_subs_chk, _ = _normalize_subagent_items(args)
+        if _all_subs_chk and any(
+            isinstance(s, dict)
+            and (
+                _canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) == "harness-worker-agent"
+                or _canonical_subagent_role(str(s.get("Role") or s.get("role") or "").strip()) == "harness-worker-agent"
+            )
+            for s in _all_subs_chk
+        ):
+            emit(
+                "deny",
+                "WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY: `harness-worker-agent` has been retired because custom subagents inherit the parent model with a cold cache. "
+                "Implement approved files and run `checkpoint-phase` / `verify-steps` directly on the warm Lead session (or via Web-Relay when Web mode is active).",
+                tool=name,
+                reason_code="WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY",
+            )
+            return
+
     if name == "send_message" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         emit(
             "deny",
@@ -1757,13 +1776,42 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 emit(
                     "deny",
                     f"SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is not permitted during IMPLEMENTING unless retrying phase review protocol (current router action: {act_code}). "
-                    "Completed utility workers cannot be resumed via `send_message` — advance directly with `python .agents/harness.py task checkpoint-phase --advance-all-ready` "
-                    "(which runs compile + unit tests in one pass without a separate `compile` call) or `verify-steps`, or dispatch a fresh `invoke_subagent` worker wave.",
+                    "Advance directly on the warm Lead session with `python .agents/harness.py task checkpoint-phase --advance-all-ready` "
+                    "or `python .agents/harness.py verify-steps --task-id " + task_id + " --host antigravity`.",
                     tool=name,
                     reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
                 )
                 return
             norm_subs, _ = _normalize_subagent_items(args)
+            if name == "invoke_subagent" and norm_subs and any(
+                isinstance(s, dict)
+                and (
+                    _canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in CORE_ROUTED_REVIEWERS
+                    or _canonical_subagent_role(str(s.get("Role") or s.get("role") or "").strip()) in CORE_ROUTED_REVIEWERS
+                )
+                for s in norm_subs
+            ):
+                busy_pid = _detect_live_verification_or_build_owner(REPO, task_id)
+                if busy_pid:
+                    emit(
+                        "deny",
+                        f"CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS: Background verification/Gradle process (PID {busy_pid}) "
+                        "is still actively running and review briefs are not ready yet. Do NOT speculatively dispatch reviewers while "
+                        "`verify-steps` is running — output one short status sentence and end your turn with ZERO tool calls.",
+                        tool=name,
+                        reason_code="CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS",
+                        task_id=task_id,
+                    )
+                    return
+                emit(
+                    "deny",
+                    f"PREMATURE_REVIEWER_DISPATCH_FORBIDDEN: Reviewer subagents cannot be dispatched during IMPLEMENTING "
+                    f"(current router action: {act_code}). Run `verify-steps` first to build immutable review briefs.",
+                    tool=name,
+                    reason_code="PREMATURE_REVIEWER_DISPATCH_FORBIDDEN",
+                    task_id=task_id,
+                )
+                return
             if name == "invoke_subagent" and norm_subs and any(
                 isinstance(s, dict) and _canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in CORE_UTILITY_AGENTS
                 for s in norm_subs
@@ -1840,6 +1888,20 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
 
         if name != "invoke_subagent":
             emit("allow", "Reviewer management is allowed during verification.", tool=name)
+            return
+
+        ver_tid = str(plan.get("task_id") or "").strip()
+        busy_pid = _detect_live_verification_or_build_owner(REPO, ver_tid)
+        if busy_pid:
+            emit(
+                "deny",
+                f"CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS: Background verification/Gradle process (PID {busy_pid}) "
+                "is still actively running and review briefs are not ready yet. Do NOT speculatively invoke reviewers while "
+                "`verify-steps` is running — output one short status sentence and end your turn with ZERO tool calls.",
+                tool=name,
+                reason_code="CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS",
+                task_id=ver_tid,
+            )
             return
 
         try:
@@ -2880,12 +2942,40 @@ def _deny_engine_read(tool: str, command: str = "") -> None:
          tool=tool, command=command, reason_code="HARNESS_IMPLEMENTATION_BOUNDARY")
 
 
+def _is_large_step_output_paginated_read(raw_target: str, args: dict) -> bool:
+    norm = str(raw_target or "").strip().replace("\\", "/")
+    if not norm:
+        return False
+    low = norm.lower()
+    if not (re.search(r"(?:^|/)\.system_generated/steps/\d+/output\.txt$", low)):
+        return False
+    raw_offset = args.get("ByteOffset")
+    if raw_offset is None:
+        raw_offset = args.get("byteOffset")
+    if raw_offset is None:
+        raw_offset = args.get("byte_offset")
+    try:
+        offset_val = int(raw_offset or 0)
+    except (TypeError, ValueError):
+        offset_val = 0
+    if offset_val <= 0:
+        return False
+    try:
+        cand = Path(raw_target).expanduser()
+        resolved = cand.resolve() if cand.is_absolute() else (REPO / cand).resolve()
+        if resolved.is_file():
+            return resolved.stat().st_size > 24576
+    except OSError:
+        return offset_val >= 24576
+    return offset_val >= 24576
+
+
 def _canonical_subagent_role(raw_name: str) -> str:
     s = str(raw_name or "").strip()
     m = re.fullmatch(r"([a-z0-9-]+-agent)-(?:live|r[1-9])", s)
     if m:
         base = m.group(1)
-        allowed = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
+        allowed = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS) | {"harness-worker-agent"}
         if base in allowed:
             return base
     return s
@@ -2936,6 +3026,12 @@ def _has_unfinalized_active_review_wave(repo: Path) -> tuple[bool, str]:
 def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, str]:
     raw_sub_name = str(args.get("Name") or args.get("name") or "").strip()
     sub_name = _canonical_subagent_role(raw_sub_name)
+    if sub_name == "harness-worker-agent":
+        return (
+            False,
+            "WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY: `harness-worker-agent` has been retired. Implement approved changes directly on the warm Lead session.",
+            "WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY",
+        )
     allowed_all = set(CORE_UTILITY_AGENTS) | set(CORE_ROUTED_REVIEWERS) | set(ON_DEMAND_SPECIALIST_AGENTS)
     if sub_name not in allowed_all:
         return (
@@ -2949,7 +3045,7 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
         or args.get("enable_subagent_tools")
     ):
         return (False, "Nested subagent delegation (`EnableSubagentTools=True`) is forbidden.", "SUBAGENT_NESTING_FORBIDDEN")
-    if sub_name != "harness-worker-agent" and bool(
+    if bool(
         args.get("EnableWriteTools")
         or args.get("enableWriteTools")
         or args.get("enable_write_tools")
@@ -2973,6 +3069,59 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
         except (OSError, ValueError, ValidationError):
             pass
     return (True, f"Harness subagent `{sub_name}` definition verified.", "DEFINE_SUBAGENT_ALLOWED")
+
+
+SEARCH_WEB_BURST_WINDOW_SEC = 8.0
+SEARCH_WEB_MAX_PARALLEL_CALLS = 2
+SEARCH_WEB_WAVE_WINDOW_SEC = 45.0
+SEARCH_WEB_MAX_WAVE_CALLS = 4
+
+
+def _enforce_search_web_parallel_cap(conv_key: str) -> bool:
+    """Block 3+ parallel `search_web` calls or back-to-back multi-call bursts (#201621 17m `unexpected EOF` hang)."""
+    key = str(conv_key or "default").strip() or "default"
+    cache_dir = (REPO / ".agents" / "cache") if (REPO / ".agents").is_dir() else (REPO / "agents" / "state" / "cache")
+    guard_path = cache_dir / "search-web-guard.json"
+    lock_base = (REPO / ".agents" / "state") if (REPO / ".agents").is_dir() else (REPO / "agents" / "state")
+    now = time.time()
+    try:
+        from _vnext_common import atomic_write_json
+        from evidence_store import StateLock
+        lock_base.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with StateLock(lock_base):
+            store: dict[str, Any] = {}
+            if guard_path.is_file():
+                try:
+                    loaded = read_json(guard_path)
+                    if isinstance(loaded, dict):
+                        store = loaded
+                except (OSError, ValueError, ValidationError):
+                    store = {}
+            pruned_store: dict[str, list[float]] = {}
+            for ck, stamps in store.items():
+                if isinstance(stamps, list):
+                    kept = [float(t) for t in stamps if isinstance(t, (int, float)) and 0.0 <= (now - float(t)) <= SEARCH_WEB_WAVE_WINDOW_SEC]
+                    if kept:
+                        pruned_store[str(ck)] = kept
+            cur_stamps = pruned_store.get(key, [])
+            in_burst = [t for t in cur_stamps if (now - t) <= SEARCH_WEB_BURST_WINDOW_SEC]
+            if len(in_burst) >= SEARCH_WEB_MAX_PARALLEL_CALLS or len(cur_stamps) >= SEARCH_WEB_MAX_WAVE_CALLS:
+                emit(
+                    "deny",
+                    "SEARCH_WEB_PARALLEL_CAP_REACHED (#201621): Do NOT issue 3+ parallel `search_web` calls in one turn "
+                    "or back-to-back multi-call waves (exhausts the Windows cloud search pool and freezes the turn for 17 minutes "
+                    "with `unexpected EOF`). Check `.agents/project-context/` first and coalesce keywords into 1-2 focused queries.",
+                    tool="search_web",
+                    reason_code="SEARCH_WEB_PARALLEL_CAP_REACHED",
+                )
+                return True
+            cur_stamps.append(now)
+            pruned_store[key] = cur_stamps[-8:]
+            atomic_write_json(guard_path, pruned_store)
+    except (ImportError, OSError, ValueError, ValidationError):
+        return False
+    return False
 
 
 def main() -> None:
@@ -3055,11 +3204,9 @@ def _main() -> None:
                 from delegation_policy import (
                     SCOUT_AGENT,
                     SPECIALIST_AGENT,
-                    WORKER_AGENT,
                     check_and_record_subagent_step_budget,
                     scout_command_allowed,
                     utility_subagent_context,
-                    worker_command_allowed,
                 )
                 utility_ctx = utility_subagent_context(REPO, conversation, bind=True)
             except (ImportError, OSError, ValueError, KeyError, ValidationError):
@@ -3095,7 +3242,15 @@ def _main() -> None:
                             reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
                         )
                         return
-                elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
+                    if _is_large_step_output_paginated_read(_sc_tgt, args):
+                        emit(
+                            "deny",
+                            "LARGE_STEP_OUTPUT_PAGINATION_BLOCKED: Never paginate large `.system_generated/steps/*/output.txt` dumps via `read_file` `ByteOffset` (causes 200K+ token bloat). Run `python .agents/harness.py pm find-item --item <id> --file \"<output.txt>\"` or `grep_search` instead.",
+                            tool=name,
+                            reason_code="LARGE_STEP_OUTPUT_PAGINATION_BLOCKED",
+                        )
+                        return
+                elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir", "search_web"}:
                     emit(
                         "deny",
                         f"`{SCOUT_AGENT}` is strictly read-only; mutations, subagent calls, `send_message`, and developer prompts are forbidden. Output your digest directly as plain assistant text.",
@@ -3108,48 +3263,6 @@ def _main() -> None:
                 )
                 if not ok_sb:
                     emit("deny", reason_sb, tool=name, reason_code=code_sb)
-                    return
-            elif u_type == WORKER_AGENT:
-                # Preserve parent's discovery receipt freshness inside worker child conversation
-                try:
-                    import discovery_receipt
-                    discovery_receipt.RECEIPT_NOT_BEFORE = 0.0
-                except (ImportError, AttributeError):
-                    pass
-                if name in (SUBAGENT_TOOLS - {"manage_task"}) | {"ask_question"}:
-                    emit(
-                        "deny",
-                        f"`{WORKER_AGENT}` cannot invoke nested subagents, call `send_message`, or ask the developer directly; output your completion summary as plain assistant text.",
-                        tool=name,
-                        reason_code="WORKER_NO_DELEGATION_OR_APPROVAL",
-                    )
-                    return
-                if name == "run_command":
-                    cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-                    ok_w_cmd, reason_w_cmd = worker_command_allowed(cmd_str)
-                    if not ok_w_cmd:
-                        emit("deny", reason_w_cmd, tool=name, command=cmd_str, reason_code="WORKER_LIFECYCLE_COMMAND_FORBIDDEN")
-                        return
-                    from delegation_policy import check_worker_intra_wave_retry_cap
-                    ok_iw, reason_iw = check_worker_intra_wave_retry_cap(REPO, cmd_str)
-                    if not ok_iw:
-                        emit("deny", reason_iw, tool=name, command=cmd_str, reason_code="WORKER_INTRA_WAVE_RETRY_CAP")
-                        return
-                    from delegation_policy import extract_symbol_write_targets, worker_write_allowed
-                    is_sym_w, sym_targets = extract_symbol_write_targets(cmd_str)
-                    if is_sym_w:
-                        if not sym_targets:
-                            emit("deny", "Malformed or chained `symbol` write command; pass a single `--file <path>`.", tool=name, command=cmd_str, reason_code="PROTECTED_PATH")
-                            return
-                        w_ok, w_reason, w_code = worker_write_allowed(REPO, sym_targets, utility_ctx)
-                        if not w_ok:
-                            emit("deny", w_reason, tool=name, command=cmd_str, reason_code=w_code)
-                            return
-                ok_wb, reason_wb, code_wb = check_and_record_subagent_step_budget(
-                    REPO, u_exec, kind="WORKER", tool_name=name, role=WORKER_AGENT,
-                )
-                if not ok_wb:
-                    emit("deny", reason_wb, tool=name, reason_code=code_wb)
                     return
             elif u_type == SPECIALIST_AGENT:
                 try:
@@ -3177,7 +3290,7 @@ def _main() -> None:
                                 reason_code="SPECIALIST_READ_ONLY_BOUNDARY",
                             )
                             return
-                    elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
+                    elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir", "search_web"}:
                         emit(
                             "deny",
                             f"Specialist subagent `{utility_ctx.get('role')}` is strictly read-only.",
@@ -3218,6 +3331,15 @@ def _main() -> None:
                     "Use `python .agents/harness.py graph --find <Symbol>` or native `grep_search` instead.",
                     tool=name,
                     reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
+                )
+                return
+            if name in {"view_file", "read_file", "read"} and _is_large_step_output_paginated_read(target, args):
+                emit(
+                    "deny",
+                    f"LARGE_STEP_OUTPUT_PAGINATION_BLOCKED: Never paginate large tool output dumps (`.system_generated/steps/*/output.txt`) via `read_file` `ByteOffset` (causes 200K+ token cache bloat). "
+                    f"Extract Zoho/Jira items in <20ms via `python .agents/harness.py pm find-item --item <I1454|id> --file \"{target}\"` or search specific keys via `grep_search`.",
+                    tool=name,
+                    reason_code="LARGE_STEP_OUTPUT_PAGINATION_BLOCKED",
                 )
                 return
             if _is_native_transcript_read_target(target):
@@ -3273,9 +3395,6 @@ def _main() -> None:
                 emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
-            if allowed and utility_ctx is not None and str(utility_ctx.get("agent_type") or "") == "harness-worker-agent":
-                from delegation_policy import worker_write_allowed
-                allowed, reason, code = worker_write_allowed(REPO, targets, utility_ctx)
             if allowed and utility_ctx is None and not reviewer:
                 w_ok, w_reason, w_code = _check_web_mode_direct_write_guard(
                     REPO, targets, conversation=conversation, transcript_hint=transcript_hint,
@@ -3314,6 +3433,8 @@ def _main() -> None:
             return
         # Known read-only tools (checked before loading external integration registry)
         if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
+            if name == "search_web" and _enforce_search_web_parallel_cap(conversation or lead_conv):
+                return
             if name in ("view_file", "read_file", "read"):
                 if lead_conv and _enforce_lead_anti_reread(lead_conv, name, args):
                     return

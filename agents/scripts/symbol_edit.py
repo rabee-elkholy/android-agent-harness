@@ -1,13 +1,12 @@
 """MIT-compatible, pure-stdlib semantic symbol outline, read, and AST-brace body surgery.
 
 Provides `harness.py symbol <outline|read|replace-body|insert-after>` for Kotlin (.kt),
-Java (.java), and Swift (.swift) source files so agents and `harness-worker-agent` can
-inspect or replace a single function/type body in large files (>350 lines) without
+Java (.java), and Swift (.swift) source files so the Lead session and `harness-scout-agent`
+can inspect or replace a single function/type body in large files (>350 lines) without
 loading hundreds of surrounding lines into context or failing fragile text matches.
 
-All mutating operations enforce `mutation_guard.file_mutation_allowed` (and
-`delegation_policy.worker_write_allowed` when invoked by `harness-worker-agent`),
-optimistic `expected_sha256` verification, and code brace-balance validation.
+All mutating operations enforce `mutation_guard.file_mutation_allowed`, read-only subagent
+boundaries, optimistic `expected_sha256` verification, and code brace-balance validation.
 """
 from __future__ import annotations
 
@@ -349,14 +348,12 @@ def _authorize_symbol_write(repo: Path, target_file: Path) -> str:
     conv = os.environ.get("HARNESS_CONVERSATION_ID", "").strip()
     if conv or os.environ.get("HARNESS_UTILITY_AGENT"):
         try:
-            from delegation_policy import WORKER_AGENT, utility_subagent_context, worker_write_allowed
+            from delegation_policy import SCOUT_AGENT, utility_subagent_context
             uctx = utility_subagent_context(repo, conv, bind=False)
-            if uctx is not None and str(uctx.get("agent_type") or "") == WORKER_AGENT:
-                w_ok, w_reason, w_code = worker_write_allowed(repo, [rel], uctx)
-                if not w_ok:
-                    raise ValidationError(f"{w_code}: {w_reason}")
         except (ImportError, OSError, ValueError, KeyError):
-            pass
+            uctx = None
+        if uctx is not None and (str(uctx.get("agent_type") or "") == SCOUT_AGENT or bool(uctx.get("read_only_specialist"))):
+            raise ValidationError("SCOUT_READ_ONLY_BOUNDARY: Read-only utility/specialist subagents cannot execute symbol write commands.")
     return rel
 
 

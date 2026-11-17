@@ -714,18 +714,20 @@ class WebRelaySelftest(unittest.TestCase):
             "--json",
         )
 
-        # Simulate a 2-strike Worker handoff capsule in Mode 1 before switching mid-task to Mode 2!
+        # Simulate a failing local gate result in Mode 1 before switching mid-task to Mode 2!
         tdir = self.repo / ".agents" / "state" / "tasks" / "phased-relay-06"
+        res_dir_06 = self.repo / ".agents" / "state" / "results"
+        res_dir_06.mkdir(parents=True, exist_ok=True)
         atomic_write_json(
-            tdir / "worker-handoff.json",
-            {"status": "UNRESOLVED", "wave_count": 2, "summary": "Hydrogen High hit cross-module signature question"},
+            res_dir_06 / "compile.json",
+            {"status": "FAIL", "detail": "Unresolved cross-module signature in CheckoutCalculator"},
         )
 
         r_pack = self._run_harness("web-pack", "--task-id", "phased-relay-06", "--no-clipboard", "--json")
         self.assertEqual(0, r_pack.returncode, r_pack.stderr)
         pinfo = json.loads(r_pack.stdout)
         bundle_txt = Path(pinfo["bundle_file"]).read_text(encoding="utf-8")
-        self.assertIn("Hydrogen High hit cross-module signature question", bundle_txt)
+        self.assertIn("Unresolved cross-module signature in CheckoutCalculator", bundle_txt)
 
         # Gemini Web returns edits for BOTH p1 (`PriceFormatter.kt`) and p2 (`CheckoutCalculator.kt`) in one response!
         phased_merge = {
@@ -796,8 +798,8 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertIn("currencyCode()", (self.repo / "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt").read_text(encoding="utf-8"))
 
     def test_07_pretooluse_scout_and_worker_authority_boundaries(self) -> None:
-        """Safeguard #5: PreToolUse blocks unapproved web-apply, allows read-only web-pack, and blocks Worker web-apply."""
-        from delegation_policy import _WORKER_FORBIDDEN_LIFECYCLE_RE, scout_command_allowed
+        """Safeguard #5: PreToolUse blocks unapproved web-apply, allows read-only web-pack, and blocks Scout web-apply."""
+        from delegation_policy import scout_command_allowed
         from pre_tool_safety import _developer_authority_violation
         from mutation_guard import _is_read_only
 
@@ -813,7 +815,7 @@ class WebRelaySelftest(unittest.TestCase):
         )
         self.assertEqual("", _developer_authority_violation("python .agents/harness.py web-pack --prompt 'fix git merge'"))
 
-        # Read-only & Scout/Worker boundaries
+        # Read-only & Scout boundaries
         self.assertTrue(_is_read_only("python .agents/harness.py web-pack --prompt 'hello'", self.repo))
         self.assertTrue(_is_read_only("python .agents/harness.py web-relay status --json", self.repo))
         self.assertFalse(_is_read_only("python .agents/harness.py web-apply --source conversation --proof-reference ok", self.repo))
@@ -821,9 +823,6 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertTrue(scout_command_allowed("python .agents/harness.py web-pack --feature Checkout"))
         self.assertTrue(scout_command_allowed("python .agents/harness.py web-relay status --json"))
         self.assertFalse(scout_command_allowed("python .agents/harness.py web-apply --source conversation --proof-reference ok"))
-
-        self.assertIsNotNone(_WORKER_FORBIDDEN_LIFECYCLE_RE.search("python .agents/harness.py web-apply --source conversation --proof-reference ok"))
-        self.assertIsNotNone(_WORKER_FORBIDDEN_LIFECYCLE_RE.search("python .agents/scripts/web_relay.py apply --source conversation --proof-reference ok"))
 
         # End-to-end PreToolUse hook subprocess invocation check
         hook_script = self.repo / ".agents" / "scripts" / "pre_tool_safety.py"
@@ -1214,7 +1213,7 @@ class WebRelaySelftest(unittest.TestCase):
         v_grep = json.loads(p_grep.stdout)
         self.assertEqual("allow", v_grep["decision"], v_grep)
 
-        # 10b. Apply cold-start task, simulate a completed Worker wave + unresolved `worker-handoff.json`, then switch to `web-apply`!
+        # 10b. Apply cold-start task, simulate a completed Scout wave with exhausted `lead_post_reads`, then switch to `web-apply`!
         merge_1 = {
             "schema": "HARNESS_WEB_MERGE_V1",
             "pack_id": pinfo["pack_id"],
@@ -1234,33 +1233,30 @@ class WebRelaySelftest(unittest.TestCase):
         )
         self.assertEqual(0, r_app1.returncode, r_app1.stderr + "\n" + r_app1.stdout)
 
-        tdir = self.repo / ".agents" / "state" / "tasks" / "worker-unlock-10"
-        # Simulate a Worker wave dispatched AFTER `r_app1` that completed with friction (`worker-handoff.json` UNRESOLVED)
-        future_ts = "2099-01-01T00:00:00+00:00"
         past_ts = "2020-01-01T00:00:00+00:00"
-        atomic_write_json(tdir / "worker-handoff.json", {"status": "UNRESOLVED", "wave_count": 1, "summary": "Worker hit edge case"})
         atomic_write_json(
             self.repo / ".agents" / "state" / "utility-subagents.json",
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "entries": [
                     {
-                        "wave_id": "wave-worker-test",
+                        "wave_id": "wave-scout-test",
                         "parent_conversation_id": "conv-worker-unlock",
-                        "agent_type": "harness-worker-agent",
+                        "agent_type": "harness-scout-agent",
                         "task_id": "worker-unlock-10",
                         "task_status": "IMPLEMENTING",
                         "phase_id": "",
                         "dispatched_at": past_ts,
+                        "dispatched_epoch": __import__("time").time(),
                         "completed_at": past_ts,
                         "wave_completed": True,
                         "parent_user_turns": 0,
-                        "lead_reread_count": 3,
+                        "lead_post_reads": 3,
                     }
                 ],
             },
         )
-        # Re-pack & `web-apply` AFTER the Worker wave -> must mark `worker-handoff.json` `RESOLVED` AND unlock Lead `view_file`!
+        # Re-pack & `web-apply` AFTER the Scout wave -> must expire the prior wave anti-reread choke and unlock Lead `view_file`!
         r_pack2 = self._run_harness("web-pack", "--task-id", "worker-unlock-10", "--no-clipboard", "--json")
         pinfo2 = json.loads(r_pack2.stdout)
         merge_2 = {
@@ -1281,10 +1277,6 @@ class WebRelaySelftest(unittest.TestCase):
             stdin_text=json.dumps(merge_2),
         )
         self.assertEqual(0, r_app2.returncode, r_app2.stderr + "\n" + r_app2.stdout)
-
-        hf_after = read_json(tdir / "worker-handoff.json")
-        self.assertEqual("RESOLVED", hf_after["status"])
-        self.assertEqual("web_relay", hf_after["resolved_by"])
 
         view_payload = {
             "conversationId": "conv-worker-unlock",
@@ -1606,13 +1598,8 @@ class WebRelaySelftest(unittest.TestCase):
         dp_done = delegation_policy.evaluate_delegation_policy(self.repo, task_id=tid_100)
         self.assertEqual("WEB_RELAY_APPLIED_VERIFY", dp_done["strategy"])
 
-        # 5) Verify Normal Mode scale-adaptive Worker & Reviewer budgets on this 100-file active plan (`>32` and `>12`),
+        # 5) Verify scale-adaptive Reviewer budget on this 100-file active plan (`>12`),
         #    plus conflict-marker detection at file #95!
-        for step_i in range(45):
-            ok_w, rsn_w, _ = delegation_policy.check_and_record_subagent_step_budget(
-                self.repo, "worker-100-exec", kind="WORKER", tool_name="view_file", role="harness-worker-agent"
-            )
-            self.assertTrue(ok_w, f"Worker choked prematurely at read #{step_i + 1} on 100-file task: {rsn_w}")
         for step_r in range(30):
             ok_r, rsn_r, _ = delegation_policy.check_and_record_subagent_step_budget(
                 self.repo, "rev-100-exec", kind="REVIEWER", tool_name="view_file", run_id="r100", role="bug-test-reviewer-agent"
@@ -2039,22 +2026,22 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertTrue((self.repo / "app/src/test/kotlin/com/demo/app/DirtyPromoBannerTest.kt").is_file())
 
     def test_17_new_chat_and_task_mode_guidance(self) -> None:
-        """Initial web-pack recommends a NEW Gemini Web chat in Task mode; --retry keeps the SAME chat in Task mode."""
+        """Initial web-pack recommends a NEW external AI chat; --retry keeps the SAME external AI chat."""
         r_fresh_json = self._run_harness("web-pack", "--file", "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt", "--prompt", "Refactor fee calc", "--no-clipboard", "--json")
         self.assertEqual(0, r_fresh_json.returncode, r_fresh_json.stderr)
         doc_fresh = json.loads(r_fresh_json.stdout)
         self.assertTrue(doc_fresh.get("new_chat_recommended"))
         self.assertEqual("Task", doc_fresh.get("recommended_gemini_web_mode"))
-        self.assertIn("NEW Gemini Web chat", doc_fresh.get("gemini_web_instruction", ""))
-        self.assertIn("Task mode", doc_fresh.get("gemini_web_instruction", ""))
+        self.assertIn("NEW external AI chat", doc_fresh.get("web_chat_instruction", ""))
+        self.assertEqual(doc_fresh.get("web_chat_instruction"), doc_fresh.get("gemini_web_instruction"))
 
         r_fresh_txt = self._run_harness("web-pack", "--file", "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt", "--prompt", "Refactor fee calc", "--no-clipboard")
         self.assertEqual(0, r_fresh_txt.returncode, r_fresh_txt.stderr)
-        self.assertIn("Open a NEW Gemini Web chat (select `Task` mode)", r_fresh_txt.stdout)
+        self.assertIn("Open a NEW external AI chat", r_fresh_txt.stdout)
 
         r_retry_txt = self._run_harness("web-pack", "--retry", "--no-clipboard")
         self.assertEqual(0, r_retry_txt.returncode, r_retry_txt.stderr)
-        self.assertIn("Stay in the SAME Gemini Web chat (keep `Task` mode selected)", r_retry_txt.stdout)
+        self.assertIn("Stay in the SAME external AI chat", r_retry_txt.stdout)
 
 if __name__ == "__main__":
     unittest.main()

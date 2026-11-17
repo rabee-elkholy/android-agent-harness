@@ -1051,8 +1051,9 @@ class ReviewerModelsTests(unittest.TestCase):
         }
         atomic_write_json(task_dir(self.repo, t_simple) / "plan.json", plan_s)
         self.assertEqual("gemini-4-hydrogen-medium", dp.resolve_utility_scout_model(self.repo, t_simple, plan=plan_s))
-        w_simple, tier_s = dp.resolve_utility_worker_model(self.repo, t_simple, plan=plan_s, worker_mode="FULL_SLICE")
-        self.assertEqual(("gemini-4-hydrogen-high", "SIMPLE"), (w_simple, tier_s))
+        pol_s = dp.evaluate_delegation_policy(self.repo, t_simple, plan=plan_s)
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_s["strategy"])
+        self.assertFalse(pol_s["worker_allowed"])
         frozen_s = models.freeze_models(
             self.repo, t_simple, "antigravity", roster, run_id="r-hy-s",
             policy_data={"surfaces": ["COMPOSE_UI"], "severity": "MEDIUM", "risk_tier": "T2_MODERATE", "reviewer_efforts": efforts_norm},
@@ -1063,7 +1064,7 @@ class ReviewerModelsTests(unittest.TestCase):
             self.assertEqual("medium", frozen_s["reviewers"][r]["thinking_level"])
         models.frozen_models({"review_host": "antigravity", "review_models": frozen_s})
 
-        # Edge Case 3: Band 2 COMPLEX -> Worker & bug-test/security-perf upgrade to gemini-4-hydrogen-high (0 Argon burn!); Scout & arch stay medium
+        # Edge Case 3: Band 2 COMPLEX -> bug-test/security-perf upgrade to gemini-4-hydrogen-high (0 Argon burn!); Scout & arch stay medium; Lead inline
         t_complex = "task-hy-complex"
         plan_c = {
             "task_id": t_complex,
@@ -1080,10 +1081,9 @@ class ReviewerModelsTests(unittest.TestCase):
         }
         atomic_write_json(task_dir(self.repo, t_complex) / "plan.json", plan_c)
         self.assertEqual("gemini-4-hydrogen-medium", dp.resolve_utility_scout_model(self.repo, t_complex, plan=plan_c))
-        w_complex, tier_c = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="FULL_SLICE")
-        self.assertEqual(("gemini-4-hydrogen-high", "COMPLEX"), (w_complex, tier_c))
-        w_red, _ = dp.resolve_utility_worker_model(self.repo, t_complex, plan=plan_c, worker_mode="CAPTURE_RED_ONLY")
-        self.assertEqual("gemini-4-hydrogen-high", w_red)
+        pol_c = dp.evaluate_delegation_policy(self.repo, t_complex, plan=plan_c, router_action="CAPTURE_RED_EVIDENCE")
+        self.assertEqual("CAPTURE_RED_INLINE_LEAD", pol_c["strategy"])
+        self.assertFalse(pol_c["worker_allowed"])
         frozen_c = models.freeze_models(
             self.repo, t_complex, "antigravity", roster, run_id="r-hy-c",
             policy_data={"surfaces": ["COROUTINES", "NETWORK"], "severity": "HIGH", "risk_tier": "T3_SUBSYSTEM", "reviewer_efforts": efforts_norm},
@@ -1094,7 +1094,7 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("gemini-4-hydrogen-medium", frozen_c["reviewers"][conv]["resolved_model"])
         models.frozen_models({"review_host": "antigravity", "review_models": frozen_c})
 
-        # Edge Case 4: Band 3 CRITICAL (T5 AUTH/BILLING) -> Strict hard ceiling at gemini-4-argon-low; Worker runs TESTS_AND_GATES_ONLY on medium
+        # Edge Case 4: Band 3 CRITICAL (T5 AUTH/BILLING) -> Inline Lead implementation + gemini-4-hydrogen-high reviewers
         t_crit = "task-hy-crit"
         plan_crit = {
             "task_id": t_crit,
@@ -1107,8 +1107,8 @@ class ReviewerModelsTests(unittest.TestCase):
         }
         atomic_write_json(task_dir(self.repo, t_crit) / "plan.json", plan_crit)
         dec_crit = dp.evaluate_delegation_policy(self.repo, t_crit, plan=plan_crit)
-        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", dec_crit["strategy"])
-        self.assertEqual("gemini-4-hydrogen-high", dec_crit["worker_model"])
+        self.assertEqual("INLINE_LEAD_DIRECT", dec_crit["strategy"])
+        self.assertFalse(dec_crit["worker_allowed"])
         frozen_crit = models.freeze_models(
             self.repo, t_crit, "antigravity", roster, run_id="r-hy-crit",
             policy_data={
@@ -1248,8 +1248,8 @@ class ReviewerModelsTests(unittest.TestCase):
         self.assertEqual("allow", out_loc.get("decision"), out_loc)
 
         # Edge Case 8: Doctor, Lifecycle ownership, Repair preservation, and Legacy `flash-*` fallback sync!
-        dp.sync_utility_worker_model(self.repo, "gemini-4-hydrogen-high")
-        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-worker-agent/agent.md"))
+        dp.sync_utility_scout_model(self.repo, "gemini-4-hydrogen-medium")
+        self.assertFalse((self.repo / ".agents/agents/harness-worker-agent/agent.md").exists())
         self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-scout-agent/agent.md"))
         doc = HarnessDoctor(self.repo, run_selftest=False)
         doc.check_antigravity_installation()
@@ -1261,7 +1261,6 @@ class ReviewerModelsTests(unittest.TestCase):
             task_id=None, host="antigravity", source="conversation", proof_reference="Fallback to Flash", scope="project",
         )
         self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
-        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
         # Mid-session set_policy must NOT overwrite installed agent.md (v1.3.10 Desktop anti-deadlock),
         # while explicit repair re-renders the updated target-model comment without YAML model: frontmatter.
         pre_repair_scout = (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8")

@@ -157,7 +157,25 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     prev_cached_tokens = 0
     prev_prompt_tokens = 0
     usage_turn_index = 0
+    search_web_eof_stalls = 0
+    max_search_web_sec = 0.0
+    max_parallel_search_web = 0
+    pending_search_web_ts: float | None = None
+    iso_ts_re = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
     tool_counts: Counter[str] = Counter()
+
+    def _parse_step_epoch(step_obj: dict[str, Any], raw_ln: str) -> float | None:
+        from datetime import datetime as _dt
+        ts_v = step_obj.get("created_at") or step_obj.get("timestamp") or step_obj.get("ts")
+        if isinstance(ts_v, (int, float)) and ts_v > 1_000_000_000:
+            return float(ts_v)
+        m_t = iso_ts_re.search(str(ts_v or "") or raw_ln)
+        if m_t:
+            try:
+                return _dt.fromisoformat(m_t.group(1).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        return None
 
     try:
         lines = tp.read_text(encoding="utf-8", errors="replace").splitlines()[-800:]
@@ -177,6 +195,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 orchestrator_handoff_hits += 1
             if "gemini-4-hydrogen-extra" in low or "gemini-4-hydrogen-xhigh" in low:
                 hydrogen_extra_leak_hits += 1
+            if "search_web" in low and "unexpected eof" in low:
+                search_web_eof_stalls += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -189,9 +209,43 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             cur_step = int(s_idx) if isinstance(s_idx, int) else idx
             if cur_step > step_count:
                 step_count = cur_step
+            step_epoch = _parse_step_epoch(obj, ln)
+            if pending_search_web_ts is not None and step_epoch is not None and step_epoch >= pending_search_web_ts:
+                sw_elapsed = step_epoch - pending_search_web_ts
+                if sw_elapsed > max_search_web_sec:
+                    max_search_web_sec = sw_elapsed
+                if sw_elapsed > 300.0 or "unexpected eof" in low:
+                    search_web_eof_stalls += 1
+                pending_search_web_ts = None
+            elif pending_search_web_ts is not None and "unexpected eof" in low:
+                search_web_eof_stalls += 1
+                pending_search_web_ts = None
+
             t_name = str(obj.get("tool_name") or ((obj.get("toolCall") or {}).get("name") if isinstance(obj.get("toolCall"), dict) else "") or "")
             if t_name:
                 tool_counts[t_name] += 1
+            t_calls_arr = obj.get("tool_calls") if isinstance(obj.get("tool_calls"), list) else []
+            sw_in_turn = 0
+            for tc_item in t_calls_arr:
+                if isinstance(tc_item, dict):
+                    tc_n = str(tc_item.get("name") or tc_item.get("tool_name") or ((tc_item.get("function") or {}).get("name") if isinstance(tc_item.get("function"), dict) else "") or "")
+                    if tc_n:
+                        tool_counts[tc_n] += 1
+                        if tc_n == "search_web":
+                            sw_in_turn += 1
+            if t_name == "search_web":
+                sw_in_turn = max(sw_in_turn, 1)
+            if sw_in_turn > max_parallel_search_web:
+                max_parallel_search_web = sw_in_turn
+            if sw_in_turn > 0:
+                dur_ms = obj.get("duration_ms") or obj.get("elapsed_ms")
+                dur_sec = (float(dur_ms) / 1000.0) if isinstance(dur_ms, (int, float)) else float(obj.get("duration_seconds") or obj.get("elapsed_seconds") or 0.0)
+                if dur_sec > max_search_web_sec:
+                    max_search_web_sec = dur_sec
+                if dur_sec > 300.0:
+                    search_web_eof_stalls += 1
+                elif step_epoch is not None:
+                    pending_search_web_ts = step_epoch
             compacted = "compaction" in low or "summariz" in low
             usage_candidates: list[dict[str, Any]] = []
             for u_key in ("usage", "token_usage", "usageMetadata", "metadata"):
@@ -250,6 +304,9 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "hydrogen_extra_leak_hits": hydrogen_extra_leak_hits,
         "turn3_cache_drop_hits": turn3_cache_drop_hits,
         "cache_regression_hits": cache_regression_hits,
+        "search_web_eof_stalls": search_web_eof_stalls,
+        "search_web_max_duration_sec": round(max_search_web_sec, 1),
+        "search_web_max_parallel": max_parallel_search_web,
         "top_tools": dict(tool_counts.most_common(8)),
     }
 
@@ -343,8 +400,44 @@ def diagnose_session(
         findings.append({
             "code": "AGY_HEADLESS_LOOP_TOS_ATTEMPT",
             "severity": "HIGH",
-            "evidence": f"{denials['AGY_HEADLESS_LOOP_TOS_GUARD']} unattended `agy -p` / UI-injection command(s) blocked (#199748/#199756).",
-            "remedy": "Never run unattended `agy -p` loops (triggers automated 403 account ban); prepare local folders and invoke via an interactive Skill.",
+            "evidence": f"{denials['AGY_HEADLESS_LOOP_TOS_GUARD']} `agy` / `antigravity` CLI subprocess or UI-injection command(s) blocked (#201582/#201491/#199748).",
+            "remedy": "Never invoke `agy` as a subprocess from an AI agent (triggers automated Section 6 ToS 403 account suspension); validate rules via `python harness_cli.py selftest`.",
+        })
+    if denials.get("SEARCH_WEB_PARALLEL_CAP_REACHED", 0) >= 1:
+        findings.append({
+            "code": "SEARCH_WEB_PARALLEL_BURST_BLOCKED",
+            "severity": "MEDIUM",
+            "evidence": f"{denials['SEARCH_WEB_PARALLEL_CAP_REACHED']} excess parallel `search_web` call(s) intercepted before triggering #201621 17m hang.",
+            "remedy": "Coalesce keywords into at most 1-2 `search_web` queries per turn after checking `.agents/project-context/`.",
+        })
+    if transcript.get("search_web_eof_stalls", 0) > 0 or float(transcript.get("search_web_max_duration_sec") or 0.0) > 300.0:
+        findings.append({
+            "code": "SEARCH_WEB_UPSTREAM_EOF_STALL",
+            "severity": "HIGH",
+            "evidence": (
+                f"Upstream `search_web` timeout / `unexpected EOF` stall detected "
+                f"(stalls={transcript.get('search_web_eof_stalls', 0)}, max_duration={transcript.get('search_web_max_duration_sec', 0.0)}s, "
+                f"max_parallel_in_turn={transcript.get('search_web_max_parallel', 0)}) — upstream search service hang + client Parallel Barrier freeze (#201621), not a harness logic stall."
+            ),
+            "remedy": "Keep `search_web` to <=1-2 focused queries per turn (never 3+ parallel `search_web` calls or back-to-back waves) after exhausting `.agents/project-context/`.",
+        })
+
+    ls_health: dict[str, Any] = {"crash_loop_detected": False}
+    try:
+        from antigravity_runtime import inspect_language_server_acceptex_crashes
+        ls_health = inspect_language_server_acceptex_crashes()
+    except (ImportError, OSError, ValueError):
+        ls_health = {"crash_loop_detected": False}
+    if ls_health.get("crash_loop_detected"):
+        findings.append({
+            "code": "LANGUAGE_SERVER_ACCEPTEX_995_CRASH_LOOP",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected Windows `language_server.exe` Exit Code 2 AcceptEx (Error 995) crash loop in `main.log` "
+                f"(code2_crashes={ls_health.get('code2_crashes', 0)}, port_restarts={ls_health.get('port_restarts', 0)}, "
+                f"zero_byte_crash_logs={ls_health.get('zero_byte_crash_logs', 0)}) (#200687/#199301/#200763)."
+            ),
+            "remedy": "Launch Antigravity on Windows 11 with `GOMEMLIMIT=8GiB` and `GOGC=200` (or `GOGC=off` paired with `GOMEMLIMIT=8GiB`), migrate stdio MCP servers to HTTP/SSE, and use consolidated `verify-steps`.",
         })
     pacer_info: dict[str, Any] = {"throttled_events": 0, "total_delay_ms": 0, "coalesced_parallel_calls": 0}
     pacer_file = repo / ".agents" / "cache" / "burst-pacer.json"
@@ -359,15 +452,6 @@ def diagnose_session(
                 }
         except (OSError, ValueError, ValidationError):
             pass
-
-    worker_friction: dict[str, Any] = {"consecutive_failures": 0, "total_failures": 0}
-    eff_tid = str(plan.get("task_id") or task_id or "").strip()
-    if eff_tid:
-        try:
-            from delegation_policy import get_worker_friction_state
-            worker_friction = get_worker_friction_state(repo, eff_tid, plan)
-        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
-            worker_friction = worker_friction
 
     if transcript.get("hydrogen_extra_leak_hits", 0) > 0:
         findings.append({
@@ -392,16 +476,6 @@ def diagnose_session(
                 f"and {transcript.get('cache_regression_hits', 0)} multi-shard KV-cache regression(s) (#200026)."
             ),
             "remedy": "Prefer pure `agy` CLI (3.41% cache regression) over ACP IDE extensions (5.86%) on long Carbon sessions, keep Scout waves <=2 batched turns, or switch Scout to `safe-cache-project` (3.8 Flash = 0 cache drops).",
-        })
-    if int(worker_friction.get("consecutive_failures") or 0) >= 2:
-        findings.append({
-            "code": "ORCHESTRATOR_WORKER_FRICTION_ESCALATION",
-            "severity": "MEDIUM",
-            "evidence": (
-                f"Worker hit {worker_friction['consecutive_failures']} consecutive verification failure(s) "
-                f"(last gate: `{worker_friction.get('last_failed_gate') or 'unknown'}`)."
-            ),
-            "remedy": "Native Harness Orchestrator caps automatic Hydrogen at `high`, giving `Hydrogen High` up to 2 attempts (fast-failing immediately on explicit architectural blockers) before handing core files + `worker-handoff.json` (`Zero-Scratch Handoff Capsule`) to Lead (`Carbon`).",
         })
     if pacer_info["throttled_events"] > 0:
         findings.append({
@@ -456,7 +530,7 @@ def diagnose_session(
         "task_status": str(plan.get("status") or "IDLE"),
         "hook_audit": audit,
         "burst_pacer": pacer_info,
-        "worker_friction": worker_friction,
+        "language_server_health": ls_health,
         "transcript": transcript,
         "findings": findings,
     }

@@ -451,6 +451,7 @@ def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None
         return {"applicable": False, "at_risk": False, "stdio_servers": [], "config_paths": []}
 
     mcp_files: list[Path] = [
+        repo / ".agents" / "mcp_config.json",
         repo / ".agents" / "mcp.json",
         repo / "mcp_config.json",
         repo / ".mcp.json",
@@ -950,4 +951,178 @@ def inspect_nov15_antigravity_hazards(
         "active_lead_conversation_id": active_lead_cid,
         "auto_accept_on_chat_state": auto_accept_state,
         "auto_accept_at_risk": auto_accept_at_risk,
+    }
+
+
+def inspect_language_server_acceptex_crashes(
+    env: dict[str, str] | None = None,
+    log_dirs: list[Path] | None = None,
+    crash_dirs: list[Path] | None = None,
+) -> dict[str, object]:
+    """Detect Windows `language_server.exe` Exit Code 2 AcceptEx (Win32 Error 995) crash loops (#200687/#199301/#200763)
+    even after Electron wipes `language_server.log` within 2s, by correlating `main.log` (`exited with code 2` +
+    `[Auto-Restart] Port changed!`) and 0-byte `crash_*.log` files under `.gemini/antigravity/crashes/`.
+    """
+    environ = env if env is not None else os.environ
+    main_log_candidates: list[Path] = []
+    explicit_main = str(environ.get("ANTIGRAVITY_MAIN_LOG") or "").strip()
+    if explicit_main:
+        p_exp = Path(explicit_main).expanduser()
+        if p_exp.is_file():
+            main_log_candidates.append(p_exp)
+
+    search_roots: list[Path] = []
+    if log_dirs is not None:
+        search_roots.extend(log_dirs)
+    else:
+        app_data_ovr = str(environ.get("ANTIGRAVITY_APP_DATA") or "").strip()
+        if app_data_ovr:
+            search_roots.append(Path(app_data_ovr).expanduser())
+        else:
+            for env_key in ("APPDATA", "LOCALAPPDATA"):
+                raw_v = str(environ.get(env_key) or "").strip()
+                if raw_v:
+                    search_roots.append(Path(raw_v) / "Antigravity" / "logs")
+            search_roots.append(Path.home() / ".gemini" / "antigravity" / "logs")
+            search_roots.append(Path.home() / ".gemini" / "antigravity")
+
+    seen_logs: set[Path] = set()
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        direct_main = root / "main.log"
+        if direct_main.is_file():
+            main_log_candidates.append(direct_main)
+        logs_sub = root / "logs" if (root / "logs").is_dir() else root
+        try:
+            subdirs = sorted(
+                [d for d in logs_sub.iterdir() if d.is_dir()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )[:6]
+            for sd in subdirs:
+                cand_m = sd / "main.log"
+                if cand_m.is_file():
+                    main_log_candidates.append(cand_m)
+                for nested in sd.glob("*/main.log"):
+                    if nested.is_file():
+                        main_log_candidates.append(nested)
+        except OSError:
+            continue
+
+    code2_crashes = 0
+    port_restarts = 0
+    acceptex_hits = 0
+    matched_logs: list[str] = []
+    code2_re = re.compile(r"language[_\s-]*server[^\n]*exited with code 2\b", re.IGNORECASE)
+    acceptex_re = re.compile(r"acceptex:\s*the i/o operation has been aborted|server_common\.go:(?:58|98)\b", re.IGNORECASE)
+
+    for ml in main_log_candidates[:8]:
+        try:
+            resolved = ml.resolve()
+            if resolved in seen_logs or not resolved.is_file() or resolved.is_symlink():
+                continue
+            seen_logs.add(resolved)
+            sz = resolved.stat().st_size
+            if sz <= 0:
+                continue
+            with resolved.open("rb") as fh:
+                fh.seek(max(0, sz - 65536))
+                tail = fh.read(65536).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        c2 = len(code2_re.findall(tail))
+        pr = tail.count("[Auto-Restart] Port changed!")
+        ax = len(acceptex_re.findall(tail))
+        if c2 or pr or ax:
+            code2_crashes += c2
+            port_restarts += pr
+            acceptex_hits += ax
+            matched_logs.append(str(resolved))
+
+    c_dirs: list[Path] = []
+    if crash_dirs is not None:
+        c_dirs.extend(crash_dirs)
+    else:
+        explicit_cdir = str(environ.get("ANTIGRAVITY_CRASH_DIR") or "").strip()
+        if explicit_cdir:
+            c_dirs.append(Path(explicit_cdir).expanduser())
+        app_data_ovr = str(environ.get("ANTIGRAVITY_APP_DATA") or "").strip()
+        if app_data_ovr:
+            c_dirs.append(Path(app_data_ovr).expanduser() / "crashes")
+        else:
+            c_dirs.append(Path.home() / ".gemini" / "antigravity" / "crashes")
+
+    zero_byte_crash_logs = 0
+    seen_cdirs: set[Path] = set()
+    for cd in c_dirs:
+        try:
+            if not cd.is_dir():
+                continue
+            rcd = cd.resolve()
+            if rcd in seen_cdirs:
+                continue
+            seen_cdirs.add(rcd)
+            for cf in rcd.glob("crash_*.log"):
+                if cf.is_file() and not cf.is_symlink() and cf.stat().st_size == 0:
+                    zero_byte_crash_logs += 1
+        except OSError:
+            continue
+
+    crash_loop_detected = bool(
+        acceptex_hits > 0
+        or (code2_crashes > 0 and (port_restarts > 0 or zero_byte_crash_logs > 0))
+    )
+    return {
+        "crash_loop_detected": crash_loop_detected,
+        "code2_crashes": code2_crashes,
+        "port_restarts": port_restarts,
+        "acceptex_hits": acceptex_hits,
+        "zero_byte_crash_logs": zero_byte_crash_logs,
+        "matched_logs": matched_logs,
+    }
+
+
+def inspect_windows_go_gc_and_handle_risk(
+    repo: Path,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Check Windows 11 `GOMEMLIMIT` / `GOGC` tuning, `stdio` MCP count, and `AcceptEx` crash fingerprints (#200687/#199301)."""
+    import sys as _sys
+    environ = env if env is not None else os.environ
+    sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
+    sim_mcp = str(environ.get("HARNESS_SIMULATE_WINDOWS_MCP") or "").strip().lower() in {"1", "true", "yes"}
+    is_win = sim_plat == "win32" or sim_mcp or (not sim_plat and _sys.platform == "win32")
+    if not is_win:
+        return {"applicable": False, "at_risk": False, "gc_tuned": True}
+
+    gogc = str(environ.get("GOGC") or "").strip()
+    gomemlimit = str(environ.get("GOMEMLIMIT") or "").strip()
+    gogc_low = gogc.lower()
+    gogc_off_without_memlimit = (gogc_low == "off" and not gomemlimit)
+    gogc_relaxed = gogc_low == "off" or (gogc.isdigit() and int(gogc) >= 150)
+    gc_tuned = bool(gomemlimit) and gogc_relaxed and not gogc_off_without_memlimit
+
+    mcp_env = dict(environ)
+    if sim_plat == "win32" and "HARNESS_SIMULATE_WINDOWS_MCP" not in mcp_env:
+        mcp_env["HARNESS_SIMULATE_WINDOWS_MCP"] = "1"
+    mcp_rep = inspect_windows_stdio_mcp_risk(repo, env=mcp_env)
+    stdio_servers = list(mcp_rep.get("stdio_servers") or [])
+    crash_rep = inspect_language_server_acceptex_crashes(env=environ)
+    crash_loop = bool(crash_rep.get("crash_loop_detected"))
+
+    at_risk = bool(
+        gogc_off_without_memlimit
+        or crash_loop
+        or (not gc_tuned and len(stdio_servers) >= 2)
+    )
+    return {
+        "applicable": True,
+        "at_risk": at_risk,
+        "gc_tuned": gc_tuned,
+        "gogc": gogc,
+        "gomemlimit": gomemlimit,
+        "gogc_off_without_memlimit": gogc_off_without_memlimit,
+        "stdio_servers": stdio_servers,
+        "crash_report": crash_rep,
     }

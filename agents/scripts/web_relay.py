@@ -2,7 +2,7 @@
 """Optional Manual Web-Relay Mode (`web-pack` / `web-apply`) for Android Agent Harness.
 
 Bridges local AST-scoped discovery & deterministic Gradle/EvidenceStore verification in
-Antigravity with manual high-reasoning offload on Gemini Web — with zero GitHub OAuth
+Antigravity with manual high-reasoning offload in any external AI web chat — with zero GitHub OAuth
 linking, zero full-repo uploads, and zero impact on the default Antigravity-only mode.
 """
 from __future__ import annotations
@@ -817,28 +817,6 @@ def _extract_neighbor_signatures(repo: Path, scope_files: list[str], vault: dict
 
 def _collect_active_diagnostics(repo: Path, task_id: str) -> str:
     chunks: list[str] = []
-    if task_id:
-        try:
-            from delegation_policy import get_worker_handoff_capsule
-            cap = get_worker_handoff_capsule(repo, task_id)
-            if not cap:
-                raw_hf = task_dir(repo, task_id) / "worker-handoff.json"
-                if raw_hf.is_file():
-                    hf_doc = read_json(raw_hf)
-                    if str(hf_doc.get("status") or "").upper() not in {"RESOLVED", "CLEARED"}:
-                        cap = hf_doc
-            if cap:
-                chunks.append("### Worker Handoff Capsule (Preserve Existing Progress — Do Not Restart From Scratch)\n" + json.dumps({
-                    "takeover_trigger": cap.get("takeover_trigger"),
-                    "last_failed_gate": cap.get("last_failed_gate"),
-                    "completed_files_on_disk": cap.get("completed_files_on_disk"),
-                    "passing_gates": cap.get("passing_gates"),
-                    "failing_gates": cap.get("failing_gates"),
-                    "attempt_history": cap.get("attempt_history"),
-                    "summary_for_lead": cap.get("summary_for_lead") or cap.get("summary"),
-                }, indent=2, ensure_ascii=False))
-        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
-            pass
     res_dir = state_root(repo) / "results"
     if res_dir.is_dir():
         for r_file in sorted(res_dir.glob("*.json")):
@@ -991,7 +969,7 @@ def build_web_pack(
         )
         raise ValidationError(
             f"WEB_RELAY_SECRET_SCOPE_FALLBACK: All target file(s) ({', '.join(rejected_secrets)}) are protected by the "
-            "Zero-Secret Gate and cannot be exported to Gemini Web. "
+            "Zero-Secret Gate and cannot be exported to an external AI web chat. "
             "TOOL_CALL_REQUIRED=ask_question — Ask the developer via `ask_question` with a simple English choice: "
             "'Run this task locally in Normal mode (keep project Web default intact)' -> run "
             f"`{fallback_cmd}` and execute locally."
@@ -1141,11 +1119,11 @@ def build_web_pack(
     md_sections = [
         f"# Android Agent Harness — Web-Relay Context Pack (`{pack_id}`)",
         "",
-        "## 1. Mission & Output Contract (For Gemini Web)",
+        "## 1. Mission & Output Contract (External AI Web-Relay)",
         f"- **Task Goal**: {eff_prompt}",
         f"- **Task Kind**: `{eff_kind}` | **Suggested Task ID**: `{suggested_tid}` | **Pack ID**: `{pack_id}`{batch_banner}",
         "- **Editing Freedom & Rules**:",
-        "  1. Solve the task completely across all affected files in this pack: preserve Clean Architecture boundaries, maintain bilingual EN/AR string parity (`values/strings.xml` + `values-ar/strings.xml`) when adding user-visible strings, include Room `Migration`s when changing `@Entity` schemas, and include JUnit tests (for `BUG` tasks, ensure the test FAILS before your production fix and PASSES after).",
+        "  1. Solve the task completely across all affected files in this pack: preserve Clean Architecture boundaries, write concise English KDoc (`/** ... */` documenting responsibility, `@param`, and `@return`) on every newly created class/interface and every newly added public/internal method on `Repository`, `UseCase`, `ViewModel`, `DataSource`/`ApiService`, or public `@Composable` screen/component, maintain bilingual EN/AR string parity (`values/strings.xml` + `values-ar/strings.xml`) when adding user-visible strings, include Room `Migration`s when changing `@Entity` schemas, and include JUnit tests (for `BUG` tasks, ensure the test FAILS before your production fix and PASSES after).",
         "  2. **Compact Lossless `hunks` (Essential for `10–100` File Tasks)**: For `MODIFY` operations, ALWAYS prefer minimal `hunks` (`search` / `replace` with 2-3 surrounding context lines copied verbatim, or set `\"replace_all\": true` for repeated symbol/import/package renames across a file) instead of rewriting whole files. **NEVER** emit lazy truncation comments (`// ... rest of code unchanged`, `// existing code`).",
         "  3. **Full Freedom to Create, Rename, Delete & Patch Neighbors**: You may freely `CREATE` new classes, unit tests, or Android `<vector>` XML drawables (`res/drawable/ic_*.xml`), `DELETE` or `RENAME` (`old_path` -> `path`) scoped files, and apply surgical `hunks` to `READ_ONLY_NEIGHBOR_SIGNATURES` when updating shared interfaces/imports. Never blindly overwrite an unseen file with full `content` — emit `NEED_FILES` if you need a missing file's full body first.",
         "  4. **UI Screenshots & Drawables**: If the developer attached a UI design image/screenshot in chat alongside this pack, match its layout hierarchy, spacing, colors, typography, and RTL support faithfully, reusing existing `R.drawable.*` / `R.font.*` IDs listed in Section 2 (or `CREATE` new `<vector>` XML drawables as needed).",
@@ -1276,10 +1254,10 @@ def build_web_pack(
 
     clip_info = {"copied": False, "mode": "skipped"} if no_clipboard else _copy_to_clipboard(bundle_file, bundle_text)
     new_chat_recommended = not bool(retry or add_files or cur_batch_num > 1 or had_prior_task_pack)
-    gemini_web_instruction = (
-        "Open a NEW Gemini Web chat (gemini.google.com), select Task mode, paste (Ctrl+V), and send."
+    web_chat_instruction = (
+        "Open a NEW external AI chat, attach or paste the Context Pack (Ctrl+V), and send."
         if new_chat_recommended
-        else "Stay in the SAME Gemini Web chat (keep Task mode selected), paste (Ctrl+V), and send (open a NEW chat in Task mode only for a new task)."
+        else "Stay in the SAME external AI chat, attach or paste the pack (Ctrl+V), and send (open a NEW chat only for a new task)."
     )
     return {
         "status": "OK",
@@ -1300,8 +1278,9 @@ def build_web_pack(
         "bundle_bytes": len(bundle_text.encode("utf-8")),
         "clipboard": clip_info,
         "new_chat_recommended": new_chat_recommended,
+        "web_chat_instruction": web_chat_instruction,
         "recommended_gemini_web_mode": "Task",
-        "gemini_web_instruction": gemini_web_instruction,
+        "gemini_web_instruction": web_chat_instruction,
     }
 
 
@@ -1443,7 +1422,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             if _detect_truncated_merge_pack_id(raw_fp, set()):
                 raise ValidationError(
                     f"WEB_MERGE_JSON_TRUNCATED: File '{fp}' begins a `{WEB_MERGE_SCHEMA}` payload but is cut off before the closing JSON brace. "
-                    "Download the complete `harness-merge-*.json` file from Gemini Web (or copy after generation finishes) and re-run `web-apply`."
+                    "Download the complete `harness-merge-*.json` file from the external AI chat (or copy after generation finishes) and re-run `web-apply`."
                 )
             raise ValidationError(f"File '{fp}' does not contain a valid `{WEB_MERGE_SCHEMA}` JSON payload.")
         return parsed, f"file:{fp}"
@@ -1542,13 +1521,13 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         _, t_pid, t_src = truncated_sources[0]
         raise ValidationError(
             f"WEB_MERGE_JSON_TRUNCATED: Detected `{WEB_MERGE_SCHEMA}` for pack `{t_pid}` in `{t_src}`, "
-            "but the JSON text was truncated mid-stream (likely chat input length cap or copying before Gemini Web finished). "
-            f"Download `harness-merge-{t_pid}.json` into `Downloads` (or copy the full JSON block via Gemini Web's copy button) and re-run `web-apply`."
+            "but the JSON text was truncated mid-stream (likely chat input length cap or copying before generation finished). "
+            f"Download `harness-merge-{t_pid}.json` into `Downloads` (or copy the full JSON block once generation completes) and re-run `web-apply`."
         )
 
     raise ValidationError(
         f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{WEB_MERGE_SCHEMA}` JSON found in Clipboard, `.user_uploaded`, or Downloads. "
-        "Copy the JSON block from Gemini Web (or click Download on `harness-merge-*.json`) and re-run `web-apply`."
+        "Copy the JSON block from the external AI chat (or download `harness-merge-*.json`) and re-run `web-apply`."
     )
 
 
@@ -1667,7 +1646,7 @@ def _validate_code_integrity(rel_path: str, new_text: str, base_text: str = "") 
     if m_trunc:
         raise ValidationError(
             f"LAZY_TRUNCATION_BLOCKED on '{rel_path}': detected placeholder `{m_trunc.group(0).strip()}`. "
-            "Gemini Web must return exact `hunks` (`search`/`replace`) or complete untruncated code."
+            "The external AI reply must return exact `hunks` (`search`/`replace`) or complete untruncated code."
         )
     if base_text:
         old_lines = len(base_text.splitlines())
@@ -1925,7 +1904,7 @@ def apply_web_merge(
         if not norm_req:
             raise ValidationError(
                 f"NEED_FILES_NOT_FOUND: Requested file(s) do not exist in repository `{repo.name}` (or are protected): {missing_req}. "
-                "Do NOT apply template examples; copy or download the actual Gemini Web reply and re-run `web-apply`."
+                "Do NOT apply template examples; copy or download the actual external AI reply and re-run `web-apply`."
             )
         cur_ed_keys = list((pack_doc.get("editable_files") or {}).keys())
         merged_active_files = list(dict.fromkeys(cur_ed_keys + norm_req))
@@ -2761,43 +2740,68 @@ def apply_web_merge(
     }
     atomic_write_json(prev_rec_f, receipt_doc)
 
-    # Transition any unresolved `worker-handoff.json` capsule to RESOLVED so Lead/router know Web-Relay took over cleanly
-    hf_file = tdir / "worker-handoff.json"
-    if hf_file.is_file():
-        try:
-            hf_data = read_json(hf_file)
-            if str(hf_data.get("status") or "").upper() not in {"RESOLVED", "CLEARED"}:
-                hf_data["status"] = "RESOLVED"
-                hf_data["resolved_by"] = "web_relay"
-                hf_data["resolved_pack_id"] = pack_id
-                hf_data["resolved_at"] = receipt_doc["applied_at"]
-                atomic_write_json(hf_file, hf_data)
-        except (OSError, ValueError, ValidationError):
-            pass
-
     phases_now = active_doc.get("phases") or []
     p_idx_now = int(active_doc.get("active_phase_index") or 0)
+    gate_findings: dict[str, list[str]] = {}
+    kdoc_advisories = [
+        ln.strip()
+        for ln in (lint_proc.stdout or "").splitlines()
+        if ln.strip().startswith("[KDOC-ADVISORY]")
+    ][:20]
+    if lint_proc.returncode != 0:
+        lint_lines = [ln.strip() for ln in ((lint_proc.stdout or "") + "\n" + (lint_proc.stderr or "")).splitlines() if ln.strip()]
+        if lint_lines:
+            gate_findings["fast_kt_lint"] = lint_lines[:20]
+    if str_proc.returncode != 0:
+        str_lines = [ln.strip() for ln in ((str_proc.stdout or "") + "\n" + (str_proc.stderr or "")).splitlines() if ln.strip()]
+        if str_lines:
+            gate_findings["check_strings"] = str_lines[:20]
+
+    ready_single_pass = False
+    if phases_now and not is_partial_reply and next_batch_pack_info is None and not staged_phases_summary:
+        try:
+            from workflow import all_remaining_phases_ready_for_final
+            ready_single_pass, _ = all_remaining_phases_ready_for_final(repo, tid, active_doc)
+        except (ImportError, OSError, ValueError, ValidationError):
+            ready_single_pass = False
+
+    kdoc_inline_hint = (
+        f"First add concise English KDoc (`/** ... */`) on the {len(kdoc_advisories)} newly added contract(s) listed in `kdoc_advisories` via `edit_file`, then run: "
+        if kdoc_advisories
+        else ""
+    )
     if is_partial_reply:
-        next_cmd = 'Stay in the SAME Gemini Web chat (keep `Task` mode selected), ask Gemini Web `Continue remaining files for this pack_id`, and run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"`.'
+        next_cmd = 'Stay in the SAME external AI chat, ask `Continue remaining files for this pack_id`, and run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"`.'
     elif next_batch_pack_info is not None:
         next_cmd = (
             f"Batch {next_batch_pack_info['batch_index']}/{next_batch_pack_info['total_batches']} "
-            f"(`{next_batch_pack_info['pack_id']}`) is now copied to Clipboard — stay in the SAME Gemini Web chat (keep `Task` mode selected), paste into Gemini Web, and run `web-apply`."
+            f"(`{next_batch_pack_info['pack_id']}`) is now copied to Clipboard — stay in the SAME external AI chat, paste/attach the next batch, and run `web-apply`."
         )
-    elif phases_now and 0 <= p_idx_now < len(phases_now):
+    elif phases_now and 0 <= p_idx_now < len(phases_now) and not ready_single_pass:
         cur_pid = str(phases_now[p_idx_now].get("id") or "p1")
         if (
             len(phases_now) - p_idx_now > 1
             and not staged_phases_summary
             and not bool(active_doc.get("scoped_phase_review_enabled"))
         ):
-            next_cmd = f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}" --advance-all-ready'
+            next_cmd = kdoc_inline_hint + f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}" --advance-all-ready'
         else:
-            next_cmd = f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}"'
+            next_cmd = kdoc_inline_hint + f'python .agents/harness.py task checkpoint-phase --repo . --task-id {tid} --phase-id "{cur_pid}"'
+    elif gate_findings:
+        next_cmd = (
+            f"Fix zero_token_gate_findings"
+            + (" and `kdoc_advisories`" if kdoc_advisories else "")
+            + f" via surgical edit_file, then run `python .agents/harness.py verify-steps --task-id {tid} --host antigravity`."
+        )
+    elif kdoc_advisories:
+        next_cmd = (
+            f"Add concise English KDoc (`/** ... */`) on the {len(kdoc_advisories)} newly added contract(s) in `kdoc_advisories` via surgical `edit_file`, "
+            f"then run `python .agents/harness.py verify-steps --task-id {tid} --host antigravity`."
+        )
     else:
         next_cmd = f"python .agents/harness.py verify-steps --task-id {tid} --host antigravity"
 
-    return {
+    ret_apply: dict[str, Any] = {
         "status": "APPLIED_PARTIAL_BATCH" if is_partial_reply else ("APPLIED_BATCH_NEXT_READY" if next_batch_pack_info else "APPLIED"),
         "pack_id": pack_id,
         "task_id": tid,
@@ -2816,6 +2820,11 @@ def apply_web_merge(
         },
         "next_recommended_command": next_cmd,
     }
+    if gate_findings:
+        ret_apply["zero_token_gate_findings"] = gate_findings
+    if kdoc_advisories:
+        ret_apply["kdoc_advisories"] = kdoc_advisories
+    return ret_apply
 
 
 def get_web_relay_status(repo: Path) -> dict[str, Any]:
@@ -2840,7 +2849,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", dest="top_repo", default=None, help="Android/KMP project root.")
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
-    p_pack = sub.add_parser("pack", help="Build an AST-scoped, secret-scrubbed Context Pack for Gemini Web and copy to Clipboard.")
+    p_pack = sub.add_parser("pack", help="Build an AST-scoped, secret-scrubbed Context Pack for an external AI chat and copy to Clipboard.")
     p_pack.add_argument("--repo", default=None, help="Android/KMP project root.")
     p_pack.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional active task ID.")
     p_pack.add_argument("--prompt", default="", help="Task goal or bug description.")
@@ -2902,15 +2911,15 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 clip_mode = (res.get("clipboard") or {}).get("mode", "none")
                 chat_step = (
-                    "Open a NEW Gemini Web chat (select `Task` mode)"
+                    "Open a NEW external AI chat"
                     if res.get("new_chat_recommended", True)
-                    else "Stay in the SAME Gemini Web chat (keep `Task` mode selected)"
+                    else "Stay in the SAME external AI chat"
                 )
                 print(
                     f"[WEB-PACK READY] pack_id={res['pack_id']} | files={len(res['editable_files'])} | "
                     f"neighbors={res['neighbor_signatures_count']} | size={res['bundle_bytes']:,} B | clipboard={clip_mode}\n"
                     f"  Bundle file: {res['bundle_file']}\n"
-                    f"  Next: {chat_step}, paste (`Ctrl+V`), then copy/download its reply and run `web-apply`."
+                    f"  Next: {chat_step}, attach or paste (`Ctrl+V`), then copy/download its `HARNESS_WEB_MERGE_V1` reply and run `web-apply`."
                 )
             return 0
 
@@ -2940,14 +2949,18 @@ def main(argv: list[str] | None = None) -> int:
                 np_info = res["new_pack"]
                 print(
                     f"[WEB-PACK EXPANDED] Added requested files {res['added_files']} -> new pack_id={np_info['pack_id']} "
-                    f"({np_info['bundle_bytes']:,} B, clipboard={np_info['clipboard'].get('mode')}). Stay in the SAME Gemini Web chat (keep `Task` mode selected) and paste into Gemini Web."
+                    f"({np_info['bundle_bytes']:,} B, clipboard={np_info['clipboard'].get('mode')}). Stay in the SAME external AI chat and paste/attach the expanded pack."
                 )
             else:
+                kdoc_cli_block = ""
+                if res.get("kdoc_advisories"):
+                    kdoc_cli_block = "\n  KDoc reminders:\n    " + "\n    ".join(res["kdoc_advisories"][:8])
                 print(
                     f"[WEB-APPLY OK] task_id={res['task_id']} | origin={res['origin']} | "
                     f"written={len(res.get('files_written') or [])} | deleted={len(res.get('files_deleted') or [])}\n"
                     f"  Zero-token gates: fast_kt_lint={res.get('zero_token_gates', {}).get('fast_kt_lint')}, "
-                    f"check_strings={res.get('zero_token_gates', {}).get('check_strings')}\n"
+                    f"check_strings={res.get('zero_token_gates', {}).get('check_strings')}"
+                    f"{kdoc_cli_block}\n"
                     f"  Next: {res.get('next_recommended_command')}"
                 )
             return 0

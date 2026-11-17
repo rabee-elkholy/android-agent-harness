@@ -809,7 +809,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         )
         act_impl = workflow.resolve_next_action(self.repo, "t-docs", host="antigravity")
         self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act_impl["code"])
-        self.assertEqual("TRIVIAL_INLINE_LEAD", act_impl["delegation_advisory"]["strategy"])
+        self.assertEqual("INLINE_LEAD_DIRECT", act_impl["delegation_advisory"]["strategy"])
 
         (self.repo / "README.md").write_text("# DemoApp\nUpdated architecture overview.\n", encoding="utf-8")
         cur = workflow.prepare_verification(argparse.Namespace(repo=str(self.repo), task_id="t-docs", force=False, host="antigravity"))
@@ -834,12 +834,12 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertEqual("DELIVERED", delivered["status"])
 
     def test_2_feature_single_and_multiphase_and_worker_symbol_scope(self) -> None:
-        """Verify FEATURE single-phase + worker symbol scope guard + unbound reviewer auto-bind + multi-phase p1->p2."""
+        """Verify FEATURE single-phase + scout read-only symbol guard + inline Lead symbol edit + unbound reviewer auto-bind + multi-phase p1->p2."""
         import workflow
         from _vnext_common import read_json, sha256_file, state_root
-        from delegation_policy import WORKER_AGENT, record_utility_dispatch
+        from delegation_policy import SCOUT_AGENT, record_utility_dispatch
 
-        # A) Single-phase FEATURE with worker scope check on `symbol replace-body`
+        # A) Single-phase FEATURE with scout read-only check + inline Lead `symbol replace-body`
         self._draft_approve_begin(
             task_id="t-feat",
             title="Add calorie formatting label",
@@ -847,39 +847,51 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             files=["app/src/main/java/com/demo/FoodViewModel.kt"],
             surfaces=["BUSINESS_LOGIC", "COROUTINES", "PERSISTENCE"],
         )
-        w_prompt = "Implement loadPlan() in app/src/main/java/com/demo/FoodViewModel.kt returning kcal suffix and run unit tests."
+        s_prompt = "Inspect loadPlan() in app/src/main/java/com/demo/FoodViewModel.kt and return digest."
         record_utility_dispatch(
             self.repo,
-            agent_type=WORKER_AGENT,
-            role_label=WORKER_AGENT,
-            prompt=w_prompt,
+            agent_type=SCOUT_AGENT,
+            role_label=SCOUT_AGENT,
+            prompt=s_prompt,
             parent_conversation_id="lead-conv-1",
             task_id="t-feat",
-            worker_mode="FULL_SLICE",
+            worker_mode="READ_ONLY",
         )
-        # Bind worker transcript
-        w_tx_dir = self.brain_app_data / "brain/worker-conv-1/.system_generated/logs"
-        w_tx_dir.mkdir(parents=True, exist_ok=True)
-        (w_tx_dir / "transcript.jsonl").write_text(
+        # Bind scout transcript
+        s_tx_dir = self.brain_app_data / "brain/scout-conv-1/.system_generated/logs"
+        s_tx_dir.mkdir(parents=True, exist_ok=True)
+        (s_tx_dir / "transcript.jsonl").write_text(
             json.dumps({
                 "source": "SYSTEM_SDK",
                 "type": "SYSTEM_MESSAGE",
-                "content": f"<SYSTEM_MESSAGE>sender=lead-conv-1 priority=MESSAGE_PRIORITY_HIGH content={w_prompt}\n</SYSTEM_MESSAGE>",
+                "content": f"<SYSTEM_MESSAGE>sender=lead-conv-1 priority=MESSAGE_PRIORITY_HIGH content={s_prompt}\n</SYSTEM_MESSAGE>",
             }) + "\n",
             encoding="utf-8",
         )
-        # Worker trying `symbol replace-body` on UNPLANNED production file AuthManager.kt MUST BE DENIED in PreToolUse!
-        deny_unplanned = self._pre_tool({
-            "conversationId": "worker-conv-1",
+        # Scout trying `symbol replace-body` MUST BE DENIED in PreToolUse!
+        deny_scout_write = self._pre_tool({
+            "conversationId": "scout-conv-1",
             "toolName": "run_command",
             "toolArgs": {
-                "CommandLine": "python .agents/harness.py symbol replace-body --file app/src/main/java/com/demo/AuthManager.kt --symbol refreshToken --replacement x",
+                "CommandLine": "python .agents/harness.py symbol replace-body --file app/src/main/java/com/demo/FoodViewModel.kt --symbol loadPlan --replacement x",
             },
         })
-        self.assertEqual("deny", deny_unplanned["decision"])
-        # Worker using `symbol replace-body` on PLANNED FoodViewModel.kt IS ALLOWED!
+        self.assertEqual("deny", deny_scout_write["decision"])
+        # Retired worker invocation MUST BE DENIED in PreToolUse!
+        deny_retired_worker = self._pre_tool({
+            "conversationId": "lead-conv-1",
+            "toolName": "invoke_subagent",
+            "toolArgs": {
+                "TypeName": "harness-worker-agent",
+                "Role": "harness-worker-agent",
+                "Prompt": "Implement FoodViewModel.kt",
+            },
+        })
+        self.assertEqual("deny", deny_retired_worker["decision"])
+        self.assertIn("WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY", deny_retired_worker["reason"])
+        # Warm Lead session using `symbol replace-body` on PLANNED FoodViewModel.kt IS ALLOWED!
         allow_planned = self._pre_tool({
-            "conversationId": "worker-conv-1",
+            "conversationId": "lead-conv-1",
             "toolName": "run_command",
             "toolArgs": {
                 "CommandLine": "python .agents/harness.py symbol replace-body --file app/src/main/java/com/demo/FoodViewModel.kt --symbol loadPlan --replacement x",
@@ -1042,7 +1054,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         )
         act_bug = workflow.resolve_next_action(self.repo, "t-bug", host="antigravity")
         self.assertEqual("CAPTURE_RED_EVIDENCE", act_bug["code"])
-        self.assertEqual("CAPTURE_RED_ONLY", act_bug["delegation_advisory"]["worker_mode"])
+        self.assertEqual("CAPTURE_RED_INLINE_LEAD", act_bug["delegation_advisory"]["strategy"])
+        self.assertEqual("NONE", act_bug["delegation_advisory"]["worker_mode"])
 
         # Lead calling `symbol replace-body` on production Calc.kt BEFORE RED evidence MUST BE DENIED at PreToolUse!
         deny_prod_sym = self._pre_tool({
@@ -1174,7 +1187,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         )
         self.assertEqual("CONFLICT", plan_conf["task_kind"], "AUTO kind must auto-detect active unmerged Git conflict!")
         act_conf = workflow.resolve_next_action(self.repo, "t-conflict", host="antigravity")
-        self.assertEqual("CONFLICT_LEAD_CORE_WORKER_VERIFY", act_conf["delegation_advisory"]["strategy"])
+        self.assertEqual("CONFLICT_INLINE_LEAD", act_conf["delegation_advisory"]["strategy"])
 
         # prepare-verification MUST fail closed while conflict markers remain!
         from _vnext_common import ValidationError
@@ -1306,8 +1319,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             surfaces=["AUTH", "SENSITIVE_DATA"],
         )
         act_auth_impl = workflow.resolve_next_action(self.repo, "t-auth", host="antigravity")
-        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", act_auth_impl["delegation_advisory"]["strategy"])
-        self.assertEqual("TESTS_AND_GATES_ONLY", act_auth_impl["delegation_advisory"]["worker_mode"])
+        self.assertEqual("INLINE_LEAD_DIRECT", act_auth_impl["delegation_advisory"]["strategy"])
+        self.assertEqual("NONE", act_auth_impl["delegation_advisory"]["worker_mode"])
 
         (self.repo / "app/src/main/java/com/demo/AuthManager.kt").write_text(
             "package com.demo\n\nclass AuthManager {\n    fun refreshToken(raw: String): Boolean = raw.trim().length >= 16\n}\n",
@@ -1402,17 +1415,13 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         import workflow
         from _vnext_common import read_json, state_root
 
-        # 1. Verify Flash Scout & Worker native system prompts embed `symbol outline/read/replace-body`, `roborazzi`, and `health`
+        # 1. Verify Scout native system prompt embeds `symbol outline/read` and targets `gemini-4-hydrogen-medium`
         scout_md = dp.render_utility_agent_markdown(dp.SCOUT_AGENT)
-        worker_md = dp.render_utility_agent_markdown(dp.WORKER_AGENT)
         self.assertIn("symbol outline", scout_md)
         self.assertIn("symbol read", scout_md)
-        self.assertIn("symbol replace-body", worker_md)
-        self.assertIn("roborazzi verify", worker_md)
         self.assertIn("gemini-4-hydrogen-medium", scout_md)
-        self.assertIn("gemini-4-hydrogen-high", worker_md)
 
-        # 2. Verify T5_CRITICAL (`MANIFEST_PERMISSION`) locks production edits to Lead Architect while allowing Flash Worker on tests
+        # 2. Verify T5_CRITICAL (`MANIFEST_PERMISSION`) executes inline on the warm Lead session (`INLINE_LEAD_DIRECT`, `worker_mode == NONE`)
         self._draft_approve_begin(
             task_id="t-perm-hybrid",
             title="Add foreground service permission guard",
@@ -1421,8 +1430,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             surfaces=["MANIFEST_PERMISSION"],
         )
         act_perm = workflow.resolve_next_action(self.repo, "t-perm-hybrid", host="antigravity")
-        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", act_perm["delegation_advisory"]["strategy"])
-        self.assertEqual("TESTS_AND_GATES_ONLY", act_perm["delegation_advisory"]["worker_mode"])
+        self.assertEqual("INLINE_LEAD_DIRECT", act_perm["delegation_advisory"]["strategy"])
+        self.assertEqual("NONE", act_perm["delegation_advisory"]["worker_mode"])
         workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-perm-hybrid", source="developer_terminal", proof_reference="done"))
 
         # 3. Verify T5_CRITICAL + `risk-hybrid` task policy keeps `.agents/agents/*/agent.md` synchronized (`inherit`) even across adapter regeneration!
@@ -1719,41 +1728,40 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertEqual("deny", res_impl_research["decision"])
         self.assertIn("USE_HARNESS_SCOUT_AGENT", res_impl_research["reason"])
 
-        # Dispatch Worker Wave 1 in Phase `p1`
-        w1_brief = (
-            "Update app/src/main/java/com/demo/FoodViewModel.kt to add fun isCaloriesAlwaysVisible(): Boolean = true "
-            "and run python .agents/harness.py compile."
-        )
+        # Dispatch Scout Wave in Phase `p1` (while retired `harness-worker-agent` is hard-denied!)
+        self.assertEqual("deny", self._pre_tool({
+            "conversationId": parent_cid,
+            "toolCall": {
+                "name": "invoke_subagent",
+                "args": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": "Edit FoodViewModel.kt"},
+            },
+        })["decision"])
+        s1_brief = "Inspect app/src/main/java/com/demo/FoodViewModel.kt and FoodScreen.kt callers."
         self.assertEqual("allow", self._pre_tool({
             "conversationId": parent_cid,
             "toolCall": {
                 "name": "invoke_subagent",
-                "args": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": w1_brief},
+                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": s1_brief},
             },
         })["decision"])
-        (self.repo / "app/src/main/java/com/demo/FoodViewModel.kt").write_text(
-            "package com.demo\n\nclass FoodViewModel {\n    fun isCaloriesAlwaysVisible(): Boolean = true\n    fun loadPlan(): String = \"1800\"\n}\n",
-            encoding="utf-8",
-        )
         post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
-
-        # `git diff` is ALWAYS free after worker completion!
-        self.assertEqual("allow", self._pre_tool({
-            "conversationId": parent_cid,
-            "toolCall": {"name": "run_command", "args": {"CommandLine": "git diff"}},
-        })["decision"])
-        # After 3 surgical reads in p1, 4th read is blocked by POST_WORKER_REREAD_CAP_REACHED!
+        # After 3 surgical reads in p1, 4th read on non-Lead-owned file is blocked by POST_SCOUT_REREAD_CAP_REACHED!
         for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
             self.assertEqual("allow", self._pre_tool({
                 "conversationId": parent_cid,
-                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodViewModel.kt")}},
+                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
             })["decision"])
-        r_w1_fourth = self._pre_tool({
+        r_s1_fourth = self._pre_tool({
             "conversationId": parent_cid,
             "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
         })
-        self.assertEqual("deny", r_w1_fourth["decision"])
-        self.assertIn("POST_WORKER_REREAD_CAP_REACHED", r_w1_fourth["reason"])
+        self.assertEqual("deny", r_s1_fourth["decision"])
+        self.assertIn("POST_SCOUT_REREAD_CAP_REACHED", r_s1_fourth["reason"])
+        # Lead executes Phase `p1` edit inline directly on warm cache!
+        (self.repo / "app/src/main/java/com/demo/FoodViewModel.kt").write_text(
+            "package com.demo\n\n/** ViewModel managing food plan state. */\nclass FoodViewModel {\n    /** Returns whether calories remain visible. */\n    fun isCaloriesAlwaysVisible(): Boolean = true\n    fun loadPlan(): String = \"1800\"\n}\n",
+            encoding="utf-8",
+        )
 
         # Advance `p1` via real `workflow.checkpoint_phase` -> build Phase Review package -> verify GraphEngine topology + Zero-Hop inlining + Pre-Verified Gates!
         with unittest.mock.patch("_workflow.engine.check_phase_compile", return_value=(True, "PASS")), unittest.mock.patch("_workflow.engine.check_phase_tests", return_value=(True, "PASS")):
@@ -1870,32 +1878,6 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         })
         self.assertEqual("deny", r_spec_cap["decision"])
         self.assertIn("POST_SPECIALIST_REREAD_CAP_REACHED", r_spec_cap["reason"])
-
-        # Now dispatch Worker Wave 2 in Phase `p2` -> verify `POST_WORKER_REREAD_CAP_REACHED` applies on `p2` too, AND unlocks if Lead edits a fix!
-        w2_brief = (
-            "Update app/src/main/java/com/demo/FoodScreen.kt to render always-visible calories card "
-            "and run python .agents/harness.py compile."
-        )
-        self.assertEqual("allow", self._pre_tool({
-            "conversationId": parent_cid,
-            "toolCall": {
-                "name": "invoke_subagent",
-                "args": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": w2_brief},
-            },
-        })["decision"])
-        post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
-
-        for _ in range(dp.MAX_LEAD_POST_SUBAGENT_READS):
-            self.assertEqual("allow", self._pre_tool({
-                "conversationId": parent_cid,
-                "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
-            })["decision"])
-        r_w2_cap = self._pre_tool({
-            "conversationId": parent_cid,
-            "toolCall": {"name": "view_file", "args": {"AbsolutePath": str(self.repo / "app/src/main/java/com/demo/FoodScreen.kt")}},
-        })
-        self.assertEqual("deny", r_w2_cap["decision"])
-        self.assertIn("POST_WORKER_REREAD_CAP_REACHED", r_w2_cap["reason"])
 
         # Lead Architect decides to edit `FoodScreen.kt` directly -> unlocks subsequent reads cleanly!
         r_lead_edit = self._pre_tool({
@@ -2093,21 +2075,11 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertFalse(ok_unowned)
         self.assertEqual("POST_SUBAGENT_FULL_FILE_READ_BLOCKED", code_unowned)
 
-        # 3. `TESTS_AND_GATES_ONLY` worker wave on clean Git tree does NOT falsely trigger `EMPTY_WAVE` fast-fail
-        res_tgo = dp.evaluate_completed_worker_wave(
-            self.repo,
-            {
-                "task_id": "t-lead-owned-nochoke",
-                "phase_id": "",
-                "worker_mode": "TESTS_AND_GATES_ONLY",
-                "wave_id": "w-tgo-1",
-                "dispatched_epoch": 0.0,
-                "execution_id": "exec-tgo-clean",
-                "check_empty_worktree": True,
-                "task_status": "IMPLEMENTING",
-            },
-        )
-        self.assertFalse(bool(res_tgo.get("architectural_fast_fail")), f"TESTS_AND_GATES_ONLY falsely fast-failed: {res_tgo}")
+        # 3. Active `IMPLEMENTING` task resolves `INLINE_LEAD_DIRECT` (`worker_allowed == False`)
+        pol_tgo = dp.evaluate_delegation_policy(self.repo, task_id="t-lead-owned-nochoke")
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_tgo["strategy"])
+        self.assertFalse(pol_tgo["worker_allowed"])
+        self.assertEqual("NONE", pol_tgo["worker_mode"])
         workflow.cancel(argparse.Namespace(repo=str(self.repo), task_id="t-lead-owned-nochoke"))
 
         # 4. Cross-template & rule consistency checks (zero self-contradictions, zero stale `edit_file`/`Argon Low`, full `--expected-files` & `--plan-hash` parity)
@@ -2120,8 +2092,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertIn("task heal", global_tpl)
         self.assertIn("phase-review complete-all", global_tpl)
         self.assertNotIn("Argon Low", gemini_tpl)
-        self.assertIn("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", gemini_tpl)
-        self.assertIn("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", rules_md)
+        self.assertIn("INLINE_LEAD_DIRECT", gemini_tpl)
+        self.assertIn("INLINE_LEAD_DIRECT", rules_md)
         self.assertNotIn("edit_file", gemini_tpl)
         self.assertNotIn("edit_file", rules_md)
         for host_tpl in (
@@ -2216,31 +2188,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         self.assertNotIn("Hydrogen + Argon Low", rev_models_doc)
 
         # 8. Round-4 parity:
-        #    (a) Failed utility subagent launch (`not found` / `503`) clears ghost `is_worker_verification_context_active`
+        #    (a) Failed utility scout launch (`not found` / `503`) marks wave `dispatch_failed`
         #        and never triggers false `POST_SCOUT_REREAD_CAP_REACHED` or burns `SCOUT_WAVE_CAP_PER_TURN`.
-        dp.record_utility_dispatch(
-            self.repo,
-            agent_type="harness-worker-agent",
-            role_label="harness-worker-agent",
-            prompt="Implement feature in FoodViewModel.kt with unit tests and compile verification.",
-            parent_conversation_id="conv-r4-ghost",
-            task_id="t-r4-ghost",
-            worker_mode="FULL_SLICE",
-            task_status="IMPLEMENTING",
-        )
-        self.assertTrue(dp.is_worker_verification_context_active(self.repo, "t-r4-ghost"))
-        subprocess.run(
-            [sys.executable, str(kit_root / "agents/scripts/post_tool_reconcile.py")],
-            input=json.dumps({
-                "conversationId": "conv-r4-ghost",
-                "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [{"TypeName": "harness-worker-agent", "Prompt": "..."}]}},
-                "error": "subagent harness-worker-agent not found",
-            }),
-            env={**os.environ, "HARNESS_REPO": str(self.repo)},
-            capture_output=True, text=True, encoding="utf-8", check=True,
-        )
-        self.assertFalse(dp.is_worker_verification_context_active(self.repo, "t-r4-ghost"))
-
         dp.record_utility_dispatch(
             self.repo,
             agent_type="harness-scout-agent",
@@ -2268,12 +2217,13 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             )
             self.assertTrue(ok_s503)
 
-        #    (b) Non-ASCII / Arabic untracked & modified paths are preserved via `-c core.quotepath=false`
+        #    (b) Non-ASCII / Arabic untracked & modified paths are preserved in delivery manifests
+        from delivery_manifest import build_manifest
         ar_doc = self.repo / "docs" / "تقرير_السعرات.md"
         ar_doc.parent.mkdir(parents=True, exist_ok=True)
         ar_doc.write_text("# تقرير السعرات\n", encoding="utf-8")
-        wt_ar = dp._collect_worktree_progress(self.repo, [])
-        self.assertTrue(any("تقرير_السعرات.md" in item.get("file", "") for item in wt_ar), f"Arabic path dropped: {wt_ar}")
+        wt_ar = build_manifest(self.repo).get("changes") or []
+        self.assertTrue(any("تقرير_السعرات.md" in item.get("path", "") for item in wt_ar), f"Arabic path dropped: {wt_ar}")
         ar_doc.unlink(missing_ok=True)
 
         #    (c) `hooks.json` PreToolUse matcher covers delete_file, create_file, move_file, rename_file, apply_patch, mcp_.*, schedules:.*

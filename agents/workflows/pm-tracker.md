@@ -11,6 +11,10 @@ Follow `.agents/rules/harness-rules.md` section 7. This playbook governs **all**
 Run `python .agents/harness.py pm status` to inspect all installed PM MCP servers and their categorized tools (`read_tools`, `create_tools`, `update_status_tools`, `update_description_tools`, `comment_tools`).
 
 - **Read/Search/Inspect tools are always allowed immediately** without approval.
+- **Fast Zoho Sprints Item Resolution (Zero `output.txt` Pagination)**:
+  - Check **all** active sprints (`sprintType == 2` from `ZohoSprints_GetSprints`) before scanning Backlog (`sprintType == 5`), or filter directly with `query_params={"itemsearchby": "{\"itemNo\":\"1454\"}"}` (NEVER pass `searchby="itemNo"`, which fails with Zoho error `7600`).
+  - Whenever `ZohoSprints_GetItems` or Jira/PM tools save a large response to `.system_generated/steps/<N>/output.txt`, NEVER paginate `output.txt` with `read_file(..., ByteOffset=...)` — extract the item in `<20ms` via:
+    `python .agents/harness.py pm find-item --item <I1454|1454> --file "<output.txt>" --json`
 - **Bug id / Issue id:** fetch details from the active PM MCP, explain in chat, analyze, then draft the normal task plan with `workflow.py` and request approval.
 - **Feature / Task id:** fetch details, explain in chat, then ask whether to start the plan. Do not implement until the developer approves.
 - Never change status, description, or comments during ingest.
@@ -37,7 +41,7 @@ Never create, update, comment, transition, or delete any item on any PM MCP with
 | **Task / Story Delivery** | For **Task / Story / Feature** items, write the full 5-section QA delivery report in the **Description** and post a short **Comment** with `Commit: <short-hash>`. |
 | **Terminal Status Protection** | Never set `Done`, `Closed`, `Solved`, `Completed`, or `Resolved` automatically — always transition to `Ready To ReTest` / `In Review` / `Ready for Testing`, **unless** the developer explicitly ordered closing the task (`close task` / `اقفل التاسك`). |
 | **Zero Code / File / Class Leak** | Never include raw source file names (`.kt`, `.java`, `.xml`, `.kts`, `.gradle`), class/architecture identifiers (`*ViewModel`, `*Fragment`, `*Activity`, `*Repository`, `*UseCase`, `*Composable`), or internal code jargon. Write for **QA / Testers & Product Stakeholders** in functional user-facing terms. |
-| **5-Section RTL HTML Standard (when required by `project-notes.md` or HTML trackers)** | Use `<div dir="rtl" style="font-family: inherit; line-height: 1.6; text-align: right;">` with `<h3>` headings (`1. سبب المشكلة والهدف من المهمة`, `2. التعديلات الوظيفية والسلوكية للتطبيق` + Unit Tests PASS + Commit hash, `3. نطاق التأثير وفحص الآثار الجانبية`, `4. سيناريوهات الفحص اليدوي وفريق الجودة` in a 4-column `<table>`, `5. معايير القبول`). Never hardcode dark colors (`#2c3e50`, `#000000`); use `inherit` and `rgba(128,128,128,0.15)` for Dark/Light Mode compatibility. |
+| **5-Section RTL HTML Standard (when required by `project-notes.md` or HTML trackers)** | Use `<div dir="rtl" style="font-family: inherit; line-height: 1.6; text-align: right;">` with `<h3>` headings (`1. سبب المشكلة والهدف من المهمة`, `2. التعديلات الوظيفية والسلوكية للتطبيق` + Unit Tests PASS + Commit hash, `3. نطاق التأثير وفحص الآثار الجانبية`, `4. سيناريوهات الفحص اليدوي وفريق الجودة` in a 4-column `<table>`, `5. معايير القبول`). Never hardcode dark colors (`#2c3e50`, `#000000`); use `inherit` and `rgba(128,128,128,0.15)` for Dark/Light Mode compatibility. **Zoho Sprints HTTP 414 Guard**: `ZohoSprints_UpdateItem` sends `query_params.description` in the URL query string (where Arabic URL-encodes to 6 chars/letter), so ALWAYS pass the whitespace-minified `zoho_query_param_html` (`<= 1,050` chars) returned by `pm prepare-report` for `ZohoSprints_UpdateItem` (`ZohoSprints_AddItemComment` sends `body.name` in the POST body without URI length limits). |
 
 ---
 

@@ -29,7 +29,6 @@ CORE_SCRIPTS = (
     "delegation_policy.py",
     "maestro_bridge.py",
     "roborazzi_gate.py",
-    "human_review_cockpit.py",
     "session_forensics.py",
     "static_health_bridge.py",
     "symbol_edit.py",

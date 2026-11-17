@@ -15,7 +15,7 @@ TASK_SUBCOMMANDS = frozenset({
     "begin", "debug-evidence", "validate-finding", "prepare-verification", "complete", "deliver", "cancel",
     "resume", "handoff", "reconcile-handoff", "reconcile-delivery", "status", "recover-stale", "recover-active",
     "coverage", "bind-evidence", "metrics", "review-budget", "continue", "switch", "merge", "change-decision",
-    "heal", "plan-check", "plan-note", "bridge", "review-brief",
+    "heal", "plan-check", "plan-note", "bridge",
 })
 
 
@@ -35,7 +35,7 @@ def _run(script: str, args: list[str]) -> int:
     read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"], ["bridge"]))
     read_only = read_only or (script == "generate_project_context.py" and args[:1] in (["preview"], ["status"], ["drift-report"]))
-    read_only = read_only or (script == "pm_discovery.py" and args[:1] in (["discover"], ["status"]))
+    read_only = read_only or (script == "pm_discovery.py" and (args[:1] in (["discover"], ["status"], ["find-item"]) or any(a in ("-h", "--help") for a in args)))
     read_only = read_only or script in {"incident_reporter.py", "repair.py", "execution_mode.py"}
     # Merge checks the execution sessions of every source before applying; preview is read-only.
     read_only = (
@@ -45,7 +45,7 @@ def _run(script: str, args: list[str]) -> int:
         or (script == "static_health_bridge.py")
         or (script == "roborazzi_gate.py" and args[:1] in (["capabilities"], ["inspect-tree"]))
         or (script == "maestro_bridge.py" and args[:1] in (["capabilities"], ["list"]))
-        or (script in {"session_forensics.py", "human_review_cockpit.py"})
+        or (script == "session_forensics.py")
         or (script == "web_relay.py" and (args[:1] in (["pack"], ["status"]) or (args[:1] == ["apply"] and "--dry-run" in args)))
     )
     # The bounded verification runner owns its execution lease, including when
@@ -72,7 +72,7 @@ def _run(script: str, args: list[str]) -> int:
     in_process_ok = (
         os.environ.get("HARNESS_FORCE_SUBPROCESS") != "1"
         and (
-            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py", "session_forensics.py", "human_review_cockpit.py"}
+            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py", "session_forensics.py"}
             or (script == "static_health_bridge.py" and args[:1] in (["capabilities"], ["report"]))
             or (script == "symbol_edit.py" and args[:1] in (["outline"], ["read"]))
             or (script == "workflow.py" and args[:1] == ["status"])
@@ -314,7 +314,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|symbol|task|doctor|repair|diagnose-session|review-diff|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|symbol|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -390,11 +390,6 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("maestro_bridge.py", [*args, "--repo", str(REPO_ROOT)])
     if command == "diagnose-session":
         return _run("session_forensics.py", [*args, "--repo", str(REPO_ROOT)])
-    if command == "review-diff" or (command == "task" and args and args[0] == "review-brief"):
-        forwarded_rd = list(args[1:] if command == "task" else args)
-        if not {"-h", "--help"} & set(forwarded_rd) and "--repo" not in forwarded_rd and not any(a.startswith("--repo=") for a in forwarded_rd):
-            forwarded_rd = ["--repo", str(REPO_ROOT), *forwarded_rd]
-        return _run("human_review_cockpit.py", forwarded_rd)
     if command == "web-pack":
         forwarded = list(args)
         if not {"-h", "--help"} & set(forwarded) and "--repo" not in forwarded and not any(a.startswith("--repo=") for a in forwarded):

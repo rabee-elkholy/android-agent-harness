@@ -143,7 +143,37 @@ def cmd_prepare_report(args: argparse.Namespace) -> int:
 
     report_file = tdir / "zoho-delivery-report.json"
     atomic_write_json(report_file, report_payload)
-    sys.stdout.write(json.dumps({"status": "PREPARED", "report_path": str(report_file), "report_sha256": report_sha}, indent=2) + "\n")
+
+    from pm_discovery import resolve_configured_pm_language
+    language = resolve_configured_pm_language(repo, plan)
+    short_commit = str(plan.get("delivery_commit_sha") or "HEAD").strip()[:7]
+    compact_query_html = ZohoPolicyResolver.render_compact_query_param_html(
+        language=language,
+        commit_hash=short_commit,
+        root_cause_or_objective=objective,
+        solution_or_changes=changes,
+        blast_radius=impact_list,
+        test_cases=tests_list,
+    )
+    sys.stdout.write(
+        json.dumps(
+            {
+                "status": "PREPARED",
+                "report_path": str(report_file),
+                "report_sha256": report_sha,
+                "zoho_query_param_html": compact_query_html,
+                "zoho_query_param_chars": len(compact_query_html),
+                "zoho_sprints_update_hint": (
+                    "For ZohoSprints_UpdateItem `query_params.description` (sent in URL query string), pass `zoho_query_param_html` "
+                    "(<=1,050 chars, whitespace-minified) to avoid HTTP 414 Request-URI Too Large on URL-encoded Arabic; "
+                    "for `ZohoSprints_AddItemComment` (`body.name`), full HTML/text is sent in the POST body without URI limits."
+                ),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
     return 0
 
 

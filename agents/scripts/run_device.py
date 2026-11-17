@@ -1076,6 +1076,7 @@ def main() -> int:
     parser.add_argument("--verdict", choices=["PASS", "FAIL"], default="PASS", help="Signoff verdict")
     parser.add_argument("--source", choices=["developer_terminal", "host_native", "conversation"], default=None, help="Authority source for signoff")
     parser.add_argument("--approval-token", default=None, help="Trusted approval token from developer prompt")
+    parser.add_argument("--json", action="store_true", help="Accepted for CLI flag uniformity across harness commands")
     args = parser.parse_args()
     if not math.isfinite(args.startup_timeout) or not 1 <= args.startup_timeout <= 30:
         parser.error('--startup-timeout must be between 1 and 30 seconds')

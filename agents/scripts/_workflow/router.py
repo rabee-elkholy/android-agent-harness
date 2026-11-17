@@ -374,8 +374,7 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 )
     except (OSError, ValueError, KeyError, TypeError):
         cur_pid = ""
-    has_active_friction = (_engine.task_dir(repo, task_id) / "worker-friction.json").is_file()
-    if (run_host == "antigravity" and not has_task_changes) or has_active_friction:
+    if run_host == "antigravity" and not has_task_changes:
         try:
             from delegation_policy import evaluate_delegation_policy
             bfe_existing = str((action.get("before_first_edit") or {}).get("command") or "")
@@ -386,27 +385,20 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
                 router_action="IMPLEMENT_APPROVED_SCOPE",
                 before_first_edit_cmd=bfe_existing,
             )
-            if (run_host == "antigravity" and not has_task_changes) or int(adv.get("friction_strikes") or 0) > 0:
-                adv_payload = {
-                    "strategy": adv.get("strategy"),
-                    "recommended_subagent": adv.get("recommended_subagent"),
-                    "worker_mode": adv.get("worker_mode"),
-                    "target_files": adv.get("target_files"),
-                    "reason": adv.get("reason"),
-                }
-                if adv.get("next_command"):
-                    adv_payload["next_command"] = adv["next_command"]
-                if adv.get("execution_mode"):
-                    adv_payload["execution_mode"] = adv["execution_mode"]
-                if adv.get("lead_owned_files"):
-                    adv_payload["lead_owned_files"] = adv["lead_owned_files"]
-                if adv.get("lead_takeover_handoff"):
-                    adv_payload["lead_takeover_handoff"] = adv["lead_takeover_handoff"]
-                elif adv.get("previous_wave_handoff"):
-                    adv_payload["previous_wave_handoff"] = adv["previous_wave_handoff"]
-                action["delegation_advisory"] = adv_payload
-                if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
-                    action["reason"] += f" Web mode active: run `{adv['next_command']}` to build the Gemini Web Context Pack."
+            adv_payload = {
+                "strategy": adv.get("strategy"),
+                "recommended_subagent": adv.get("recommended_subagent"),
+                "worker_mode": adv.get("worker_mode"),
+                "target_files": adv.get("target_files"),
+                "reason": adv.get("reason"),
+            }
+            if adv.get("next_command"):
+                adv_payload["next_command"] = adv["next_command"]
+            if adv.get("execution_mode"):
+                adv_payload["execution_mode"] = adv["execution_mode"]
+            action["delegation_advisory"] = adv_payload
+            if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
+                action["reason"] += f" Web mode active: run `{adv['next_command']}` to build the Web-Relay Context Pack."
         except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
             pass
     return action
@@ -742,6 +734,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             if recorded_notes else ""
         )
 
+        sorted_dirty = sorted(dirty)
         return {
             "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
             "kind": "DEVELOPER_ACTION",
@@ -749,8 +742,8 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             "command": "",
             "blocking": True,
             "reason": (
-                f"Verified task files remain uncommitted: {', '.join(sorted(dirty))}.{mixed_note} "
-                "Human Git Authority requires the developer to review and commit changes before final delivery. "
+                f"Verified task files remain uncommitted: {', '.join(sorted_dirty)}.{mixed_note} "
+                "Human Git Authority requires the developer to review in Android Studio Git Diff and commit changes before final delivery. "
                 "If the developer asks to install/test the APK or inspect `logcat` on their phone before committing, run `python .agents/harness.py device install-start` or `python .agents/harness.py debug logs --lines 400 --filter \"<tag|url>\"` directly in `READY_FOR_DELIVERY` (no `--reopen` needed for read-only logcat/code diagnosis). "
                 f"Only once an actual code edit is confirmed for this task, reopen with: python .agents/harness.py task resume --task-id {task_id} --reopen"
             ),
@@ -761,20 +754,21 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 "task_id": task_id,
                 "verified_run_id": ready_run_id,
                 "verified_snapshot_sha256": ready_snapshot,
-                "dirty_task_files": sorted(dirty),
+                "dirty_task_files": sorted_dirty,
                 "suggested_commit_message": suggested_commit,
                 "suggested_commit_block": suggested_commit_full,
             },
             "instructions": (
-                f"Developer action required: Commit uncommitted task files ({', '.join(sorted(dirty))}).\n"
+                f"Developer action required: Review in Android Studio Git Diff and commit uncommitted task files ({', '.join(sorted_dirty)}).\n"
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
                 + refinement_commit_note
                 + f"Suggested commit:\n```text\n{suggested_commit_full}\n```\n"
-                "Invoke `ask_question` IMMEDIATELY with ZERO chat prose before the tool call, placing the Commit & Delivery Card "
-                "(in the developer's active conversation language) directly inside the `ask_question` `question` text:\n"
-                "(1) Compact verified files summary (show total file count and at most 3 key file names in `backticks`, noting any pre-existing edits),\n"
-                "(2) The full Conventional Commit message (subject line + bullet body) inside a copyable fenced ```text code block, and\n"
-                "(3) Neutral options 'Committed - verify and deliver' / 'Install & test on phone first' / 'Request changes' / 'Cancel task' (translated into the developer's language, without '(Recommended)' prefix; in an RTL language, start every line, bullet, and option with a word in that language).\n"
+                "Invoke `ask_question` IMMEDIATELY with ZERO chat prose before the tool call, placing an ULTRA-COMPACT Commit & Delivery Card "
+                "(in the developer's active conversation language; STRICT SCREEN-SPACE CAP: <= 5 lines total ABOVE the fenced commit block, NO pipe tables, NO long paragraphs) directly inside `question`:\n"
+                "(1) `1-2` concise lines summarizing the end-to-end functional flow delivered,\n"
+                "(2) `2-3` single-line Android Studio Git Diff Hotspots (`<= 14` words per bullet: `- <word in developer's language> `<FileName.kt>`: <exact method/condition to check>`, plus `+ N support/test files` if >3 files changed, noting any pre-existing edits),\n"
+                "(3) The full Conventional Commit message (subject line + bullet body) inside a copyable fenced ```text code block, and\n"
+                "(4) Neutral options 'Committed - verify and deliver' / 'Install & test on phone first' / 'Request changes' / 'Cancel task' (translated into the developer's language, without '(Recommended)' prefix; in an RTL language, start every line, bullet, and option with a word in that language).\n"
                 f"NOTE: Once the developer confirms they committed, run `python .agents/harness.py task deliver --repo . --task-id {task_id}` directly to seal delivery (do NOT run `task verify` first). If the developer asks to install/test on their phone before committing, run `python .agents/harness.py device install-start` directly in `READY_FOR_DELIVERY` (do NOT run `task resume --reopen` unless code changes are needed).\n"
                 "CRITICAL: Emit ZERO chat text, NO `---` dividers, and NO `*(...)*` status notes before calling `ask_question`! "
                 "The model must NOT run git commit commands. Await developer commit."

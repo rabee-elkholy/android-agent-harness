@@ -591,6 +591,222 @@ def resolve_configured_pm_language(repo: Path | None = None, plan: Mapping[str, 
     return "en_titles_ar_comments"
 
 
+def _normalize_item_lookup_tokens(raw_item: str) -> tuple[str, str]:
+    """Return `(raw_clean, numeric_suffix)` from inputs like `I1454`, `1454`, `Ras-I1454`, or `#P1/itemdetails/I1454`."""
+    s = str(raw_item or "").strip()
+    if "#" in s:
+        s = s.rsplit("/", 1)[-1].strip()
+    m_num = re.search(r"(?:^|[^0-9])0*([0-9]+)$", s)
+    num = m_num.group(1) if m_num else ""
+    return s, num
+
+
+def _compact_pm_item(obj: Mapping[str, Any], user_map: Mapping[str, str]) -> dict[str, Any]:
+    sprint_info = obj.get("sprintInfo") if isinstance(obj.get("sprintInfo"), Mapping) else {}
+    owners_raw = obj.get("ownerId") or obj.get("owners") or []
+    owner_ids = [str(x) for x in owners_raw] if isinstance(owners_raw, list) else ([str(owners_raw)] if owners_raw else [])
+    owner_names = [user_map.get(oid, oid) for oid in owner_ids if oid]
+    fields = obj.get("fields") if isinstance(obj.get("fields"), Mapping) else {}
+    status_obj = fields.get("status") if isinstance(fields.get("status"), Mapping) else (obj.get("status") if isinstance(obj.get("status"), Mapping) else {})
+    itype_obj = fields.get("issuetype") if isinstance(fields.get("issuetype"), Mapping) else {}
+    compact: dict[str, Any] = {
+        "itemId": str(obj.get("itemId") or obj.get("id") or ""),
+        "itemNo": str(obj.get("itemNo") or obj.get("key") or obj.get("identifier") or obj.get("number") or ""),
+        "itemName": str(
+            obj.get("itemName")
+            or obj.get("name")
+            or obj.get("title")
+            or obj.get("summary")
+            or fields.get("summary")
+            or ""
+        ),
+        "itemTypeName": str(obj.get("itemTypeName") or itype_obj.get("name") or obj.get("type") or ""),
+        "projItemTypeId": str(obj.get("projItemTypeId") or ""),
+        "projPriorityId": str(obj.get("projPriorityId") or ""),
+        "statusId": str(obj.get("statusId") or status_obj.get("id") or ""),
+        "statusName": str(obj.get("statusName") or status_obj.get("name") or (obj.get("status") if isinstance(obj.get("status"), str) else "") or ""),
+        "sprintId": str(obj.get("sprintId") or sprint_info.get("id") or ""),
+        "sprintNo": str(sprint_info.get("no") or ""),
+        "sprintName": str(sprint_info.get("name") or ""),
+        "epicId": str(obj.get("epicId") or ""),
+        "parentItem": str(obj.get("parentItem") or ""),
+        "sequence": str(obj.get("sequence") or ""),
+    }
+    if owner_names:
+        compact["owners"] = owner_names
+    return {k: v for k, v in compact.items() if v not in ("", [], None)}
+
+
+def find_pm_items_in_files(
+    file_paths: list[Path],
+    *,
+    item: str = "",
+    query: str = "",
+) -> dict[str, Any]:
+    """Scan large saved PM MCP JSON tool outputs (`output.txt`) in <20ms without LLM pagination."""
+    raw_tok, num_tok = _normalize_item_lookup_tokens(item)
+    raw_up = raw_tok.upper()
+    i_prefixed = f"I{num_tok}" if num_tok else ""
+    q_low = str(query or "").strip().lower()
+    matches: list[dict[str, Any]] = []
+    scanned_files: list[dict[str, Any]] = []
+
+    def _matches_dict(d: Mapping[str, Any]) -> bool:
+        has_pm_keys = any(k in d for k in ("itemId", "itemNo", "itemName", "key", "identifier", "projItemTypeId"))
+        if not has_pm_keys:
+            return False
+        if raw_tok or num_tok:
+            cand_vals: set[str] = set()
+            for k in ("itemNo", "itemId", "id", "key", "identifier", "number", "prefix"):
+                v = d.get(k)
+                if v is not None and str(v).strip():
+                    vs = str(v).strip()
+                    cand_vals.add(vs.upper())
+                    if vs.isdigit():
+                        cand_vals.add(vs.lstrip("0") or "0")
+                        cand_vals.add(f"I{vs.lstrip('0') or '0'}")
+                    m_tail = re.search(r"-(?:I)?0*([0-9]+)$", vs, re.IGNORECASE)
+                    if m_tail:
+                        cand_vals.add(m_tail.group(1))
+                        cand_vals.add(f"I{m_tail.group(1)}")
+            hit = False
+            if raw_up and raw_up in cand_vals:
+                hit = True
+            elif num_tok and (num_tok in cand_vals or i_prefixed in cand_vals):
+                hit = True
+            if not hit:
+                return False
+        if q_low:
+            fields = d.get("fields") if isinstance(d.get("fields"), Mapping) else {}
+            hay = " ".join(
+                str(x or "")
+                for x in (
+                    d.get("itemName"),
+                    d.get("name"),
+                    d.get("title"),
+                    d.get("summary"),
+                    fields.get("summary"),
+                    d.get("itemNo"),
+                    d.get("key"),
+                )
+            ).lower()
+            if q_low not in hay:
+                return False
+        return bool(raw_tok or num_tok or q_low)
+
+    for fp in file_paths:
+        p = Path(fp).expanduser().resolve()
+        if not p.is_file():
+            scanned_files.append({"file": str(fp), "exists": False, "item_count": 0})
+            continue
+        raw_text = p.read_text(encoding="utf-8", errors="replace").strip()
+        try:
+            doc = json.loads(raw_text)
+        except ValueError:
+            # Handle wrapper text around a JSON object if present
+            first_brace = raw_text.find("{")
+            last_brace = raw_text.rfind("}")
+            if first_brace >= 0 and last_brace > first_brace:
+                try:
+                    doc = json.loads(raw_text[first_brace : last_brace + 1])
+                except ValueError as exc:
+                    scanned_files.append({"file": str(p), "exists": True, "parse_error": str(exc)})
+                    continue
+            else:
+                scanned_files.append({"file": str(p), "exists": True, "parse_error": "not valid JSON"})
+                continue
+
+        # Unwrap MCP `content[0].text` JSON envelope when present
+        if isinstance(doc, Mapping) and isinstance(doc.get("content"), list):
+            for c_part in doc["content"]:
+                if isinstance(c_part, Mapping) and isinstance(c_part.get("text"), str):
+                    try:
+                        inner = json.loads(c_part["text"])
+                        if isinstance(inner, (Mapping, list)):
+                            doc = inner
+                            break
+                    except ValueError:
+                        pass
+
+        data_sec = doc.get("data") if (isinstance(doc, Mapping) and isinstance(doc.get("data"), Mapping)) else (doc if isinstance(doc, Mapping) else {})
+        user_map = {str(k): str(v) for k, v in (data_sec.get("userDisplayName") or {}).items()} if isinstance(data_sec, Mapping) and isinstance(data_sec.get("userDisplayName"), Mapping) else {}
+        has_next = bool(data_sec.get("next")) if isinstance(data_sec, Mapping) and "next" in data_sec else False
+
+        # Support legacy Zoho Sprints positional `itemJObj` + `item_prop` if ever encountered
+        candidates: list[Mapping[str, Any]] = []
+        if isinstance(data_sec, Mapping) and isinstance(data_sec.get("itemJObj"), Mapping) and isinstance(data_sec.get("item_prop"), list):
+            props = [str(x) for x in data_sec["item_prop"]]
+            for item_id_k, arr in data_sec["itemJObj"].items():
+                if isinstance(arr, list):
+                    mapped = {props[i]: arr[i] for i in range(min(len(props), len(arr)))}
+                    mapped.setdefault("itemId", str(item_id_k))
+                    candidates.append(mapped)
+
+        def _walk(node: Any, depth: int = 0) -> None:
+            if depth > 8:
+                return
+            if isinstance(node, Mapping):
+                if any(k in node for k in ("itemId", "itemNo", "itemName", "key", "identifier", "projItemTypeId")):
+                    candidates.append(node)
+                for k, v in node.items():
+                    if k in ("userDisplayName", "headers", "blockedByObj"):
+                        continue
+                    if isinstance(v, (Mapping, list)):
+                        _walk(v, depth + 1)
+            elif isinstance(node, list):
+                for el in node:
+                    if isinstance(el, (Mapping, list)):
+                        _walk(el, depth + 1)
+
+        _walk(doc)
+        last_item_no = str(candidates[-1].get("itemNo") or candidates[-1].get("key") or "") if candidates else ""
+        last_seq = str(candidates[-1].get("sequence") or "") if candidates else ""
+        file_hits = 0
+        seen_ids: set[tuple[str, str]] = set()
+        for cand in candidates:
+            if _matches_dict(cand):
+                comp = _compact_pm_item(cand, user_map)
+                dedup_k = (str(comp.get("itemId") or ""), str(comp.get("itemNo") or ""))
+                if dedup_k in seen_ids:
+                    continue
+                seen_ids.add(dedup_k)
+                comp["source_file"] = str(p)
+                matches.append(comp)
+                file_hits += 1
+        file_meta: dict[str, Any] = {
+            "file": str(p),
+            "exists": True,
+            "item_count": len(candidates),
+            "matches_in_file": file_hits,
+            "has_next_page": has_next,
+        }
+        if last_item_no:
+            file_meta["last_item_no"] = last_item_no
+        if last_seq:
+            file_meta["last_sequence"] = last_seq
+        scanned_files.append(file_meta)
+
+    hint = ""
+    if not matches and any(f.get("has_next_page") for f in scanned_files):
+        hint = (
+            "Item not in this page (`next=true`). On Zoho Sprints, check active sprints (`sprintType == 2`) FIRST "
+            "or pass `query_params={\"itemsearchby\": json.dumps({\"itemNo\": \"<number>\"})}` (never `searchby=\"itemNo\"`, which triggers Zoho error 7600)."
+        )
+    elif not matches:
+        hint = (
+            "Item not found in scanned file(s). On Zoho Sprints, check all active sprints (`sprintType == 2`) before Backlog "
+            "or query `itemsearchby`."
+        )
+    return {
+        "status": "FOUND" if matches else "NOT_FOUND",
+        "query": {"item": item, "text": query},
+        "found_count": len(matches),
+        "matches": matches[:25],
+        "scanned_files": scanned_files,
+        "hint": hint,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     from _live_process import enable_line_buffered_stdio
     enable_line_buffered_stdio()
@@ -622,6 +838,16 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument("--impact-json", default=None)
     p_rep.add_argument("--tests", action="append", help="Test case item (repeat once per item)")
     p_rep.add_argument("--tests-json", default=None)
+
+    p_find = sub.add_parser(
+        "find-item",
+        help="Extract matching Zoho/Jira/PM item(s) from large saved tool output JSON files without LLM pagination",
+    )
+    p_find.add_argument("--repo", default=".")
+    p_find.add_argument("--item", default="", help="Display code or numeric ID (e.g. I1454, 1454, Ras-I1454, PROJ-123)")
+    p_find.add_argument("--query", default="", help="Optional case-insensitive title/summary substring filter")
+    p_find.add_argument("--file", dest="files", action="append", required=True, help="Saved JSON output file path (repeatable)")
+    p_find.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
@@ -690,6 +916,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.subcommand == "prepare-report":
         import zoho_sync
         return zoho_sync.cmd_prepare_report(args)
+
+    if args.subcommand == "find-item":
+        if not str(args.item or "").strip() and not str(args.query or "").strip():
+            sys.stderr.write("ERROR: pm find-item requires --item <code|id> and/or --query <text>\n")
+            return 2
+        res = find_pm_items_in_files([Path(f) for f in (args.files or [])], item=args.item, query=args.query)
+        if args.json:
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+        else:
+            print(f"PM_FIND_STATUS={res['status']} FOUND={res['found_count']}")
+            for m in res["matches"]:
+                print("MATCH=" + json.dumps(m, ensure_ascii=False))
+            for sf in res["scanned_files"]:
+                print(
+                    f"SCANNED={sf.get('file')} items={sf.get('item_count', 0)} "
+                    f"next={sf.get('has_next_page', False)} last_item_no={sf.get('last_item_no', '-')}"
+                )
+            if res.get("hint"):
+                print(f"HINT={res['hint']}")
+        return 0
 
     return 1
 

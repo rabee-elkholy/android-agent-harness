@@ -529,8 +529,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
             "inputs": {"repo": ".", "task_id": task_id, "current_phase_id": phase_id},
             "expected": {},
         }
-        has_phase_friction = (_engine.task_dir(repo, task_id) / "worker-friction.json").is_file()
-        if run_host == "antigravity" or has_phase_friction:
+        if run_host == "antigravity":
             try:
                 from delegation_policy import evaluate_delegation_policy
                 adv = evaluate_delegation_policy(
@@ -540,27 +539,20 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                     router_action="IMPLEMENT_APPROVED_SCOPE",
                     before_first_edit_cmd="",
                 )
-                if run_host == "antigravity" or int(adv.get("friction_strikes") or 0) > 0:
-                    adv_payload = {
-                        "strategy": adv.get("strategy"),
-                        "recommended_subagent": adv.get("recommended_subagent"),
-                        "worker_mode": adv.get("worker_mode"),
-                        "target_files": adv.get("target_files"),
-                        "reason": adv.get("reason"),
-                    }
-                    if adv.get("next_command"):
-                        adv_payload["next_command"] = adv["next_command"]
-                    if adv.get("execution_mode"):
-                        adv_payload["execution_mode"] = adv["execution_mode"]
-                    if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
-                        act_obj["reason"] += f" Web mode active: run `{adv['next_command']}`."
-                    if adv.get("lead_owned_files"):
-                        adv_payload["lead_owned_files"] = adv["lead_owned_files"]
-                    if adv.get("lead_takeover_handoff"):
-                        adv_payload["lead_takeover_handoff"] = adv["lead_takeover_handoff"]
-                    elif adv.get("previous_wave_handoff"):
-                        adv_payload["previous_wave_handoff"] = adv["previous_wave_handoff"]
-                    act_obj["delegation_advisory"] = adv_payload
+                adv_payload = {
+                    "strategy": adv.get("strategy"),
+                    "recommended_subagent": adv.get("recommended_subagent"),
+                    "worker_mode": adv.get("worker_mode"),
+                    "target_files": adv.get("target_files"),
+                    "reason": adv.get("reason"),
+                }
+                if adv.get("next_command"):
+                    adv_payload["next_command"] = adv["next_command"]
+                if adv.get("execution_mode"):
+                    adv_payload["execution_mode"] = adv["execution_mode"]
+                if adv.get("strategy") == "WEB_RELAY_ACTIVE" and adv.get("next_command"):
+                    act_obj["reason"] += f" Web mode active: run `{adv['next_command']}`."
+                act_obj["delegation_advisory"] = adv_payload
             except (ImportError, OSError, ValueError, KeyError, _engine.ValidationError):
                 pass
         return act_obj

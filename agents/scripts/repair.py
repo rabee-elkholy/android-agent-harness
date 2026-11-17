@@ -257,11 +257,27 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 pass
         restored.append(rel_installed)
 
+    # Prune retired legacy files from older client installs so doctor/ownership stay clean
+    for retired_rel in (
+        ".agents/scripts/human_review_cockpit.py",
+        ".agents/subagents/harness-worker-agent.json",
+        ".agents/agents/harness-worker-agent/agent.md",
+        ".claude/agents/harness-worker-agent.md",
+    ):
+        ret_p = root / retired_rel
+        if ret_p.is_file():
+            try:
+                ret_p.unlink()
+                if ret_p.parent.name == "harness-worker-agent" and not any(ret_p.parent.iterdir()):
+                    ret_p.parent.rmdir()
+            except OSError:
+                pass
+
     # Re-render Antigravity agent markdown wrappers when present so subagent updates propagate
     # while preserving role-specific tool allowlists for utility and specialist subagents.
     if (root / ".agents" / "agents").is_dir():
         try:
-            from delegation_policy import render_utility_agent_markdown
+            from delegation_policy import render_utility_agent_markdown, resolve_utility_scout_model
             from install_tool_adapters import antigravity_agent_markdown, with_managed_marker
             from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS
             from review_models import _antigravity_frontmatter_model
@@ -269,8 +285,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 role = agent_md.parent.name
                 rendered: bytes | None = None
                 if role in CORE_UTILITY_AGENTS:
-                    from delegation_policy import SCOUT_AGENT, resolve_utility_scout_model, resolve_utility_worker_model
-                    u_model = resolve_utility_scout_model(root) if role == SCOUT_AGENT else resolve_utility_worker_model(root)[0]
+                    u_model = resolve_utility_scout_model(root)
                     rendered = with_managed_marker(render_utility_agent_markdown(role, model=u_model)).encode("utf-8")
                 elif role in ON_DEMAND_SPECIALIST_AGENTS:
                     src_json = root / ".agents" / "subagents" / f"{role}.json"

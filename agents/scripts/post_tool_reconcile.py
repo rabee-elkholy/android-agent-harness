@@ -181,9 +181,6 @@ def main() -> int:
             try:
                 from delegation_policy import (
                     CORE_UTILITY_AGENTS,
-                    WORKER_AGENT,
-                    _load_utility_ledger,
-                    evaluate_completed_worker_wave,
                     mark_utility_wave_completed,
                     record_unloaded_utility_agent,
                 )
@@ -197,13 +194,6 @@ def main() -> int:
                             record_unloaded_utility_agent(repo, eff_cid, r)
                             if eff_cid != "global":
                                 record_unloaded_utility_agent(repo, "global", r)
-                elif "harness-worker-agent" in roles:
-                    ledger_u = _load_utility_ledger(repo)
-                    for u_item in reversed(ledger_u.get("entries") or []):
-                        if isinstance(u_item, dict) and str(u_item.get("agent_type") or "") == WORKER_AGENT:
-                            if not parent_cid or str(u_item.get("parent_conversation_id") or "") == parent_cid:
-                                evaluate_completed_worker_wave(repo, u_item, invoke_error=str(err or ""))
-                                break
             except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
                 logger_noop = None
 

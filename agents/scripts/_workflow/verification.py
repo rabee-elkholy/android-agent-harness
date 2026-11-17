@@ -915,36 +915,14 @@ def completion_action(context: VerificationContext) -> dict | None:
                 "expected": {"success_statuses": ["VERIFIED"]},
             }
 
-    # 9. Complete task (encourage populating/refreshing pipe-free bilingual human review brief)
-    _brief_path = _engine.task_dir(repo, task_id) / "review-brief.json"
-    _brief_fresh = False
-    if _brief_path.is_file():
-        try:
-            _bdoc = read_json(_brief_path)
-            if isinstance(_bdoc, dict):
-                _reopened_at = str(plan.get("reopened_at") or "").strip()
-                _b_updated = str(_bdoc.get("updated_at") or "").strip()
-                _b_run = str(_bdoc.get("run_id") or "").strip()
-                _brief_fresh = bool(_b_run == str(run_id)) or (not _reopened_at) or bool(_b_updated and _b_updated >= _reopened_at)
-        except (OSError, ValueError, ValidationError):
-            _brief_fresh = False
-    _brief_hint = (
-        ""
-        if _brief_fresh
-        else (
-            f" Before (or right after) sealing, enrich the developer's Interactive Review Cockpit with a concise bilingual summary via "
-            f"`python .agents/harness.py review-diff --task-id {task_id} --title-ar \"<3-6 word AR title>\" --title-en \"<Short EN title>\" "
-            f"--problem-ar \"<problem in clear Arabic>\" --solution-ar \"<solution in clear Arabic>\" --check-ar \"<2-min check 1>::<check 2>\" "
-            f"--file-note \"<FileName.kt>::<AR why>::<EN why>\"`."
-        )
-    )
+    # 9. Complete task
     return {
         "code": "COMPLETE_TASK",
         "kind": "HARNESS_COMMAND",
         "command": f"python .agents/scripts/workflow.py complete --repo . --task-id {task_id}",
         "blocking": True,
-        "reason": "All required gates, reviews, and verifications have passed; seal task to READY_FOR_DELIVERY." + _brief_hint,
-        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id, "review_brief_recorded": _brief_fresh},
+        "reason": "All required gates, reviews, and verifications have passed; seal task to READY_FOR_DELIVERY.",
+        "inputs": {"repo": ".", "task_id": task_id, "run_id": run_id},
         "expected": {"success_exit_codes": [0], "success_statuses": ["READY_FOR_DELIVERY"]},
     }
 

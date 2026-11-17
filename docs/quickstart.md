@@ -22,7 +22,7 @@ Key configuration defaults for Google Antigravity:
 - **AI Host**: Select `Google Antigravity` (`antigravity`).
 - **Clean Install Only**: This architecture version supports deterministic clean installations.
 - **Reviewer Call Safety Cap**: Recommended clean-install value = `20` (acts as a safety ceiling, not a target).
-- **Installed Custom Subagents**: Four dedicated specialist reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`) plus two quota-saving `gemini-4-hydrogen-medium` / `gemini-4-hydrogen-high` utility subagents (`harness-scout-agent`, `harness-worker-agent`) are automatically generated under `.agents/agents/<role>/agent.md`.
+- **Installed Custom Subagents**: Four dedicated specialist reviewer agents (`bug-test-reviewer-agent`, `security-perf-reviewer-agent`, `arch-regression-reviewer-agent`, `spec-compliance-agent`), two on-demand domain specialists (`qa-diagnostics-agent`, `android-ui-expert-agent`), and one quota-saving read-only exploration scout (`harness-scout-agent`) are automatically generated under `.agents/agents/<role>/agent.md`.
 - **Model & Reasoning**: Inherited by omission from the parent agent; no manual model or reasoning configuration required.
 
 ## Terminal installation (alternative)
@@ -45,7 +45,7 @@ The setup wizard can be rerun before installation. Clean install is the supporte
 
 1. **Discovery & Plan**: Ask the AI to analyze first. It explores using bounded Task Context, drafts a plan (evaluating Zero-Decision readiness, codebase reuse candidates, path grounding, and multi-phase module DAG ordering via `task plan-check`), and waits for explicit developer approval before any file modification.
 2. **Approval**: Approve the plan in chat (reply with an approval such as "approve", in any language). Single intake approval covers all phases in a multi-phase task without pauses.
-3. **Implementation & Shared-Quota Hydrogen Delegation**: The agent follows `python .agents/harness.py delegate-plan --json` — executing `1–3` file non-sensitive `T0–T3` slices inline on the warm Lead cache (`TRIVIAL_INLINE_LEAD`), delegating `4+`-file slices and Gradle compile/test loops to `harness-worker-agent` (`gemini-4-hydrogen-high` from Wave 1), and keeping `T4/T5` sensitive core code (`AUTH`/`BILLING`/`SECURITY`/`CRYPTO`) and semantic `CONFLICT` edits on the Lead Architect (`Gemini 4 Carbon Medium` / `Claude 5.5`). Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
+3. **Warm-Cache Inline Lead Implementation**: The agent follows `python .agents/harness.py delegate-plan --json` — implementing approved production & unit-test files directly inline on the warm Lead cache (`INLINE_LEAD_DIRECT`, or via `Web-Relay` when Web mode is active) with concise English KDoc (`/** ... */`) on newly created classes/interfaces and added public contracts, then advancing through `checkpoint-phase --advance-all-ready` / single-pass `verify-steps`. Unapproved file mutations outside scope are blocked by `.agents/hooks.json`.
 4. **Prepare Verification**: Once changes are ready, the agent runs:
    ```bash
    python .agents/harness.py task prepare-verification --repo . --task-id <id> --host antigravity
@@ -92,17 +92,17 @@ Task A
 
 ## Execution Modes (`auto-project` & Stateless `Web-Relay`)
 
-Set Smart Auto once per project (`auto-project`) to keep compact tasks (`<10` files, `<80 KB` non-test code mass, and single-module or small 2-module `<6` files / `<48 KB`) local in Antigravity while automatically promoting `10+`-file or `80+ KB` refactors, substantial multi-module (`3+` modules, or `2` modules with `6+` files / `48+ KB`), multi-phase, `T5` critical surfaces, or `2-Strike` escalations to your separate **Gemini Web (`gemini.google.com`)** quota:
+Set Smart Auto once per project (`auto-project`) to keep compact tasks (`<10` files, `<80 KB` non-test code mass, and single-module or small 2-module `<6` files / `<48 KB`) local in Antigravity while automatically promoting `10+`-file or `80+ KB` refactors, substantial multi-module (`3+` modules, or `2` modules with `6+` files / `48+ KB`), multi-phase, `T5` critical surfaces, or `2-Strike` escalations to an **external AI chat (`Web-Relay`)**:
 
 ```bash
 # 1. Enable Smart Auto project-wide (or choose normal-project / web-project)
 python .agents/harness.py execution-mode set --choice auto-project --source developer_terminal --proof-reference "Use Smart Auto"
 
 # 2. Pack modified/staged/untracked Android Studio files (or --feature <Name>) into 1 secret-scrubbed .md bundle
-#    (Then open a NEW Gemini Web chat, select Task mode, paste via Ctrl+V, and send)
+#    (Then open a NEW external AI chat, attach or paste via Ctrl+V, and send)
 python .agents/harness.py web-pack --dirty --prompt "Complete refactor and unit tests"
 
-# 3. Preview Gemini Web's HARNESS_WEB_MERGE_V1 reply with zero disk writes, then apply
+# 3. Preview the external AI's HARNESS_WEB_MERGE_V1 reply with zero disk writes, then apply
 python .agents/harness.py web-apply --dry-run
 python .agents/harness.py web-apply --source developer_terminal --proof-reference "Apply web merge"
 ```

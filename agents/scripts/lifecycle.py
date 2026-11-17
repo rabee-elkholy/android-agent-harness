@@ -239,15 +239,13 @@ def _antigravity_agent_matches_policy(repo: Path, rel: str) -> bool:
         from review_models import ANTIGRAVITY_META_PRESETS, ANTIGRAVITY_MODEL_CHOICES, _antigravity_frontmatter_model
         from policy_vocab import ANTIGRAVITY_SCOUT_TOOLS, CORE_UTILITY_AGENTS, ON_DEMAND_SPECIALIST_AGENTS
         if role in CORE_UTILITY_AGENTS:
-            from delegation_policy import SCOUT_AGENT, render_utility_agent_markdown, resolve_utility_scout_model, resolve_utility_worker_model
+            from delegation_policy import render_utility_agent_markdown, resolve_utility_scout_model
             fm_model = _antigravity_frontmatter_model(repo, role)
             if fm_model is not None:
                 return False
             import re as _re
             m_comment = _re.search(r"<!--\s*harness-target-model:\s*([A-Za-z0-9_.-]+)\s*-->", content)
-            target_m = m_comment.group(1).strip() if m_comment else (
-                resolve_utility_scout_model(repo) if role == SCOUT_AGENT else resolve_utility_worker_model(repo)[0]
-            )
+            target_m = m_comment.group(1).strip() if m_comment else resolve_utility_scout_model(repo)
             u_rendered = render_utility_agent_markdown(role, model=target_m)
             return content in (u_rendered, with_managed_marker(u_rendered))
         if role in ON_DEMAND_SPECIALIST_AGENTS:

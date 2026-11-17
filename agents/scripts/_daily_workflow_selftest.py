@@ -4036,23 +4036,20 @@ class ReviewerPrecisionTests(unittest.TestCase):
         subagent_files = list(subagents_dir.glob("*.json"))
         self.assertGreaterEqual(len(subagent_files), 6)
 
+        self.assertFalse((subagents_dir / "harness-worker-agent.json").exists(), "Retired harness-worker-agent.json must not exist")
         for sf in subagent_files:
             data = json.loads(sf.read_text(encoding="utf-8"))
             self.assertFalse(data.get("enable_subagent_tools", True), f"{sf.name} must not have subagent tools enabled")
             prompt = data.get("system_prompt", "")
             self.assertIn("untrusted evidence", prompt.lower(), f"{sf.name} must have untrusted evidence boundary")
             self.assertNotIn("guarantee zero regressions across the entire app", prompt.lower(), f"{sf.name} must not claim impossible global zero-regression guarantee")
-            if sf.name == "harness-worker-agent.json":
-                self.assertTrue(data.get("enable_write_tools", False), "harness-worker-agent.json must enable write tools")
-                self.assertIn("harness_worker_fingerprint=flash-scoped-worker-v1", prompt.lower())
+            self.assertFalse(data.get("enable_write_tools", True), f"{sf.name} must not have write tools enabled")
+            if sf.name == "harness-scout-agent.json":
+                self.assertIn("harness_scout_fingerprint=flash-architectural-scout-v1", prompt.lower())
+            elif sf.name in ("android-ui-expert-agent.json", "qa-diagnostics-agent.json"):
+                self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
             else:
-                self.assertFalse(data.get("enable_write_tools", True), f"{sf.name} must not have write tools enabled")
-                if sf.name == "harness-scout-agent.json":
-                    self.assertIn("harness_scout_fingerprint=flash-architectural-scout-v1", prompt.lower())
-                elif sf.name in ("android-ui-expert-agent.json", "qa-diagnostics-agent.json"):
-                    self.assertIn("evidence pkg=", prompt.lower(), f"{sf.name} must require evidence footer")
-                else:
-                    self.assertIn("harness_review_result_v2", prompt.lower(), f"{sf.name} must require V2 contract")
+                self.assertIn("harness_review_result_v2", prompt.lower(), f"{sf.name} must require V2 contract")
 
     def test_review_package_untrusted_evidence_warning(self):
         """Review package generation and briefs must inject the UNTRUSTED_EVIDENCE_WARNING."""

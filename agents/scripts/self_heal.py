@@ -226,23 +226,7 @@ def heal_task_state(
         except (OSError, ValueError, ValidationError):
             pass
 
-    # 3a. Clear stuck intra-wave retry cap in worker-friction.json while preserving Zero-Scratch worker-handoff.json
-    if status == "IMPLEMENTING" and (tdir / "worker-friction.json").is_file():
-        try:
-            wf_doc = read_json(tdir / "worker-friction.json")
-            if isinstance(wf_doc, dict) and isinstance(wf_doc.get("by_phase"), dict):
-                cleared_iw = False
-                for _pk, pb in wf_doc["by_phase"].items():
-                    if isinstance(pb, dict) and int(pb.get("intra_wave_gate_failures") or 0) > 0:
-                        pb["intra_wave_gate_failures"] = 0
-                        cleared_iw = True
-                if cleared_iw:
-                    atomic_write_json(tdir / "worker-friction.json", wf_doc)
-                    healed_actions.append("cleared_stuck_intra_wave_gate_counter")
-        except (OSError, ValueError, ValidationError):
-            healed_noop = None
-
-    # 3b. Handle IMPLEMENTING phase-review ENV_BLOCKED in-place without losing phase progress
+    # 3. Handle IMPLEMENTING phase-review ENV_BLOCKED in-place without losing phase progress
     if status == "IMPLEMENTING" and (tdir / "phase-state.json").is_file():
         try:
             from phase_review import PHASE_REVIEWING, compute_ledger_sha, get_phase_substate, load_phase_ledger, phase_ledger_file, phase_review_dir, phase_run_file

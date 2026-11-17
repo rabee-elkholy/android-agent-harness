@@ -1510,20 +1510,12 @@ class HarnessDoctor:
                     if u_fm.get("name") != u_role or u_fm.get("mainAgent") is not False or u_fm.get("subagent") is not True:
                         agent_errors.append(f"{u_role}: invalid frontmatter")
                     if u_fm.get("model") is not None:
-                        allowed_u_models = (
-                            {
-                                "gemini-4-hydrogen-low",
-                                "gemini-4-hydrogen-medium",
-                                "gemini-4-hydrogen-high",
-                                "gemini-4-hydrogen-xhigh",
-                                "gemini-4-argon-low",
-                                "gemini-4-argon-medium",
-                                "gemini-4-argon-high",
-                                "gemini-3.8-flash-medium",
-                            }
-                            if u_role == "harness-worker-agent"
-                            else {"gemini-4-hydrogen-medium", "gemini-4-hydrogen-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-low"}
-                        )
+                        allowed_u_models = {
+                            "gemini-4-hydrogen-medium",
+                            "gemini-4-hydrogen-low",
+                            "gemini-3.8-flash-medium",
+                            "gemini-3.8-flash-low",
+                        }
                         if str(u_fm.get("model") or "") not in allowed_u_models:
                             agent_errors.append(f"{u_role}: unexpected model ({u_fm.get('model')})")
                     if set(u_fm.get("tools") or []) != set(u_spec["tools"]):
@@ -1828,6 +1820,49 @@ class HarnessDoctor:
                     )
             except Exception as exc:
                 self.log(category, "Nov 15 Quota & Diff Guard", "WARN", f"Could not complete Nov 15 hazard check: {exc}")
+
+        # 9f. Windows 11 Go GC Handle-Recycling & AcceptEx Code 2 Crash Guard (#200687 / #199301 / #200763)
+        try:
+            from antigravity_runtime import inspect_windows_go_gc_and_handle_risk
+            gc_rep = inspect_windows_go_gc_and_handle_risk(self.repo)
+            if gc_rep.get("applicable"):
+                if gc_rep.get("at_risk"):
+                    gc_reasons: list[str] = []
+                    gc_rems: list[str] = []
+                    crash_sub = gc_rep.get("crash_report") if isinstance(gc_rep.get("crash_report"), dict) else {}
+                    if gc_rep.get("gogc_off_without_memlimit"):
+                        gc_reasons.append("GOGC=off is set without GOMEMLIMIT, risking unbounded RAM exhaustion on long sessions.")
+                        gc_rems.append("Always pair GOGC=off with GOMEMLIMIT=8GiB (or set GOMEMLIMIT=8GiB and GOGC=200 on 32GB Windows 11 hosts).")
+                    if crash_sub.get("crash_loop_detected"):
+                        gc_reasons.append(
+                            f"Detected language_server.exe Exit Code 2 AcceptEx crash fingerprint in main.log "
+                            f"(code2={crash_sub.get('code2_crashes')}, port_restarts={crash_sub.get('port_restarts')}, "
+                            f"zero_byte_crash_logs={crash_sub.get('zero_byte_crash_logs')}) (#200687/#199301)."
+                        )
+                    stdio_svcs = list(gc_rep.get("stdio_servers") or [])
+                    if not gc_rep.get("gc_tuned") and len(stdio_svcs) >= 2:
+                        gc_reasons.append(
+                            f"{len(stdio_svcs)} stdio MCP servers ({', '.join(stdio_svcs[:6])}) active without GOMEMLIMIT/GOGC tuning (#200687 Win32 handle recycling)."
+                        )
+                    if not gc_rems:
+                        gc_rems.append("Set GOMEMLIMIT=8GiB and GOGC=200 (or GOGC=off paired with GOMEMLIMIT=8GiB) before launching Antigravity on Windows 11 (#200687).")
+                    if stdio_svcs:
+                        gc_rems.append("Reduce active stdio MCP servers in mcp_config.json or migrate high-churn MCP servers to localhost HTTP/SSE (#199301).")
+                    self.log(category, "Windows Go GC & AcceptEx Guard", "WARN", " ".join(gc_reasons), gc_rems)
+                else:
+                    gc_note = (
+                        f"GOMEMLIMIT={gc_rep.get('gomemlimit')} & GOGC={gc_rep.get('gogc')} verified"
+                        if gc_rep.get("gc_tuned")
+                        else "tip: set GOMEMLIMIT=8GiB and GOGC=200 on 32GB Windows 11 hosts to prevent #200687 Go GC handle-recycling crashes"
+                    )
+                    self.log(
+                        category,
+                        "Windows Go GC & AcceptEx Guard",
+                        "PASS",
+                        f"Zero language_server.exe AcceptEx code-2 crash loops detected ({gc_note}).",
+                    )
+        except Exception as exc:
+            self.log(category, "Windows Go GC & AcceptEx Guard", "WARN", f"Could not inspect Windows Go GC / AcceptEx health: {exc}")
 
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""

@@ -1,14 +1,14 @@
 ---
-description: Optional stateless Manual Web-Relay Mode (`web-pack` / `web-apply`) for offloading heavy Gemini 4 Carbon planning/coding (including 30–100+ file refactors and UI screenshot tasks) to Gemini Web while keeping 100% local safety, Gradle, ADB, and default Antigravity mode untouched.
+description: Optional stateless Manual Web-Relay Mode (`web-pack` / `web-apply`) for offloading heavy planning/coding (including 30–100+ file refactors and UI screenshot tasks) to any external AI chat while keeping 100% local safety, Gradle, ADB, and default Antigravity mode untouched.
 ---
 
-# Optional Manual Web-Relay Workflow (`web-pack` -> Gemini Web -> `web-apply`)
+# Optional Manual Web-Relay Workflow (`web-pack` -> External AI Chat -> `web-apply`)
 
 **Execution Mode Integration (`normal-*` vs `web-*`)**: Execution mode is controlled exclusively by the developer via `python .agents/harness.py execution-mode set --choice <auto-project|auto-task|normal-task|normal-project|web-task|web-project|ask-every-task> --source conversation --proof-reference "<words>"` (defaulting to `hydrogen-dynamic-project` inside Antigravity when `normal` mode is selected). Single-task overrides (`normal-task` / `web-task`) apply to one task without altering the saved project default, and `CONFLICT` tasks automatically resolve locally while preserving `web-project`.
 
 ## When to use `Mode 2: Manual Web-Relay`
 
-Use when `execution-mode` is set to `web-task` / `web-project`, when the developer asks to pack context for Gemini Web (e.g., `30–100+` file refactors, heavy multi-module features, `T5` sensitive reviews, UI design screenshot tasks, or after a 2-strike `Hydrogen High` escalation), or when applying a returned `HARNESS_WEB_MERGE_V1` merge block.
+Use when `execution-mode` is set to `web-task` / `web-project`, when the developer asks to pack context for an external AI chat (e.g., `30–100+` file refactors, heavy multi-module features, `T5` sensitive reviews, UI design screenshot tasks, or quota-saving runs), or when applying a returned `HARNESS_WEB_MERGE_V1` merge block.
 
 ## Step 1: Build the Scoped Context Pack (`web-pack`)
 
@@ -29,17 +29,17 @@ python .agents/harness.py web-pack --task-id <id> --retry
 
 What `web-pack` guarantees automatically:
 - **Single-File `.md` Bundle (`30–40` Files Standard) + Auto-Sharded `41–250` File DAG Batches**: Routine `1–40` file tasks pack into **one** `.md` file under `~/Downloads/Harness-Web-Relay/`. Massive `41–250` file refactors sort automatically in Clean Architecture DAG order (`core`/`domain` -> `data` -> `app`/`UI` -> `res` -> `tests`) and shard into `40`-file batches (`Batch 1/N`) with the upcoming batch schedule embedded in Section `4A`. Bundles `<= 45 KB` copy straight as UTF-8 text to Clipboard; larger bundles copy the `.md` file handle (`Set-Clipboard -Path`).
-- **Binary Asset Shield & Automatic `R.drawable` / `R.font` / KMP `Res.drawable` Inventory**: Binary media/font files (`.png`, `.webp`, `.jpg`, `.ttf`, `\x00` bytes) are excluded from UTF-8 code blocks (`binary_assets` metadata instead), while existing module `R.drawable.*`, `R.font.*`, and KMP `Res.drawable.*` IDs are indexed automatically in Section 2 so Gemini Web reuses real project assets or emits `<vector>` XML `CREATE` operations without hallucinating missing resource IDs.
+- **Binary Asset Shield & Automatic `R.drawable` / `R.font` / KMP `Res.drawable` Inventory**: Binary media/font files (`.png`, `.webp`, `.jpg`, `.ttf`, `\x00` bytes) are excluded from UTF-8 code blocks (`binary_assets` metadata instead), while existing module `R.drawable.*`, `R.font.*`, and KMP `Res.drawable.*` IDs are indexed automatically in Section 2 so the external AI model reuses real project assets or emits `<vector>` XML `CREATE` operations without hallucinating missing resource IDs.
 - **Zero-Secret Vault Redaction**: Blocks `.env`, `keystore`, `.jks`, `local.properties`, `google-services.json`, `GoogleService-Info.plist`, and `*secret*`/`*credentials*`, and replaces inline tokens (`AIza...`, `Bearer ...`, `sk-...`, `api_key=...`) with `__HARNESS_REDACTED_SECRET_N__` stored locally under `.agents/state/web-relay/packs/<pack_id>.json`.
-- **AST Neighbor Signatures**: Includes public signatures of direct callers/callees (`READ_ONLY_NEIGHBOR_SIGNATURES`), `project-facts.json`, code-relevant `project-notes.md`, active `developer-instructions.json`, and any `worker-handoff.json` diagnostics.
+- **AST Neighbor Signatures**: Includes public signatures of direct callers/callees (`READ_ONLY_NEIGHBOR_SIGNATURES`), `project-facts.json`, code-relevant `project-notes.md`, active `developer-instructions.json`, and any failing local gate diagnostics.
 
 
 > **Zero-Rewrite `web-apply` Rule**: Always run `python .agents/harness.py web-apply --source conversation --proof-reference "<words>"` **FIRST with NO `--file` flag** — it automatically discovers the merge payload from Clipboard, `~/Downloads`, or `.agents/state/web-relay/inbox/`. NEVER re-emit the merge JSON via shell redirection or external paths; ONLY if raw JSON was pasted in chat and `web-apply` reports no file in Clipboard/Downloads, write it once via `write_file` to `.agents/state/web-relay/inbox/merge.json` and re-run `web-apply`.
 
-## Step 2: Developer Interaction on Gemini Web (`gemini.google.com`)
+## Step 2: Developer Interaction in External AI Chat
 
-1. **For a new task**, open a **NEW** `gemini.google.com` chat, select **`Task` mode**, press `Ctrl+V` to attach/paste the Context Pack (plus attach 1–5 relevant Figma/UI screenshots if implementing a visual mockup — avoid 40+ bulk image dumps in a single session), and send. *(Only stay in the **SAME** Gemini Web chat when continuing a `--retry`, `PARTIAL`, `NEED_FILES`, or `Batch 2+` pack of the same task.)*
-2. Copy Gemini Web's `HARNESS_WEB_MERGE_V1` JSON block (or save it to `~/Downloads`).
+1. **For a new task**, open a **NEW** external AI chat (ChatGPT, Claude, Gemini, etc.), press `Ctrl+V` to attach/paste the Context Pack (plus attach 1–5 relevant Figma/UI screenshots if implementing a visual mockup — avoid 40+ bulk image dumps in a single session), and send. *(Only stay in the **SAME** chat when continuing a `--retry`, `PARTIAL`, `NEED_FILES`, or `Batch 2+` pack of the same task.)*
+2. Copy the `HARNESS_WEB_MERGE_V1` JSON block from the reply (or save it to `~/Downloads`).
 
 ## Step 3: Verify & Apply Locally (`web-apply`)
 

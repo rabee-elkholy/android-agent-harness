@@ -1469,32 +1469,42 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         from install_tool_adapters import generate_antigravity_agents
         from lifecycle import _antigravity_agent_matches_policy
         from doctor.engine import HarnessDoctor
+        import repair as repair_mod
 
         generate_antigravity_agents(self.repo, dry_run=False)
-        for role in ("harness-scout-agent", "harness-worker-agent"):
-            rel = f".agents/agents/{role}/agent.md"
-            p = self.repo / rel
-            self.assertTrue(p.is_file(), f"Missing {rel}")
-            txt = p.read_text(encoding="utf-8")
-            self.assertNotIn("\nmodel:", txt)
-            self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-", txt)
-            self.assertIn("subagent: true", txt)
-            self.assertIn("mainAgent: false", txt)
-            self.assertTrue(_antigravity_agent_matches_policy(self.repo, rel))
+        rel = ".agents/agents/harness-scout-agent/agent.md"
+        p = self.repo / rel
+        self.assertTrue(p.is_file(), f"Missing {rel}")
+        self.assertFalse((self.repo / ".agents/agents/harness-worker-agent/agent.md").exists())
+        txt = p.read_text(encoding="utf-8")
+        self.assertNotIn("\nmodel:", txt)
+        self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-", txt)
+        self.assertIn("subagent: true", txt)
+        self.assertIn("mainAgent: false", txt)
+        self.assertTrue(_antigravity_agent_matches_policy(self.repo, rel))
 
-        scout_md = (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8")
-        scout_fm = scout_md.split("---")[1]
+        scout_fm = txt.split("---")[1]
         self.assertNotIn("write_to_file", scout_fm)
-        worker_md = (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8")
-        worker_fm = worker_md.split("---")[1]
-        self.assertIn("write_to_file", worker_fm)
-        self.assertNotIn("ask_question", worker_fm)
-        self.assertNotIn("invoke_subagent", worker_fm)
 
         doc = HarnessDoctor(self.repo, run_selftest=False)
         doc.check_antigravity_installation()
         rev_check = next(r for r in doc.results if r.name == "Custom Reviewer Agents")
         self.assertEqual("PASS", rev_check.status, rev_check.message)
+
+        # Verify `repair.py` prunes retired legacy `harness-worker-agent` and `human_review_cockpit.py` artifacts on upgrade!
+        stale_worker_md = self.repo / ".agents/agents/harness-worker-agent/agent.md"
+        stale_worker_json = self.repo / ".agents/subagents/harness-worker-agent.json"
+        stale_cockpit_py = self.repo / ".agents/scripts/human_review_cockpit.py"
+        stale_worker_md.parent.mkdir(parents=True, exist_ok=True)
+        stale_worker_md.write_text("legacy worker", encoding="utf-8")
+        stale_worker_json.write_text("{}", encoding="utf-8")
+        stale_cockpit_py.write_text("# legacy cockpit", encoding="utf-8")
+        (self.repo / ".agents/VERSION").write_text((REPO_ROOT / "agents/VERSION").read_text(encoding="utf-8"), encoding="utf-8")
+        rep_res = repair_mod.repair_repository(self.repo, REPO_ROOT, force=True)
+        self.assertEqual((REPO_ROOT / "agents/VERSION").read_text(encoding="utf-8").strip(), rep_res["pinned_version"])
+        self.assertFalse(stale_worker_md.exists())
+        self.assertFalse(stale_worker_json.exists())
+        self.assertFalse(stale_cockpit_py.exists())
 
     def test_scout_preplan_dispatch_readonly_enforcement_and_bridge_protection(self) -> None:
         from task_bridge import record_active_conversation_turn, _active_conversation_file
@@ -1609,10 +1619,11 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/HomeUiState.kt",
         ], "t-trivial")
         pol_t0 = evaluate_delegation_policy(self.repo)
-        self.assertIn(pol_t0["strategy"], ("TRIVIAL_INLINE_LEAD", "DELEGATE_WORKER_SLICE"))
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_t0["strategy"])
+        self.assertFalse(pol_t0["worker_allowed"])
         _cancel("t-trivial")
 
-        # --- Case B0: Small 2-file FEATURE (<4 files) -> TRIVIAL_INLINE_LEAD (avoids cold Worker spawn tax!) ---
+        # --- Case B0: Small 2-file FEATURE -> INLINE_LEAD_DIRECT ---
         _draft_and_begin([
             "--outcome", "Small 2-file state tweak",
             "--kind", "FEATURE",
@@ -1622,12 +1633,12 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-small-inline")
         pol_small = evaluate_delegation_policy(self.repo)
-        self.assertEqual("TRIVIAL_INLINE_LEAD", pol_small["strategy"])
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_small["strategy"])
         self.assertIsNone(pol_small["recommended_subagent"])
         self.assertEqual("Gemini 4 Hydrogen (High)", pol_small["quota_strategy"]["fast_fallback_chat_model"])
         _cancel("t-small-inline")
 
-        # --- Case B: 4+ file FEATURE -> DELEGATE_WORKER_SLICE (starts on Hydrogen High from Wave 1) + Guards + CLI ---
+        # --- Case B: 4+ file FEATURE -> INLINE_LEAD_DIRECT + retired Worker hard-denied across PreToolUse ---
         _draft_and_begin([
             "--outcome", "Add home state, repo, screen & test",
             "--kind", "FEATURE",
@@ -1637,9 +1648,9 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/HomeUiState.kt,app/src/main/kotlin/com/example/HomeRepository.kt,app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-feat")
         pol_feat = evaluate_delegation_policy(self.repo)
-        self.assertEqual("DELEGATE_WORKER_SLICE", pol_feat["strategy"])
-        self.assertEqual("gemini-4-hydrogen-high", pol_feat["worker_model"])
-        self.assertEqual("FULL_SLICE", pol_feat["worker_mode"])
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_feat["strategy"])
+        self.assertFalse(pol_feat["worker_allowed"])
+        self.assertEqual("NONE", pol_feat["worker_mode"])
 
         # Public CLI `harness.py delegate-plan --json` works cleanly
         cli_proc = subprocess.run(
@@ -1651,89 +1662,35 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         )
         self.assertEqual(0, cli_proc.returncode, cli_proc.stderr)
         cli_json = json.loads(cli_proc.stdout)
-        self.assertEqual("DELEGATE_WORKER_SLICE", cli_json["strategy"])
+        self.assertEqual("INLINE_LEAD_DIRECT", cli_json["strategy"])
         self.assertEqual("Gemini 4 Carbon (Medium)", cli_json["quota_strategy"]["primary_chat_model"])
 
         # Router attaches delegation_advisory on Antigravity
         act_ag = workflow.resolve_next_action(self.repo, "t-feat", host="antigravity")
         self.assertIn("delegation_advisory", act_ag)
-        self.assertEqual("DELEGATE_WORKER_SLICE", act_ag["delegation_advisory"]["strategy"])
+        self.assertEqual("INLINE_LEAD_DIRECT", act_ag["delegation_advisory"]["strategy"])
 
-        # Parallel workers MUST be denied (prevents StateLock + edit collisions)
+        # Retired `harness-worker-agent` (and `-live` alias) MUST be hard-denied on `invoke_subagent`!
         brief = "Update HomeViewModel.kt to expose StateFlow<HomeUiState>, add unit test in HomeViewModelTest.kt, and run python .agents/harness.py test."
-        par_deny = self._run_pre_hook({
+        for w_alias in ("harness-worker-agent", "harness-worker-agent-live"):
+            w_deny = self._run_pre_hook({
+                "conversationId": "parent-carbon-2",
+                "tool": "invoke_subagent",
+                "arguments": {"TypeName": w_alias, "Role": w_alias, "Workspace": "inherit", "Prompt": brief},
+            })
+            self.assertEqual("deny", w_deny["decision"], w_deny)
+            self.assertEqual("WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY", w_deny.get("reason_code"))
+
+        # Warm Lead session CAN edit in-scope HomeViewModel.kt directly!
+        lead_in_scope = self._run_pre_hook({
             "conversationId": "parent-carbon-2",
-            "tool": "invoke_subagent",
-            "arguments": {"Subagents": [
-                {"TypeName": "harness-worker-agent", "Role": "w1", "Prompt": brief},
-                {"TypeName": "harness-worker-agent", "Role": "w2", "Prompt": brief},
-            ]},
-        })
-        self.assertEqual("deny", par_deny["decision"], par_deny)
-        self.assertEqual("PARALLEL_WORKER_FORBIDDEN", par_deny.get("reason_code"))
-
-        # Worktree workspace override MUST be denied on Worker
-        ws_deny = self._run_pre_hook({
-            "conversationId": "parent-carbon-2",
-            "tool": "invoke_subagent",
-            "arguments": {"Subagents": [{"TypeName": "harness-worker-agent", "Role": "w1", "Workspace": "worktree", "Prompt": brief}]},
-        })
-        self.assertEqual("deny", ws_deny["decision"], ws_deny)
-        self.assertEqual("WORKER_WORKSPACE_MISMATCH", ws_deny.get("reason_code"))
-
-        # Short lazy brief MUST be denied
-        short_deny = self._run_pre_hook({
-            "conversationId": "parent-carbon-2",
-            "tool": "invoke_subagent",
-            "arguments": {"Subagents": [{"TypeName": "harness-worker-agent", "Role": "w1", "Prompt": "do it"}]},
-        })
-        self.assertEqual("deny", short_deny["decision"], short_deny)
-        self.assertEqual("INCOMPLETE_WORKER_BRIEF", short_deny.get("reason_code"))
-
-        # Valid single worker dispatch succeeds
-        ok_worker = self._run_pre_hook({
-            "conversationId": "parent-carbon-2",
-            "tool": "invoke_subagent",
-            "arguments": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Prompt": brief},
-        })
-        self.assertEqual("allow", ok_worker["decision"], ok_worker)
-
-        self._write_child_transcript("worker-child-1", "parent-carbon-2", brief)
-
-        # Worker CAN edit in-scope HomeViewModel.kt, CANNOT edit out-of-scope AuthManager.kt, CANNOT call ask_question or task prepare-verification
-        w_in_scope = self._run_pre_hook({
-            "conversationId": "worker-child-1",
             "tool": "write_to_file",
             "arguments": {"TargetFile": str(self.repo / "app/src/main/kotlin/com/example/HomeViewModel.kt"), "CodeContent": "package com.example\nclass HomeViewModel { val ok = true }\n"},
         })
-        self.assertEqual("allow", w_in_scope["decision"], w_in_scope)
-
-        w_out_scope = self._run_pre_hook({
-            "conversationId": "worker-child-1",
-            "tool": "write_to_file",
-            "arguments": {"TargetFile": str(self.repo / "app/src/main/kotlin/com/example/AuthManager.kt"), "CodeContent": "hack"},
-        })
-        self.assertEqual("deny", w_out_scope["decision"], w_out_scope)
-        self.assertEqual("WORKER_OUTSIDE_PLANNED_FILES", w_out_scope.get("reason_code"))
-
-        w_ask = self._run_pre_hook({
-            "conversationId": "worker-child-1",
-            "tool": "ask_question",
-            "arguments": {"question": "approve me?"},
-        })
-        self.assertEqual("deny", w_ask["decision"], w_ask)
-        self.assertEqual("WORKER_NO_DELEGATION_OR_APPROVAL", w_ask.get("reason_code"))
-
-        w_lifecycle = self._run_pre_hook({
-            "conversationId": "worker-child-1",
-            "tool": "run_command",
-            "arguments": {"CommandLine": "python .agents/harness.py task prepare-verification --task-id t-feat --host antigravity"},
-        })
-        self.assertEqual("deny", w_lifecycle["decision"], w_lifecycle)
-        self.assertEqual("WORKER_LIFECYCLE_COMMAND_FORBIDDEN", w_lifecycle.get("reason_code"))
+        self.assertEqual("allow", lead_in_scope["decision"], lead_in_scope)
         _cancel("t-feat")
 
-        # --- Case C: Sensitive AUTH / SECURITY task -> SENSITIVE_LEAD_CORE_WORKER_TESTS ---
+        # --- Case C: Sensitive AUTH / SECURITY task -> INLINE_LEAD_DIRECT with sensitive_surfaces ---
         _draft_and_begin([
             "--outcome", "Harden token auth",
             "--kind", "FEATURE",
@@ -1746,35 +1703,10 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/AuthManager.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-auth")
         pol_auth = evaluate_delegation_policy(self.repo)
-        self.assertEqual("SENSITIVE_LEAD_CORE_WORKER_TESTS", pol_auth["strategy"])
-        self.assertEqual("TESTS_AND_GATES_ONLY", pol_auth["worker_mode"])
+        self.assertEqual("INLINE_LEAD_DIRECT", pol_auth["strategy"])
+        self.assertEqual(["AUTH", "SECURITY"], pol_auth["sensitive_surfaces"])
+        self.assertFalse(pol_auth["worker_allowed"])
 
-        auth_brief = "Write unit tests in app/src/test/kotlin/com/example/HomeViewModelTest.kt covering AuthManager token expiry and run harness test."
-        self.assertEqual("allow", self._run_pre_hook({
-            "conversationId": "parent-carbon-3",
-            "tool": "invoke_subagent",
-            "arguments": {"Subagents": [{"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Prompt": auth_brief}]},
-        })["decision"])
-        self._write_child_transcript("worker-auth-1", "parent-carbon-3", auth_brief)
-
-        # Worker is BLOCKED from touching sensitive AuthManager.kt even though AuthManager.kt IS in plan.json!
-        deny_sens_prod = self._run_pre_hook({
-            "conversationId": "worker-auth-1",
-            "tool": "write_to_file",
-            "arguments": {"TargetFile": str(self.repo / "app/src/main/kotlin/com/example/AuthManager.kt"), "CodeContent": "package com.example\nclass AuthManager\n"},
-        })
-        self.assertEqual("deny", deny_sens_prod["decision"], deny_sens_prod)
-        self.assertEqual("WORKER_SENSITIVE_CORE_PROTECTED", deny_sens_prod.get("reason_code"))
-
-        # Worker IS allowed to edit the unit test file!
-        allow_sens_test = self._run_pre_hook({
-            "conversationId": "worker-auth-1",
-            "tool": "write_to_file",
-            "arguments": {"TargetFile": str(self.repo / "app/src/test/kotlin/com/example/HomeViewModelTest.kt"), "CodeContent": "package com.example\nclass HomeViewModelTest { }\n"},
-        })
-        self.assertEqual("allow", allow_sens_test["decision"], allow_sens_test)
-
-        # Meanwhile Lead Architect (parent-carbon-3) CAN edit sensitive AuthManager.kt directly!
         allow_lead_prod = self._run_pre_hook({
             "conversationId": "parent-carbon-3",
             "tool": "write_to_file",
@@ -1783,7 +1715,7 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         self.assertEqual("allow", allow_lead_prod["decision"], allow_lead_prod)
         _cancel("t-auth")
 
-        # --- Case D: BUG task before red-evidence -> CAPTURE_RED_ONLY ---
+        # --- Case D: BUG task before red-evidence -> CAPTURE_RED_INLINE_LEAD ---
         _draft_and_begin([
             "--outcome", "Fix crash in HomeViewModel",
             "--kind", "BUG",
@@ -1793,34 +1725,27 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-bug")
         pol_bug = evaluate_delegation_policy(self.repo)
-        self.assertEqual("DELEGATE_RED_REPRODUCTION_TO_WORKER", pol_bug["strategy"])
-        self.assertEqual("CAPTURE_RED_ONLY", pol_bug["worker_mode"])
-
-        bug_brief = "Add failing reproduction test in app/src/test/kotlin/com/example/HomeViewModelTest.kt and run python .agents/harness.py test --capture-red."
-        self.assertEqual("allow", self._run_pre_hook({
-            "conversationId": "parent-carbon-4",
-            "tool": "invoke_subagent",
-            "arguments": {"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Prompt": bug_brief},
-        })["decision"])
-        self._write_child_transcript("worker-bug-1", "parent-carbon-4", bug_brief)
+        self.assertEqual("CAPTURE_RED_INLINE_LEAD", pol_bug["strategy"])
+        self.assertFalse(pol_bug["worker_allowed"])
+        self.assertEqual(["app/src/test/kotlin/com/example/HomeViewModelTest.kt"], pol_bug["target_files"])
 
         deny_bug_prod = self._run_pre_hook({
-            "conversationId": "worker-bug-1",
+            "conversationId": "parent-carbon-4",
             "tool": "write_to_file",
             "arguments": {"TargetFile": str(self.repo / "app/src/main/kotlin/com/example/HomeViewModel.kt"), "CodeContent": "package com.example\nclass HomeViewModel\n"},
         })
         self.assertEqual("deny", deny_bug_prod["decision"], deny_bug_prod)
-        self.assertIn(deny_bug_prod.get("reason_code"), ("WORKER_CAPTURE_RED_ONLY", "RED_EVIDENCE_REQUIRED"))
+        self.assertEqual("RED_EVIDENCE_REQUIRED", deny_bug_prod.get("reason_code"))
 
         allow_bug_test = self._run_pre_hook({
-            "conversationId": "worker-bug-1",
+            "conversationId": "parent-carbon-4",
             "tool": "write_to_file",
             "arguments": {"TargetFile": str(self.repo / "app/src/test/kotlin/com/example/HomeViewModelTest.kt"), "CodeContent": "package com.example\nclass HomeViewModelTest\n"},
         })
         self.assertEqual("allow", allow_bug_test["decision"], allow_bug_test)
         _cancel("t-bug")
 
-        # --- Case E: CONFLICT task -> CONFLICT_LEAD_CORE_WORKER_VERIFY ---
+        # --- Case E: CONFLICT task -> CONFLICT_INLINE_LEAD ---
         _draft_and_begin([
             "--outcome", "Resolve merge conflict in HomeViewModel",
             "--kind", "CONFLICT",
@@ -1830,8 +1755,8 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
             "--expected-files", "app/src/main/kotlin/com/example/HomeViewModel.kt,app/src/test/kotlin/com/example/HomeViewModelTest.kt",
         ], "t-conflict")
         pol_conf = evaluate_delegation_policy(self.repo)
-        self.assertEqual("CONFLICT_LEAD_CORE_WORKER_VERIFY", pol_conf["strategy"])
-        self.assertEqual("TESTS_AND_GATES_ONLY", pol_conf["worker_mode"])
+        self.assertEqual("CONFLICT_INLINE_LEAD", pol_conf["strategy"])
+        self.assertFalse(pol_conf["worker_allowed"])
         _cancel("t-conflict")
 
         # --- Case F: Multi-phase task -> phase-scoped delegation advisory ---
@@ -1856,8 +1781,8 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         )
         act_phased = workflow.resolve_next_action(self.repo, "t-phased", host="antigravity")
         self.assertIn("delegation_advisory", act_phased)
-        # 2-file phase p1-state (<4 files) executes inline on warm Lead cache!
-        self.assertEqual("TRIVIAL_INLINE_LEAD", act_phased["delegation_advisory"]["strategy"])
+        # Multi-phase slice executes inline on warm Lead cache!
+        self.assertEqual("INLINE_LEAD_DIRECT", act_phased["delegation_advisory"]["strategy"])
         _cancel("t-phased")
 
 
@@ -2516,11 +2441,10 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
         }
         atomic_write_json(task_dir(self.repo, "w-simple") / "plan.json", s_plan)
         dec_simple = dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
-        self.assertEqual("SIMPLE", dec_simple["complexity_tier"])
-        self.assertEqual("gemini-3.8-flash-medium", dec_simple["worker_model"])
-        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertEqual("INLINE_LEAD_DIRECT", dec_simple["strategy"])
+        self.assertFalse(dec_simple["worker_allowed"])
 
-        # 3b. COMPLEX multi-module slice -> Worker upgrades to gemini-4-argon-low, Scout stays Flash, Doctor & lifecycle pass!
+        # 3b. COMPLEX multi-module slice -> Lead inline, Scout stays Flash, Doctor & lifecycle pass!
         c_plan = {
             "task_id": "w-complex",
             "status": "IMPLEMENTING",
@@ -2535,37 +2459,35 @@ class ReviewerSpeedAndModelUpgradesSelftest(unittest.TestCase):
         }
         atomic_write_json(task_dir(self.repo, "w-complex") / "plan.json", c_plan)
         dec_complex = dp.evaluate_delegation_policy(self.repo, task_id="w-complex", plan=c_plan, router_action="IMPLEMENT_TASK")
-        self.assertEqual("COMPLEX", dec_complex["complexity_tier"])
-        self.assertEqual("gemini-4-argon-low", dec_complex["worker_model"])
-        self.assertIsNone(dec_complex["worker_invoke_model_arg"])
-        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertEqual("INLINE_LEAD_DIRECT", dec_complex["strategy"])
+        self.assertFalse(dec_complex["worker_allowed"])
         self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
-        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-worker-agent/agent.md"))
+        self.assertTrue(_antigravity_agent_matches_policy(self.repo, ".agents/agents/harness-scout-agent/agent.md"))
         doc_c = HarnessDoctor(self.repo, run_selftest=False)
         doc_c.check_antigravity_installation()
         rev_chk = next(r for r in doc_c.results if r.name == "Custom Reviewer Agents")
         self.assertEqual("PASS", rev_chk.status, rev_chk.message)
 
-        # Validate utility dispatch allows omitted Model on Argon Low Worker, blocks Model='pro', and blocks Model='pro' on Scout
-        ok_w, msg_w, _ = dp.validate_utility_dispatch(
+        # Validate utility dispatch rejects retired `harness-worker-agent` and blocks `Model='pro'` on Scout!
+        bad_retired_w, _, code_ret_w = dp.validate_utility_dispatch(
             self.repo,
             c_plan,
             [{"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit",
-              "Prompt": "Implement SyncViewModel.kt and SyncRepo.kt following exact CoroutineDispatcher injection and run compile + test."}],
+              "Prompt": "Implement SyncViewModel.kt and SyncRepo.kt."}],
         )
-        self.assertTrue(ok_w, msg_w)
-        bad_w, _, code_w = dp.validate_utility_dispatch(
+        self.assertFalse(bad_retired_w)
+        self.assertEqual("WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY", code_ret_w)
+        bad_s, _, code_s = dp.validate_utility_dispatch(
             self.repo,
             c_plan,
-            [{"TypeName": "harness-worker-agent", "Role": "harness-worker-agent", "Workspace": "inherit", "Model": "pro",
-              "Prompt": "Implement SyncViewModel.kt and SyncRepo.kt following exact CoroutineDispatcher injection and run compile + test."}],
+            [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "pro",
+              "Prompt": "Inspect SyncViewModel.kt and SyncRepo.kt callers."}],
         )
-        self.assertFalse(bad_w)
-        self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_w)
+        self.assertFalse(bad_s)
+        self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_s)
 
-        # Switching back to SIMPLE keeps harness-worker-agent/agent.md stable and model-less on disk
         dp.evaluate_delegation_policy(self.repo, task_id="w-simple", plan=s_plan, router_action="IMPLEMENT_TASK")
-        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-worker-agent/agent.md").read_text(encoding="utf-8"))
+        self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
 
     def test_rev_upg_3_4_5_6_inlined_package_pure_tools_turn_cap_and_gate_evidence(self):
         import argparse
@@ -3239,7 +3161,7 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 "review_rounds": 0,
             }
             pol_3file = dp.evaluate_delegation_policy(repo, task_id="t-inline-3", plan=plan_3file_inline, router_action="IMPLEMENT")
-            self.assertEqual("TRIVIAL_INLINE_LEAD", pol_3file["strategy"])
+            self.assertEqual("INLINE_LEAD_DIRECT", pol_3file["strategy"])
             self.assertIsNone(pol_3file["recommended_subagent"])
 
             plan_simple = {
@@ -3265,275 +3187,11 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertFalse(res_frontier["applied"])
             self.assertEqual("exempt_frontier_model", res_frontier["mode"])
 
-            # Wave 1 initial state (4 files >= 4) -> starts directly on `gemini-4-hydrogen-high`, DELEGATE_WORKER_SLICE!
+            # 4+ file slices execute inline directly on the warm Lead session (`INLINE_LEAD_DIRECT`)
             pol0 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol0["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol0["worker_model"])
-            self.assertEqual("NONE", pol0["friction_escalation"])
-
-            # Intra-wave normal TDD compile/test iterations (`is_wave_boundary=False`) MUST NOT prematurely lock out Worker mid-wave!
-            for iw_idx in range(3):
-                dp.record_worker_verification_outcome(
-                    repo, passed=False, gate_name="gradle-compiledebugkotlin", detail=f"Typo {iw_idx}",
-                    task_id="t-orch", is_wave_boundary=False,
-                )
-            pol_mid_wave = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_mid_wave["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_mid_wave["worker_model"])
-            self.assertEqual(0, pol_mid_wave["friction_strikes"])
-
-            # Intra-wave runaway cap triggers cleanly at 5 consecutive intra-wave gate failures
-            for _ in range(2):
-                dp.record_worker_verification_outcome(
-                    repo, passed=False, gate_name="unit_tests", detail="Spinning",
-                    task_id="t-orch", is_wave_boundary=False,
-                )
-            with patch("mutation_guard.active_plan", return_value=plan_simple):
-                ok_cap, cap_msg = dp.check_worker_intra_wave_retry_cap(repo, "python .agents/harness.py test")
-            self.assertFalse(ok_cap)
-            self.assertIn("WORKER_INTRA_WAVE_RETRY_CAP", cap_msg)
-
-            # Wave 1 (`gemini-4-hydrogen-high` #1) completes WITHOUT green unit_tests.json -> Wave Failure #1 (`high_friction_strikes == 1`) -> Wave 2 corrective `Hydrogen High`!
-            dp.evaluate_completed_worker_wave(repo, {
-                "wave_id": "w-simple-1",
-                "task_id": "t-orch",
-                "phase_id": "",
-                "task_status": "IMPLEMENTING",
-                "worker_mode": "FULL_SLICE",
-                "worker_model": "gemini-4-hydrogen-high",
-                "dispatched_epoch": 500.0,
-            })
-            pol_w2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_w2["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_w2["worker_model"])
-            self.assertEqual(1, pol_w2["friction_strikes"])
-            self.assertEqual(1, pol_w2["high_friction_strikes"])
-            self.assertEqual("ESCALATED_WORKER_MODEL", pol_w2["friction_escalation"])
-            self.assertTrue(pol_w2["previous_wave_handoff"])
-
-            # Duplicate PostToolUse on the same wave_id is strictly idempotent (stays at 1 strike!)
-            dp.evaluate_completed_worker_wave(repo, {
-                "wave_id": "w-simple-1",
-                "task_id": "t-orch",
-                "phase_id": "",
-                "task_status": "IMPLEMENTING",
-                "worker_mode": "FULL_SLICE",
-                "worker_model": "gemini-4-hydrogen-high",
-                "dispatched_epoch": 500.0,
-            })
-            self.assertEqual(1, dp.get_worker_friction_state(repo, "t-orch", plan_simple)["wave_failures"])
-
-            # Wave 2 (`gemini-4-hydrogen-high` attempt #2) ALSO fails -> `high_friction_strikes == 2` triggers Native Orchestrator Lead Takeover (`Carbon`) without wasting a 3rd wave!
-            dp.evaluate_completed_worker_wave(repo, {
-                "wave_id": "w-simple-2",
-                "task_id": "t-orch",
-                "phase_id": "",
-                "task_status": "IMPLEMENTING",
-                "worker_mode": "FULL_SLICE",
-                "worker_model": "gemini-4-hydrogen-high",
-                "dispatched_epoch": 600.0,
-            })
-            pol_w4 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_w4["strategy"])
-            self.assertEqual("TESTS_AND_GATES_ONLY", pol_w4["worker_mode"])
-            self.assertEqual("LEAD_TAKEOVER", pol_w4["friction_escalation"])
-            self.assertEqual(2, pol_w4["high_friction_strikes"])
-            self.assertEqual("TWO_HYDROGEN_HIGH_FAILURES", pol_w4["takeover_trigger"])
-            self.assertEqual(
-                [
-                    "app/src/main/java/com/example/Feature.kt",
-                    "app/src/main/java/com/example/FeatureUiState.kt",
-                    "app/src/main/java/com/example/FeatureMapper.kt",
-                ],
-                pol_w4["lead_owned_files"],
-            )
-
-            with patch("mutation_guard.active_plan", return_value=plan_simple), \
-                 patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
-                w_ok, _, w_code = dp.worker_write_allowed(
-                    repo,
-                    ["app/src/main/java/com/example/Feature.kt"],
-                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "FULL_SLICE"},
-                )
-            self.assertFalse(w_ok)
-            self.assertEqual("WORKER_FRICTION_CORE_ESCALATED_TO_LEAD", w_code)
-
-            # Lead Architect fixes code and runs full `unit_tests` PASS -> resets wave_failures & high_wave_failures to 0 and resolves handoff!
-            dp.record_worker_verification_outcome(
-                repo, passed=True, gate_name="unit_tests", detail="All green", task_id="t-orch", is_wave_boundary=False,
-            )
-            pol_reset = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_simple, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_reset["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_reset["worker_model"])
-            self.assertEqual(0, pol_reset["friction_strikes"])
-            self.assertEqual(0, pol_reset["high_friction_strikes"])
-            self.assertIsNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
-
-            # COMPLEX slice 2-Strike `Hydrogen High` + Zero-Scratch Handoff Capsule (`worker-handoff.json`):
-            # Wave 1 (`High` #1) writes 85% of code & passes `compile`, fails 1 unit test -> Wave 2 (`High` #2 corrective delta) ->
-            # fails 2nd time -> hands over to `Carbon` with full preserved worktree files, passing gates, failing `cause:`, & cumulative Worker history!
-            plan_complex = {
-                "task_id": "t-orch",
-                "status": "IMPLEMENTING",
-                "kind": "BUG",
-                "risk_tier": "T3_MODERATE",
-                "expected_files": [
-                    "app/src/main/java/com/example/SyncWorker.kt",
-                    "app/src/main/java/com/example/SyncRepository.kt",
-                    "app/src/main/java/com/example/SyncContract.kt",
-                    "app/src/test/java/com/example/SyncWorkerTest.kt",
-                ],
-                "expected_surfaces": ["COROUTINES", "NETWORK"],
-                "review_rounds": 0,
-            }
-            (repo / ".agents" / "agents" / dp.WORKER_AGENT).mkdir(parents=True, exist_ok=True)
-            (repo / "app/src/main/java/com/example").mkdir(parents=True, exist_ok=True)
-            (repo / "app/src/test/java/com/example").mkdir(parents=True, exist_ok=True)
-            (repo / "app/src/main/java/com/example/SyncRepository.kt").write_text(
-                "package com.example\nclass SyncRepository { suspend fun sync(): Boolean = true }\n",
-                encoding="utf-8",
-            )
-            (repo / "app/src/test/java/com/example/SyncWorkerTest.kt").write_text(
-                "package com.example\nclass SyncWorkerTest { fun retryOnIoException() {} }\n",
-                encoding="utf-8",
-            )
-            (repo / ".agents" / "state" / "results").mkdir(parents=True, exist_ok=True)
-            atomic_write_json(repo / ".agents" / "state" / "results" / "compile.json", {"status": "PASS", "exit_code": 0})
-            atomic_write_json(
-                repo / ".agents" / "state" / "results" / "unit_tests.json",
-                {
-                    "status": "FAIL",
-                    "exit_code": 1,
-                    "failed_tests": ["com.example.SyncWorkerTest#retryOnIoException"],
-                    "cause": "java.lang.AssertionError: expected Result.retry() on IOException at SyncWorkerTest.kt:44",
-                },
-            )
-            atomic_write_json(repo / ".agents" / "state" / "tasks" / "t-orch" / "plan.json", plan_complex)
-            atomic_write_json(repo / ".agents" / "state" / "active-task.json", {"task_id": "t-orch"})
-
-            pol_c0 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
-            self.assertEqual("COMPLEX", pol_c0["complexity_tier"])
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_c0["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_c0["worker_model"])
-
-            # Wave 1 (`Hydrogen High` #1) fails with structured Worker self-report -> Wave 2 stays on `gemini-4-hydrogen-high` (zero `xhigh`!)
-            dp.evaluate_completed_worker_wave(
-                repo,
-                {
-                    "wave_id": "w-complex-1",
-                    "task_id": "t-orch",
-                    "phase_id": "",
-                    "task_status": "IMPLEMENTING",
-                    "worker_mode": "FULL_SLICE",
-                    "worker_model": "gemini-4-hydrogen-high",
-                    "dispatched_epoch": 1.0,
-                },
-                worker_output=(
-                    "HANDOFF_COMPLETED: Implemented SyncRepository.kt and SyncWorkerTest.kt harness.\n"
-                    "HANDOFF_TRIED_AND_FAILED: Wrapped sync() in runCatching, which accidentally caught CancellationException.\n"
-                    "HANDOFF_EXACT_BLOCKER: SyncWorker.kt:29 returns Result.failure() instead of Result.retry() on IOException."
-                ),
-            )
-            pol_c1 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
-            self.assertEqual("DELEGATE_WORKER_SLICE", pol_c1["strategy"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_c1["worker_model"])
-            self.assertNotIn("xhigh", pol_c1["worker_model"])
-            self.assertEqual(1, pol_c1["high_friction_strikes"])
-            self.assertIn("SyncRepository.kt", pol_c1["previous_wave_handoff"]["summary_for_lead"])
-
-            # Wave 2 (`Hydrogen High` #2) fails -> Now `high_friction_strikes == 2` hands over to `Carbon` with cumulative Zero-Scratch Handoff!
-            dp.evaluate_completed_worker_wave(
-                repo,
-                {
-                    "wave_id": "w-complex-2",
-                    "task_id": "t-orch",
-                    "phase_id": "",
-                    "task_status": "IMPLEMENTING",
-                    "worker_mode": "FULL_SLICE",
-                    "worker_model": "gemini-4-hydrogen-high",
-                    "dispatched_epoch": 1.0,
-                },
-                worker_output=(
-                    "HANDOFF_COMPLETED: Preserved SyncRepository.kt and rethrew CancellationException.\n"
-                    "HANDOFF_TRIED_AND_FAILED: Added retry policy in SyncWorker but dispatcher clock under StandardTestDispatcher stalled.\n"
-                    "HANDOFF_EXACT_BLOCKER: SyncWorkerTest.kt:44 needs advanceUntilIdle() with injected CoroutineDispatcher."
-                ),
-            )
-            pol_c2 = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
-            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_c2["strategy"])
-            self.assertEqual("LEAD_TAKEOVER", pol_c2["friction_escalation"])
-            self.assertEqual("TWO_HYDROGEN_HIGH_FAILURES", pol_c2["takeover_trigger"])
-            self.assertEqual(2, pol_c2["high_friction_strikes"])
-            self.assertEqual("TESTS_AND_GATES_ONLY", pol_c2["worker_mode"])
-            self.assertEqual("gemini-4-hydrogen-high", pol_c2["worker_model"])
-            handoff_c2 = pol_c2["lead_takeover_handoff"]
-            self.assertFalse(handoff_c2["resolved"])
-            self.assertEqual(2, len(handoff_c2["attempt_history"]))
-            self.assertIn("compile", handoff_c2["passing_gates"])
-            self.assertTrue(any("SyncRepository.kt" in f["file"] for f in handoff_c2["completed_files_on_disk"]))
-            self.assertIn("StandardTestDispatcher", handoff_c2["worker_self_report"]["tried_and_failed"])
-            self.assertIn("DO NOT START FROM SCRATCH", pol_c2["reason"])
-
-            # Verify `PreInvocation` (`pending_post_subagent_directive`) automatically injects the Zero-Scratch Handoff to `Carbon`!
-            w_key, w_dir = dp.pending_post_subagent_directive(repo, "lead-carbon-conv")
-            self.assertTrue(w_key.startswith("takeover-t-orch-"))
-            self.assertIn("DO NOT START FROM SCRATCH", w_dir)
-            self.assertIn("SyncRepository.kt", w_dir)
-            self.assertIn("SyncWorkerTest.kt:44", w_dir)
-
-            w_agent_md = (repo / ".agents" / "agents" / dp.WORKER_AGENT / "agent.md").read_text(encoding="utf-8")
-            self.assertNotIn("\nmodel:", w_agent_md)
-            self.assertIn("<!-- harness-target-model: gemini-4-hydrogen-", w_agent_md)
-            with patch("mutation_guard.active_plan", return_value=plan_complex), \
-                 patch("workflow.resolve_next_action", return_value={"code": "IMPLEMENT"}):
-                ok_wc, _, code_wc = dp.worker_write_allowed(
-                    repo,
-                    ["app/src/main/java/com/example/SyncWorker.kt"],
-                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "FULL_SLICE"},
-                )
-                ok_wt, _, _ = dp.worker_write_allowed(
-                    repo,
-                    ["app/src/test/java/com/example/SyncWorkerTest.kt"],
-                    {"agent_type": dp.WORKER_AGENT, "worker_mode": "TESTS_AND_GATES_ONLY"},
-                )
-            self.assertFalse(ok_wc)
-            self.assertEqual("WORKER_FRICTION_CORE_ESCALATED_TO_LEAD", code_wc)
-            self.assertTrue(ok_wt)
-
-            # Fast-Fail Exception Test: Reset strikes, then verify an explicit `ARCHITECTURAL_BLOCKER:` on Wave 1 skips Wave 2 and hands straight to `Carbon`!
-            dp.record_worker_verification_outcome(
-                repo, passed=True, gate_name="unit_tests", detail="Reset before fast-fail check", task_id="t-orch", is_wave_boundary=False,
-            )
-            dp.evaluate_completed_worker_wave(
-                repo,
-                {
-                    "wave_id": "w-fast-fail-arch",
-                    "task_id": "t-orch",
-                    "phase_id": "",
-                    "task_status": "IMPLEMENTING",
-                    "worker_mode": "FULL_SLICE",
-                    "worker_model": "gemini-4-hydrogen-high",
-                    "dispatched_epoch": 1.0,
-                },
-                worker_output="HANDOFF_EXACT_BLOCKER: ARCHITECTURAL_BLOCKER: [SCOPE-HINT] Legacy BillingManagerTest outside expected_files conflicts with new interface.",
-            )
-            pol_ff = dp.evaluate_delegation_policy(repo, task_id="t-orch", plan=plan_complex, router_action="IMPLEMENT")
-            self.assertEqual("ORCHESTRATOR_FRICTION_LEAD_TAKEOVER", pol_ff["strategy"])
-            self.assertEqual(1, pol_ff["friction_strikes"])
-            self.assertEqual("FAST_FAIL_ARCHITECTURAL_BLOCKER", pol_ff["takeover_trigger"])
-
-            # Verify green snapshot-bound `unit_tests.json` at Wave completion passes cleanly and resets strikes!
-            (repo / ".agents" / "state" / "results").mkdir(parents=True, exist_ok=True)
-            atomic_write_json(repo / ".agents" / "state" / "results" / "unit_tests.json", {"status": "PASS", "exit_code": 0})
-            dp.evaluate_completed_worker_wave(repo, {
-                "wave_id": "w-complex-green",
-                "task_id": "t-orch",
-                "phase_id": "",
-                "task_status": "IMPLEMENTING",
-                "worker_mode": "TESTS_AND_GATES_ONLY",
-                "dispatched_epoch": 1.0,
-            })
-            self.assertEqual(0, dp.get_worker_friction_state(repo, "t-orch", plan_complex)["wave_failures"])
+            self.assertEqual("INLINE_LEAD_DIRECT", pol0["strategy"])
+            self.assertFalse(pol0["worker_allowed"])
+            self.assertEqual("NONE", pol0["worker_mode"])
 
             # 3) #200026 Turn-0 Subagent Prefix-Cache Lock & safe-cache-hybrid Routing
             brain_root = repo / "brain"
@@ -3559,7 +3217,6 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             self.assertEqual(("gemini-4-hydrogen-high", "high"), rm.resolve_antigravity_model("safe-cache-hybrid", "arch-regression-reviewer-agent", "NORMAL", complexity_tier="CRITICAL"))
             with patch.object(rm, "load_policy", return_value=(sc_pol, "project")):
                 self.assertEqual("gemini-3.8-flash-medium", dp.resolve_utility_scout_model(repo, "t-orch", plan_simple))
-                self.assertEqual(("gemini-4-hydrogen-high", "SIMPLE"), dp.resolve_utility_worker_model(repo, "t-orch", plan_simple))
 
             # 4) Forensics & Doctor (#200026, #200029/#199971, #200037)
             c_tos = ar.classify_antigravity_quota_or_capacity_error(
@@ -3606,40 +3263,6 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
                 installer_dirs=[repo / "EmptyDownloads"],
             )
             self.assertFalse(sac_clean["at_risk"])
-
-            # 5) VERIFYING-stage green unit_tests resolves worker-handoff.json after Carbon takeover
-            import _gate_results as gr
-            atomic_write_json(repo / ".agents" / "state" / "active-task.json", {"task_id": "t-orch"})
-            plan_ver = dict(plan_simple, status="VERIFYING", verification_run_id="run-v1")
-            atomic_write_json(repo / ".agents" / "state" / "tasks" / "t-orch" / "plan.json", plan_ver)
-            atomic_write_json(
-                repo / ".agents" / "state" / "tasks" / "t-orch" / "current-run.json",
-                {"run_id": "run-v1", "delivery_snapshot_sha256": "a" * 64, "change_set_sha256": "b" * 64},
-            )
-            dp.record_worker_verification_outcome(
-                repo, passed=False, gate_name="unit_tests", detail="fail 1",
-                task_id="t-orch", is_wave_boundary=True, wave_id="w-v1", worker_model_used="gemini-4-hydrogen-high",
-            )
-            dp.record_worker_verification_outcome(
-                repo, passed=False, gate_name="unit_tests", detail="fail 2",
-                task_id="t-orch", is_wave_boundary=True, wave_id="w-v2", worker_model_used="gemini-4-hydrogen-high",
-            )
-            self.assertIsNotNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
-            gr.write_gate_result(
-                "unit_tests",
-                {
-                    "status": "PASS",
-                    "exit_code": 0,
-                    "delivery_snapshot_sha256": "a" * 64,
-                    "change_set_sha256": "b" * 64,
-                    "external_inputs_sha256": "c" * 64,
-                },
-                results_dir_override=repo / ".agents" / "state" / "results",
-            )
-            self.assertIsNone(dp.get_worker_handoff_capsule(repo, "t-orch"))
-            resolved_doc = dp.get_worker_handoff_capsule(repo, "t-orch", include_resolved=True)
-            self.assertIsNotNone(resolved_doc)
-            self.assertTrue(resolved_doc["resolved"])
 
 
 class TestV139AuditFixes(unittest.TestCase):
@@ -3737,7 +3360,7 @@ class TestV139AuditFixes(unittest.TestCase):
             "python .agents/harness.py pm sync",
             "python .agents/harness.py context note --note x",
         ):
-            self.assertIsNotNone(dp._WORKER_FORBIDDEN_LIFECYCLE_RE.search(forbidden_cmd), forbidden_cmd)
+            self.assertFalse(dp.scout_command_allowed(forbidden_cmd), forbidden_cmd)
 
         gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         global_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
@@ -4052,11 +3675,12 @@ class TestV139AuditFixes(unittest.TestCase):
             self.assertFalse(ok_wr)
             self.assertEqual("READ_ONLY_SUBAGENT_WRITE_FORBIDDEN", code_wr)
 
-            ok_wk, _, _ = pts._validate_define_subagent(
+            ok_wk, _, code_wk = pts._validate_define_subagent(
                 {"name": "harness-worker-agent", "enable_subagent_tools": False, "enable_write_tools": True},
                 "define_subagent",
             )
-            self.assertTrue(ok_wk)
+            self.assertFalse(ok_wk)
+            self.assertEqual("WORKER_AGENT_RETIRED_INLINE_LEAD_ONLY", code_wk)
 
 
     def test_v139_07_library_project_kind_isolation_doctor_stderr_and_prepare_verification_json(self):
@@ -4203,34 +3827,32 @@ class TestV1312CrossSystemParity(unittest.TestCase):
             fake_win_repo = Path("/mnt_sim")
             with patch.object(Path, "resolve", return_value=fake_win_repo):
                 pass
-            # Post-Worker unread file gap allowance
+            # Post-Scout unread file gap allowance
             tx_dir = repo / "brain" / "parent-v1312" / ".system_generated" / "logs"
             tx_dir.mkdir(parents=True, exist_ok=True)
             parent_tx = tx_dir / "transcript.jsonl"
             parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "Fix slice"}) + "\n", encoding="utf-8")
             w_plan = {
                 "task_id": "t-w-v1312",
-                "status": "IMPLEMENTING",
+                "status": "DRAFT",
                 "task_kind": "FEATURE",
                 "expected_files": [
                     "app/src/main/java/com/demo/TouchedByWorker.kt",
                     "app/src/main/java/com/demo/UntouchedCaller.kt",
-                    "app/src/main/java/com/demo/F3.kt",
-                    "app/src/main/java/com/demo/F4.kt",
                 ],
                 "expected_surfaces": ["BUSINESS_LOGIC"],
             }
             dp._save_utility_ledger(repo, {
-                "schema_version": 1,
+                "schema_version": 2,
                 "entries": [{
-                    "wave_id": "w-worker-v1312",
-                    "agent_type": dp.WORKER_AGENT,
-                    "role": dp.WORKER_AGENT,
+                    "wave_id": "w-scout-v1312",
+                    "agent_type": dp.SCOUT_AGENT,
+                    "role": dp.SCOUT_AGENT,
                     "task_id": "t-w-v1312",
-                    "task_status": "IMPLEMENTING",
+                    "task_status": "DRAFT",
                     "parent_conversation_id": "parent-v1312",
                     "parent_user_turns": 1,
-                    "execution_id": "child-worker-1",
+                    "execution_id": "child-scout-1",
                     "wave_completed": True,
                     "completed_at_epoch": 9999999999.0,
                     "lead_post_reads": 3,
@@ -4243,12 +3865,12 @@ class TestV1312CrossSystemParity(unittest.TestCase):
                     repo, "parent-v1312", tool_name="view_file", args={"AbsolutePath": str(f1), "StartLine": 1, "EndLine": 10}, plan=w_plan,
                 )
                 self.assertFalse(ok_same)
-                self.assertEqual("POST_WORKER_REREAD_CAP_REACHED", code_same)
+                self.assertEqual("POST_SCOUT_REREAD_CAP_REACHED", code_same)
 
                 ok_unseen, _, _ = dp.check_and_record_lead_post_subagent_read(
                     repo, "parent-v1312", tool_name="view_file", args={"AbsolutePath": str(f2), "StartLine": 1, "EndLine": 10}, plan=w_plan,
                 )
-                self.assertTrue(ok_unseen, "Post-Worker surgical read on file NOT touched/read by Worker must be allowed")
+                self.assertTrue(ok_unseen, "Post-Scout surgical read on file NOT read by Scout must be allowed")
 
             # Lead is allowed to stage in inbox; verify check_write_safety allows Lead
             res_lead = pts.check_write_safety(repo, ".agents/state/web-relay/inbox/merge.json")
@@ -7399,171 +7021,148 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertNotIn("git diff --check", raw, sub_json.name)
             self.assertNotIn("The user will primarily request you perform software engineering tasks", raw, sub_json.name)
 
-    def test_v1319_08_interactive_human_review_cockpit_and_cli(self) -> None:
-        """Verify Interactive Human Review Cockpit (`human-review.html` & `harness.py review-diff`): isolation, layer order, triage, blast-radius callers, X-Ray, and side-effect detection."""
+    def test_v1319_08_pm_find_item_pagination_guard_and_zoho_414_budget(self) -> None:
+        """Verify `pm find-item`, `LARGE_STEP_OUTPUT_PAGINATION_BLOCKED`, and compact `zoho_query_param_html` (HTTP 414 guard)."""
         import argparse
+        import contextlib
+        import io
+        import urllib.parse
+        from unittest import mock
         from _vnext_common import atomic_write_json
-        import human_review_cockpit as hrc
-        import review_orchestrator as ro
+        import pm_discovery as pmd
+        import pre_tool_safety as pts
         import workflow
 
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td) / "repo"
             self._init_mini_git_repo(repo)
-            # Install minimal `.agents` bridge for CLI test
             kit_root = Path(__file__).resolve().parents[2]
             shutil.copytree(kit_root / "agents", repo / ".agents", ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "state", "cache"))
 
-            # Seed project files across Clean Architecture layers + an untouched caller + an unrelated dirty file
-            domain_f = repo / "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt"
-            vm_f = repo / "app/src/main/java/com/demo/presentation/FoodPlanViewModel.kt"
-            ui_f = repo / "app/src/main/java/com/demo/ui/FoodPlanFragment.kt"
-            caller_f = repo / "app/src/main/java/com/demo/ui/HomeDashboardFragment.kt"
-            dirty_unrelated = repo / "app/src/main/java/com/demo/DirtyScratch.kt"
-            str_f = repo / "app/src/main/res/values/strings.xml"
-            test_f = repo / "app/src/test/java/com/demo/FoodPlanViewModelTest.kt"
+            # 1) Create a realistic >60 KB single-line `.system_generated/steps/391/output.txt` Zoho Sprints dump
+            step_out = Path(td) / "brain" / "conv-zoho" / ".system_generated" / "steps" / "391" / "output.txt"
+            step_out.parent.mkdir(parents=True, exist_ok=True)
+            items_payload = [
+                {
+                    "itemNo": str(1000 + idx),
+                    "itemId": f"19308300000047{idx:04d}",
+                    "itemName": f"شاشة اختبار رقم {idx} لتكبير حجم مخرجات زوهو بدون تقسيم يدوي",
+                    "itemTypeName": "Story",
+                    "projItemTypeId": "193083000000007025",
+                    "projPriorityId": "193083000000007019",
+                    "statusId": "193083000000005245",
+                    "statusName": "To do",
+                    "sprintId": "193083000000007004",
+                    "sequence": str(idx),
+                    "ownerId": ["193083000000007333"],
+                    "sprintInfo": {"no": "0", "name": "Backlog", "id": "193083000000007004", "type": 5},
+                }
+                for idx in range(1, 220)
+            ]
+            items_payload.append({
+                "itemNo": "1454",
+                "itemId": "193083000000551454",
+                "itemName": "دعم باكدج خصم من شاشات متعددة مع الحفاظ على سلوك الرجوع",
+                "itemTypeName": "Task",
+                "projItemTypeId": "193083000000007023",
+                "projPriorityId": "193083000000007019",
+                "statusId": "193083000000005246",
+                "statusName": "In progress",
+                "sprintId": "193083000000499999",
+                "sequence": "220",
+                "ownerId": ["193083000000007333"],
+                "sprintInfo": {"no": "18", "name": "Sprint 18", "id": "193083000000499999", "type": 2},
+            })
+            zoho_dump = {
+                "status": "success",
+                "data": {
+                    "next": True,
+                    "userDisplayName": {"193083000000007333": "Rabee Elkholy"},
+                    "items": items_payload,
+                },
+            }
+            step_out.write_text(json.dumps(zoho_dump, ensure_ascii=False), encoding="utf-8")
+            self.assertGreater(step_out.stat().st_size, 48000)
 
-            for fp, content in [
-                (domain_f, "package com.demo.domain\nclass StartFoodPlansUseCase { fun executePlan(fromOnboarding: Boolean = false): Boolean = fromOnboarding }\n"),
-                (vm_f, "package com.demo.presentation\nclass FoodPlanViewModel(private val uc: com.demo.domain.StartFoodPlansUseCase) { fun onStartClicked() { uc.executePlan() } }\n"),
-                (ui_f, "package com.demo.ui\nclass FoodPlanFragment { fun openScreen() {} }\n"),
-                (caller_f, "package com.demo.ui\nclass HomeDashboardFragment(private val uc: com.demo.domain.StartFoodPlansUseCase) { fun openFromHome() { uc.executePlan() } }\n"),
-                (dirty_unrelated, "package com.demo\nclass DirtyScratch { val x = 1 }\n"),
-                (str_f, "<resources><string name=\"app_name\">Demo</string></resources>\n"),
-                (test_f, "package com.demo\nclass FoodPlanViewModelTest { fun testOne() {} }\n"),
-            ]:
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                fp.write_text(content, encoding="utf-8")
+            # 2) `pm find-item` resolves `I1454`, `1454`, `#P1/itemdetails/I1454`, and `Ras-I1454` in <20ms!
+            for lookup in ("I1454", "1454", "https://sprints.zoho.com/workspace/demo#P1/itemdetails/I1454", "Ras-I1454"):
+                found = pmd.find_pm_items_in_files([step_out], item=lookup)
+                self.assertEqual("FOUND", found["status"], lookup)
+                self.assertEqual(1, found["found_count"])
+                m0 = found["matches"][0]
+                self.assertEqual("193083000000551454", m0["itemId"])
+                self.assertEqual("1454", m0["itemNo"])
+                self.assertEqual("193083000000499999", m0["sprintId"])
+                self.assertEqual(["Rabee Elkholy"], m0["owners"])
 
+            cli_find = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "pm", "find-item", "--item", "I1454", "--file", str(step_out), "--json"],
+                cwd=str(repo), capture_output=True, text=True, check=True,
+            )
+            self.assertEqual("FOUND", json.loads(cli_find.stdout)["status"])
+
+            # Missing item when `next=true` emits active-sprint (`sprintType == 2`) + `itemsearchby` hint!
+            miss = pmd.find_pm_items_in_files([step_out], item="I9999")
+            self.assertEqual("NOT_FOUND", miss["status"])
+            self.assertIn("itemsearchby", miss["hint"])
+
+            # 3) `pre_tool_safety` allows head read (`ByteOffset` omitted) on `output.txt`, but blocks `ByteOffset > 0` pagination!
+            def _run_read_hook(read_args: dict) -> dict:
+                buf = io.StringIO()
+                with mock.patch.object(pts, "REPO", repo), \
+                     mock.patch("sys.stdin", io.StringIO(json.dumps({"toolName": "read_file", "toolArgs": read_args, "conversationId": "lead-zoho"}))), \
+                     contextlib.redirect_stdout(buf):
+                    pts._main()
+                return json.loads(buf.getvalue().strip())
+
+            head_ok = _run_read_hook({"Path": str(step_out), "StartLine": 1, "EndLine": 1})
+            self.assertEqual("allow", head_ok["decision"], head_ok)
+            paginated_deny = _run_read_hook({"Path": str(step_out), "StartLine": 1, "EndLine": 1, "ByteOffset": 46080})
+            self.assertEqual("deny", paginated_deny["decision"], paginated_deny)
+            self.assertIn("LARGE_STEP_OUTPUT_PAGINATION_BLOCKED", paginated_deny["reason"])
+            self.assertIn("pm find-item", paginated_deny["reason"])
+
+            # 4) `pm prepare-report` emits whitespace-minified `zoho_query_param_html` <= 1,050 chars (< 5,800 URL-encoded chars)
+            f_src = repo / "app/src/main/java/com/demo/OfferPaywall.kt"
+            f_src.parent.mkdir(parents=True, exist_ok=True)
+            f_src.write_text("package com.demo\nclass OfferPaywall\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "seed architecture"], cwd=str(repo), check=True, capture_output=True)
-
-            # Dirty `DirtyScratch.kt` BEFORE drafting the task so baseline isolation must exclude it!
-            dirty_unrelated.write_text("package com.demo\nclass DirtyScratch { val x = 999 /* pre-existing dirty edit */ }\n", encoding="utf-8")
-
-            tid = "cockpit-demo-task"
-            d_res = workflow.draft(argparse.Namespace(
-                repo=str(repo),
-                task_id=tid,
-                outcome="Update StartFoodPlansUseCase onboarding navigation and ViewModel flow",
-                kind="FEATURE",
-                expected_files="app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt,app/src/main/java/com/demo/presentation/FoodPlanViewModel.kt,app/src/main/res/values/strings.xml,app/src/test/java/com/demo/FoodPlanViewModelTest.kt",
-                expected_surfaces="BUSINESS_LOGIC,LOCALIZATION",
-                modules=":app",
-                phases=None,
-                approach="Clean architecture flow",
-                risks="Caller default parameter behavior",
-                device_strategy="Unit tests",
-                allow_sensitive=False,
-                adopt_dirty=False,
-                from_task=None,
+            subprocess.run(["git", "commit", "-m", "seed offer"], cwd=str(repo), check=True, capture_output=True)
+            workflow.draft(argparse.Namespace(
+                repo=str(repo), task_id="t-zoho-414", outcome="Support multi-entry discount offer paywall",
+                kind="FEATURE", expected_files="app/src/main/java/com/demo/OfferPaywall.kt",
+                expected_surfaces="BUSINESS_LOGIC", modules=":app", phases=None,
+                approach="Clean flow", risks="None", device_strategy="Unit tests",
+                allow_sensitive=False, adopt_dirty=False, from_task=None,
             ))
-            subprocess.run(
+            rep_proc = subprocess.run(
                 [
-                    sys.executable, str(repo / ".agents" / "harness.py"),
-                    "task", "approve", "--repo", str(repo), "--task-id", tid,
-                    "--source", "conversation", "--proof-reference", "Proceed approved",
-                    "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", d_res["plan_sha256"],
+                    sys.executable, str(repo / ".agents/harness.py"), "pm", "prepare-report",
+                    "--task-id", "t-zoho-414",
+                    "--objective", "توحيد فتح شاشة عرض الخصم من كافة مداخل التطبيق مع ضمان عمل زر الرجوع لكل مسار دون تكرار الشاشة.",
+                    "--changes", "تم تحديث مسار عرض الباقة الترويجية وحفظ حالة العرض النشط مؤقتاً أثناء جلسة الشراء مع التحقق من كافة نقاط الدخول.",
+                    "--impact", "شاشة الاشتراك الرئيسية وشاشة العروض الترويجية",
+                    "--impact", "مسار الرجوع من شاشة الدفع إلى الشاشة السابقة",
+                    "--tests", "فتح عرض الخصم من الرئيسية ثم الضغط على رجوع والتأكد من العودة للرئيسية مباشرة",
+                    "--tests", "إتمام تفعيل الباقة المخفضة والتأكد من تحديث حالة الاشتراك فوراً",
                 ],
-                cwd=str(repo), check=True, capture_output=True, text=True,
+                cwd=str(repo), capture_output=True, text=True, check=True,
             )
+            rep_json = json.loads(rep_proc.stdout)
+            self.assertEqual("PREPARED", rep_json["status"])
+            q_html = rep_json["zoho_query_param_html"]
+            self.assertLessEqual(len(q_html), 1050)
+            self.assertLessEqual(len(urllib.parse.quote(q_html, safe="")), 5800)
+            self.assertIn('dir="rtl"', q_html)
+            self.assertIn("<h3>1.", q_html)
+            self.assertIn("<h3>5.", q_html)
 
-            # Snapshot initial plan into plan-history to simulate an extra side-effect file (`FoodPlanFragment.kt`) absorbed later
-            t_dir = workflow.task_dir(repo, tid)
-            hist_dir = t_dir / "plan-history"
-            hist_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(t_dir / "plan.json", hist_dir / f"{d_res['plan_sha256']}.json")
-
-            # Modify task files (including side-effect `ui_f`, leaving `caller_f` untouched!)
-            domain_f.write_text(
-                "package com.demo.domain\nclass StartFoodPlansUseCase {\n"
-                "    fun executePlan(fromOnboarding: Boolean = true, paymentRequired: Boolean = false): Boolean {\n"
-                "        if (paymentRequired) return false\n"
-                "        return fromOnboarding\n"
-                "    }\n}\n",
-                encoding="utf-8",
+            # Retired `review-diff` command must fail closed with exit code 2
+            ret_cli = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "review-diff"],
+                cwd=str(repo), capture_output=True, text=True, check=False,
             )
-            vm_f.write_text(
-                "package com.demo.presentation\nclass FoodPlanViewModel(private val uc: com.demo.domain.StartFoodPlansUseCase) {\n"
-                "    fun onStartClicked() { if (uc.executePlan(fromOnboarding = true)) { /*MutableStateFlow*/ } }\n}\n",
-                encoding="utf-8",
-            )
-            ui_f.write_text(
-                "package com.demo.ui\nclass FoodPlanFragment { fun openScreen() { findNavController() } }\n",
-                encoding="utf-8",
-            )
-            str_f.write_text("<resources><string name=\"app_name\">Demo2</string></resources>\n", encoding="utf-8")
-            test_f.write_text("package com.demo\nclass FoodPlanViewModelTest { fun testOne() { assert(true) } }\n", encoding="utf-8")
-
-            # Seed a Round 1 resolved finding + Round 2 LOW advisory finding for AI Review X-Ray
-            r1_res = t_dir / "review-execution" / "run-1" / "results"
-            r2_res = t_dir / "review-execution" / "run-2" / "results"
-            r1_res.mkdir(parents=True, exist_ok=True)
-            r2_res.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(r1_res / "bug-test-reviewer-agent.json", {
-                "reviewer": "bug-test-reviewer-agent",
-                "result": {
-                    "verdict": "CHANGES_REQUESTED",
-                    "findings": [{
-                        "severity": "HIGH",
-                        "title": "Check default onboarding flag",
-                        "description": "Verify HomeDashboardFragment caller behavior.",
-                        "file": "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt",
-                        "line": 3,
-                    }],
-                },
-            })
-            atomic_write_json(r2_res / "bug-test-reviewer-agent.json", {
-                "reviewer": "bug-test-reviewer-agent",
-                "result": {
-                    "verdict": "PASS",
-                    "findings": [{
-                        "severity": "LOW",
-                        "title": "Optional KDoc suggestion",
-                        "description": "Consider documenting paymentRequired param.",
-                        "file": "app/src/main/java/com/demo/domain/StartFoodPlansUseCase.kt",
-                        "line": 3,
-                    }],
-                },
-            })
-
-            # Invoke via public CLI `python .agents/harness.py review-diff --task-id <tid> --json`
-            cli_proc = subprocess.run(
-                [sys.executable, str(repo / ".agents" / "harness.py"), "review-diff", "--task-id", tid, "--json"],
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            summary = json.loads(cli_proc.stdout)
-            self.assertEqual(tid, summary["task_id"])
-            # 1. Pre-existing dirty file `DirtyScratch.kt` MUST NOT appear in isolated task review!
-            ordered_paths = [item["path"] for item in summary["ordered_files"]]
-            self.assertNotIn("app/src/main/java/com/demo/DirtyScratch.kt", ordered_paths)
-            # 2. Narrative Clean Architecture ordering: DOMAIN -> VIEWMODEL -> UI_NAV -> RESOURCES_CONFIG -> TESTS
-            layers = [item["layer"] for item in summary["ordered_files"]]
-            self.assertEqual(["DOMAIN", "VIEWMODEL", "UI_NAV", "RESOURCES_CONFIG", "TESTS"], layers)
-            # 3. Hotspots vs Auto-Collapsed Boilerplate triage
-            triage_by_layer = {item["layer"]: item["triage"] for item in summary["ordered_files"]}
-            self.assertEqual("HOTSPOT", triage_by_layer["DOMAIN"])
-            self.assertEqual("HOTSPOT", triage_by_layer["UI_NAV"])
-            self.assertEqual("AUTO_COLLAPSED", triage_by_layer["RESOURCES_CONFIG"])
-            self.assertEqual("AUTO_COLLAPSED", triage_by_layer["TESTS"])
-            # 4. Unmodified Blast-Radius Callers radar catches `HomeDashboardFragment.kt`!
-            html_content = Path(summary["html_path"]).read_text(encoding="utf-8")
-            self.assertGreaterEqual(summary["blast_radius_callers_count"], 1)
-            self.assertIn("HomeDashboardFragment.kt", html_content)
-            self.assertNotIn("DirtyScratch.kt", html_content)
-            # 5. Side-Effect detector flags `FoodPlanFragment.kt`!
-            self.assertEqual(1, summary["side_effect_files_count"])
-            self.assertIn("Side-Effect / Extra-Scope Files Outside Initial Plan", html_content)
-            # 6. AI Review X-Ray shows both RESOLVED_IN_LATER_ROUND and LOW ADVISORY + surgical reopen command
-            self.assertIn("RESOLVED_IN_LATER_ROUND", html_content)
-            self.assertIn("Optional KDoc suggestion", html_content)
-            self.assertIn("task resume --repo . --task-id cockpit-demo-task --reopen", html_content)
-            self.assertIn("toggleLanguage()", html_content)
-            self.assertIn("toggleReviewed(", html_content)
-            self.assertTrue(all(bool(item.get("why_en")) and bool(item.get("why_ar")) for item in summary["ordered_files"]))
+            self.assertEqual(2, ret_cli.returncode)
 
 
     def test_v1321_all_forensic_edge_cases_and_cockpit_v3(self) -> None:
@@ -7573,7 +7172,6 @@ class TestV1319ForensicIntegration(unittest.TestCase):
         import unittest.mock
         from _vnext_common import atomic_write_json, canonical_sha256, read_json
         import delegation_policy as dp
-        import human_review_cockpit as hrc
         import review_orchestrator as ro
         import self_heal
         import workflow
@@ -7639,55 +7237,47 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 dp.record_live_lead_session_model(repo, "lead-live-cid", live_m)
                 self.assertEqual(exp_fam, dp._detect_live_parent_lead_family(repo))
                 pol_red = dp.evaluate_delegation_policy(repo, task_id="t-g4", plan=plan_4files, router_action="CAPTURE_RED_EVIDENCE")
-                self.assertEqual("LEAD_WARM_CACHE_RED_DIRECT", pol_red["strategy"])
+                self.assertEqual("CAPTURE_RED_INLINE_LEAD", pol_red["strategy"])
                 self.assertIsNone(pol_red["recommended_subagent"])
                 pol_impl = dp.evaluate_delegation_policy(repo, task_id="t-g4", plan=plan_4files, router_action="IMPLEMENT")
-                self.assertIn(pol_impl["strategy"], ("HYDROGEN_LEAD_WARM_CACHE_DIRECT", "GEMINI4_LEAD_WARM_CACHE_DIRECT"))
+                self.assertEqual("INLINE_LEAD_DIRECT", pol_impl["strategy"])
                 self.assertIsNone(pol_impl["recommended_subagent"])
             (repo / ".agents/state/live-session-models.json").unlink(missing_ok=True)
 
-            # 4. Async `invoke_subagent` `HEADER_ONLY` open wave at spawn -> settles cleanly on `COMPLETED_DONE`!
+            # 4. Async `invoke_subagent` `HEADER_ONLY` open Scout wave at spawn -> settles cleanly on `COMPLETED_DONE`!
             ag_brain = Path(td) / "ag_brain" / "brain"
             parent_cid = "lead-async-001"
-            worker_cid = "worker-async-002"
+            scout_cid = "scout-async-002"
             parent_tx = ag_brain / parent_cid / ".system_generated" / "logs" / "transcript.jsonl"
-            worker_tx = ag_brain / worker_cid / ".system_generated" / "logs" / "transcript.jsonl"
+            scout_tx = ag_brain / scout_cid / ".system_generated" / "logs" / "transcript.jsonl"
             parent_tx.parent.mkdir(parents=True, exist_ok=True)
-            worker_tx.parent.mkdir(parents=True, exist_ok=True)
+            scout_tx.parent.mkdir(parents=True, exist_ok=True)
             parent_tx.write_text(json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "fix bug"}) + "\n", encoding="utf-8")
-            w_prompt = "Author failing unit test ATest.kt and run test --capture-red"
-            worker_tx.write_text(
-                json.dumps({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={w_prompt}\n</SYSTEM_MESSAGE>"}) + "\n",
+            s_prompt = "Inspect A.kt and B.kt callers and return architectural digest"
+            scout_tx.write_text(
+                json.dumps({"source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE", "content": f"<SYSTEM_MESSAGE>sender={parent_cid} priority=MESSAGE_PRIORITY_HIGH content={s_prompt}\n</SYSTEM_MESSAGE>"}) + "\n",
                 encoding="utf-8",
             )
             atomic_write_json(repo / ".agents/state/tasks/t-g4/plan.json", plan_4files)
             with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(Path(td) / "ag_brain")}, clear=False):
                 dp.record_utility_dispatch(
-                    repo, agent_type=dp.WORKER_AGENT, role_label=dp.WORKER_AGENT,
-                    prompt=w_prompt, parent_conversation_id=parent_cid, task_id="t-g4",
-                    wave_id="w-async-1", worker_mode="CAPTURE_RED_ONLY",
+                    repo, agent_type=dp.SCOUT_AGENT, role_label=dp.SCOUT_AGENT,
+                    prompt=s_prompt, parent_conversation_id=parent_cid, task_id="t-g4",
+                    wave_id="s-async-1", worker_mode="READ_ONLY",
                 )
+                with scout_tx.open("a", encoding="utf-8") as sf_out:
+                    sf_out.write(json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Analyzed A.kt and B.kt signatures cleanly."}) + "\n")
                 dp.bind_utility_from_post_tool(
                     repo,
                     {
                         "conversationId": parent_cid,
                         "transcriptPath": str(parent_tx),
                         "toolCall": {"name": "invoke_subagent"},
-                        "toolResult": {"conversationId": worker_cid},
+                        "toolResult": {"conversationId": scout_cid},
                     },
                 )
-                ent_open = [e for e in dp._load_utility_ledger(repo)["entries"] if e.get("wave_id") == "w-async-1"][0]
-                self.assertEqual(worker_cid, ent_open["execution_id"])
-                self.assertFalse(ent_open.get("wave_completed"))
-                self.assertEqual(0, dp.get_worker_friction_state(repo, "t-g4", plan_4files)["wave_failures"])
-
-                # Worker finishes writing red-evidence.json and emits COMPLETED_DONE response
-                atomic_write_json(repo / ".agents/state/tasks/t-g4/red-evidence.json", {"captured_at_epoch": time.time() + 5})
-                with worker_tx.open("a", encoding="utf-8") as wf:
-                    wf.write(json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Captured failing RED test successfully in ATest.kt."}) + "\n")
-                fr_after = dp.get_worker_friction_state(repo, "t-g4", plan_4files)
-                self.assertEqual(0, fr_after["wave_failures"])
-                ent_closed = [e for e in dp._load_utility_ledger(repo)["entries"] if e.get("wave_id") == "w-async-1"][0]
+                ent_closed = [e for e in dp._load_utility_ledger(repo)["entries"] if e.get("wave_id") == "s-async-1"][0]
+                self.assertEqual(scout_cid, ent_closed["execution_id"])
                 self.assertTrue(ent_closed.get("wave_completed"))
 
             # 5. Idempotent `protocol_attempts` + `task heal` unblocking `REVIEW_FAILED_PROTOCOL` while preserving PASSED peers
@@ -7723,7 +7313,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertEqual(ro.REVIEW_NOT_DISPATCHED, healed_l["reviewers"]["bug-test-reviewer-agent"]["state"])
             self.assertEqual(0, healed_l["reviewers"]["bug-test-reviewer-agent"]["protocol_attempts"])
 
-            # 6. Cockpit v3 `task review-brief` + `review-diff --title-ar` + `requested_outcome` extraction
+            # 6. Prepare LocationModule task for phase-review idempotency check (retired `task review-brief` must fail closed)
             shutil.rmtree(repo / ".agents/state", ignore_errors=True)
             loc_f = repo / "app/src/main/java/com/demo/di/LocationModule.kt"
             loc_f.parent.mkdir(parents=True, exist_ok=True)
@@ -7749,48 +7339,11 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 cwd=str(repo), check=True, capture_output=True, text=True,
             )
             loc_f.write_text("package com.demo.di\nfun provideLocation() = 1\n", encoding="utf-8")
-
-            brief_proc = subprocess.run(
-                [
-                    sys.executable, str(repo / ".agents/harness.py"), "task", "review-brief",
-                    "--task-id", tid_loc,
-                    "--title-ar", "Fixes LocationAR Title",
-                    "--title-en", "Fix Location Callback Leaks",
-                    "--problem-ar", "Location stayed active in background.",
-                    "--solution-ar", "Removed Singleton from LocationModule.",
-                    "--file-note", "LocationModule.kt|Custom AR File Rationale|Custom EN File Rationale",
-                    "--json",
-                ],
-                cwd=str(repo), check=True, capture_output=True, text=True,
+            ret_brief = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "task", "review-brief", "--task-id", tid_loc],
+                cwd=str(repo), capture_output=True, text=True, check=False,
             )
-            b_sum = json.loads(brief_proc.stdout)
-            self.assertTrue(b_sum["has_ai_brief"])
-            self.assertEqual("Fixes LocationAR Title", b_sum["title_ar"])
-            self.assertEqual("Custom AR File Rationale", b_sum["ordered_files"][0]["why_ar"])
-            html_v3 = Path(b_sum["html_path"]).read_text(encoding="utf-8")
-            self.assertIn("adjustZoom(", html_v3)
-            self.assertIn("story-grid", html_v3)
-            self.assertIn("Custom AR File Rationale", html_v3)
-            self.assertIn("return lines.join(String.fromCharCode(10));", html_v3)
-            self.assertNotIn('return lines.join("\\n");', html_v3)
-            self.assertIn("toggleNoteBoxFromBtn(this)", html_v3)
-
-            # 7. Pipe-free `::` delimiter support in `--check-ar` and `--file-note`
-            brief_pipefree = subprocess.run(
-                [
-                    sys.executable, str(repo / ".agents/harness.py"), "review-diff",
-                    "--task-id", tid_loc,
-                    "--check-ar", "Check item 1::Check item 2",
-                    "--file-note", "LocationModule.kt::PipeFree AR Why::PipeFree EN Why",
-                    "--json",
-                ],
-                cwd=str(repo), check=True, capture_output=True, text=True,
-            )
-            pf_sum = json.loads(brief_pipefree.stdout)
-            self.assertEqual("PipeFree AR Why", pf_sum["ordered_files"][0]["why_ar"])
-            self.assertEqual("PipeFree EN Why", pf_sum["ordered_files"][0]["why_en"])
-            saved_brief_doc = read_json(repo / ".agents/state/tasks" / tid_loc / "review-brief.json")
-            self.assertEqual(["Check item 1", "Check item 2"], saved_brief_doc["checks_ar"])
+            self.assertNotEqual(0, ret_brief.returncode)
 
             # 8. `phase_review.py` malformed response SHA idempotency + 1-char repeated hex SHA tolerance
             import phase_review as pr_mod
@@ -7916,6 +7469,550 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             lead_orch_out = buf_lead_orch.getvalue()
             self.assertNotIn("HAZARD #200029", lead_orch_out)
             self.assertIn("injectSteps", lead_orch_out)
+
+    def test_single_pass_whole_task_verify_steps_and_concurrent_reviewer_guard(self) -> None:
+        """Regression for whole-task single-pass phase fast-forward (`verify-steps` / `web-apply`),
+        single-invocation compile+test in sequential `checkpoint-phase`, unconditional `tdir/execution`
+        lease, and premature speculative reviewer dispatch blocking."""
+        import argparse
+        import contextlib
+        import io
+        from unittest import mock
+        import pre_tool_safety as pts
+        import verification_steps
+        import workflow
+        from _vnext_common import ValidationError, atomic_write_json, read_json, state_root, task_dir
+        from evidence_store import StateLock
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents/state").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            (repo / ".gitignore").write_text(".agents/\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "app").mkdir(parents=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            p1_rel = "app/src/main/java/com/demo/OfferRepo.kt"
+            p2_rel = "app/src/main/java/com/demo/PaywallRouter.kt"
+            for rel, cls_name in ((p1_rel, "OfferRepo"), (p2_rel, "PaywallRouter")):
+                f = repo / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(f"package com.demo\nclass {cls_name} {{ val v = 1 }}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            parser = workflow.build_parser()
+            tid = "t-single-pass"
+            draft_res = workflow.draft(parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", tid, "--kind", "FEATURE",
+                "--outcome", "Route discountOffer paywall across repo and router",
+                "--expected-files", f"{p1_rel},{p2_rel}",
+                "--phases", json.dumps([
+                    {"id": "p1", "title": "Offer cache", "expected_files": [p1_rel]},
+                    {"id": "p2", "title": "Router callers", "expected_files": [p2_rel]},
+                ]),
+            ]))
+            workflow.record_approval(parser.parse_args([
+                "approve", "--repo", str(repo), "--task-id", tid,
+                "--source", "conversation", "--proof-reference", "approve",
+                "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", draft_res["plan_sha256"][:12],
+            ]))
+
+            # 1) Sequential mid-task (`p1` edited, `p2` untouched): NOT ready for single-pass final fast-forward!
+            (repo / p1_rel).write_text("package com.demo\nclass OfferRepo { val v = 2 }\n", encoding="utf-8")
+            ready_partial, _ = workflow.all_remaining_phases_ready_for_final(repo, tid)
+            self.assertFalse(ready_partial)
+
+            # 2) Both `p1` and `p2` edited on disk: ready for single-pass fast-forward!
+            (repo / p2_rel).write_text("package com.demo\nclass PaywallRouter { val v = 2 }\n", encoding="utf-8")
+            ready_all, cur_pid = workflow.all_remaining_phases_ready_for_final(repo, tid)
+            self.assertTrue(ready_all)
+            self.assertEqual("p1", cur_pid)
+
+            # `checkpoint-phase --advance-all-ready --defer-gradle-to-final` completes p1+p2 with ZERO Gradle calls!
+            with mock.patch("run_gradle_task.run_gradle", side_effect=AssertionError("Gradle must not run during deferred whole-task checkpoint")):
+                cp_fast = workflow.checkpoint_phase(parser.parse_args([
+                    "checkpoint-phase", "--repo", str(repo), "--task-id", tid,
+                    "--phase-id", "p1", "--advance-all-ready", "--defer-gradle-to-final",
+                ]))
+            self.assertEqual(["p1", "p2"], cp_fast["completed_phases"])
+            self.assertEqual(["p2"], cp_fast.get("auto_advanced_phases"))
+            self.assertEqual("DEFERRED_TO_FINAL_VERIFICATION", cp_fast["compile"]["status"])
+            self.assertEqual("DEFERRED_TO_FINAL_VERIFICATION", cp_fast["tests"]["status"])
+            self.assertEqual("PREPARE_VERIFICATION", workflow.resolve_next_action(repo, tid)["code"])
+
+            # 3) Reset phase-state to test `verification_steps.run_steps` end-to-end auto-fast-forward + unconditional execution lease!
+            tdir = task_dir(repo, tid)
+            plan_doc = read_json(tdir / "plan.json")
+            plan_doc["active_phase_index"] = 0
+            atomic_write_json(tdir / "plan.json", plan_doc)
+            atomic_write_json(tdir / "phase-state.json", {"current_phase_id": "p1", "completed_phases": [], "phase_checkpoints": {}})
+            for p_sub in ("p1", "p2"):
+                (tdir / "phases" / p_sub / "checkpoint.json").unlink(missing_ok=True)
+                (tdir / "phases" / p_sub / "baseline.json").unlink(missing_ok=True)
+
+            # Even without `host-session.json`, holding `tdir / "execution"` blocks concurrent `verify-steps`!
+            self.assertFalse((tdir / "host-session.json").exists())
+            with StateLock(tdir / "execution", timeout_seconds=0):
+                with self.assertRaises(ValidationError):
+                    verification_steps.run_steps(repo, tid, host="antigravity", json_only=True)
+
+            dispatched_steps: list[tuple[str, list[str]]] = []
+            orig_dispatch = verification_steps._dispatch
+
+            def _spy_dispatch(r: Path, script: str, arguments: list[str], *, quiet_stdout: bool = False) -> int:
+                dispatched_steps.append((script, list(arguments)))
+                if script == "workflow.py" and arguments[:1] == ["checkpoint-phase"]:
+                    return orig_dispatch(r, script, arguments, quiet_stdout=True)
+                if script == "workflow.py" and arguments[:1] == ["prepare-verification"]:
+                    p_now = read_json(tdir / "plan.json")
+                    p_now["status"] = "VERIFYING"
+                    atomic_write_json(tdir / "plan.json", p_now)
+                    return 0
+                return 0
+
+            orig_resolve = workflow.resolve_next_action
+
+            def _stub_resolve(r: Path, t_id: str, pl: dict | None = None, host: str | None = None) -> dict:
+                st = str((pl or {}).get("status") or "")
+                if st == "VERIFYING":
+                    return {"code": "DISPATCH_REVIEWERS", "kind": "HOST_ACTION", "command": "", "blocking": True}
+                return orig_resolve(r, t_id, pl, host=host)
+
+            with mock.patch.object(verification_steps, "_dispatch", side_effect=_spy_dispatch), \
+                 mock.patch("workflow.resolve_next_action", side_effect=_stub_resolve):
+                rc_vs, sum_vs = verification_steps.run_steps(repo, tid, host="antigravity", json_only=True)
+            self.assertEqual(0, rc_vs, sum_vs)
+            self.assertEqual(["CHECKPOINT_READY_PHASES", "PREPARE_VERIFICATION"], sum_vs["completed_steps"])
+            self.assertIn("--defer-gradle-to-final", dispatched_steps[0][1])
+
+            # 4) Premature speculative reviewer `invoke_subagent` blocked in BOTH `IMPLEMENTING` and `VERIFYING` (when build/verification lock active)!
+            ext_pid = os.getppid() if os.getppid() > 0 and os.getppid() != os.getpid() else 1
+            exec_lock_dir = tdir / "execution"
+            exec_lock_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(exec_lock_dir / ".write.lock", {"pid": ext_pid, "nonce": "vlock", "created_at": "2026-11-17T10:22:00Z"})
+
+            def _call_pts(tool_name: str, tool_args: dict) -> dict:
+                buf = io.StringIO()
+                payload = json.dumps({"toolName": tool_name, "toolArgs": tool_args, "conversationId": "lead-spec"})
+                with mock.patch.object(pts, "REPO", repo), \
+                     mock.patch("evidence_store._pid_alive", side_effect=lambda p: p == ext_pid), \
+                     mock.patch("evidence_store._process_marker", return_value=""), \
+                     mock.patch("sys.stdin", io.StringIO(payload)), \
+                     contextlib.redirect_stdout(buf):
+                    try:
+                        pts.main()
+                    except SystemExit:
+                        pass
+                return json.loads(buf.getvalue().strip())
+
+            # During VERIFYING while `tdir / execution` lock is held -> CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS!
+            den_ver = _call_pts("invoke_subagent", {
+                "TypeName": "arch-regression-reviewer-agent",
+                "Role": "arch-regression-reviewer-agent",
+                "Prompt": "Read brief",
+                "Workspace": "inherit",
+            })
+            self.assertEqual("deny", den_ver["decision"])
+            self.assertIn("CONCURRENT_BUILD_OR_VERIFICATION_IN_PROGRESS", den_ver["reason"])
+
+            # `task status --next --brief` surfaces `background_execution_active` while lock is held!
+            with mock.patch("evidence_store._pid_alive", side_effect=lambda p: p == ext_pid), \
+                 mock.patch("evidence_store._process_marker", return_value=""):
+                st_brief = workflow.status(argparse.Namespace(repo=str(repo), task_id=tid, next=True, brief=True, host="antigravity"))
+            self.assertEqual(ext_pid, st_brief.get("background_execution_active", {}).get("pid"))
+
+            # During IMPLEMENTING without active lock -> PREMATURE_REVIEWER_DISPATCH_FORBIDDEN!
+            (exec_lock_dir / ".write.lock").unlink(missing_ok=True)
+            p_imp = read_json(tdir / "plan.json")
+            p_imp["status"] = "IMPLEMENTING"
+            atomic_write_json(tdir / "plan.json", p_imp)
+            den_imp = _call_pts("invoke_subagent", {
+                "TypeName": "arch-regression-reviewer-agent",
+                "Role": "arch-regression-reviewer-agent",
+                "Prompt": "Read brief",
+                "Workspace": "inherit",
+            })
+            self.assertEqual("deny", den_imp["decision"])
+            self.assertIn("PREMATURE_REVIEWER_DISPATCH_FORBIDDEN", den_imp["reason"])
+
+            # 5) Sequential `checkpoint-phase` combines compile into `:app:testDebugUnitTest` (1 Gradle invocation, 0 separate `:app:compileDebugKotlin`)!
+            tid_seq = "t-seq-single-gradle"
+            seq1_rel = "app/src/main/java/com/demo/SeqOne.kt"
+            seq2_rel = "app/src/main/java/com/demo/SeqTwo.kt"
+            (repo / seq1_rel).write_text("package com.demo\nclass SeqOne { val v = 10 }\n", encoding="utf-8")
+            (repo / seq2_rel).write_text("package com.demo\nclass SeqTwo { val v = 10 }\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "base2"], cwd=repo, check=True)
+            d_seq = workflow.draft(parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", tid_seq, "--kind", "FEATURE",
+                "--outcome", "Sequential phase compile+test merge",
+                "--expected-files", f"{seq1_rel},{seq2_rel}",
+                "--phases", json.dumps([
+                    {"id": "p1", "title": "Phase 1", "expected_files": [seq1_rel]},
+                    {"id": "p2", "title": "Phase 2", "expected_files": [seq2_rel]},
+                ]),
+            ]))
+            workflow.record_approval(parser.parse_args([
+                "approve", "--repo", str(repo), "--task-id", tid_seq,
+                "--source", "conversation", "--proof-reference", "approve",
+                "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", d_seq["plan_sha256"][:12],
+            ]))
+            (repo / seq1_rel).write_text("package com.demo\nclass SeqOne { val v = 11 }\n", encoding="utf-8")
+            gradle_invocations: list[list[str]] = []
+
+            def _real_shaped_gradle(tasks_arg, cwd=None, outcome=None):
+                gradle_invocations.append(list(tasks_arg))
+                xml_d = Path(cwd) / "app/build/test-results/testDebugUnitTest"
+                xml_d.mkdir(parents=True, exist_ok=True)
+                xml_p = xml_d / "TEST-com.demo.OfferRepoTest.xml"
+                xml_p.write_text(
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<testsuite name="com.demo.OfferRepoTest" tests="2" skipped="0" failures="0" errors="0">'
+                    '<testcase classname="com.demo.OfferRepoTest" name="t1"/>'
+                    '<testcase classname="com.demo.OfferRepoTest" name="t2"/>'
+                    '</testsuite>',
+                    encoding="utf-8",
+                )
+                return 0
+
+            # Plain function (no Mock attributes) exercises the real production Gradle path!
+            import run_gradle_task as rgt_mod
+            orig_rg = rgt_mod.run_gradle
+            try:
+                rgt_mod.run_gradle = _real_shaped_gradle
+                cp_seq = workflow.checkpoint_phase(parser.parse_args([
+                    "checkpoint-phase", "--repo", str(repo), "--task-id", tid_seq, "--phase-id", "p1",
+                ]))
+            finally:
+                rgt_mod.run_gradle = orig_rg
+            self.assertEqual([[':app:testDebugUnitTest']], gradle_invocations)
+            self.assertTrue(cp_seq["compile"].get("covered_by_unit_tests"))
+
+            # 6) `DEVELOPER_GIT_COMMIT_REQUIRED` surfaces ULTRA-COMPACT Commit Card (`<= 5` lines above commit block, zero `human_review_uri`),
+            #    and `run_device.py` accepts `--json` without failing!
+            from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline
+            from delivery_equivalence import snapshot_verified_files
+            tdir_seq = task_dir(repo, tid_seq)
+            plan_rfd = read_json(tdir_seq / "plan.json")
+            live_m = build_manifest(repo)
+            t_man_seq = build_task_manifest(repo, load_task_baseline(repo, tid_seq), expected_files=plan_rfd.get("expected_files"), live_manifest=live_m)
+            plan_rfd["status"] = "READY_FOR_DELIVERY"
+            plan_rfd["ready_delivery_snapshot_sha256"] = live_m["delivery_snapshot_sha256"]
+            plan_rfd["ready_change_set_sha256"] = t_man_seq["change_set_sha256"]
+            plan_rfd["ready_run_id"] = "run-rfd-1"
+            atomic_write_json(tdir_seq / "manifest-run-rfd-1.json", t_man_seq)
+            snapshot_verified_files(repo, tid_seq, plan_rfd, "run-rfd-1")
+            atomic_write_json(tdir_seq / "plan.json", plan_rfd)
+            rfd_act = orig_resolve(repo, tid_seq, plan_rfd, host="antigravity")
+            self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", rfd_act["code"])
+            self.assertNotIn("human_review_uri", rfd_act)
+            instr_txt = str(rfd_act.get("instructions") or "")
+            self.assertIn("<= 5 lines total ABOVE the fenced commit block", instr_txt)
+            self.assertIn("Android Studio Git Diff Hotspots", instr_txt)
+            self.assertNotIn("review-diff", instr_txt)
+            self.assertNotIn("human-review.html", instr_txt)
+
+            import subprocess as _sp_dev
+            dev_help = _sp_dev.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "run_device.py"), "--help"],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertIn("--json", dev_help.stdout)
+
+    def test_diff_scoped_kdoc_scanner_and_compact_commit_card(self) -> None:
+        """Verify diff-scoped KDoc scanner (`find_missing_architectural_kdoc`, `kdoc_advisories` in `web-apply`, `--strict-kdoc`) and zero-cockpit `READY_FOR_DELIVERY`."""
+        import fast_kt_lint
+        import web_relay
+        import workflow
+        from delivery_manifest import build_manifest, build_task_manifest, load_task_baseline
+        from delivery_equivalence import snapshot_verified_files
+        from _workflow.router import resolve_next_action
+        from _vnext_common import atomic_write_json, read_json, task_dir
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = (Path(td) / "studio_kdoc_repo").resolve()
+            (repo / ".agents/state").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / ".gitignore").write_text(".agents/\n", encoding="utf-8")
+            (repo / "app").mkdir(parents=True)
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            pay_rel = "app/src/main/java/com/example/payment/repository/PaymentRepo.kt"
+            pay_file = repo / pay_rel
+            pay_file.parent.mkdir(parents=True, exist_ok=True)
+            pay_file.write_text(
+                "package com.example.payment.repository\n\n"
+                "class PaymentRepo {\n"
+                "    fun existingLegacyMethod(): Boolean = true\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            # 1) Draft & approve task, add undocumented public contract on PaymentRepo.kt
+            parser = workflow.build_parser()
+            dr_sk = workflow.draft(parser.parse_args([
+                "draft", "--repo", str(repo), "--task-id", "t-studio-kdoc", "--kind", "FEATURE",
+                "--outcome", "Cache active discount offer package in PaymentRepo",
+                "--expected-files", pay_rel,
+            ]))
+            workflow.record_approval(parser.parse_args([
+                "approve", "--repo", str(repo), "--task-id", "t-studio-kdoc",
+                "--source", "conversation", "--proof-reference", "Proceed",
+                "--enforcement-tier", "RULE_ENFORCED", "--plan-hash", dr_sk["plan_sha256"][:12],
+            ]))
+
+            # Verify Web-Relay pack prompt explicitly instructs writing KDoc (`/** ... */`)
+            pack_info = web_relay.build_web_pack(
+                repo, task_id="t-studio-kdoc", prompt="Add offer cache methods", files=[pay_rel], no_clipboard=True,
+            )
+            bundle_md = Path(pack_info["bundle_file"]).read_text(encoding="utf-8")
+            self.assertIn("write concise English KDoc (`/** ... */`", bundle_md)
+
+            # Apply merge WITHOUT KDoc first -> web-apply surfaces `kdoc_advisories`!
+            undoc_merge = {
+                "schema": web_relay.WEB_MERGE_SCHEMA,
+                "pack_id": pack_info["pack_id"],
+                "status": "READY",
+                "operations": [{
+                    "action": "MODIFY",
+                    "path": pay_rel,
+                    "hunks": [{
+                        "search": "    fun existingLegacyMethod(): Boolean = true\n}",
+                        "replace": (
+                            "    fun existingLegacyMethod(): Boolean = true\n\n"
+                            "    private var cachedPkg: String? = null\n\n"
+                            "    @JvmOverloads\n"
+                            "    fun cacheActiveOfferPackage(pkgId: String?, nowMs: Long = 0L) {\n"
+                            "        cachedPkg = pkgId\n"
+                            "    }\n}"
+                        ),
+                        "replace_all": False,
+                    }],
+                }],
+            }
+            inbox_f = repo / ".agents/state/web-relay/inbox/merge.json"
+            inbox_f.parent.mkdir(parents=True, exist_ok=True)
+            inbox_f.write_text(json.dumps(undoc_merge), encoding="utf-8")
+            apply_res = web_relay.apply_web_merge(
+                repo, merge_file=inbox_f, source="conversation", proof_reference="Apply", auto_red_green=False,
+            )
+            self.assertEqual("APPLIED", apply_res["status"])
+            self.assertTrue(apply_res.get("kdoc_advisories"), f"Expected kdoc_advisories in {apply_res}")
+            self.assertTrue(any("fun cacheActiveOfferPackage" in a for a in apply_res["kdoc_advisories"]))
+            self.assertFalse(any("existingLegacyMethod" in a for a in apply_res["kdoc_advisories"]))
+
+            # `--strict-kdoc` fails on undocumented architectural contracts, and passes once KDoc is added!
+            strict_fail = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "fast_kt_lint.py"), "--strict-kdoc", str(pay_file)],
+                cwd=str(repo), capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(1, strict_fail.returncode)
+            self.assertIn("[MISSING_ARCHITECTURAL_KDOC]", strict_fail.stdout)
+
+            # Once KDoc is added above `@JvmOverloads`, `find_missing_architectural_kdoc` and `--strict-kdoc` pass cleanly (`0`)!
+            documented_text = (
+                "package com.example.payment.repository\n\n"
+                "class PaymentRepo {\n"
+                "    fun existingLegacyMethod(): Boolean = true\n\n"
+                "    private var cachedPkg: String? = null\n\n"
+                "    /**\n"
+                "     * Caches the active promotional offer package identifier.\n"
+                "     *\n"
+                "     * @param pkgId Active offer package ID or null to clear.\n"
+                "     * @param nowMs Current epoch timestamp in milliseconds.\n"
+                "     */\n"
+                "    @JvmOverloads\n"
+                "    fun cacheActiveOfferPackage(pkgId: String?, nowMs: Long = 0L) {\n"
+                "        cachedPkg = pkgId\n"
+                "    }\n"
+                "}\n"
+            )
+            pay_file.write_text(documented_text, encoding="utf-8")
+            mod_map = fast_kt_lint.get_modified_lines_map(repo, [pay_file])
+            self.assertEqual([], fast_kt_lint.find_missing_architectural_kdoc(pay_file, documented_text, mod_map.get(pay_file)))
+            strict_ok = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parent / "fast_kt_lint.py"), "--strict-kdoc", str(pay_file)],
+                cwd=str(repo), capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, strict_ok.returncode, strict_ok.stdout + strict_ok.stderr)
+
+            # 2) `DEVELOPER_GIT_COMMIT_REQUIRED` emits compact Android Studio Commit Card without creating `human-review.html`!
+            td_sk = task_dir(repo, "t-studio-kdoc")
+            p_sk = read_json(td_sk / "plan.json")
+            lm_sk = build_manifest(repo)
+            tm_sk = build_task_manifest(repo, load_task_baseline(repo, "t-studio-kdoc"), expected_files=p_sk.get("expected_files"), live_manifest=lm_sk)
+            p_sk["status"] = "READY_FOR_DELIVERY"
+            p_sk["ready_delivery_snapshot_sha256"] = lm_sk["delivery_snapshot_sha256"]
+            p_sk["ready_change_set_sha256"] = tm_sk["change_set_sha256"]
+            p_sk["ready_run_id"] = "run-sk-1"
+            atomic_write_json(td_sk / "manifest-run-sk-1.json", tm_sk)
+            snapshot_verified_files(repo, "t-studio-kdoc", p_sk, "run-sk-1")
+            atomic_write_json(td_sk / "plan.json", p_sk)
+            act_sk = resolve_next_action(repo, "t-studio-kdoc", p_sk, host="antigravity")
+            self.assertEqual("DEVELOPER_GIT_COMMIT_REQUIRED", act_sk["code"])
+            self.assertFalse((td_sk / "human-review.html").exists())
+            self.assertNotIn("human_review_uri", act_sk)
+            self.assertIn("<= 5 lines total ABOVE the fenced commit block", act_sk["instructions"])
+
+    def test_v1319_09_nov17_search_web_eof_agy_tos_and_acceptex_995_guards(self) -> None:
+        """Verify Nov 17, 2026 guards: #201621 search_web parallel cap & EOF forensics, #201582 agy CLI ToS block, and #200687/#199301 Go GC AcceptEx diagnostics."""
+        import antigravity_runtime as agr
+        import delegation_policy as dp
+        import session_forensics as sf
+        from doctor.engine import HarnessDoctor
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            repo = root / "repo"
+            (repo / ".agents" / "state").mkdir(parents=True)
+            (repo / ".agents" / "cache").mkdir(parents=True)
+            app_data = root / "ag_appdata"
+            brain_dir = app_data / "brain" / "conv-nov17-sw" / ".system_generated" / "logs"
+            brain_dir.mkdir(parents=True)
+
+            # 1) #201621 `search_web` parallel cap in `pre_tool_safety.py` + `hooks.json` matcher + Scout/GEMINI prompt rules
+            hooks_doc = json.loads((REPO_ROOT / "agents" / "hooks.json").read_text(encoding="utf-8"))
+            self.assertIn("search_web", hooks_doc["adb-and-git-safety"]["PreToolUse"][0]["matcher"].split("|"))
+            self.assertIn("#201621", dp.UTILITY_AGENT_SPECS[dp.SCOUT_AGENT]["system_prompt"])
+            self.assertIn("#201621", (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8"))
+
+            env_hook = {
+                **os.environ,
+                "HARNESS_REPO": str(repo),
+                "ANTIGRAVITY_APP_DATA": str(app_data),
+                "ANTIGRAVITY_BRAIN_ROOT": str(app_data / "brain"),
+            }
+
+            def _run_hook(payload: dict) -> dict:
+                proc = subprocess.run(
+                    [sys.executable, str(REPO_ROOT / "agents" / "scripts" / "pre_tool_safety.py")],
+                    input=json.dumps(payload),
+                    capture_output=True, text=True, env=env_hook, check=False,
+                )
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                return json.loads(proc.stdout.strip())
+
+            for ok_i in range(2):
+                res_sw = _run_hook({"conversationId": "conv-sw-burst", "toolCall": {"name": "search_web", "args": {"query": f"q{ok_i}"}}})
+                self.assertEqual("allow", res_sw["decision"], res_sw)
+            res_sw3 = _run_hook({"conversationId": "conv-sw-burst", "toolCall": {"name": "search_web", "args": {"query": "q3"}}})
+            self.assertEqual("deny", res_sw3["decision"])
+            self.assertIn("SEARCH_WEB_PARALLEL_CAP_REACHED", res_sw3["reason"])
+
+            # 2) #201582 / #201491 `agy` & `antigravity` CLI subprocess guard (blocks all verb forms, zero false positives on `--host antigravity` or paths!)
+            for bad_agy in (
+                "agy -p \"test rules\"",
+                "agy chat",
+                "agy.exe --version",
+                "\"C:\\Program Files\\Antigravity\\agy.exe\" .",
+                "antigravity.exe --status",
+                "echo ready; agy run",
+            ):
+                r_bad = _run_hook({"conversationId": "conv-agy", "toolCall": {"name": "run_command", "args": {"CommandLine": bad_agy}}})
+                self.assertEqual("deny", r_bad["decision"], f"Expected deny for {bad_agy}: {r_bad}")
+            for safe_cmd in (
+                "python .agents/harness.py task status --next --brief --json",
+                f'python "{app_data / "helper.py"}" --check',
+            ):
+                # Ensure `agy_headless_loop_tos_guard` regex never false-positives on paths containing `antigravity` or `--host antigravity`
+                import pre_tool_safety as pts
+                agy_rx = dict(pts.DANGEROUS)["agy_headless_loop_tos_guard"]
+                self.assertIsNone(agy_rx.search(safe_cmd), f"False positive on {safe_cmd}")
+                self.assertIsNone(agy_rx.search("python .agents/harness.py verify-steps --task-id t1 --host antigravity"))
+
+            # 3) #201621 `SEARCH_WEB_UPSTREAM_EOF_STALL` + #200687 `LANGUAGE_SERVER_ACCEPTEX_995_CRASH_LOOP` in `session_forensics.py`
+            tx_file = brain_dir / "transcript.jsonl"
+            tx_file.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 10,
+                        "type": "PLANNER_RESPONSE",
+                        "created_at": "2026-11-17T10:00:00Z",
+                        "tool_calls": [
+                            {"name": "search_web", "args": {"query": "android billing v8"}},
+                            {"name": "search_web", "args": {"query": "play billing offer token"}},
+                            {"name": "search_web", "args": {"query": "compose paywall rtl"}},
+                        ],
+                    }),
+                    json.dumps({
+                        "step_index": 11,
+                        "type": "TOOL_RESPONSE",
+                        "status": "ERROR",
+                        "created_at": "2026-11-17T10:16:48Z",
+                        "content": "Encountered error in step execution: unexpected EOF",
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            logs_dir = app_data / "logs" / "20261117T100000"
+            logs_dir.mkdir(parents=True)
+            main_log = logs_dir / "main.log"
+            main_log.write_text(
+                "[2026-11-17 10:05:11] Language server crashed: exited with code 2\n"
+                "[2026-11-17 10:05:13] [Auto-Restart] Port changed! Reconnecting client...\n",
+                encoding="utf-8",
+            )
+            crashes_dir = app_data / "crashes"
+            crashes_dir.mkdir(parents=True)
+            (crashes_dir / "crash_20261117_100511.log").write_bytes(b"")
+
+            with unittest.mock.patch.dict(os.environ, env_hook, clear=False):
+                diag = sf.diagnose_session(repo, conversation_id="conv-nov17-sw")
+            codes_found = {f["code"] for f in diag["findings"]}
+            self.assertIn("SEARCH_WEB_UPSTREAM_EOF_STALL", codes_found, diag)
+            self.assertIn("LANGUAGE_SERVER_ACCEPTEX_995_CRASH_LOOP", codes_found, diag)
+            self.assertEqual(3, diag["transcript"]["search_web_max_parallel"])
+            self.assertGreaterEqual(diag["transcript"]["search_web_max_duration_sec"], 1007.0)
+
+            # 4) #200687 / #199301 Windows Go GC (`GOMEMLIMIT` / `GOGC`) & `.agents/mcp_config.json` Doctor checks
+            (repo / ".agents" / "mcp_config.json").write_text(
+                json.dumps({
+                    "mcpServers": {
+                        "zoho-sprints": {"command": "npx", "args": ["-y", "zoho-mcp"]},
+                        "atlassian": {"command": "npx", "args": ["-y", "atlassian-mcp"]},
+                    }
+                }),
+                encoding="utf-8",
+            )
+            bad_off = agr.inspect_windows_go_gc_and_handle_risk(
+                repo,
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "GOGC": "off", "GOMEMLIMIT": "", "ANTIGRAVITY_APP_DATA": str(root / "clean_ag")},
+            )
+            self.assertTrue(bad_off["at_risk"])
+            self.assertTrue(bad_off["gogc_off_without_memlimit"])
+
+            untuned_mcp = agr.inspect_windows_go_gc_and_handle_risk(
+                repo,
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "GOGC": "", "GOMEMLIMIT": "", "ANTIGRAVITY_APP_DATA": str(root / "clean_ag")},
+            )
+            self.assertTrue(untuned_mcp["at_risk"])
+            self.assertEqual(2, len(untuned_mcp["stdio_servers"]))
+
+            tuned_ok = agr.inspect_windows_go_gc_and_handle_risk(
+                repo,
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "GOGC": "200", "GOMEMLIMIT": "8GiB", "ANTIGRAVITY_APP_DATA": str(root / "clean_ag")},
+            )
+            self.assertFalse(tuned_ok["at_risk"])
+            self.assertTrue(tuned_ok["gc_tuned"])
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"HARNESS_SIMULATE_PLATFORM": "win32", "GOGC": "off", "GOMEMLIMIT": "", "ANTIGRAVITY_APP_DATA": str(app_data)},
+                clear=False,
+            ):
+                doc = HarnessDoctor(repo, run_selftest=False)
+                doc.check_antigravity_installation()
+                gc_check = next(r for r in doc.results if r.name == "Windows Go GC & AcceptEx Guard")
+                self.assertEqual("WARN", gc_check.status)
+                self.assertIn("GOMEMLIMIT=8GiB", " ".join(gc_check.details))
 
 
 if __name__ == "__main__":

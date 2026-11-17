@@ -37,7 +37,7 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
     from evidence_store import StateLock
     from host_continuation import assert_execution_session
     from mutation_guard import active_plan
-    from workflow import _compact_for_host, resolve_next_action, task_dir
+    from workflow import _compact_for_host, all_remaining_phases_ready_for_final, resolve_next_action, task_dir
 
     completed: list[str] = []
     action: dict = {}
@@ -46,8 +46,8 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
     summary["step_timings"] = timings
     # CLI review routing must not override the process-local execution identity.
     assert_execution_session(repo, task_id)
-    session = task_dir(repo, task_id) / "host-session.json"
-    lease = StateLock(session.parent / "execution", timeout_seconds=0) if session.is_file() else nullcontext()
+    tdir = task_dir(repo, task_id)
+    lease = StateLock(tdir / "execution", timeout_seconds=0) if tdir.is_dir() else nullcontext()
     with lease:
         while True:
             plan = active_plan(repo) or {}
@@ -58,14 +58,37 @@ def run_steps(repo: Path, task_id: str, host: str | None = None, *, json_only: b
             code = str(action.get("code") or "")
             arguments: list[str] = []
             script = ""
-            if (plan.get("status") == "IMPLEMENTING" and
-                    (code == "PREPARE_VERIFICATION" or
-                     (code == "IMPLEMENT_APPROVED_SCOPE" and
-                      (action.get("on_complete") or {}).get("code") == "PREPARE_VERIFICATION"))):
-                code, script = "PREPARE_VERIFICATION", "workflow.py"
-                arguments = ["prepare-verification", "--repo", str(repo), "--task-id", task_id]
-                if host:
-                    arguments.extend(["--host", host])
+            if plan.get("status") == "IMPLEMENTING":
+                if (
+                    code == "PREPARE_VERIFICATION"
+                    or (
+                        code == "IMPLEMENT_APPROVED_SCOPE"
+                        and (action.get("on_complete") or {}).get("code") == "PREPARE_VERIFICATION"
+                    )
+                ):
+                    code, script = "PREPARE_VERIFICATION", "workflow.py"
+                    arguments = ["prepare-verification", "--repo", str(repo), "--task-id", task_id]
+                    if host:
+                        arguments.extend(["--host", host])
+                elif code in {"CHECKPOINT_PHASE", "BEGIN_NEXT_PHASE"}:
+                    ready_final, cur_pid = all_remaining_phases_ready_for_final(repo, task_id, plan)
+                    if ready_final and cur_pid:
+                        if code == "BEGIN_NEXT_PHASE":
+                            code, script = "BEGIN_NEXT_PHASE", "workflow.py"
+                            arguments = ["begin-next-phase", "--repo", str(repo), "--task-id", task_id]
+                        else:
+                            code, script = "CHECKPOINT_READY_PHASES", "workflow.py"
+                            arguments = [
+                                "checkpoint-phase",
+                                "--repo",
+                                str(repo),
+                                "--task-id",
+                                task_id,
+                                "--phase-id",
+                                cur_pid,
+                                "--advance-all-ready",
+                                "--defer-gradle-to-final",
+                            ]
             elif plan.get("status") == "VERIFYING":
                 script = {
                     "RUN_PREFLIGHT": "preflight_check.py",

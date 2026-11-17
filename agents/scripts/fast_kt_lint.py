@@ -1167,12 +1167,206 @@ def lint_build_script(file_path: Path) -> list[dict]:
     return issues
 
 
+_ARCH_KDOC_STEM_RE = re.compile(
+    r"(?:Repo|Repository|RepositoryImpl|UseCase|Interactor|ViewModel|DataSource|ApiService|Service|Screen|Router|Manager)$",
+    re.IGNORECASE,
+)
+_ARCH_KDOC_PATH_RE = re.compile(
+    r"/(?:repository|repositories|usecase|usecases|domain|viewmodel|viewmodels|datasource|remote)/",
+    re.IGNORECASE,
+)
+_KDOC_CLASS_DECL_RE = re.compile(
+    r"^\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s+)*"
+    r"(?!(?:[^({\n]*\b(?:private|protected|companion)\b))"
+    r"(?:(?:public|internal|open|abstract|sealed|data|value|actual|expect)\s+)*"
+    r"(class|interface)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
+_KDOC_FUN_DECL_RE = re.compile(
+    r"^\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s+)*"
+    r"(?!(?:[^({\n]*\b(?:private|protected|override)\b))"
+    r"(?:(?:public|internal|open|abstract|suspend|operator|inline|actual|expect)\s+)*"
+    r"fun\s+(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.<>?]+\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+
+
+def _is_architectural_kdoc_surface(file_path: Path) -> bool:
+    from _modules import is_kmp_or_android_test_path
+
+    posix = file_path.as_posix()
+    if is_kmp_or_android_test_path(posix):
+        return False
+    stem = file_path.stem
+    if stem.endswith(("Preview", "Previews", "Module", "Modules")):
+        return False
+    return bool(_ARCH_KDOC_STEM_RE.search(stem) or _ARCH_KDOC_PATH_RE.search(posix))
+
+
+def _has_preceding_kdoc_or_preview(lines: list[str], decl_line_idx_0: int) -> tuple[bool, bool]:
+    """Return `(has_kdoc, is_preview)` by walking upward above `decl_line_idx_0` past annotations."""
+    i = decl_line_idx_0 - 1
+    blank_budget = 1
+    in_kdoc_block = False
+    is_preview = "@Preview" in lines[decl_line_idx_0] or "Preview" in lines[decl_line_idx_0]
+    paren_depth = 0
+    while i >= 0:
+        s = lines[i].strip()
+        if in_kdoc_block:
+            if "/**" in s:
+                return True, is_preview
+            if s.startswith("/*") and not s.startswith("/**"):
+                in_kdoc_block = False
+            i -= 1
+            continue
+        if not s:
+            if blank_budget > 0:
+                blank_budget -= 1
+                i -= 1
+                continue
+            break
+        if s.startswith("/**") and s.endswith("*/"):
+            return True, is_preview
+        if s.endswith("*/") and not s.startswith("/*"):
+            in_kdoc_block = True
+            i -= 1
+            continue
+        if s.startswith("//"):
+            i -= 1
+            continue
+        if s.startswith("@"):
+            if "Preview" in s:
+                is_preview = True
+            i -= 1
+            continue
+        # Handle multi-line annotation arguments directly above declaration (e.g. `@OptIn(\n Foo::class\n)`)
+        if s.endswith(")") or paren_depth > 0:
+            paren_depth += s.count(")") - s.count("(")
+            if "Preview" in s:
+                is_preview = True
+            i -= 1
+            if paren_depth <= 0:
+                paren_depth = 0
+            continue
+        break
+    return False, is_preview
+
+
+def find_missing_architectural_kdoc(
+    file_path: Path,
+    text: str,
+    modified_lines: set[int] | None,
+) -> list[dict]:
+    """Find newly added public/internal classes, interfaces, and contract functions missing `/** ... */` KDoc."""
+    if not _is_architectural_kdoc_surface(file_path):
+        return []
+    if modified_lines is not None and len(modified_lines) == 0:
+        return []
+
+    raw_lines = text.splitlines()
+    clean_text = _strip_kotlin_comments_preserve_lines(text)
+    clean_lines = clean_text.splitlines()
+    advisories: list[dict] = []
+    brace_depth = 0
+    paren_depth = 0
+
+    for idx_0, c_line in enumerate(clean_lines):
+        ln_1 = idx_0 + 1
+        in_mod = modified_lines is None or ln_1 in modified_lines
+        # Only check top-level declarations (brace_depth == 0) or direct class/interface members (brace_depth == 1)
+        if in_mod and paren_depth == 0 and brace_depth in (0, 1):
+            m_cls = _KDOC_CLASS_DECL_RE.match(c_line)
+            if m_cls and brace_depth == 0:
+                kind_kw, sym_name = m_cls.group(1), m_cls.group(2)
+                if not sym_name.endswith(("UiState", "State", "Event", "Effect", "Action")):
+                    has_kdoc, is_prev = _has_preceding_kdoc_or_preview(raw_lines, idx_0)
+                    if not has_kdoc and not is_prev:
+                        advisories.append({
+                            "file": str(file_path),
+                            "line": ln_1,
+                            "type": "MISSING_ARCHITECTURAL_KDOC",
+                            "msg": (
+                                f"Newly added public/internal {kind_kw} '{sym_name}' has no KDoc (/** ... */). "
+                                "Add concise English KDoc documenting its architectural responsibility and contract."
+                            ),
+                        })
+            else:
+                m_fun = _KDOC_FUN_DECL_RE.match(c_line)
+                if m_fun:
+                    fn_name = m_fun.group(1)
+                    if not fn_name.endswith(("Preview", "Previews")):
+                        has_kdoc, is_prev = _has_preceding_kdoc_or_preview(raw_lines, idx_0)
+                        if not has_kdoc and not is_prev:
+                            advisories.append({
+                                "file": str(file_path),
+                                "line": ln_1,
+                                "type": "MISSING_ARCHITECTURAL_KDOC",
+                                "msg": (
+                                    f"Newly added public/internal contract 'fun {fn_name}(...)' has no KDoc (/** ... */). "
+                                    "Add concise English KDoc documenting responsibility, @param, and @return."
+                                ),
+                            })
+        brace_depth += c_line.count("{") - c_line.count("}")
+        if brace_depth < 0:
+            brace_depth = 0
+        paren_depth += c_line.count("(") - c_line.count(")")
+        if paren_depth < 0:
+            paren_depth = 0
+    return advisories
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fast Kotlin lint for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files under app/src/main")
+    parser.add_argument("--strict-kdoc", action="store_true", help="Treat missing architectural KDoc on newly added contracts as blocking lint errors")
+    parser.add_argument("files", nargs="*", help="Optional explicit file path(s) to scan")
     args = parser.parse_args()
 
-    if args.all:
+    if args.files:
+        cwd_root = Path.cwd().resolve()
+        explicit_paths: list[Path] = []
+        for raw_f in args.files:
+            cand = Path(raw_f)
+            if cand.is_absolute():
+                resolved_p = cand.resolve()
+            elif (cwd_root / cand).is_file():
+                resolved_p = (cwd_root / cand).resolve()
+            else:
+                resolved_p = (REPO / cand).resolve()
+            if resolved_p.is_file() and resolved_p not in explicit_paths:
+                explicit_paths.append(resolved_p)
+        eff_repo = REPO
+        if explicit_paths:
+            probe_f = explicit_paths[0]
+            if (cwd_root / ".git").exists() and probe_f.is_relative_to(cwd_root):
+                eff_repo = cwd_root
+            else:
+                for anc in probe_f.parents:
+                    if (anc / ".git").exists():
+                        eff_repo = anc
+                        break
+        changed = explicit_paths
+        target_files = [p for p in changed if p.suffix == ".kt"]
+        java_files = [p for p in changed if p.suffix == ".java"]
+        swift_files = [p for p in changed if p.suffix == ".swift"]
+        if args.all:
+            modified_lines_map = {p: None for p in target_files}
+            java_lines_map = {p: None for p in java_files}
+            swift_lines_map = {p: None for p in swift_files}
+        else:
+            from _repo_files import active_task_scope, diff_modified_lines_against_baseline
+            _, baseline_dir = active_task_scope(eff_repo)
+            modified_lines_map = get_modified_lines_map(eff_repo, target_files) if (eff_repo / ".git").exists() else {p: None for p in target_files}
+            java_lines_map = get_modified_lines_map(eff_repo, java_files) if (java_files and (eff_repo / ".git").exists()) else {p: None for p in java_files}
+            swift_lines_map = get_modified_lines_map(eff_repo, swift_files) if (swift_files and (eff_repo / ".git").exists()) else {p: None for p in swift_files}
+            if baseline_dir is not None:
+                for p in target_files:
+                    try:
+                        rel = p.resolve().relative_to(eff_repo.resolve()).as_posix()
+                    except ValueError:
+                        continue
+                    b_file = baseline_dir / rel
+                    if b_file.is_file() and p.is_file():
+                        modified_lines_map[p] = diff_modified_lines_against_baseline(b_file, p)
+    elif args.all:
         try:
             from _modules import discover_source_roots
 
@@ -1278,8 +1472,21 @@ def main() -> int:
     if swift_files:
         print(f"[*] Fast Swift Lint: Scanning {len(swift_files)} Swift file(s) ({mode_label})...")
     all_issues = []
+    kdoc_advisories = []
+    strict_kdoc = bool(args.strict_kdoc or os.environ.get("HARNESS_STRICT_KDOC") == "1")
     for path in target_files:
-        all_issues.extend(lint_file(path, modified_lines=modified_lines_map.get(path)))
+        mod_set = modified_lines_map.get(path)
+        all_issues.extend(lint_file(path, modified_lines=mod_set))
+        if strict_kdoc or (mod_set is not None and len(mod_set) > 0):
+            try:
+                kt_raw = path.read_text(encoding="utf-8", errors="replace")
+                found_kdoc = find_missing_architectural_kdoc(path, kt_raw, mod_set)
+                if strict_kdoc:
+                    all_issues.extend(found_kdoc)
+                else:
+                    kdoc_advisories.extend(found_kdoc)
+            except OSError:
+                pass
     for path in java_files:
         all_issues.extend(lint_java_file(path, modified_lines=java_lines_map.get(path)))
     for path in swift_files:
@@ -1287,13 +1494,23 @@ def main() -> int:
     for bf in build_files:
         all_issues.extend(lint_build_script(bf))
 
+    def _safe_rel(raw_path: str) -> str:
+        try:
+            return os.path.relpath(raw_path, REPO)
+        except ValueError:
+            return str(raw_path)
+
+    for adv in kdoc_advisories[:20]:
+        rel_adv = _safe_rel(adv["file"]).replace("\\", "/")
+        print(f"[KDOC-ADVISORY] {rel_adv}:{adv['line']} -> {adv['msg']}")
+
     if not all_issues:
         print("[SUCCESS] Fast Kotlin Lint passed! 0 syntax/architectural violations detected.")
         return 0
 
     print(f"\nFound {len(all_issues)} lint issue(s):")
     for i, iss in enumerate(all_issues, 1):
-        rel_path = os.path.relpath(iss["file"], REPO)
+        rel_path = _safe_rel(iss["file"])
         print(f"  {i}. [{iss['type']}] {rel_path}:{iss['line']}")
         print(f"     -> {iss['msg']}")
 

@@ -491,14 +491,12 @@ def generate_antigravity_agents(repo: Path, *, dry_run: bool) -> list[str]:
                 f"tools:\n{sp_tools}\n---\n\n{sp_prompt}\n"
             )
             logs.append(write_file(repo / ".agents" / "agents" / sp_role / "agent.md", sp_md, dry_run=dry_run, repo=repo, merge_existing=False))
-    from delegation_policy import SCOUT_AGENT, WORKER_AGENT, render_utility_agent_markdown, resolve_utility_scout_model, resolve_utility_worker_model
+    from delegation_policy import SCOUT_AGENT, render_utility_agent_markdown, resolve_utility_scout_model
     for u_role in CORE_UTILITY_AGENTS:
         u_dest = repo / ".agents" / "agents" / u_role / "agent.md"
         u_model = None
         try:
-            if u_role == WORKER_AGENT:
-                u_model, _ = resolve_utility_worker_model(repo)
-            elif u_role == SCOUT_AGENT:
+            if u_role == SCOUT_AGENT:
                 u_model = resolve_utility_scout_model(repo)
         except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError):
             u_model = None
