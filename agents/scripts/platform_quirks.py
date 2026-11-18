@@ -22,6 +22,24 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "default_enabled": True,
         "summary": "PostToolUse audit catches executed invoke_subagent calls that bypassed PreToolUse denials.",
     },
+    "AGY_1618_548_DEFAULT_PROJECT_PERM_LEAK": {
+        "issues": ("#1618", "#548"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when ~/.gemini/config/projects/default-cli-project.json stores broad allow rules that leak across non-Git or --project-omitted directories.",
+    },
+    "AGY_1620_BUILTIN_SLASH_SKILL_COLLISION": {
+        "issues": ("#1620",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when custom project skills collide with non-disableable agy CLI built-in slash commands (/grill-me, /plan, /compact, /goal).",
+    },
+    "AGY_1623_171228_LONG_WAIT_KV_CACHE_TTL": {
+        "issues": ("#1623", "#171228"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects >=120s tool/subagent wait gaps followed by cachedContentTokenCount=0 KV prompt-cache TTL expiration drops.",
+    },
     "AGY_198333_FLASH_503_BACKOFF": {
         "issues": ("#198333",),
         "platforms": ("all",),

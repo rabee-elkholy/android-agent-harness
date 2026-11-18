@@ -744,6 +744,59 @@ class HarnessDoctor:
                 "Zero /migrate-workflows .md.bak backups and zero unintended workflow-to-skill shadowing detected.",
             )
 
+        # #1620: Guard against custom project skills colliding with non-disableable agy CLI built-in slash commands
+        builtin_cli_slash_commands = frozenset({
+            "grill-me",
+            "goal",
+            "compact",
+            "schedule",
+            "browser",
+            "plan",
+            "teamwork",
+            "learn",
+            "boost",
+            "migrate-workflows",
+            "plugin",
+            "automation",
+            "permissions",
+        })
+        quirk_1620_on = True
+        try:
+            from platform_quirks import is_quirk_enabled
+            quirk_1620_on = is_quirk_enabled("1620", repo=self.repo)
+        except ImportError:
+            pass
+        colliding_skills: list[str] = []
+        if quirk_1620_on and skills_dir.is_dir():
+            for sk_md in sorted(skills_dir.glob("*/SKILL.md")):
+                dir_slug = sk_md.parent.name.strip().lower()
+                fm_name = ""
+                try:
+                    fm_parsed = _parse_frontmatter(sk_md.read_text(encoding="utf-8", errors="ignore"))
+                    fm_name = str(fm_parsed.get("name") or "").strip().lower()
+                except Exception:
+                    fm_name = ""
+                if dir_slug in builtin_cli_slash_commands or fm_name in builtin_cli_slash_commands:
+                    hit_label = dir_slug if dir_slug in builtin_cli_slash_commands else f"{dir_slug} (name={fm_name})"
+                    colliding_skills.append(hit_label)
+        if colliding_skills:
+            self.log(
+                category,
+                "CLI Slash-Command Skill Collision",
+                "WARN",
+                f"Custom skill(s) collide with non-disableable agy CLI built-in slash command(s): {', '.join(colliding_skills)} (#1620).",
+                [
+                    "Rename colliding skill directories/frontmatter (e.g. `brainstorming` or `project-grill`) so `agy` CLI built-in commands like `/grill-me` do not hijack invocation (#1620).",
+                ],
+            )
+        else:
+            self.log(
+                category,
+                "CLI Slash-Command Skill Collision",
+                "PASS",
+                "Zero custom skill collisions with agy CLI built-in slash commands (/grill-me, /plan, /compact, /goal).",
+            )
+
         ref_dir = self.agents_dir / "skills" / "android-harness" / "references"
         if not ref_dir.is_dir():
             self.log(category, "Domain References", "FAIL", f"Missing references directory at {ref_dir}")
@@ -1858,7 +1911,34 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "Windows Go GC & AcceptEx Guard", "WARN", f"Could not inspect Windows Go GC / AcceptEx health: {exc}")
 
-        # 9g. Platform Quirks Registry Status
+        # 9g. CLI Default-Project Permission Scope Leak Guard (#1618 / #548)
+        try:
+            from antigravity_runtime import inspect_default_cli_project_permissions
+            perm_rep = inspect_default_cli_project_permissions(repo=self.repo)
+            if perm_rep.get("applicable"):
+                if perm_rep.get("at_risk"):
+                    leaked_rules = ", ".join(str(r) for r in (perm_rep.get("broad_allow_rules") or [])[:6])
+                    self.log(
+                        category,
+                        "CLI Default-Project Permission Guard",
+                        "WARN",
+                        f"Broad allow rule(s) in {perm_rep.get('path')} ({leaked_rules}) leak across non-Git or --project-omitted directories (#1618/#548).",
+                        [
+                            "Remove broad allow entries from ~/.gemini/config/projects/default-cli-project.json so global fallback CLI permissions do not leak across folders.",
+                            "Run agy inside Git worktrees (or pass --project) and govern tool permissions locally via .agents/hooks.json (PreToolUse).",
+                        ],
+                    )
+                else:
+                    self.log(
+                        category,
+                        "CLI Default-Project Permission Guard",
+                        "PASS",
+                        "Zero leaked global fallback allow rules in ~/.gemini/config/projects/default-cli-project.json (#1618/#548).",
+                    )
+        except Exception as exc:
+            self.log(category, "CLI Default-Project Permission Guard", "WARN", f"Could not inspect default-cli-project.json permissions: {exc}")
+
+        # 9h. Platform Quirks Registry Status
         try:
             from platform_quirks import list_platform_quirks
             q_rows = list_platform_quirks(repo=self.repo)

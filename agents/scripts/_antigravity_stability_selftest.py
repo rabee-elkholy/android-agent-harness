@@ -8014,6 +8014,131 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 self.assertEqual("WARN", gc_check.status)
                 self.assertIn("GOMEMLIMIT=8GiB", " ".join(gc_check.details))
 
+    def test_nov18_cli_default_project_permissions_slash_collision_and_long_wait_ttl_drop(self) -> None:
+        """Verify #1618/#548 default-cli-project.json leak guard, #1620 /grill-me skill collision guard, and #1623/#171228 >=120s KV cache TTL drop forensics."""
+        import antigravity_runtime as agr
+        import platform_quirks as pq
+        import session_forensics as sf
+        from doctor.engine import HarnessDoctor
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            repo = root / "app"
+            (repo / ".agents" / "state").mkdir(parents=True)
+            (repo / ".agents" / "cache").mkdir(parents=True)
+            app_data = root / "gemini_home" / "antigravity"
+            cfg_projects = root / "gemini_home" / "config" / "projects"
+            cfg_projects.mkdir(parents=True)
+            app_data.mkdir(parents=True)
+
+            # 0) Quirk catalog lookup for #1618, #1620, #1623, #171228
+            self.assertEqual("AGY_1618_548_DEFAULT_PROJECT_PERM_LEAK", pq.resolve_quirk_id("#1618"))
+            self.assertEqual("AGY_1620_BUILTIN_SLASH_SKILL_COLLISION", pq.resolve_quirk_id("1620"))
+            self.assertEqual("AGY_1623_171228_LONG_WAIT_KV_CACHE_TTL", pq.resolve_quirk_id("#1623"))
+            self.assertEqual("AGY_1623_171228_LONG_WAIT_KV_CACHE_TTL", pq.resolve_quirk_id("171228"))
+
+            # 1) #1618 / #548: Clean absence -> PASS; leaked broad allow in default-cli-project.json -> WARN; disabled quirk -> skipped
+            clean_perm = agr.inspect_default_cli_project_permissions(repo, env={"ANTIGRAVITY_APP_DATA": str(app_data)})
+            self.assertFalse(clean_perm["at_risk"])
+            self.assertFalse(clean_perm["exists"])
+
+            default_proj_json = cfg_projects / "default-cli-project.json"
+            default_proj_json.write_text(
+                json.dumps({
+                    "permissions": {
+                        "allow": ["view_file", "run_command(*)", "edit_file"],
+                        "deny": ["rm -rf /"],
+                    }
+                }),
+                encoding="utf-8",
+            )
+            leaked_perm = agr.inspect_default_cli_project_permissions(repo, env={"ANTIGRAVITY_APP_DATA": str(app_data)})
+            self.assertTrue(leaked_perm["at_risk"])
+            self.assertIn("run_command(*)", leaked_perm["broad_allow_rules"])
+            self.assertIn("edit_file", leaked_perm["broad_allow_rules"])
+            self.assertNotIn("view_file", leaked_perm["broad_allow_rules"])
+
+            disabled_perm = agr.inspect_default_cli_project_permissions(
+                repo,
+                env={"ANTIGRAVITY_APP_DATA": str(app_data), "HARNESS_DISABLE_QUIRKS": "1618"},
+            )
+            self.assertFalse(disabled_perm["applicable"])
+            self.assertFalse(disabled_perm["at_risk"])
+
+            # 2) #1620: Custom `/grill-me` skill collision in `.agents/skills/grill-me/SKILL.md` -> Doctor WARN
+            grill_skill = repo / ".agents" / "skills" / "grill-me" / "SKILL.md"
+            grill_skill.parent.mkdir(parents=True, exist_ok=True)
+            grill_skill.write_text(
+                "---\nname: grill-me\ndescription: Custom interview skill\n---\n# Grill Me\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                doc = HarnessDoctor(repo, run_selftest=False)
+                doc.check_skills_and_workflows()
+                doc.check_antigravity_installation()
+                slash_chk = next(r for r in doc.results if r.name == "CLI Slash-Command Skill Collision")
+                perm_chk = next(r for r in doc.results if r.name == "CLI Default-Project Permission Guard")
+                self.assertEqual("WARN", slash_chk.status)
+                self.assertIn("grill-me", slash_chk.message)
+                self.assertEqual("WARN", perm_chk.status)
+                self.assertIn("run_command(*)", perm_chk.message)
+
+            # Remove colliding skill & broad allow rules -> both Doctor checks PASS
+            shutil.rmtree(grill_skill.parent)
+            default_proj_json.write_text(json.dumps({"permissions": {"allow": ["view_file"]}}), encoding="utf-8")
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                doc_ok = HarnessDoctor(repo, run_selftest=False)
+                doc_ok.check_skills_and_workflows()
+                doc_ok.check_antigravity_installation()
+                self.assertEqual("PASS", next(r for r in doc_ok.results if r.name == "CLI Slash-Command Skill Collision").status)
+                self.assertEqual("PASS", next(r for r in doc_ok.results if r.name == "CLI Default-Project Permission Guard").status)
+
+            # 3) #1623 / #171228: >=120s tool/subagent wait followed by cachedContentTokenCount=0 -> LONG_WAIT_KV_CACHE_TTL_EXPIRED
+            brain_dir = app_data / "brain" / "conv-1623-ttl" / ".system_generated" / "logs"
+            brain_dir.mkdir(parents=True)
+            tx_1623 = brain_dir / "transcript.jsonl"
+            tx_1623.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 1,
+                        "type": "PLANNER_RESPONSE",
+                        "created_at": "2026-11-18T08:00:00Z",
+                        "usageMetadata": {"promptTokenCount": 42000, "cachedContentTokenCount": 39500},
+                        "tool_calls": [{"name": "run_command", "args": {"CommandLine": "python .agents/harness.py verify-steps"}}],
+                    }),
+                    json.dumps({
+                        "step_index": 2,
+                        "type": "TOOL_RESPONSE",
+                        "created_at": "2026-11-18T08:02:45Z",
+                        "duration_ms": 165000,
+                        "content": "BUILD SUCCESSFUL in 2m 45s",
+                    }),
+                    json.dumps({
+                        "step_index": 3,
+                        "type": "PLANNER_RESPONSE",
+                        "created_at": "2026-11-18T08:02:47Z",
+                        "usageMetadata": {"promptTokenCount": 43200, "cachedContentTokenCount": 0},
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag_ttl = sf.diagnose_session(repo, conversation_id="conv-1623-ttl")
+                diag_ttl_off = None
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_APP_DATA": str(app_data), "HARNESS_DISABLE_QUIRKS": "1623"},
+                clear=False,
+            ):
+                diag_ttl_off = sf.diagnose_session(repo, conversation_id="conv-1623-ttl")
+
+            ttl_codes = {f["code"] for f in diag_ttl["findings"]}
+            self.assertIn("LONG_WAIT_KV_CACHE_TTL_EXPIRED", ttl_codes, diag_ttl)
+            self.assertNotIn("GEMINI4_TURN3_CACHE_DROP_ANOMALY", ttl_codes)
+            self.assertEqual(1, diag_ttl["transcript"]["long_wait_cache_ttl_drops"])
+            self.assertGreaterEqual(diag_ttl["transcript"]["max_ttl_drop_wait_sec"], 165.0)
+            self.assertNotIn("LONG_WAIT_KV_CACHE_TTL_EXPIRED", {f["code"] for f in diag_ttl_off["findings"]})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

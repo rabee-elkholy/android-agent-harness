@@ -1132,3 +1132,153 @@ def inspect_windows_go_gc_and_handle_risk(
         "stdio_servers": stdio_servers,
         "crash_report": crash_rep,
     }
+
+
+_BROAD_CLI_PERMISSION_RE = re.compile(
+    r"(?:\*|(?:^|[:_./\s(-])(?:bash|sh|zsh|pwsh|powershell|cmd|run_command|run_terminal_cmd|shell|exec|"
+    r"write_file|edit_file|replace_file_content|multi_replace_file_content|delete_file|write|edit|"
+    r"call_mcp_tool|mcp|fetch|http|curl|git)(?:$|[:_./\s(-]))",
+    re.IGNORECASE,
+)
+
+
+def inspect_default_cli_project_permissions(
+    repo: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Check `~/.gemini/config/projects/default-cli-project.json` for leaked `/permissions` Project-scope
+    `allow` rules that silently apply across non-Git or `--project`-omitted directories (#1618 / #548).
+    """
+    import json as _json
+
+    environ = env if env is not None else os.environ
+    try:
+        from platform_quirks import is_quirk_enabled
+        if not is_quirk_enabled("1618", repo=repo, env=environ):
+            return {
+                "applicable": False,
+                "at_risk": False,
+                "path": "",
+                "allow_rules": [],
+                "broad_allow_rules": [],
+                "quirk_disabled": True,
+            }
+    except ImportError:
+        pass
+
+    candidates: list[Path] = []
+    explicit_file = str(environ.get("ANTIGRAVITY_DEFAULT_CLI_PROJECT_JSON") or "").strip()
+    cfg_root_ovr = str(environ.get("ANTIGRAVITY_CONFIG_ROOT") or "").strip()
+    app_data_ovr = str(environ.get("ANTIGRAVITY_APP_DATA") or "").strip()
+    if explicit_file:
+        candidates.append(Path(explicit_file).expanduser())
+    elif cfg_root_ovr:
+        candidates.append(Path(cfg_root_ovr).expanduser() / "projects" / "default-cli-project.json")
+    elif app_data_ovr:
+        ap = Path(app_data_ovr).expanduser()
+        candidates.append(ap / "config" / "projects" / "default-cli-project.json")
+        candidates.append(ap.parent / "config" / "projects" / "default-cli-project.json")
+    else:
+        candidates.append(Path.home() / ".gemini" / "config" / "projects" / "default-cli-project.json")
+
+    target_file: Path | None = None
+    for cand in candidates:
+        try:
+            if cand.is_file() and not cand.is_symlink():
+                target_file = cand.resolve()
+                break
+        except OSError:
+            continue
+
+    if target_file is None:
+        return {
+            "applicable": True,
+            "at_risk": False,
+            "exists": False,
+            "path": "",
+            "allow_rules": [],
+            "broad_allow_rules": [],
+        }
+
+    try:
+        raw = target_file.read_text(encoding="utf-8", errors="replace")
+        cleaned = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        data = _json.loads(cleaned) if cleaned.strip() else {}
+    except (OSError, ValueError):
+        return {
+            "applicable": True,
+            "at_risk": False,
+            "exists": True,
+            "path": str(target_file),
+            "allow_rules": [],
+            "broad_allow_rules": [],
+            "parse_error": True,
+        }
+
+    allow_rules: list[str] = []
+    seen_rules: set[str] = set()
+
+    def _add_rule(val: object) -> None:
+        s = str(val or "").strip()
+        if s and s not in seen_rules:
+            seen_rules.add(s)
+            allow_rules.append(s)
+
+    allow_list_keys = {"allow", "alwaysallow", "always_allow", "allowed", "allowedtools", "allowed_tools"}
+    allow_decisions = {"allow", "always", "always_allow", "auto_approve", "approved"}
+    container_keys = {"permissions", "tools", "toolpermissions", "tool_permissions", "rules", "policies"}
+
+    def _walk(node: object, *, in_allow_map: bool = False) -> None:
+        if isinstance(node, dict):
+            decision = str(
+                node.get("action") or node.get("decision") or node.get("policy") or node.get("permission") or ""
+            ).strip().lower()
+            if decision in allow_decisions:
+                target = (
+                    node.get("tool")
+                    or node.get("pattern")
+                    or node.get("rule")
+                    or node.get("command")
+                    or node.get("name")
+                    or "*"
+                )
+                if isinstance(target, list):
+                    for item in target:
+                        _add_rule(item)
+                else:
+                    _add_rule(target)
+            for k, v in node.items():
+                kl = str(k).strip().lower()
+                if kl in allow_list_keys:
+                    if isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, (str, int, float)):
+                                _add_rule(item)
+                            elif isinstance(item, dict):
+                                _walk(item, in_allow_map=True)
+                    elif isinstance(v, dict):
+                        _walk(v, in_allow_map=True)
+                    elif isinstance(v, str):
+                        _add_rule(v)
+                elif kl in container_keys:
+                    _walk(v, in_allow_map=(kl in {"tools", "toolpermissions", "tool_permissions"}))
+                elif in_allow_map:
+                    if isinstance(v, str) and v.strip().lower() in allow_decisions:
+                        _add_rule(k)
+                    elif v is True:
+                        _add_rule(k)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item, in_allow_map=in_allow_map)
+
+    _walk(data)
+    broad_allow_rules = [r for r in allow_rules if _BROAD_CLI_PERMISSION_RE.search(r)]
+    return {
+        "applicable": True,
+        "at_risk": bool(broad_allow_rules),
+        "exists": True,
+        "path": str(target_file),
+        "allow_rules": allow_rules,
+        "broad_allow_rules": broad_allow_rules,
+    }

@@ -154,8 +154,12 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     hydrogen_extra_leak_hits = 0
     turn3_cache_drop_hits = 0
     cache_regression_hits = 0
+    long_wait_cache_ttl_drops = 0
+    max_ttl_drop_wait_sec = 0.0
     prev_cached_tokens = 0
     prev_prompt_tokens = 0
+    prev_usage_epoch: float | None = None
+    inter_turn_tool_wait_sec = 0.0
     usage_turn_index = 0
     search_web_eof_stalls = 0
     max_search_web_sec = 0.0
@@ -237,12 +241,18 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 sw_in_turn = max(sw_in_turn, 1)
             if sw_in_turn > max_parallel_search_web:
                 max_parallel_search_web = sw_in_turn
+            step_dur_ms = obj.get("duration_ms") or obj.get("elapsed_ms")
+            step_dur_sec = (
+                (float(step_dur_ms) / 1000.0)
+                if isinstance(step_dur_ms, (int, float))
+                else float(obj.get("duration_seconds") or obj.get("elapsed_seconds") or 0.0)
+            )
+            if step_dur_sec > inter_turn_tool_wait_sec:
+                inter_turn_tool_wait_sec = step_dur_sec
             if sw_in_turn > 0:
-                dur_ms = obj.get("duration_ms") or obj.get("elapsed_ms")
-                dur_sec = (float(dur_ms) / 1000.0) if isinstance(dur_ms, (int, float)) else float(obj.get("duration_seconds") or obj.get("elapsed_seconds") or 0.0)
-                if dur_sec > max_search_web_sec:
-                    max_search_web_sec = dur_sec
-                if dur_sec > 300.0:
+                if step_dur_sec > max_search_web_sec:
+                    max_search_web_sec = step_dur_sec
+                if step_dur_sec > 300.0:
                     search_web_eof_stalls += 1
                 elif step_epoch is not None:
                     pending_search_web_ts = step_epoch
@@ -268,8 +278,26 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         peak_tokens = tok
                         peak_step = cur_step
                     if raw_prompt > 0 or cached_tok > 0:
-                        if not compacted and prev_cached_tokens >= 4096:
-                            if cached_tok == 0 and (not has_cache_field or u.get("cachedContentTokenCount", 0) == 0):
+                        turn_gap_sec = inter_turn_tool_wait_sec
+                        if (
+                            step_epoch is not None
+                            and prev_usage_epoch is not None
+                            and step_epoch >= prev_usage_epoch
+                            and (step_epoch - prev_usage_epoch) > turn_gap_sec
+                        ):
+                            turn_gap_sec = step_epoch - prev_usage_epoch
+                        cache_zero_now = cached_tok == 0 and (not has_cache_field or u.get("cachedContentTokenCount", 0) == 0)
+                        if (
+                            not compacted
+                            and turn_gap_sec >= 120.0
+                            and cache_zero_now
+                            and (prev_cached_tokens >= 4096 or (prev_prompt_tokens >= 4096 and raw_prompt >= 4096))
+                        ):
+                            long_wait_cache_ttl_drops += 1
+                            if turn_gap_sec > max_ttl_drop_wait_sec:
+                                max_ttl_drop_wait_sec = turn_gap_sec
+                        elif not compacted and prev_cached_tokens >= 4096:
+                            if cache_zero_now:
                                 turn3_cache_drop_hits += 1
                             elif 0 < cached_tok < prev_cached_tokens:
                                 cache_regression_hits += 1
@@ -283,6 +311,9 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                             turn3_cache_drop_hits += 1
                         prev_cached_tokens = cached_tok
                         prev_prompt_tokens = raw_prompt
+                        if step_epoch is not None:
+                            prev_usage_epoch = step_epoch
+                        inter_turn_tool_wait_sec = 0.0
                         usage_turn_index += 1
                     break
     except OSError:
@@ -304,6 +335,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "hydrogen_extra_leak_hits": hydrogen_extra_leak_hits,
         "turn3_cache_drop_hits": turn3_cache_drop_hits,
         "cache_regression_hits": cache_regression_hits,
+        "long_wait_cache_ttl_drops": long_wait_cache_ttl_drops,
+        "max_ttl_drop_wait_sec": round(max_ttl_drop_wait_sec, 1),
         "search_web_eof_stalls": search_web_eof_stalls,
         "search_web_max_duration_sec": round(max_search_web_sec, 1),
         "search_web_max_parallel": max_parallel_search_web,
@@ -466,6 +499,25 @@ def diagnose_session(
             "severity": "HIGH",
             "evidence": f"{transcript['tos_violation_403_hits']} false-positive 403 PERMISSION_DENIED (TOS_VIOLATION) event(s) detected (#200029/#199971).",
             "remedy": "Never use Antigravity's built-in Orchestrator mode; keep Harness HYDROGEN_ANTI_BURST_PACER enabled, batch parallel reads per turn, and file the official one-time Antigravity appeal if suspended.",
+        })
+    quirk_1623_on = True
+    try:
+        from platform_quirks import is_quirk_enabled
+        quirk_1623_on = is_quirk_enabled("1623", repo=repo)
+    except ImportError:
+        pass
+    if quirk_1623_on and transcript.get("long_wait_cache_ttl_drops", 0) > 0:
+        findings.append({
+            "code": "LONG_WAIT_KV_CACHE_TTL_EXPIRED",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected {transcript.get('long_wait_cache_ttl_drops', 0)} parent KV prompt-cache TTL expiration drop(s) "
+                f"(`cachedContentTokenCount=0`) after >=120s tool/subagent wait (max_wait={transcript.get('max_ttl_drop_wait_sec', 0.0)}s) (#1623/#171228)."
+            ),
+            "remedy": (
+                "Keep implementation on warm-cache Lead (`INLINE_LEAD_DIRECT`), use `task quick-start` / `task ship` (`T0`/`T1` 0-reviewer fast path) "
+                "and `--defer-gradle-to-final` with warm Gradle daemons (no routine `clean`), or route large multi-module tasks via `web-pack` (`Web-Relay`)."
+            ),
         })
     if transcript.get("turn3_cache_drop_hits", 0) > 0 or transcript.get("cache_regression_hits", 0) >= 2:
         findings.append({
