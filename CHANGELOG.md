@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1] - 2026-11-18
+
+### Antigravity CLI Permission Leak Guard, Built-In Slash Collision Check & Long-Wait KV-Cache TTL Forensics
+- **`#1618` / `#548` CLI Default-Project Permission Scope Leak Guard (`antigravity_runtime.py`, `doctor/engine.py`, `platform_quirks.py`)**: Added `inspect_default_cli_project_permissions()` and the `CLI Default-Project Permission Guard` check in `HarnessDoctor` (`AGY_1618_548_DEFAULT_PROJECT_PERM_LEAK`) to detect broad fallback `allow` rules (shell commands, file mutations, wildcards, or MCP execution) stored in `~/.gemini/config/projects/default-cli-project.json` that silently leak across non-Git or `--project`-omitted directories, guiding developers to govern tool permissions strictly via repo-local `.agents/hooks.json` (`PreToolUse`).
+- **`#1620` Built-In `agy` CLI Slash-Command Skill Collision Guard (`doctor/engine.py`, `platform_quirks.py`)**: Added `CLI Slash-Command Skill Collision` (`AGY_1620_BUILTIN_SLASH_SKILL_COLLISION`) in `HarnessDoctor.check_skills_and_workflows()` to warn when custom project skills under `.agents/skills/` collide with non-disableable `agy` CLI built-in slash commands (`/grill-me`, `/plan`, `/compact`, `/goal`, `/teamwork`, `/boost`, etc.).
+- **`#1623` / `#171228` Parent KV Prompt-Cache TTL Expiration Forensics (`session_forensics.py`, `platform_quirks.py`)**: Added `LONG_WAIT_KV_CACHE_TTL_EXPIRED` (`AGY_1623_171228_LONG_WAIT_KV_CACHE_TTL`) in `diagnose-session` to distinguish parent KV prompt-cache TTL drops (`cachedContentTokenCount=0` after `>=120s` tool or subagent wait gaps, tracking `long_wait_cache_ttl_drops` and `max_ttl_drop_wait_sec`) from immediate Turn-3 prefix invalidations (`#200026`).
+
 ## [1.4.0] - 2026-11-17
 
 ### Inline Warm-Cache Execution, Architectural KDoc, Provider-Neutral Web-Relay & Nov 17 Guards
