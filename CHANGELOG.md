@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.4] - 2026-11-18
+
+### On-Demand Library `-sources.jar` Inspector (`dep-inspect`), Build Pagination Guard & Gradle Sync Advisory
+- **On-Demand Third-Party Library Source Inspector (`agents/scripts/dep_inspect.py`, `agents/harness.py`, `harness_cli.py`)**: Added `python .agents/harness.py dep-inspect <group:artifact[:version] | artifact> [--query <symbol>] [--file <entry>]` to inspect external Gradle/Maven dependency Kotlin/Java sources and KDoc without waiting for Android Studio Sync. Automatically resolves versions from `gradle/libs.versions.toml` and `build.gradle*` (including variable interpolation and KMP `-android`/`-jvm` variants), checks local Gradle caches (`GRADLE_USER_HOME`, `JAVA_HOME` sibling caches, and `~/.gradle`), fetches `<artifact>-<version>-sources.jar` on demand from Google Maven / Maven Central / JitPack into `.agents/state/cache/dep-sources/`, strips `import` boilerplate, and falls back cleanly to `javap -public` signatures (filtering `$WhenMappings`, `$lambda$`, and `$$serializer` noise) for closed-source `.aar`/`.jar` packages.
+- **`PreToolUse` `BUILD_ARTIFACT_PAGINATION_BLOCKED` Guard & `gradle_sync_recommended` Delivery Note (`_safety/path_and_read_guard.py`, `_safety/engine.py`, `_workflow/router.py`, `GEMINI.md.template`)**: Blocked `ByteOffset > 0` multi-page reads on `> 48 KB` generated or scratch dump files under `build/**` to prevent 200K+ token bytecode-dump context bloat (guiding agents to `dep-inspect` while preserving page-0 reads), and added `gradle_sync_recommended` in `DEVELOPER_GIT_COMMIT_REQUIRED` whenever `build.gradle*` or `libs.versions.toml` changes so the Commit Card reminds developers to run `Sync Project with Gradle Files` in Android Studio for IDE indexing.
+
 ## [1.4.3] - 2026-11-18
 
 ### Threshold-Prompted 3-Choice Web-Relay Advisor & Subagent Enum Hygiene
