@@ -217,31 +217,24 @@ See ADR-015. The maintainer explicitly approved this amendment.
 For Antigravity Review Protocol V2:
 
 ```text
-model_policy = INHERIT_PARENT_BY_OMISSION
+model_policy = INHERIT_PARENT_BY_OMISSION (or Model="flash" quota offload on Carbon/Argon Lead sessions)
 ```
 
 Do not pass:
 
-- `model`;
-- `Model`;
+- `model` (lowercase);
 - `"inherit"` as a fake model value;
 - guessed reasoning fields.
 
 Reasoning escalation is allowed only through a trusted host-native capability whose real supported argument/schema was detected.
 
-Do not create a cross-provider model-routing subsystem. On Antigravity, default
-Gen-4 policies (`hydrogen-dynamic`, `hydrogen-risk`, `inherit`, and all `gemini-4-*`
-slugs) bind subagent models strictly through `.agents/agents/<role>/agent.md` YAML
-frontmatter (`model:`) with `invoke_subagent` omitting `model`/`Model`
-(`INHERIT_PARENT_BY_OMISSION`: `Prompt`, `Role`, `TypeName`, and `Workspace` only;
-passing native `Model="flash"` / `"pro"` is permitted solely as a legacy compatibility
-fallback when a legacy `gemini-3.8-flash-*` or `gemini-3.1-pro-*` profile is explicitly selected).
+Do not create a cross-provider model-routing subsystem. Because `.agents/agents/<role>/agent.md` omits `model:` for Antigravity CLI `#200144` compatibility, `Hydrogen` and `inherit` Lead sessions dispatch subagents via `INHERIT_PARENT_BY_OMISSION` (`Prompt`, `Role`, `TypeName`, and `Workspace` only), while `Carbon` and `Argon` Lead sessions pass native `Model="flash"` (which Antigravity's executor routes directly to `gemini-4-hydrogen-tiered-high` `1.00x`) whenever a `Hydrogen` or `Flash` scout/specialist/reviewer policy is active so frontier Lead quota is never burned on subagent turns (`Model="pro"` remains available only for explicit `gemini-3.1-pro-*` profiles). Reviewer summaries and completion outputs must always display the ground-truth observed SQLite `host_configured_model` / `actual_model` rather than unverified requested policy strings. The maintainer explicitly approved this amendment.
 
 ### 3.8 Review proof cannot be self-certified
 
 Reviewer call spending and final-review rounds are separate task limits. The default final-round cap is three. The developer may explicitly extend either limit through the task-local `review-budget` decision; extending calls alone never extends rounds. Preserve frozen policies, counters, existing findings, reviewer requirements and setup defaults. Cap exhaustion must route to a real developer decision before consuming another round, never to engine edits, disabled hooks or skipped reviews. See ADR-011.
 
-The first final integration review uses the complete policy-selected roster. Follow-up rounds route the actual post-review delta to directly affected specialists and unresolved finding owners, retaining bound unaffected PASS coverage. A migration's initial breadth alone must not recall every specialist for a small correction. Unavailable or untrustworthy comparison inputs remain conservative; new uncovered responsibilities still require review. See ADR-012.
+The first final integration review uses the complete policy-selected roster. Follow-up rounds route the actual post-review delta (normalized across `CRLF`/`LF` line endings): when a bounded surgical fix (`<= 40` changed lines inside already-reviewed files with zero new surfaces) addresses recorded blocking finding(s), only the finding owner(s) rerun while all other previously passed specialists retain bound PASS coverage (`surgical_owner_only`); larger or surface-expanding deltas route to directly affected specialists and unresolved finding owners. A migration's initial breadth alone must not recall every specialist for a small correction. Unavailable or untrustworthy comparison inputs remain conservative; new uncovered responsibilities still require review. See ADR-012. The maintainer explicitly approved this amendment.
 
 For Review V2 and scoped Phase Review V2:
 

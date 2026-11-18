@@ -1938,7 +1938,43 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "CLI Default-Project Permission Guard", "WARN", f"Could not inspect default-cli-project.json permissions: {exc}")
 
-        # 9h. Platform Quirks Registry Status
+        # 9h. Headless JVM UI Test Stack Readiness (Roborazzi + Robolectric + Compose UI Test Manifest)
+        if not self.is_raw_kit:
+            try:
+                import importlib
+                ui_stack = importlib.import_module("roborazzi_gate").detect_roborazzi(self.repo)
+                has_jvm_ui = bool(ui_stack.get("installed") or ui_stack.get("robolectric_installed"))
+                if has_jvm_ui:
+                    ui_warns: list[str] = []
+                    ui_rems: list[str] = []
+                    if not ui_stack.get("include_android_resources"):
+                        ui_warns.append(
+                            "Robolectric/Roborazzi dependencies detected without `testOptions { unitTests.isIncludeAndroidResources = true }`; "
+                            "Android resources and Compose/XML layouts will fail to load in JVM unit tests."
+                        )
+                        ui_rems.append("Add `testOptions { unitTests { isIncludeAndroidResources = true } }` inside `android { ... }` in your module build.gradle(.kts).")
+                    if ui_stack.get("compose_ui_test_installed") and not ui_stack.get("compose_ui_test_manifest_installed"):
+                        ui_warns.append(
+                            "`ui-test-junit4` is configured without `debugImplementation(\"androidx.compose.ui:ui-test-manifest\")` "
+                            "(needed by `createComposeRule()` on Robolectric JVM)."
+                        )
+                        ui_rems.append("Add `debugImplementation(\"androidx.compose.ui:ui-test-manifest\")` alongside `testImplementation(\"androidx.compose.ui:ui-test-junit4\")`.")
+                    if ui_warns:
+                        self.log(category, "Headless JVM UI Test Stack", "WARN", " ".join(ui_warns), ui_rems)
+                    else:
+                        mode_note = "Gradle plugin" if ui_stack.get("plugin_applied") else "testDebugUnitTest dependency mode"
+                        self.log(
+                            category,
+                            "Headless JVM UI Test Stack",
+                            "PASS",
+                            f"Headless JVM UI/RTL stack ready ({mode_note}, includeAndroidResources=true"
+                            + (", ui-test-manifest verified" if ui_stack.get("compose_ui_test_manifest_installed") else "")
+                            + ").",
+                        )
+            except Exception as exc:
+                self.log(category, "Headless JVM UI Test Stack", "WARN", f"Could not inspect JVM UI test stack: {exc}")
+
+        # 9i. Platform Quirks Registry Status
         try:
             from platform_quirks import list_platform_quirks
             q_rows = list_platform_quirks(repo=self.repo)

@@ -1689,6 +1689,7 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
     if not_done:
         raise ValidationError(f"cannot finalize phase review: reviewers not completed: {', '.join(not_done)}")
 
+    observed_models_by_role: dict[str, str] = {}
     for reviewer, entry in reviewers.items():
         result_file = phase_review_dir(tdir, phase_id) / "results" / f"{reviewer}.json"
         try:
@@ -1696,8 +1697,11 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
         except Exception as exc:
             raise ValidationError(f"PHASE_REVIEW_RESULT_BLOCKED: missing or unreadable result for '{reviewer}': {exc}") from exc
         parsed = result.get("result") if isinstance(result, dict) else None
-        from review_models import validate_model_evidence
-        validate_model_evidence(run_meta, reviewer, result.get("model_selection") if isinstance(result, dict) else None)
+        from review_models import effective_reviewer_model, validate_model_evidence
+        msel_doc = result.get("model_selection") if isinstance(result, dict) else None
+        validate_model_evidence(run_meta, reviewer, msel_doc)
+        if isinstance(msel_doc, dict):
+            observed_models_by_role[reviewer] = effective_reviewer_model(msel_doc)
         if (
             not isinstance(parsed, dict)
             or result.get("task_id") != task_id
@@ -1723,6 +1727,7 @@ def _finalize_phase_review_locked(repo: Path, task_id: str, phase_id: str) -> di
     aggregate_verdict = "FINDINGS" if has_findings else "PASS"
     from review_models import reviewer_model_map
     models_by_role = reviewer_model_map(run_meta, sorted(reviewers.keys()))
+    models_by_role.update(observed_models_by_role)
     summary_lines = [
         "| Reviewer | Model | Verdict | Findings |",
         "| :--- | :--- | :--- | :---: |",

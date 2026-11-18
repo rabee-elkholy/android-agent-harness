@@ -698,6 +698,11 @@ def generate_task_brief(
         brief_lines.append(
             "- **Shared/Reused Screen Back & Navigation Audit**: When any touched screen, Fragment, Activity, Dialog, BottomSheet, or route can be opened from multiple entry points/flows (e.g. onboarding/wizard vs settings/edit/home/deep-link), verify that system back (`BackHandler` / `OnBackPressedCallback`), UI back/close buttons, and completion/exit navigation (`popBackStack`, `popUpTo`, `navigateUp`, `finish`, result callbacks) return to the right caller for EVERY entry flow without hardcoded single-caller destinations or broken back stacks."
         )
+    ui_surfaces = {"COMPOSE_UI", "XML_UI"} & set(expected_surfaces)
+    if ui_surfaces and reviewer == "arch-regression-reviewer-agent":
+        brief_lines.append(
+            "- **UI Paradigm, Theme & RTL Layout Audit**: Verify touched UI files preserve the screen's existing UI paradigm (never mix unrequested XML-to-Compose rewrites), use design-system/theme tokens rather than hardcoded colors, and enforce bidirectional RTL layout hygiene (`padding(start/end)` / `Arrangement.spacedBy` / `Icons.AutoMirrored` in Compose; `paddingStart`/`paddingEnd`, `layout_marginStart`/`layout_marginEnd`, and `android:autoMirrored=\"true\"` on directional drawables in XML)."
+        )
     delta_files = [str(f) for f in ((policy.get("fix_delta") or {}).get("files") or []) if str(f).strip()]
     if delta_files:
         brief_lines.append("- **Follow-Up Delta Files (Modified Since Prior Run — Focus Here First, Full Absolute Paths)**:")
@@ -723,11 +728,11 @@ def generate_task_brief(
 
     routed = set(policy.get("reviewers") or [])
     completeness_owner = "bug-test-reviewer-agent" if "bug-test-reviewer-agent" in routed else "arch-regression-reviewer-agent"
-    if approach and reviewer == completeness_owner:
+    if reviewer in (completeness_owner, "spec-compliance-agent"):
         # Real app: a task reached the commit question with half its approved approach undone (the paywall
         # part was postponed) and every reviewer passed it; nobody was shown the approach.
         brief_lines.extend([
-            "- **Plan completeness (you own this check)**: compare every item of the Approved Approach (as updated by any recorded "
+            "- **Plan completeness (you own this check)**: compare every requirement in `Outcome`, `Approved Approach`, and any phase deliverables (as updated by any recorded "
             "`Mid-Task Developer Refinements (plan-notes)` above) with the diff. An item the diff does not implement—and that was NOT "
             "superseded or dropped by a recorded developer `plan-note`—is a HIGH finding titled `plan item not implemented`, "
             "naming the item; do not accept a deferral the developer did not approve.",
@@ -748,6 +753,23 @@ def generate_task_brief(
                 brief_lines.append(
                     f"  * New `{cand.get('planned_file', '')}` overlaps existing `{cand.get('symbol', '')}` in `{cand.get('existing_file', '')}` ({cand.get('kind', 'symbol')})"
                 )
+    if reviewer in ("bug-test-reviewer-agent", "arch-regression-reviewer-agent"):
+        try:
+            from fast_kt_lint import find_unreferenced_new_declarations, get_modified_lines_map
+            changed_kt = [(repo / p).resolve() for p in changed_paths if p.endswith(".kt") and (repo / p).is_file()]
+            if changed_kt:
+                mod_map_u = get_modified_lines_map(repo, changed_kt)
+                dead_syms = find_unreferenced_new_declarations(repo, changed_kt, mod_map_u)
+                if dead_syms:
+                    brief_lines.append(
+                        "- **Zero-Caller Newly Added Declarations (Audit for Dead / Unused Code)**: "
+                        "Verify whether each symbol below is genuinely required by an external/framework caller or is dead unreferenced code that must be wired in or removed:"
+                    )
+                    for ds in dead_syms[:10]:
+                        rel_ds = Path(ds["file"]).resolve().relative_to(repo.resolve()).as_posix() if Path(ds["file"]).resolve().is_relative_to(repo.resolve()) else ds["file"]
+                        brief_lines.append(f"  * `{rel_ds}:{ds['line']}` -> `{ds['kind']} {ds['symbol']}` (0 references found across repo)")
+        except (ImportError, OSError, ValueError):
+            dead_syms = []
     brief_lines.extend(_scoped_finding_validation_lines(repo, task_id, reviewer, completeness_owner))
     det_gate_lines = metadata.get("verified_deterministic_gates") or []
     if det_gate_lines:

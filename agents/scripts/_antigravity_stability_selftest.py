@@ -7831,7 +7831,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 "     */\n"
                 "    @JvmOverloads\n"
                 "    fun cacheActiveOfferPackage(pkgId: String?, nowMs: Long = 0L) {\n"
-                "        cachedPkg = pkgId\n"
+                "        cachedPkg = if (nowMs >= 0L) pkgId else null\n"
                 "    }\n"
                 "}\n"
             )
@@ -8138,6 +8138,682 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertEqual(1, diag_ttl["transcript"]["long_wait_cache_ttl_drops"])
             self.assertGreaterEqual(diag_ttl["transcript"]["max_ttl_drop_wait_sec"], 165.0)
             self.assertNotIn("LONG_WAIT_KV_CACHE_TTL_EXPIRED", {f["code"] for f in diag_ttl_off["findings"]})
+
+    def test_v142_carbon_flash_offload_ground_truth_models_dynamic_spec_and_rtl_guard(self):
+        """Verify Carbon/Argon Model='flash' quota offload, ground-truth SQLite model reporting, multi-phase spec escalation, and RTL XML guard."""
+        import check_strings
+        import delegation_policy as dp
+        import review_execution
+        import review_models
+        import review_package
+        import review_policy
+        atomic_write_json = dp.atomic_write_json
+
+        # 1) Slug & human-readable display-name normalization + tiered Hydrogen / #200467 xhigh detection
+        self.assertEqual(("gemini-4-hydrogen", "high"), review_models._split_antigravity_family_and_tier("gemini-4-hydrogen-tiered-high"))
+        self.assertEqual(("gemini-4-hydrogen", "xhigh"), review_models._split_antigravity_family_and_tier("gemini-4-hydrogen-tiered-xhigh"))
+        self.assertEqual(("gemini-4-carbon", "medium"), review_models._split_antigravity_family_and_tier("Gemini 4 Carbon (Medium)"))
+        self.assertEqual(("gemini-4-argon", "high"), review_models._split_antigravity_family_and_tier("Gemini 4 Argon (High)"))
+        self.assertEqual(("gemini-4-hydrogen", "high"), review_models._split_antigravity_family_and_tier("Gemini 4 Hydrogen High"))
+
+        # Ground-truth effective_reviewer_model + _matches_antigravity_native_model
+        self.assertTrue(
+            review_models._matches_antigravity_native_model(
+                "gemini-4-hydrogen-high",
+                "high",
+                "gemini-4-hydrogen-tiered-high",
+                ["gemini-4-hydrogen-tiered-high"],
+            )
+        )
+        self.assertTrue(
+            review_models._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-3.8-flash-high",
+                ["gemini-3.8-flash-high"],
+                allow_frontier_flash_offload=True,
+            )
+        )
+        self.assertFalse(
+            review_models._matches_antigravity_native_model(
+                "gemini-4-hydrogen-medium",
+                "medium",
+                "gemini-3.8-flash-high",
+                ["gemini-3.8-flash-high"],
+                allow_frontier_flash_offload=False,
+            )
+        )
+        self.assertEqual(
+            "gemini-4-carbon-medium (policy: gemini-4-hydrogen-high)",
+            review_models.effective_reviewer_model({
+                "requested_model": "hydrogen-dynamic",
+                "resolved_model": "gemini-4-hydrogen-high",
+                "actual_model": "gemini-4-carbon-medium",
+                "actual_model_status": "NATIVE_METADATA_OBSERVED",
+            }),
+        )
+        self.assertEqual(
+            "gemini-4-hydrogen-tiered-high",
+            review_models.effective_reviewer_model({
+                "requested_model": "hydrogen-dynamic",
+                "resolved_model": "gemini-4-hydrogen-high",
+                "actual_model": "gemini-4-hydrogen-tiered-high",
+                "actual_model_status": "NATIVE_METADATA_OBSERVED",
+            }),
+        )
+
+        # 2) Carbon/Argon Lead -> Model="flash" offload vs Hydrogen Lead -> INHERIT_PARENT_BY_OMISSION
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir(parents=True)
+            for sub in ("agents/harness-scout-agent", "agents/android-ui-expert-agent", "agents/bug-test-reviewer-agent"):
+                p = repo / ".agents" / sub / "agent.md"
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("---\nname: role\ndescription: role\n---\nPrompt\n", encoding="utf-8")
+            review_models.set_policy(
+                repo,
+                review_models.resolve_preset_policy("hydrogen-dynamic"),
+                task_id=None,
+                scope="project",
+                host="antigravity",
+                source="conversation",
+                proof_reference="Use hydrogen-dynamic",
+            )
+            plan_impl = {
+                "schema_version": 2,
+                "task_id": "t-offload",
+                "status": "IMPLEMENTING",
+                "task_kind": "FEATURE",
+                "planning_depth": "BOUNDED",
+                "requested_outcome": "Add RTL card",
+                "expected_files": [
+                    "app/src/main/kotlin/com/demo/A.kt",
+                    "app/src/main/kotlin/com/demo/B.kt",
+                    "app/src/main/kotlin/com/demo/C.kt",
+                    "app/src/main/kotlin/com/demo/D.kt",
+                ],
+                "expected_surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"],
+                "base_head": "HEAD",
+            }
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": "t-offload", "status": "IMPLEMENTING"})
+            atomic_write_json(repo / ".agents/state/tasks/t-offload/plan.json", plan_impl)
+
+            def _run_guard(cid: str, sub_entry: dict, env_extra: dict | None = None) -> dict:
+                engine = REPO_ROOT / "agents/scripts/pre_tool_safety.py"
+                env = {
+                    **os.environ,
+                    "HARNESS_REPO": str(repo),
+                    "HARNESS_HOST": "antigravity",
+                    "HARNESS_HOOK_STATE": str(repo / ".agents/state/hook_state.json"),
+                }
+                if env_extra:
+                    env.update(env_extra)
+                pr = subprocess.run(
+                    [sys.executable, str(engine)],
+                    input=json.dumps({
+                        "conversationId": cid,
+                        "toolCall": {"name": "invoke_subagent", "args": {"Subagents": [sub_entry]}},
+                    }),
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(0, pr.returncode, pr.stderr)
+                return _with_audit_reason(json.loads(pr.stdout), env, engine)
+
+            # A) Carbon Lead session -> Scout & Specialist MUST pass Model="flash"
+            dp.record_live_lead_session_model(repo, "cid-carbon", "Gemini 4 Carbon (Medium)")
+            self.assertEqual((True, "gemini-4-carbon"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-carbon"))
+            pol_del_c = dp.evaluate_delegation_policy(repo, task_id="t-offload", plan=plan_impl, router_action="IMPLEMENT")
+            self.assertEqual("flash", pol_del_c["scout_invoke_model"])
+
+            deny_scout_no_m = _run_guard("cid-carbon", {
+                "TypeName": "harness-scout-agent",
+                "Role": "harness-scout-agent",
+                "Workspace": "inherit",
+                "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
+            })
+            self.assertEqual("deny", deny_scout_no_m["decision"], deny_scout_no_m)
+            self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", deny_scout_no_m.get("reason_code"))
+            self.assertIn("CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED", deny_scout_no_m.get("reason", ""))
+
+            allow_scout_flash = _run_guard("cid-carbon", {
+                "TypeName": "harness-scout-agent",
+                "Role": "harness-scout-agent",
+                "Workspace": "inherit",
+                "Model": "flash",
+                "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
+            })
+            self.assertEqual("allow", allow_scout_flash["decision"], allow_scout_flash)
+
+            deny_spec_no_m = _run_guard("cid-carbon", {
+                "TypeName": "android-ui-expert-agent",
+                "Role": "android-ui-expert-agent",
+                "Workspace": "inherit",
+                "Prompt": "Audit RTL layout padding in A.kt.",
+            })
+            self.assertEqual("deny", deny_spec_no_m["decision"], deny_spec_no_m)
+            self.assertEqual("CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED", deny_spec_no_m.get("reason_code"))
+
+            allow_spec_flash = _run_guard("cid-carbon", {
+                "TypeName": "android-ui-expert-agent",
+                "Role": "android-ui-expert-agent",
+                "Workspace": "inherit",
+                "Model": "flash",
+                "Prompt": "Audit RTL layout padding in A.kt.",
+            })
+            self.assertEqual("allow", allow_spec_flash["decision"], allow_spec_flash)
+
+            # Reviewer hint & execution profile on Carbon Lead -> requires Model="flash"
+            frozen_sel = {
+                "bug-test-reviewer-agent": {
+                    "requested_model": "hydrogen-dynamic",
+                    "resolved_model": "gemini-4-hydrogen-high",
+                    "effective_model": "gemini-4-hydrogen-high",
+                    "model_policy": "INHERIT_PARENT_BY_OMISSION",
+                    "model_argument": None,
+                    "native_arguments": {},
+                }
+            }
+            hint_carbon = review_models.antigravity_dispatch_model_hint(
+                {"reviewers": frozen_sel}, ["bug-test-reviewer-agent"], repo=repo, parent_conversation_id="cid-carbon"
+            )
+            self.assertIn("Model='flash'", hint_carbon)
+            pol_path = repo / ".agents/state/tasks/t-offload/policy.json"
+            atomic_write_json(pol_path, {"reviewers": ["bug-test-reviewer-agent"], "surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "risk_tier": "T2_FEATURE"})
+            frozen_rm = review_models.freeze_models(repo, "t-offload", "antigravity", ["bug-test-reviewer-agent"])
+            atomic_write_json(
+                repo / ".agents/state/tasks/t-offload/current-run.json",
+                {
+                    "run_id": "RUN_OFFLOAD_1",
+                    "review_host": "antigravity",
+                    "review_protocol_version": 2,
+                    "policy": str(pol_path),
+                    "review_models": frozen_rm,
+                },
+            )
+            exec_prof_c = review_execution.resolve_execution_profile(repo, "t-offload", host="antigravity")
+            rev_c = exec_prof_c["reviewers"]["bug-test-reviewer-agent"]
+            self.assertEqual({"Model": "flash"}, rev_c["native_arguments"])
+            self.assertEqual({"Model": "flash"}, rev_c["dispatch_contract"]["native_arguments"])
+
+            # Inherit selection on Carbon Lead -> does NOT force Model="flash"
+            inherit_sel = {"bug-test-reviewer-agent": {"requested_model": "inherit", "resolved_model": "inherit", "effective_model": "inherit"}}
+            self.assertFalse(review_models.reviewer_requires_flash_offload(repo, inherit_sel["bug-test-reviewer-agent"], parent_conversation_id="cid-carbon"))
+
+            # Disabling quirk 200144 disables offload cleanly
+            with unittest.mock.patch.dict(os.environ, {"HARNESS_DISABLE_QUIRKS": "200144"}, clear=False):
+                self.assertEqual((False, ""), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-carbon"))
+
+            # B) Hydrogen High Lead session -> omits Model (INHERIT_PARENT_BY_OMISSION) and blocks unexpected Model="flash"
+            dp.record_live_lead_session_model(repo, "cid-hydro", "gemini-4-hydrogen-high")
+            self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-hydro"))
+            pol_del_h = dp.evaluate_delegation_policy(repo, task_id="t-offload", plan=plan_impl, router_action="IMPLEMENT")
+            self.assertIsNone(pol_del_h["scout_invoke_model"])
+
+            allow_hydro_omit = _run_guard("cid-hydro", {
+                "TypeName": "harness-scout-agent",
+                "Role": "harness-scout-agent",
+                "Workspace": "inherit",
+                "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
+            })
+            self.assertEqual("allow", allow_hydro_omit["decision"], allow_hydro_omit)
+
+            deny_hydro_flash = _run_guard("cid-hydro", {
+                "TypeName": "harness-scout-agent",
+                "Role": "harness-scout-agent",
+                "Workspace": "inherit",
+                "Model": "flash",
+                "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
+            })
+            self.assertEqual("deny", deny_hydro_flash["decision"], deny_hydro_flash)
+            self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", deny_hydro_flash.get("reason_code"))
+
+            # 3) Dynamic spec-compliance-agent escalation on multi-phase ARCHITECTURAL plans + UI/Completeness briefs
+            skills_root = REPO_ROOT / "agents/skills"
+            cls_arch = {"surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "severity": "HIGH", "changed_files": 4, "planning_depth": "ARCHITECTURAL"}
+            pol_1phase = review_policy.decide(cls_arch, skills_root, plan={"planning_depth": "ARCHITECTURAL", "phases": [{"id": "p1"}]})
+            self.assertNotIn("spec-compliance-agent", pol_1phase["reviewers"])
+
+            pol_2phase_bounded = review_policy.decide(
+                {"surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 4, "planning_depth": "BOUNDED"},
+                skills_root,
+                plan={"planning_depth": "BOUNDED", "phases": [{"id": "p1"}, {"id": "p2"}]},
+            )
+            self.assertNotIn("spec-compliance-agent", pol_2phase_bounded["reviewers"])
+
+            pol_2phase_arch = review_policy.decide(
+                cls_arch,
+                skills_root,
+                plan={"planning_depth": "ARCHITECTURAL", "phases": [{"id": "p1"}, {"id": "p2"}]},
+            )
+            self.assertIn("spec-compliance-agent", pol_2phase_arch["reviewers"])
+            self.assertIn("MULTI_PHASE_ARCHITECTURAL_SPEC_AUDIT", pol_2phase_arch["explanation"]["reviewers"]["spec-compliance-agent"])
+
+            pol_2phase_delta = review_policy.decide(
+                cls_arch,
+                skills_root,
+                plan={"planning_depth": "ARCHITECTURAL", "phases": [{"id": "p1"}, {"id": "p2"}]},
+                review_scope="FIX_DELTA",
+            )
+            self.assertNotIn("spec-compliance-agent", pol_2phase_delta["reviewers"])
+
+            pkg_dir = repo / ".agents/state/tasks/t-offload/review_runs/RUN_1"
+            pkg_dir.mkdir(parents=True, exist_ok=True)
+            meta_b = {"run_id": "RUN_1", "package_sha256": "abcdef123456"}
+            plan_no_approach = {
+                "task_id": "t-offload",
+                "task_kind": "FEATURE",
+                "requested_outcome": "Support Arabic RTL card layout and step badge",
+                "approach": "",
+                "expected_surfaces": ["COMPOSE_UI", "XML_UI"],
+            }
+            bug_b = review_package.generate_task_brief(
+                repo, "t-offload", "bug-test-reviewer-agent", pkg_dir, meta_b, plan_no_approach, pol_2phase_arch, [{"path": "app/src/main/kotlin/com/demo/A.kt"}]
+            ).read_text(encoding="utf-8")
+            spec_b = review_package.generate_task_brief(
+                repo, "t-offload", "spec-compliance-agent", pkg_dir, meta_b, plan_no_approach, pol_2phase_arch, [{"path": "app/src/main/kotlin/com/demo/A.kt"}]
+            ).read_text(encoding="utf-8")
+            arch_b = review_package.generate_task_brief(
+                repo, "t-offload", "arch-regression-reviewer-agent", pkg_dir, meta_b, plan_no_approach, pol_2phase_arch, [{"path": "app/src/main/kotlin/com/demo/A.kt"}]
+            ).read_text(encoding="utf-8")
+            self.assertIn("Plan completeness (you own this check)", bug_b)
+            self.assertIn("Plan completeness (you own this check)", spec_b)
+            self.assertIn("UI Paradigm, Theme & RTL Layout Audit", arch_b)
+
+        # 4) Deterministic diff-scoped RTL XML layout & directional vector drawable check in check_strings.py
+        with tempfile.TemporaryDirectory() as td_rtl:
+            rtl_repo = Path(td_rtl) / "rtl_app"
+            rtl_repo.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=rtl_repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=rtl_repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=rtl_repo, check=True)
+            (rtl_repo / "app/src/main/res/values").mkdir(parents=True)
+            (rtl_repo / "app/src/main/res/values-ar").mkdir(parents=True)
+            (rtl_repo / "app/src/main/res/layout").mkdir(parents=True)
+            (rtl_repo / "app/src/main/res/drawable").mkdir(parents=True)
+            (rtl_repo / "app/src/main/res/values/strings.xml").write_text('<resources><string name="ok">OK</string></resources>\n', encoding="utf-8")
+            (rtl_repo / "app/src/main/res/values-ar/strings.xml").write_text('<resources><string name="ok">حسنا</string></resources>\n', encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=rtl_repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init rtl repo"], cwd=rtl_repo, check=True)
+
+            layout_f = rtl_repo / "app/src/main/res/layout/item_step.xml"
+            icon_f = rtl_repo / "app/src/main/res/drawable/ic_arrow_back.xml"
+            layout_f.write_text(
+                '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '    android:paddingLeft="16dp"\n'
+                '    android:layout_width="match_parent"\n'
+                '    android:layout_height="wrap_content" />\n',
+                encoding="utf-8",
+            )
+            icon_f.write_text(
+                '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '    android:width="24dp"\n'
+                '    android:height="24dp"\n'
+                '    android:viewportWidth="24"\n'
+                '    android:viewportHeight="24">\n'
+                '</vector>\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(1, check_strings.main([], repo=rtl_repo))
+
+            layout_f.write_text(
+                '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '    android:paddingStart="16dp"\n'
+                '    android:layout_width="match_parent"\n'
+                '    android:layout_height="wrap_content" />\n',
+                encoding="utf-8",
+            )
+            icon_f.write_text(
+                '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '    android:autoMirrored="true"\n'
+                '    android:width="24dp"\n'
+                '    android:height="24dp"\n'
+                '    android:viewportWidth="24"\n'
+                '    android:viewportHeight="24">\n'
+                '</vector>\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(0, check_strings.main([], repo=rtl_repo))
+
+        # English-only repo (no values-ar, no RTL _product.py) -> zero false positives on paddingLeft
+        with tempfile.TemporaryDirectory() as td_en:
+            en_repo = Path(td_en) / "en_app"
+            en_repo.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=en_repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=en_repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=en_repo, check=True)
+            (en_repo / "app/src/main/res/values").mkdir(parents=True)
+            (en_repo / "app/src/main/res/layout").mkdir(parents=True)
+            (en_repo / "app/src/main/res/values/strings.xml").write_text('<resources><string name="ok">OK</string></resources>\n', encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=en_repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init en repo"], cwd=en_repo, check=True)
+            (en_repo / "app/src/main/res/layout/item_en.xml").write_text(
+                '<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                '    android:paddingLeft="16dp"\n'
+                '    android:layout_width="match_parent"\n'
+                '    android:layout_height="wrap_content" />\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(0, check_strings.main([], repo=en_repo))
+
+    def test_v142_roborazzi_robolectric_webpack_context_shield_and_unused_code_guard(self):
+        """Verify dependency-only Roborazzi/Robolectric detection + Doctor check, web-pack 40k context shield + RTL UI test rule, and Kotlin unused-code guard."""
+        import fast_kt_lint
+        import review_package
+        import roborazzi_gate as rg
+        import web_relay
+        from doctor.engine import HarnessDoctor
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "rashaka_like_app"
+            app_data = root / "ag_data"
+            (repo / ".agents/rules").mkdir(parents=True)
+            (repo / ".agents/state").mkdir(parents=True)
+            (repo / ".agents/rules/harness-rules.md").write_text("# Rules\n", encoding="utf-8")
+            (repo / "app/src/main/kotlin/com/demo").mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+
+            # 1) Dependency-only Roborazzi 1.78 + Robolectric 4.17 + ui-test-junit4 (missing includeAndroidResources & ui-test-manifest)
+            gradle_file = repo / "app/build.gradle"
+            gradle_file.write_text(
+                'plugins {\n'
+                '    id "com.android.application"\n'
+                '}\n'
+                'dependencies {\n'
+                '    testImplementation "io.github.takahirom.roborazzi:roborazzi:1.78.0"\n'
+                '    testImplementation "io.github.takahirom.roborazzi:roborazzi-compose:1.78.0"\n'
+                '    testImplementation "io.github.takahirom.roborazzi:roborazzi-junit-rule:1.78.0"\n'
+                '    testImplementation "org.robolectric:robolectric:4.17"\n'
+                '    testImplementation "androidx.compose.ui:ui-test-junit4"\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            caps_warn = rg.detect_roborazzi(repo)
+            self.assertTrue(caps_warn["installed"])
+            self.assertFalse(caps_warn["plugin_applied"])
+            self.assertTrue(caps_warn["robolectric_installed"])
+            self.assertTrue(caps_warn["compose_ui_test_installed"])
+            self.assertFalse(caps_warn["compose_ui_test_manifest_installed"])
+            self.assertFalse(caps_warn["include_android_resources"])
+
+            # Verify run_roborazzi_verify uses :app:testDebugUnitTest when plugin is not applied
+            seen_gradle_args: list[list[str]] = []
+
+            def _fake_gradle_run(cmd, **_kwargs):
+                seen_gradle_args.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 0, stdout="BUILD SUCCESSFUL", stderr="")
+
+            with unittest.mock.patch.object(rg.subprocess, "run", side_effect=_fake_gradle_run), unittest.mock.patch.object(rg, "write_gate_result"):
+                rc_rb, payload_rb = rg.run_roborazzi_verify(repo)
+                self.assertEqual(0, rc_rb)
+                self.assertEqual(":app:testDebugUnitTest", payload_rb["gradle_task"])
+                self.assertIn("-Proborazzi.dumpUiTree=true", seen_gradle_args[0])
+
+            doc_w = HarnessDoctor(repo, run_selftest=False)
+            doc_w.check_antigravity_installation()
+            jvm_chk_w = next(r for r in doc_w.results if r.name == "Headless JVM UI Test Stack")
+            self.assertEqual("WARN", jvm_chk_w.status)
+            self.assertIn("isIncludeAndroidResources", jvm_chk_w.message)
+            self.assertIn("ui-test-manifest", jvm_chk_w.message)
+
+            # Add isIncludeAndroidResources = true + ui-test-manifest -> Doctor PASS
+            gradle_file.write_text(
+                'plugins { id "com.android.application" }\n'
+                'android {\n'
+                '    testOptions { unitTests { isIncludeAndroidResources = true } }\n'
+                '}\n'
+                'dependencies {\n'
+                '    testImplementation "io.github.takahirom.roborazzi:roborazzi:1.78.0"\n'
+                '    testImplementation "org.robolectric:robolectric:4.17"\n'
+                '    testImplementation "androidx.compose.ui:ui-test-junit4"\n'
+                '    debugImplementation "androidx.compose.ui:ui-test-manifest"\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            doc_ok = HarnessDoctor(repo, run_selftest=False)
+            doc_ok.check_antigravity_installation()
+            jvm_chk_ok = next(r for r in doc_ok.results if r.name == "Headless JVM UI Test Stack")
+            self.assertEqual("PASS", jvm_chk_ok.status, jvm_chk_ok.message)
+
+            # 2) Web-Relay: pure logic pack vs Compose UI pack + >=40,000 token Context Bloat Shield
+            vm_file = repo / "app/src/main/kotlin/com/demo/FoodViewModel.kt"
+            screen_file = repo / "app/src/main/kotlin/com/demo/FoodScreen.kt"
+            vm_file.write_text("package com.demo\n\nclass FoodViewModel {\n    fun calories(): Int = 1800\n}\n", encoding="utf-8")
+            screen_file.write_text(
+                "package com.demo\n\nimport androidx.compose.runtime.Composable\n\n@Composable\nfun FoodScreen(calories: Int) {\n    println(calories)\n}\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "baseline files"], cwd=repo, check=True)
+
+            bloated_tx = app_data / "brain" / "cid-web-52k" / ".system_generated" / "logs" / "transcript.jsonl"
+            bloated_tx.parent.mkdir(parents=True)
+            bloated_tx.write_text(
+                json.dumps({
+                    "step_index": 8,
+                    "type": "PLANNER_RESPONSE",
+                    "usageMetadata": {"promptTokenCount": 52400, "cachedContentTokenCount": 48000},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_APP_DATA": str(app_data), "HARNESS_CONVERSATION_ID": "cid-web-52k", "HARNESS_NO_CLIPBOARD": "1"},
+                clear=False,
+            ):
+                pack_logic = web_relay.build_web_pack(
+                    repo,
+                    prompt="Update FoodViewModel calorie rounding",
+                    files=["app/src/main/kotlin/com/demo/FoodViewModel.kt"],
+                    no_clipboard=True,
+                )
+                pack_ui = web_relay.build_web_pack(
+                    repo,
+                    prompt="Add Arabic RTL step badge to FoodScreen",
+                    files=["app/src/main/kotlin/com/demo/FoodScreen.kt"],
+                    no_clipboard=True,
+                )
+            logic_md = Path(pack_logic["bundle_file"]).read_text(encoding="utf-8")
+            ui_md = Path(pack_ui["bundle_file"]).read_text(encoding="utf-8")
+            self.assertNotIn("Headless JVM Compose & RTL Verification", logic_md)
+            self.assertIn("Headless JVM Compose & RTL Verification", ui_md)
+            self.assertIn("ar-rSA-ldrtl", ui_md)
+            self.assertIn("UNUSED_PARAMETER", ui_md)
+            self.assertIn("context_compact_advisory", pack_ui)
+            self.assertEqual(52400, pack_ui["context_compact_advisory"]["prompt_tokens"])
+            self.assertIn("/compact", pack_ui["context_compact_advisory"]["advisory"])
+
+            # 3) Unused Code Guard: catches UNUSED_PARAMETER, UNUSED_PRIVATE_FUNCTION, UNUSED_PRIVATE_CLASS, & cross-repo UNUSED_DECLARATION with 0 false positives
+            dead_kt = repo / "app/src/main/kotlin/com/demo/NutritionCard.kt"
+            dead_kt.write_text(
+                "package com.demo\n\n"
+                "import androidx.compose.runtime.Composable\n"
+                "import androidx.compose.ui.tooling.preview.Preview\n\n"
+                "/**\n"
+                " * Renders nutrition card.\n"
+                " * @param title Card title.\n"
+                " * @param unusedSubtitle Dead parameter mentioned in KDoc.\n"
+                " */\n"
+                "fun renderNutritionCard(title: String, unusedSubtitle: String = \"\"): String {\n"
+                "    return usedPrivateHelper(title)\n"
+                "}\n\n"
+                "private fun usedPrivateHelper(label: String): String = \"Card: $label\"\n\n"
+                "private fun deadPrivateHelper(): Int = 99\n\n"
+                "private data class DeadPrivateModel(val x: Int) {\n"
+                "    companion object {\n"
+                "        fun zero() = DeadPrivateModel(0)\n"
+                "    }\n"
+                "}\n\n"
+                "class DeadPublicMapper {\n"
+                "    fun mapNothing(): Int = 0\n"
+                "}\n\n"
+                "abstract class BaseHandler {\n"
+                "    abstract fun onEvent(rawCode: Int)\n"
+                "}\n\n"
+                "class LiveHandler : BaseHandler() {\n"
+                "    override fun onEvent(rawCode: Int) {\n"
+                "        // unusedInOverride is valid on override\n"
+                "    }\n"
+                "    fun withUnderscoreAndDefault(_ignored: Int, base: Int, doubled: Int = base * 2): Int = doubled\n"
+                "    private operator fun invoke(): Int = withUnderscoreAndDefault(0, 3)\n"
+                "}\n\n"
+                "@Preview\n"
+                "@Composable\n"
+                "private fun NutritionCardPreview() {\n"
+                "    println(renderNutritionCard(\"Macro\"))\n"
+                "    println(LiveHandler()())\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            intra_issues = fast_kt_lint.lint_file(dead_kt)
+            by_type = {iss["type"]: iss for iss in intra_issues}
+            self.assertIn("UNUSED_PARAMETER", by_type, intra_issues)
+            self.assertIn("unusedSubtitle", by_type["UNUSED_PARAMETER"]["msg"])
+            self.assertIn("UNUSED_PRIVATE_FUNCTION", by_type, intra_issues)
+            self.assertIn("deadPrivateHelper", by_type["UNUSED_PRIVATE_FUNCTION"]["msg"])
+            self.assertIn("UNUSED_PRIVATE_CLASS", by_type, intra_issues)
+            self.assertIn("DeadPrivateModel", by_type["UNUSED_PRIVATE_CLASS"]["msg"])
+            # Ensure valid patterns did NOT trigger false positives
+            all_msgs = " | ".join(iss["msg"] for iss in intra_issues)
+            for valid_sym in ("rawCode", "_ignored", "base", "doubled", "usedPrivateHelper", "NutritionCardPreview", "invoke"):
+                self.assertNotIn(f"'{valid_sym}'", all_msgs, intra_issues)
+
+            # Cross-repo unreferenced public declaration check + reviewer brief injection + --strict-unused CLI
+            mod_map = fast_kt_lint.get_modified_lines_map(repo, [dead_kt])
+            cross_dead = fast_kt_lint.find_unreferenced_new_declarations(repo, [dead_kt], mod_map)
+            dead_names = {d["symbol"] for d in cross_dead}
+            self.assertIn("DeadPublicMapper", dead_names, cross_dead)
+            self.assertNotIn("renderNutritionCard", dead_names, cross_dead)
+            self.assertNotIn("LiveHandler", dead_names, cross_dead)
+
+            pkg_dir = repo / ".agents/state/tasks/t-dead/review_runs/R1"
+            pkg_dir.mkdir(parents=True)
+            brief_txt = review_package.generate_task_brief(
+                repo,
+                "t-dead",
+                "bug-test-reviewer-agent",
+                pkg_dir,
+                {"run_id": "R1", "package_sha256": "1234567890abcdef"},
+                {"task_id": "t-dead", "task_kind": "FEATURE", "requested_outcome": "Add NutritionCard", "expected_surfaces": ["COMPOSE_UI"]},
+                {"reviewers": ["bug-test-reviewer-agent"]},
+                [{"path": "app/src/main/kotlin/com/demo/NutritionCard.kt"}],
+            ).read_text(encoding="utf-8")
+            self.assertIn("Zero-Caller Newly Added Declarations", brief_txt)
+            self.assertIn("DeadPublicMapper", brief_txt)
+
+            # 4) Follow-Up Review Round Carry (`Single-Owner Surgical Fix Carry`) + CRLF->LF `build_fix_diff` normalization (#8af45957)
+            import difflib
+            import review_fix_delta
+            import review_policy
+
+            old_crlf = "".join(f"val line{i} = {i}\r\n" for i in range(1, 201))
+            new_lf = "".join(
+                (f"val line{i} = {i + 1000}\n" if i in (95, 96) else f"val line{i} = {i}\n")
+                for i in range(1, 201)
+            )
+            (repo / ".agents/state/tasks/t-dead/manifest-run-r1.json").write_text("{}", encoding="utf-8")
+            with unittest.mock.patch.object(
+                review_fix_delta,
+                "_comparison_texts",
+                return_value={"app/src/main/java/com/demo/paywall/OnboardingPaywallActivity.kt": (old_crlf, new_lf)},
+            ):
+                diff_out = review_fix_delta.build_fix_diff(
+                    repo,
+                    repo / ".agents/state/tasks/t-dead",
+                    {},
+                    {},
+                    {
+                        "fix_delta": {
+                            "comparison": "REVIEWED_TEXT",
+                            "files": ["app/src/main/java/com/demo/paywall/OnboardingPaywallActivity.kt"],
+                        },
+                        "later_round_source": {"run_id": "run-r1"},
+                    },
+                )
+            self.assertIsNotNone(diff_out)
+            self.assertLess(len(diff_out.splitlines()), 35, f"CRLF->LF caused whole-file diff explosion: {len(diff_out.splitlines())} lines")
+            self.assertIn("+val line95 = 1095", diff_out)
+
+            # Single-owner surgical fix on T5_CRITICAL BILLING file: only the 1 finding owner reruns, other 2 carry!
+            skills_root = REPO_ROOT / "agents/skills"
+            cls_t5 = {
+                "surfaces": ["BILLING", "BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES"],
+                "severity": "CRITICAL",
+                "changed_files": 5,
+                "changed_lines": 180,
+            }
+            r1_policy = {
+                "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                "surfaces": ["BILLING", "BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES"],
+            }
+            surgical_delta = {
+                "files": ["app/src/main/java/com/demo/paywall/OnboardingPaywallActivity.kt"],
+                "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                "comparison": "REVIEWED_TEXT",
+                "changed_lines": 8,
+                "all_previously_reviewed": True,
+            }
+            r2_arch_owner = review_policy.decide_later_round(
+                cls_t5,
+                skills_root,
+                previous_policy=r1_policy,
+                finding_owners=["arch-regression-reviewer-agent"],
+                passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                source_snapshot="s1" * 32,
+                source_change_set="c1" * 32,
+                current_change_set="c2" * 32,
+                source_run_id="run-1",
+                round_number=2,
+                fix_delta=surgical_delta,
+            )
+            self.assertEqual(["arch-regression-reviewer-agent"], r2_arch_owner["reviewers"])
+            self.assertEqual(
+                {"bug-test-reviewer-agent", "security-perf-reviewer-agent"},
+                {c["reviewer"] for c in r2_arch_owner["carried_reviews"]},
+            )
+            self.assertTrue(r2_arch_owner["fix_delta"].get("surgical_owner_only"))
+
+            # Also verify when bug-test-reviewer-agent is the sole finding owner -> ONLY bug-test reruns (arch & security carry!)
+            r2_bug_owner = review_policy.decide_later_round(
+                cls_t5,
+                skills_root,
+                previous_policy=r1_policy,
+                finding_owners=["bug-test-reviewer-agent"],
+                passed_reviewers=["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
+                source_snapshot="s1" * 32,
+                source_change_set="c1" * 32,
+                current_change_set="c2" * 32,
+                source_run_id="run-1",
+                round_number=2,
+                fix_delta=surgical_delta,
+            )
+            self.assertEqual(["bug-test-reviewer-agent"], r2_bug_owner["reviewers"])
+            self.assertEqual(
+                {"arch-regression-reviewer-agent", "security-perf-reviewer-agent"},
+                {c["reviewer"] for c in r2_bug_owner["carried_reviews"]},
+            )
+
+            # Large >40-line rewrite in BILLING still escalates to full delta reviewers!
+            large_delta = {**surgical_delta, "changed_lines": 65}
+            r2_large = review_policy.decide_later_round(
+                cls_t5,
+                skills_root,
+                previous_policy=r1_policy,
+                finding_owners=["arch-regression-reviewer-agent"],
+                passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                source_snapshot="s1" * 32,
+                source_change_set="c1" * 32,
+                current_change_set="c2" * 32,
+                source_run_id="run-1",
+                round_number=2,
+                fix_delta=large_delta,
+            )
+            self.assertEqual(3, len(r2_large["reviewers"]))
 
 
 if __name__ == "__main__":

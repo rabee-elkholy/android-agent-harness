@@ -107,10 +107,10 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "summary": "Detects Windows 11 Smart App Control Error 4551 on unsigned Antigravity v2.7.0 installers.",
     },
     "AGY_200144_CLI_SUBAGENT_MODEL_ID": {
-        "issues": ("#200144",),
+        "issues": ("#200144", "#171228"),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Omits unsupported explicit model IDs from subagent YAML frontmatter for agy CLI compatibility.",
+        "summary": "Omits unsupported explicit model IDs from subagent YAML frontmatter (#200144) and offloads Hydrogen Scout/Reviewer subagents on Carbon/Argon Lead sessions via Model='flash' (routes natively to Gemini 4 Hydrogen Tiered High 1x).",
     },
     "AGY_200467_HYDROGEN_EXTRA_ARGON_LEAK": {
         "issues": ("#200467",),

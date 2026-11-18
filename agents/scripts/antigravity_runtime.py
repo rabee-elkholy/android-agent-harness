@@ -908,9 +908,9 @@ def inspect_nov15_antigravity_hazards(
                 active_lead_model = chosen
                 break
 
-    norm_model = active_lead_model.lower().removeprefix("models/")
+    norm_model = re.sub(r"[\s()]+", "-", active_lead_model.lower().removeprefix("models/")).strip("-")
     hydrogen_extra_leak_active = bool(
-        re.search(r"gemini-4-hydrogen-(?:extra|xhigh)\b|hydrogen@(?:extra|xhigh)\b", norm_model)
+        re.search(r"gemini-4-hydrogen-(?:tiered-)?(?:extra|xhigh)\b|hydrogen@(?:extra|xhigh)\b", norm_model)
     )
 
     auto_accept_state = "no_vscode_settings"

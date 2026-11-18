@@ -1163,6 +1163,7 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
                 raise
             observed = {}  # Parent inheritance requires no invented native proof.
         proven_upward_parent = False
+        proven_frontier_flash_offload = False
         if not effective_inherits:
             if not observed:
                 raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: {role} requires native execution model metadata; frontmatter is configuration only")
@@ -1170,12 +1171,15 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             obs_fam_chk, _ = _split_antigravity_family_and_tier(str(observed.get("host_configured_model") or ""))
             if exp_fam_chk == "gemini-4-hydrogen" and obs_fam_chk in _UPWARD_GEMINI4_PARENT_FAMILIES and not selection.get("model_argument"):
                 proven_upward_parent = _is_proven_upward_parent_inheritance(run, identity, observed)
+            elif exp_fam_chk == "gemini-4-hydrogen" and obs_fam_chk == "gemini-3.8-flash":
+                proven_frontier_flash_offload = _is_proven_frontier_parent_session(run, identity, observed)
             if not _matches_antigravity_native_model(
                 str(expected_resolved or ""),
                 selection.get("thinking_level"),
                 observed.get("host_configured_model"),
                 observed.get("host_reported_models", []),
                 allow_upward_parent_inheritance=proven_upward_parent,
+                allow_frontier_flash_offload=proven_frontier_flash_offload,
             ):
                 raise ValidationError(f"REVIEW_MODEL_MISMATCH: {role} native execution does not match {expected_resolved}")
         return {
@@ -1185,6 +1189,7 @@ def model_evidence(run: dict, role: str, transcript_identity: dict | None = None
             "actual_model": (observed.get("host_reported_models") or [None])[-1],
             "actual_model_status": "NATIVE_METADATA_OBSERVED" if observed else "UNOBSERVED",
             **({"parent_inherited_upgrade": True} if proven_upward_parent else {}),
+            **({"frontier_flash_offload": True} if proven_frontier_flash_offload else {}),
             **observed,
             "settings_sha256": (run.get("review_models") or {}).get("sha256"),
         }
@@ -1211,6 +1216,8 @@ _THINKING_TIER_RANKS: dict[str, int] = {
 
 def _split_antigravity_family_and_tier(slug: str) -> tuple[str, str | None]:
     clean = re.sub(r"^models/", "", str(slug or "").strip().lower())
+    clean = re.sub(r"[\s()]+", "-", clean).strip("-")
+    clean = re.sub(r"-tiered(?=-|$)", "", clean)
     m = re.match(r"^(.+?)-(fast|low|medium|high|xhigh|extra|tiered|n|[0-9]{3})$", clean)
     if m:
         fam, suf = m.group(1), m.group(2)
@@ -1301,6 +1308,109 @@ def _is_proven_upward_parent_inheritance(run: dict, identity: dict, observed: di
     return False
 
 
+def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict) -> bool:
+    """Verify whether the parent Lead session is provably Carbon/Argon (justifying Model='flash' offload)."""
+    parent_cids: list[str] = []
+    tx_raw = identity.get("transcript_path")
+    if tx_raw:
+        try:
+            from antigravity_runtime import prefer_full_transcript
+            tx_p = prefer_full_transcript(Path(str(tx_raw))) or Path(str(tx_raw))
+            if tx_p.is_file():
+                with tx_p.open("r", encoding="utf-8", errors="replace") as fh:
+                    for _ in range(10):
+                        ln = fh.readline()
+                        if not ln:
+                            break
+                        for m in re.finditer(r"sender=([A-Za-z0-9._/-]+)", ln):
+                            scid = m.group(1).strip()
+                            if scid and scid not in parent_cids:
+                                parent_cids.append(scid)
+        except OSError:
+            pass
+    cand_state_dirs: list[Path] = []
+    repo_hint = str(identity.get("repo") or "").strip()
+    if repo_hint:
+        try:
+            cand_state_dirs.append(state_root(Path(repo_hint).resolve()))
+        except (OSError, RuntimeError, ValueError):
+            pass
+    for path_key in ("policy", "package_path", "review_package"):
+        raw_p = str(run.get(path_key) or "").strip()
+        if raw_p:
+            try:
+                rp = Path(raw_p).resolve()
+                for anc in rp.parents:
+                    if anc.name == "state" and anc.parent.name in {".agents", "agents"}:
+                        if anc not in cand_state_dirs:
+                            cand_state_dirs.append(anc)
+                        break
+            except (OSError, RuntimeError, ValueError):
+                pass
+    for st_dir in cand_state_dirs:
+        live_p = st_dir / "live-session-models.json"
+        if live_p.is_file():
+            try:
+                ldoc = read_json(live_p)
+                if isinstance(ldoc, dict):
+                    sess = ldoc.get("sessions") if isinstance(ldoc.get("sessions"), dict) else {}
+                    lcid = str(ldoc.get("latest_lead_cid") or "").strip()
+                    if lcid and lcid != str(observed.get("execution_id") or "") and sess.get(lcid):
+                        lf, _ = _split_antigravity_family_and_tier(str(sess[lcid]))
+                        if lf in _UPWARD_GEMINI4_PARENT_FAMILIES:
+                            return True
+            except (OSError, ValueError, ValidationError):
+                pass
+    try:
+        from antigravity_runtime import extract_lead_candidates_from_state, is_likely_subagent_transcript, native_model_metadata, resolve_transcript
+    except ImportError:
+        return False
+    explicit_parent_cid = str(parent_cids[0]) if parent_cids else ""
+    for st_dir in cand_state_dirs:
+        for scid in extract_lead_candidates_from_state(st_dir):
+            if scid not in parent_cids:
+                parent_cids.append(scid)
+    for pcid in parent_cids[:6]:
+        if pcid == str(observed.get("execution_id") or ""):
+            continue
+        try:
+            ptx = resolve_transcript(pcid)
+            if ptx is None:
+                continue
+            if pcid != explicit_parent_cid and is_likely_subagent_transcript(ptx):
+                continue
+            p_meta = native_model_metadata(ptx)
+        except Exception:
+            continue
+        if isinstance(p_meta, dict) and p_meta.get("host_configured_model"):
+            p_fam, _ = _split_antigravity_family_and_tier(str(p_meta["host_configured_model"]))
+            if p_fam in _UPWARD_GEMINI4_PARENT_FAMILIES:
+                return True
+    return False
+
+
+def reviewer_requires_flash_offload(
+    repo: Path | None,
+    selection: dict | None,
+    *,
+    parent_conversation_id: str = "",
+) -> bool:
+    """Return True when `invoke_subagent` must pass `Model='flash'` for `selection` on Antigravity."""
+    if not isinstance(selection, dict):
+        return False
+    resolved_m = str(selection.get("resolved_model") or selection.get("effective_model") or "").strip().lower()
+    if "flash" in resolved_m and not resolved_m.startswith("gemini-4-hydrogen"):
+        return True
+    if resolved_m.startswith("gemini-4-hydrogen") and repo is not None:
+        try:
+            from delegation_policy import is_frontier_lead_requiring_flash_offload
+            offload, _ = is_frontier_lead_requiring_flash_offload(repo, parent_conversation_id=parent_conversation_id)
+            return bool(offload)
+        except ImportError:
+            return False
+    return False
+
+
 def _matches_antigravity_native_model(
     expected_resolved: str,
     thinking_level: object,
@@ -1308,6 +1418,7 @@ def _matches_antigravity_native_model(
     host_reported_models: object,
     *,
     allow_upward_parent_inheritance: bool = False,
+    allow_frontier_flash_offload: bool = False,
 ) -> bool:
     """Validate observed Antigravity SQLite protobuf model metadata against the frozen reviewer selection.
 
@@ -1332,24 +1443,30 @@ def _matches_antigravity_native_model(
         and obs_family in _UPWARD_GEMINI4_PARENT_FAMILIES
         and obs_tier not in ("fast", "low")
     )
-    if obs_family != exp_family and not upward_gemini4_inherited:
+    frontier_flash_fallback = (
+        allow_frontier_flash_offload
+        and exp_family == "gemini-4-hydrogen"
+        and obs_family == "gemini-3.8-flash"
+        and obs_tier not in ("fast", "low")
+    )
+    if obs_family != exp_family and not upward_gemini4_inherited and not frontier_flash_fallback:
         return False
 
     lvl_str = str(thinking_level or "").strip().lower()
     exp_tier = lvl_str if lvl_str in _THINKING_TIER_RANKS else exp_suffix_tier
 
-    if not upward_gemini4_inherited and exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
+    if not upward_gemini4_inherited and not frontier_flash_fallback and exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
         if _THINKING_TIER_RANKS[obs_tier] < _THINKING_TIER_RANKS[exp_tier]:
             return False
 
-    target_reported_family = obs_family if upward_gemini4_inherited else exp_family
+    target_reported_family = obs_family if (upward_gemini4_inherited or frontier_flash_fallback) else exp_family
     if target_reported_family == "gemini-4-hydrogen":
         reported_re = re.compile(
-            r"(?:models/)?(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:tiered-)?(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     else:
         reported_re = re.compile(
-            r"(?:models/)?" + re.escape(target_reported_family) + r"(?:-(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?" + re.escape(target_reported_family) + r"(?:-(?:tiered-)?(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     exp_clean = re.sub(r"^models/", "", str(expected_resolved).strip().lower())
     obs_clean = re.sub(r"^models/", "", str(host_configured).strip().lower())
@@ -1383,6 +1500,7 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
                 evidence.get("host_configured_model"),
                 evidence.get("host_reported_models"),
                 allow_upward_parent_inheritance=bool(evidence.get("parent_inherited_upgrade")),
+                allow_frontier_flash_offload=bool(evidence.get("frontier_flash_offload")),
             )
         ):
             raise ValidationError(f"REVIEW_MODEL_UNVERIFIED: missing or mismatched frozen Antigravity model evidence for {role}")
@@ -1440,12 +1558,25 @@ def sync_specialist_agent_models(
 
 
 def effective_reviewer_model(selection: dict | None) -> str:
-    """Return a concise human-readable model label for a reviewer selection."""
+    """Return a concise ground-truth model label for a reviewer selection.
+
+    When native SQLite execution metadata (`host_configured_model` / `actual_model`) has been
+    observed (`NATIVE_METADATA_OBSERVED`), report the actual executed model rather than hiding
+    parent-inherited Carbon/Argon runs behind a theoretical Hydrogen policy string.
+    """
     if not isinstance(selection, dict):
         return "inherit"
     resolved = str(selection.get("resolved_model") or selection.get("agent_frontmatter_model") or "").strip()
     requested = str(selection.get("requested_model") or "inherit").strip() or "inherit"
     actual = str(selection.get("actual_model") or "").strip()
+    host_cfg = str(selection.get("host_configured_model") or "").strip()
+    observed_truth = re.sub(r"^models/", "", (host_cfg or actual)).strip()
+    if observed_truth and str(selection.get("actual_model_status") or "") == "NATIVE_METADATA_OBSERVED":
+        if resolved == "inherit" or requested == "inherit":
+            return f"inherit ({observed_truth})"
+        if resolved and _split_antigravity_family_and_tier(observed_truth)[0] != _split_antigravity_family_and_tier(resolved)[0]:
+            return f"{observed_truth} (policy: {resolved})"
+        return observed_truth
     if resolved and resolved != "inherit":
         return resolved
     if requested not in ANTIGRAVITY_META_PRESETS:
@@ -1474,15 +1605,38 @@ def format_reviewers_with_models(run_or_profile: dict | None, reviewers: list[st
     return ", ".join(f"{role} [{mapping.get(role, 'inherit')}]" for role in reviewers)
 
 
-def antigravity_dispatch_model_hint(run_or_profile: dict | None, reviewers: list[str]) -> str:
+def antigravity_dispatch_model_hint(
+    run_or_profile: dict | None,
+    reviewers: list[str],
+    *,
+    repo: Path | None = None,
+    parent_conversation_id: str = "",
+) -> str:
     """Return an explicit per-reviewer `Model` parameter hint for Antigravity `invoke_subagent` calls."""
+    rev_source: dict[str, Any] = {}
+    if isinstance(run_or_profile, dict):
+        if isinstance(run_or_profile.get("review_models"), dict) and isinstance(run_or_profile["review_models"].get("reviewers"), dict):
+            rev_source = run_or_profile["review_models"]["reviewers"]
+        elif isinstance(run_or_profile.get("reviewers"), dict):
+            rev_source = run_or_profile["reviewers"]
+        elif any(isinstance(v, dict) and ("resolved_model" in v or "requested_model" in v) for v in run_or_profile.values()):
+            rev_source = run_or_profile
     mapping = reviewer_model_map(run_or_profile, reviewers)
-    flash_roles = [r for r in reviewers if "flash" in str(mapping.get(r) or "")]
-    pro_roles = [r for r in reviewers if "pro" in str(mapping.get(r) or "")]
+    flash_roles = [
+        r for r in reviewers
+        if "flash" in str(mapping.get(r) or "")
+        or reviewer_requires_flash_offload(repo, rev_source.get(r) or {"resolved_model": mapping.get(r)}, parent_conversation_id=parent_conversation_id)
+    ]
+    pro_roles = [r for r in reviewers if r not in flash_roles and "pro" in str(mapping.get(r) or "")]
     omit_roles = [r for r in reviewers if r not in flash_roles and r not in pro_roles]
     parts: list[str] = []
     if flash_roles:
-        parts.append(f"pass Model='flash' for [{', '.join(flash_roles)}]")
+        offload_note = (
+            " (routes natively to Gemini 4 Hydrogen High 1x and prevents Carbon/Argon parent quota inheritance)"
+            if any(str(mapping.get(r) or "").startswith("gemini-4-hydrogen") for r in flash_roles)
+            else ""
+        )
+        parts.append(f"pass Model='flash' for [{', '.join(flash_roles)}]{offload_note}")
     if pro_roles:
         parts.append(f"pass Model='pro' for [{', '.join(pro_roles)}]")
     if omit_roles:

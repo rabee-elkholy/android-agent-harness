@@ -265,10 +265,13 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
         else:
             rev_entry["required_model"] = "inherit"
         if rev in selections:
+            from review_models import reviewer_requires_flash_offload
             selected = selections[rev]
             rev_entry.update(selected)
             rev_entry["dispatch_contract"].update({key: selected[key] for key in ("model_policy", "model_argument", "native_arguments")})
-            if is_antigravity and "flash" in str(selected.get("resolved_model") or ""):
+            if is_antigravity and reviewer_requires_flash_offload(repo, selected):
+                rev_entry["model_argument"] = "Model"
+                rev_entry["native_arguments"] = {"Model": "flash"}
                 rev_entry["dispatch_contract"]["model_argument"] = "Model"
                 rev_entry["dispatch_contract"]["native_arguments"] = {"Model": "flash"}
             if selected.get("agent_frontmatter_model") is not None:

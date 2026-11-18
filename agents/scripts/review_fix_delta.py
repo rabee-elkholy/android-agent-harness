@@ -168,9 +168,18 @@ def build_fix_diff(repo, task_directory, manifest, plan, policy):
     comparison = _comparison_texts(repo, previous, manifest, plan, source_run, delta.get("files") or [])
     if comparison is None:
         raise ValidationError("Reviewed text is unavailable; prepare a fresh follow-up review policy before dispatch")
-    return "\n".join("".join(difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True),
-                       fromfile="a/" + relative, tofile="b/" + relative, n=10))
-                       for relative, (old, new) in sorted(comparison.items()))
+    return "\n".join(
+        "".join(
+            difflib.unified_diff(
+                old.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True),
+                new.replace("\r\n", "\n").replace("\r", "\n").splitlines(keepends=True),
+                fromfile="a/" + relative,
+                tofile="b/" + relative,
+                n=10,
+            )
+        )
+        for relative, (old, new) in sorted(comparison.items())
+    )
 
 
 def _entries(manifest: dict) -> dict[str, tuple]:
@@ -213,8 +222,37 @@ def compute_fix_delta(
         if not files:
             return {"files": [], "reviewers": [], **decision_basis}
         comparison = _comparison_texts(repo, previous, current_manifest, plan, previous_run_id, files)
+        real_changed_lines = 0
+        all_previously_reviewed = all(path in before and path in after for path in files)
+        if comparison is not None:
+            norm_comp: dict[str, tuple[str, str]] = {}
+            for rel_k, (old_t, new_t) in comparison.items():
+                o_lf = old_t.replace("\r\n", "\n").replace("\r", "\n")
+                n_lf = new_t.replace("\r\n", "\n").replace("\r", "\n")
+                norm_comp[rel_k] = (o_lf, n_lf)
+                o_lns, n_lns = o_lf.splitlines(), n_lf.splitlines()
+                for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, o_lns, n_lns).get_opcodes():
+                    if tag != "equal":
+                        real_changed_lines += (i2 - i1) + (j2 - j1)
+            comparison = norm_comp
+            if real_changed_lines == 0:
+                return {
+                    "files": files,
+                    "reviewers": [],
+                    **decision_basis,
+                    "comparison": "REVIEWED_TEXT",
+                    "changed_lines": 0,
+                    "all_previously_reviewed": all_previously_reviewed,
+                }
         if _is_diagnostic_log_only_comparison(comparison):
-            return {"files": files, "reviewers": [], **decision_basis, "comparison": "REVIEWED_TEXT"}
+            return {
+                "files": files,
+                "reviewers": [],
+                **decision_basis,
+                "comparison": "REVIEWED_TEXT",
+                "changed_lines": real_changed_lines,
+                "all_previously_reviewed": all_previously_reviewed,
+            }
         present = [{"path": path} for path in files if path in after or comparison is not None]
         if not present:
             # Only deletions since the review: the regression reviewer covers what they break.
@@ -229,8 +267,14 @@ def compute_fix_delta(
         reviewers = set(routed.get("reviewers") or [])
         if any(path not in after for path in files):
             reviewers.add("arch-regression-reviewer-agent")
+        extra_meta = (
+            {"changed_lines": real_changed_lines, "all_previously_reviewed": all_previously_reviewed}
+            if comparison is not None
+            else {}
+        )
         return {"files": files, "reviewers": sorted(reviewers),
                 **decision_basis,
+                **extra_meta,
                 "comparison": "REVIEWED_TEXT" if comparison is not None else "FILE_SCOPE_FALLBACK"}
     except Exception:
         return None

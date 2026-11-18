@@ -22,7 +22,7 @@ def _normalize_subagent_items(args: dict) -> tuple[list[Any], bool]:
         cleaned = {k: v for k, v in args.items() if k not in host_meta_keys}
         return [cleaned], True
     return [], False
-def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], args: dict, tool_name: str) -> None:
+def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], args: dict, tool_name: str, *, parent_conversation_id: str = "") -> None:
     raw_subs, is_single_top_level = _engine._normalize_subagent_items(args)
     if not isinstance(raw_subs, list) or not raw_subs:
         _engine.emit("deny", "No reviewers specified in Subagents array.", tool=tool_name, reason_code="REVIEWER_ROSTER_EMPTY")
@@ -85,7 +85,13 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
         r_role_hint = _engine._canonical_subagent_role(str(item.get("Role") or item.get("TypeName") or "").strip())
         sel_info = phase_run_models.get(r_role_hint) if isinstance(phase_run_models, dict) else None
         resolved_m = str((sel_info or {}).get("resolved_model") or "")
-        allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
+        from review_models import reviewer_requires_flash_offload
+        needs_flash = reviewer_requires_flash_offload(
+            _engine.REPO,
+            sel_info if isinstance(sel_info, dict) else {"resolved_model": resolved_m},
+            parent_conversation_id=parent_conversation_id,
+        )
+        allowed_native_model = "flash" if needs_flash else ("pro" if "pro" in resolved_m else None)
 
         if "model" in item or (not allowed_native_model and "Model" in item):
             bound_note = (
@@ -117,10 +123,15 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                 )
                 return
         if allowed_native_model and item.get("Model") != allowed_native_model:
+            offload_ctx = (
+                " on an active Carbon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Argon quota)"
+                if resolved_m.startswith("gemini-4-hydrogen")
+                else ""
+            )
             _engine.emit(
                 "deny",
                 (
-                    f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'; "
+                    f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'{offload_ctx}; "
                     f"you MUST pass Model='{allowed_native_model}' in invoke_subagent."
                 ),
                 tool=tool_name,
@@ -422,6 +433,54 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             _engine.emit("allow" if ok_u else "deny", reason_u, tool=name, reason_code=code_u)
             return
         if raw_subs and all(
+            isinstance(s, dict)
+            and _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip()) in _engine.ON_DEMAND_SPECIALIST_AGENTS
+            for s in raw_subs
+        ):
+            if len(raw_subs) > 5:
+                _engine.emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
+                return
+            _pre_offload, _pre_lead_fam = False, ""
+            _pre_inherits = False
+            try:
+                from delegation_policy import is_frontier_lead_requiring_flash_offload as _is_frontier_pre
+                _pre_offload, _pre_lead_fam = _is_frontier_pre(_engine.REPO, parent_conversation_id=parent_conversation_id)
+                if _pre_offload:
+                    from review_models import load_policy as _load_pol_pre
+                    _pol_pre, _ = _load_pol_pre(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
+                    _def_pre = str((_pol_pre or {}).get("default") or "").strip().lower()
+                    if _def_pre == "inherit" or _def_pre.startswith(("carbon", "argon")):
+                        _pre_inherits = True
+            except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
+                _pre_offload = False
+            for s in raw_subs:
+                canon_pre = _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip())
+                spec_m_pre = str(s.get("Model") or s.get("model") or "").strip()
+                if _pre_offload and not _pre_inherits:
+                    if spec_m_pre != "flash":
+                        _engine.emit(
+                            "deny",
+                            f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Active Lead session is `{_pre_lead_fam}`, so omitting `Model` on `{canon_pre}` would inherit `{_pre_lead_fam}` and burn frontier quota. Pass `Model='flash'` (routes natively to `gemini-4-hydrogen-tiered-high` `1x`).",
+                            tool=name,
+                            reason_code="CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED",
+                        )
+                        return
+                elif spec_m_pre and spec_m_pre.lower() != "inherit":
+                    _engine.emit(
+                        "deny",
+                        f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_pre}` when Lead is not Carbon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_m_pre}`).",
+                        tool=name,
+                        reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
+                    )
+                    return
+            try:
+                from delegation_policy import record_specialist_dispatch
+                record_specialist_dispatch(_engine.REPO, plan, raw_subs, parent_conversation_id=parent_conversation_id)
+            except (ImportError, OSError, ValueError, _engine.ValidationError):
+                pass
+            _engine.emit("allow", "Read-only specialist subagent is allowed for bounded consultation.", tool=name)
+            return
+        if raw_subs and all(
             isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
             for s in raw_subs
         ):
@@ -500,7 +559,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         reason_code="DISPATCH_PHASE_REVIEWERS_REQUIRED",
                     )
                     return
-                _engine._handle_phase_reviewer_dispatch(act, plan, args, name)
+                _engine._handle_phase_reviewer_dispatch(act, plan, args, name, parent_conversation_id=parent_conversation_id)
                 return
 
             if act_code == "WAIT_FOR_PHASE_REVIEWERS" and name == "invoke_subagent":
@@ -523,7 +582,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         "reviewers": sorted(run_meta.get("selected_reviewers") or list(revs.keys())),
                         "briefs": dict(run_meta.get("briefs") or {}),
                     }
-                    _engine._handle_phase_reviewer_dispatch(replay_act, plan, args, name)
+                    _engine._handle_phase_reviewer_dispatch(replay_act, plan, args, name, parent_conversation_id=parent_conversation_id)
                     return
 
             if name in {"invoke_subagent", "send_message"} and act_code in {
@@ -604,6 +663,19 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     )
                     return
                 blocked_impl_clones = {"self", "harness-worker-agent"}
+                frontier_offload_spec, lead_fam_spec = False, ""
+                spec_policy_inherits_parent = False
+                try:
+                    from delegation_policy import is_frontier_lead_requiring_flash_offload as _is_frontier_spec
+                    frontier_offload_spec, lead_fam_spec = _is_frontier_spec(_engine.REPO, parent_conversation_id=parent_conversation_id)
+                    if frontier_offload_spec:
+                        from review_models import load_policy as _load_pol_spec
+                        _pol_spec, _ = _load_pol_spec(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
+                        _def_spec = str((_pol_spec or {}).get("default") or "").strip().lower()
+                        if _def_spec == "inherit" or _def_spec.startswith(("carbon", "argon")):
+                            spec_policy_inherits_parent = True
+                except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
+                    frontier_offload_spec = False
                 for s in norm_subs:
                     if not isinstance(s, dict):
                         _engine.emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
@@ -618,6 +690,25 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                             reason_code="WORKER_SUBAGENT_FORBIDDEN_INLINE_LEAD_ONLY",
                         )
                         return
+                    if canon_t in _engine.ON_DEMAND_SPECIALIST_AGENTS:
+                        spec_model_arg = str(s.get("Model") or s.get("model") or "").strip()
+                        if frontier_offload_spec and not spec_policy_inherits_parent:
+                            if spec_model_arg != "flash":
+                                _engine.emit(
+                                    "deny",
+                                    f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Active Lead session is `{lead_fam_spec}`, so omitting `Model` on `{canon_t}` would inherit `{lead_fam_spec}` and burn frontier quota. Pass `Model='flash'` (routes natively to `gemini-4-hydrogen-tiered-high` `1x`).",
+                                    tool=name,
+                                    reason_code="CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED",
+                                )
+                                return
+                        elif spec_model_arg and spec_model_arg.lower() != "inherit":
+                            _engine.emit(
+                                "deny",
+                                f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_t}` when Lead is not Carbon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_model_arg}`).",
+                                tool=name,
+                                reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
+                            )
+                            return
                 try:
                     from delegation_policy import record_specialist_dispatch
                     record_specialist_dispatch(_engine.REPO, plan, norm_subs, parent_conversation_id=parent_conversation_id)
@@ -795,7 +886,13 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             r_role_hint = _engine._canonical_subagent_role(str(item.get("Role") or item.get("TypeName") or item.get("role") or item.get("typeName") or "").strip())
             sel_info = final_run_models.get(r_role_hint) if isinstance(final_run_models, dict) else None
             resolved_m = str((sel_info or {}).get("resolved_model") or "")
-            allowed_native_model = "flash" if "flash" in resolved_m else ("pro" if "pro" in resolved_m else None)
+            from review_models import reviewer_requires_flash_offload
+            needs_flash = reviewer_requires_flash_offload(
+                _engine.REPO,
+                sel_info if isinstance(sel_info, dict) else {"resolved_model": resolved_m},
+                parent_conversation_id=parent_conversation_id,
+            )
+            allowed_native_model = "flash" if needs_flash else ("pro" if "pro" in resolved_m else None)
 
             if "model" in item or (not allowed_native_model and "Model" in item):
                 bound_note = (
@@ -827,10 +924,15 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     )
                     return
             if allowed_native_model and item.get("Model") != allowed_native_model:
+                offload_ctx = (
+                    " on an active Carbon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Argon quota)"
+                    if resolved_m.startswith("gemini-4-hydrogen")
+                    else ""
+                )
                 _engine.emit(
                     "deny",
                     (
-                        f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'; "
+                        f"REVIEWER_MODEL_MISMATCH: Reviewer '{r_role_hint}' is configured for '{resolved_m}'{offload_ctx}; "
                         f"you MUST pass Model='{allowed_native_model}' in invoke_subagent."
                     ),
                     tool=name,

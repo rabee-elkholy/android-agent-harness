@@ -1501,6 +1501,11 @@ def apply_web_merge(
         for ln in (lint_proc.stdout or "").splitlines()
         if ln.strip().startswith("[KDOC-ADVISORY]")
     ][:20]
+    unused_advisories = [
+        ln.strip()
+        for ln in (lint_proc.stdout or "").splitlines()
+        if ln.strip().startswith("[UNUSED-ADVISORY]")
+    ][:20]
     if lint_proc.returncode != 0:
         lint_lines = [ln.strip() for ln in ((lint_proc.stdout or "") + "\n" + (lint_proc.stderr or "")).splitlines() if ln.strip()]
         if lint_lines:
@@ -1577,4 +1582,6 @@ def apply_web_merge(
         ret_apply["zero_token_gate_findings"] = gate_findings
     if kdoc_advisories:
         ret_apply["kdoc_advisories"] = kdoc_advisories
+    if unused_advisories:
+        ret_apply["unused_advisories"] = unused_advisories
     return ret_apply

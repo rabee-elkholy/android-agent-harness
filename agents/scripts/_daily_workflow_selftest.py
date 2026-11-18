@@ -5888,9 +5888,9 @@ class ReviewOrchestrationTests(unittest.TestCase):
         self.assertEqual([text], policy2["fix_delta"]["files"])
         rerun = set(policy2["reviewers"])
         carried = {item["reviewer"] for item in policy2["carried_reviews"]}
-        self.assertIn("bug-test-reviewer-agent", rerun, "the finding owner reruns")
-        self.assertIn("arch-regression-reviewer-agent", rerun)
-        self.assertTrue(carried, "a reviewer the text change does not route keeps its PASS")
+        self.assertEqual({"bug-test-reviewer-agent"}, rerun, "surgical fix reruns only the finding owner")
+        self.assertIn("arch-regression-reviewer-agent", carried)
+        self.assertTrue(carried, "reviewers that already passed keep their PASS on a bounded surgical fix")
         self.assertFalse(rerun & carried)
         manifest2 = read_json(Path(second["manifest"]))
         expected, error, status = validate_policy_artifact(

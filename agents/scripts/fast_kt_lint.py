@@ -241,8 +241,474 @@ CLEARTEXT_WHITELIST_HOSTS = {
 }
 
 
+def _strip_kotlin_comments_keep_templates(text: str) -> str:
+    """Strip // and /* */ comments while preserving exact newlines and $ident / ${...} string templates."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            out.append("  ")
+            i += 2
+            while i < n:
+                if text[i] == "*" and i + 1 < n and text[i + 1] == "/":
+                    out.append("  ")
+                    i += 2
+                    break
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            continue
+        if text.startswith('"""', i):
+            out.append('"""')
+            i += 3
+            while i < n:
+                if text.startswith('"""', i):
+                    out.append('"""')
+                    i += 3
+                    break
+                if text[i] == "$" and i + 1 < n and text[i + 1] == "{":
+                    out.append("${")
+                    i += 2
+                    b_depth = 1
+                    while i < n and b_depth > 0:
+                        if text[i] == "{":
+                            b_depth += 1
+                        elif text[i] == "}":
+                            b_depth -= 1
+                        out.append(text[i])
+                        i += 1
+                    continue
+                if text[i] == "$" and i + 1 < n and (text[i + 1].isalpha() or text[i + 1] == "_"):
+                    out.append("$")
+                    i += 1
+                    while i < n and (text[i].isalnum() or text[i] == "_"):
+                        out.append(text[i])
+                        i += 1
+                    continue
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            continue
+        if ch == '"':
+            out.append('"')
+            i += 1
+            while i < n and text[i] != "\n":
+                if text[i] == "\\" and i + 1 < n:
+                    out.append("  ")
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    out.append('"')
+                    i += 1
+                    break
+                if text[i] == "$" and i + 1 < n and text[i + 1] == "{":
+                    out.append("${")
+                    i += 2
+                    b_depth = 1
+                    while i < n and b_depth > 0 and text[i] != "\n":
+                        if text[i] == "{":
+                            b_depth += 1
+                        elif text[i] == "}":
+                            b_depth -= 1
+                        out.append(text[i])
+                        i += 1
+                    continue
+                if text[i] == "$" and i + 1 < n and (text[i + 1].isalpha() or text[i + 1] == "_"):
+                    out.append("$")
+                    i += 1
+                    while i < n and (text[i].isalnum() or text[i] == "_"):
+                        out.append(text[i])
+                        i += 1
+                    continue
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "'":
+            out.append("'")
+            i += 1
+            while i < n and text[i] != "\n":
+                if text[i] == "\\" and i + 1 < n:
+                    out.append("  ")
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    out.append("'")
+                    i += 1
+                    break
+                out.append(" ")
+                i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+_UNUSED_SKIP_ANNOTATIONS_RE = re.compile(
+    r"@(?:Preview|DualLocalePreviews|MultiLocalePreviews|PreviewLightDark|BindingAdapter|Subscribe|JavascriptInterface|Keep|Provides|Binds|IntoSet|IntoMap|Test|Before|After|BeforeEach|AfterEach|ParameterizedTest)\b"
+)
+_SUPPRESS_UNUSED_RE = re.compile(
+    r'@Suppress\s*\([^)]*(?:UNUSED_PARAMETER|UnusedPrivateMember|UnusedPrivateClass|"unused")',
+    re.IGNORECASE,
+)
+_PRIVATE_FUN_DECL_RE = re.compile(
+    r"(?<!\boperator\s)\bprivate\s+(?:(?:suspend|inline|tailrec|infix)\s+)*fun\s+"
+    r"(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.<>?]+\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+_PRIVATE_TYPE_DECL_RE = re.compile(
+    r"(?<!\bcompanion\s)\bprivate\s+(?:(?:data|sealed|enum|value|inner|abstract|open)\s+)*"
+    r"(class|object|interface)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
+
+
+def _split_top_level_commas(segment: str, base_offset: int) -> list[tuple[int, str]]:
+    items: list[tuple[int, str]] = []
+    cur_start = 0
+    p_d = a_d = k_d = b_d = 0
+    for idx, ch in enumerate(segment):
+        if ch == "(":
+            p_d += 1
+        elif ch == ")":
+            p_d = max(0, p_d - 1)
+        elif ch == "<":
+            a_d += 1
+        elif ch == ">":
+            a_d = max(0, a_d - 1)
+        elif ch == "[":
+            k_d += 1
+        elif ch == "]":
+            k_d = max(0, k_d - 1)
+        elif ch == "{":
+            b_d += 1
+        elif ch == "}":
+            b_d = max(0, b_d - 1)
+        elif ch == "," and p_d == 0 and a_d == 0 and k_d == 0 and b_d == 0:
+            items.append((base_offset + cur_start, segment[cur_start:idx]))
+            cur_start = idx + 1
+    if cur_start < len(segment):
+        items.append((base_offset + cur_start, segment[cur_start:]))
+    return items
+
+
+def _split_top_level_equals(param_chunk: str) -> tuple[str, str]:
+    p_d = a_d = k_d = b_d = 0
+    for idx, ch in enumerate(param_chunk):
+        if ch == "(":
+            p_d += 1
+        elif ch == ")":
+            p_d = max(0, p_d - 1)
+        elif ch == "<":
+            a_d += 1
+        elif ch == ">":
+            a_d = max(0, a_d - 1)
+        elif ch == "[":
+            k_d += 1
+        elif ch == "]":
+            k_d = max(0, k_d - 1)
+        elif ch == "{":
+            b_d += 1
+        elif ch == "}":
+            b_d = max(0, b_d - 1)
+        elif ch == "=" and p_d == 0 and a_d == 0 and k_d == 0 and b_d == 0:
+            if idx + 1 < len(param_chunk) and param_chunk[idx + 1] == "=":
+                continue
+            if idx > 0 and param_chunk[idx - 1] in ("!", "=", "<", ">"):
+                continue
+            return param_chunk[:idx], param_chunk[idx + 1:]
+    return param_chunk, ""
+
+
+def _find_unused_intra_file_code(
+    file_path: Path,
+    raw_text: str,
+    modified_lines: set[int] | None,
+    *,
+    is_test: bool = False,
+) -> list[dict]:
+    """Detect unused function parameters, unused private functions, and unused private classes/objects."""
+    issues: list[dict] = []
+    tmpl_text = _strip_kotlin_comments_keep_templates(raw_text)
+    raw_lines = raw_text.splitlines()
+    line_starts = [0]
+    for idx, ch in enumerate(tmpl_text):
+        if ch == "\n":
+            line_starts.append(idx + 1)
+
+    def offset_to_line(offset: int) -> int:
+        lo, hi = 0, len(line_starts) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if line_starts[mid] <= offset:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return hi + 1
+
+    def in_scope(ln: int) -> bool:
+        return modified_lines is None or ln in modified_lines
+
+    def header_annotations(decl_line_1: int) -> str:
+        start_0 = max(0, decl_line_1 - 12)
+        collected: list[str] = [raw_lines[decl_line_1 - 1]] if 1 <= decl_line_1 <= len(raw_lines) else []
+        i = decl_line_1 - 2
+        while i >= start_0:
+            s = raw_lines[i].strip()
+            if not s:
+                i -= 1
+                continue
+            if s.endswith(("}", "{", ";")) and not s.startswith("@"):
+                break
+            collected.append(s)
+            i -= 1
+        return "\n".join(reversed(collected))
+
+    # 1. Unused parameters on non-override, non-abstract functions (production files)
+    if not is_test:
+        for m_fun in re.finditer(r"\bfun\b", tmpl_text):
+            fun_pos = m_fun.start()
+            fun_line = offset_to_line(fun_pos)
+            stmt_prefix_start = max(line_starts[fun_line - 1], fun_pos - 160)
+            stmt_prefix = tmpl_text[stmt_prefix_start:fun_pos]
+            last_sep = max(stmt_prefix.rfind(";"), stmt_prefix.rfind("{"), stmt_prefix.rfind("}"))
+            if last_sep != -1:
+                stmt_prefix = stmt_prefix[last_sep + 1:]
+            if re.search(r"\b(?:override|abstract|external|expect)\b", stmt_prefix):
+                continue
+
+            # Advance past optional `<...>` type params, receiver type, and function name to `(`
+            pos = m_fun.end()
+            n = len(tmpl_text)
+            while pos < n and tmpl_text[pos].isspace():
+                pos += 1
+            if pos < n and tmpl_text[pos] == "<":
+                a_d = 1
+                pos += 1
+                while pos < n and a_d > 0:
+                    if tmpl_text[pos] == "<":
+                        a_d += 1
+                    elif tmpl_text[pos] == ">":
+                        a_d -= 1
+                    pos += 1
+            sig_before_paren_start = pos
+            angle_d = 0
+            open_paren = -1
+            while pos < n:
+                ch = tmpl_text[pos]
+                if ch == "<":
+                    angle_d += 1
+                elif ch == ">":
+                    angle_d = max(0, angle_d - 1)
+                elif angle_d == 0 and ch == "(":
+                    open_paren = pos
+                    break
+                elif angle_d == 0 and ch in ("{", "=", ";", "\n"):
+                    break
+                pos += 1
+            if open_paren == -1:
+                continue
+            name_chunk = tmpl_text[sig_before_paren_start:open_paren].strip()
+            m_fn_ident = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", name_chunk)
+            if not m_fn_ident:
+                continue
+            fn_name = m_fn_ident.group(1)
+            if fn_name.endswith(("Preview", "Previews")):
+                continue
+            ann_ctx = header_annotations(fun_line)
+            if _UNUSED_SKIP_ANNOTATIONS_RE.search(ann_ctx) or _SUPPRESS_UNUSED_RE.search(ann_ctx):
+                continue
+
+            # Extract balanced parameter list `(...)`
+            p_d = 1
+            p_pos = open_paren + 1
+            while p_pos < n and p_d > 0:
+                if tmpl_text[p_pos] == "(":
+                    p_d += 1
+                elif tmpl_text[p_pos] == ")":
+                    p_d -= 1
+                p_pos += 1
+            if p_d != 0:
+                continue
+            close_paren = p_pos - 1
+            params_inner = tmpl_text[open_paren + 1:close_paren]
+            if not params_inner.strip():
+                continue
+
+            # Locate function body (`{ ... }` or `= expr`); skip interface/abstract methods with no body
+            scan = close_paren + 1
+            s_paren = s_angle = s_brack = 0
+            body_region = ""
+            while scan < n:
+                sch = tmpl_text[scan]
+                if sch == "(":
+                    s_paren += 1
+                elif sch == ")":
+                    if s_paren == 0:
+                        break
+                    s_paren -= 1
+                elif sch == "<":
+                    s_angle += 1
+                elif sch == ">":
+                    s_angle = max(0, s_angle - 1)
+                elif sch == "[":
+                    s_brack += 1
+                elif sch == "]":
+                    s_brack = max(0, s_brack - 1)
+                elif s_paren == 0 and s_angle == 0 and s_brack == 0:
+                    if sch == "{":
+                        extracted = _extract_balanced_brace_body(tmpl_text, scan)
+                        if extracted is not None:
+                            inner_b, close_b = extracted
+                            if inner_b.strip():
+                                body_region = tmpl_text[close_paren + 1:close_b + 1]
+                        break
+                    if sch == "=" and (scan + 1 >= n or tmpl_text[scan + 1] != "="):
+                        epos = scan + 1
+                        eb = ep = ek = 0
+                        while epos < n:
+                            ech = tmpl_text[epos]
+                            if ech == "{":
+                                eb += 1
+                            elif ech == "}":
+                                if eb == 0:
+                                    break
+                                eb -= 1
+                            elif ech == "(":
+                                ep += 1
+                            elif ech == ")":
+                                if ep == 0:
+                                    break
+                                ep -= 1
+                            elif ech == "[":
+                                ek += 1
+                            elif ech == "]":
+                                ek = max(0, ek - 1)
+                            elif eb == 0 and ep == 0 and ek == 0 and ech == "\n":
+                                rest_ln = tmpl_text[epos + 1:].lstrip(" \t\r\n")
+                                if not rest_ln.startswith((".", "?.", "?:", "else", "+", "-", "&&", "||", "{")):
+                                    break
+                            epos += 1
+                        body_region = tmpl_text[close_paren + 1:epos]
+                        break
+                    if sch in (";", "}"):
+                        break
+                    if sch == "\n":
+                        nxt = tmpl_text[scan + 1:].lstrip(" \t\r")
+                        if re.match(r"^(?:@(?:[A-Za-z0-9_.]+)|(?:public|internal|private|protected|override|suspend|fun|val|var|class|interface|object|enum|sealed|data)\b|\})", nxt):
+                            break
+                scan += 1
+
+            if not body_region or UNIMPLEMENTED_STUB_PATTERN.search(body_region):
+                continue
+
+            raw_segments = _split_top_level_commas(params_inner, open_paren + 1)
+            parsed_params: list[tuple[str, int, str]] = []
+            for seg_off, seg_txt in raw_segments:
+                if not seg_txt.strip():
+                    continue
+                decl_part, def_part = _split_top_level_equals(seg_txt)
+                cleaned_decl = re.sub(r"@[A-Za-z0-9_.]+(?:\([^)]*\))?", " ", decl_part)
+                cleaned_decl = re.sub(r"\b(?:vararg|noinline|crossinline)\b", " ", cleaned_decl)
+                if re.search(r"\b(?:val|var)\b", cleaned_decl):
+                    continue
+                m_p = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*:", cleaned_decl)
+                if not m_p:
+                    continue
+                p_name = m_p.group(1)
+                ident_rel = decl_part.find(p_name)
+                p_line = offset_to_line(seg_off + max(0, ident_rel))
+                parsed_params.append((p_name, p_line, def_part))
+
+            for idx_p, (p_name, p_line, _) in enumerate(parsed_params):
+                if p_name.startswith("_"):
+                    continue
+                if not (in_scope(p_line) or in_scope(fun_line)):
+                    continue
+                other_defaults = "\n".join(dp_txt for j, (_, _, dp_txt) in enumerate(parsed_params) if j != idx_p and dp_txt)
+                haystack = body_region + "\n" + other_defaults
+                if not re.search(rf"(?:\b{re.escape(p_name)}\b|`{re.escape(p_name)}`)", haystack):
+                    issues.append({
+                        "file": str(file_path),
+                        "line": p_line,
+                        "type": "UNUSED_PARAMETER",
+                        "msg": (
+                            f"Unused parameter '{p_name}' in 'fun {fn_name}(...)'. "
+                            "Wire it into the implementation, prefix with '_' if required by a callback signature, or remove dead parameter."
+                        ),
+                    })
+
+    # 2. Unused private functions (file-scoped)
+    for m_pf in _PRIVATE_FUN_DECL_RE.finditer(tmpl_text):
+        fn_name = m_pf.group(1)
+        decl_line = offset_to_line(m_pf.start(1))
+        if not in_scope(decl_line):
+            continue
+        if fn_name.endswith(("Preview", "Previews")) or fn_name in {
+            "readResolve", "writeReplace", "writeObject", "readObject",
+            "unusedHelper", "_vmKeep", "_signInKeep",
+        }:
+            continue
+        stmt_pre = tmpl_text[max(0, m_pf.start() - 40):m_pf.start()]
+        if re.search(r"\boperator\b", stmt_pre):
+            continue
+        ann_ctx = header_annotations(decl_line)
+        if _UNUSED_SKIP_ANNOTATIONS_RE.search(ann_ctx) or _SUPPRESS_UNUSED_RE.search(ann_ctx):
+            continue
+        rest_file = tmpl_text[:m_pf.start(1)] + " " + tmpl_text[m_pf.end(1):]
+        if not re.search(rf"(?:\b{re.escape(fn_name)}\b|`{re.escape(fn_name)}`)", rest_file):
+            issues.append({
+                "file": str(file_path),
+                "line": decl_line,
+                "type": "UNUSED_PRIVATE_FUNCTION",
+                "msg": f"Unused private function 'private fun {fn_name}(...)' is never called in {file_path.name}. Wire it in or remove dead code.",
+            })
+
+    # 3. Unused private classes / objects / interfaces (file-scoped)
+    for m_pc in _PRIVATE_TYPE_DECL_RE.finditer(tmpl_text):
+        kind_kw, cls_name = m_pc.group(1), m_pc.group(2)
+        decl_line = offset_to_line(m_pc.start(2))
+        if not in_scope(decl_line):
+            continue
+        ann_ctx = header_annotations(decl_line)
+        if "@Keep" in ann_ctx or _SUPPRESS_UNUSED_RE.search(ann_ctx):
+            continue
+        excl_start = m_pc.start()
+        excl_end = m_pc.end(2)
+        brace_probe = m_pc.end(2)
+        p_d = 0
+        while brace_probe < len(tmpl_text):
+            c_ch = tmpl_text[brace_probe]
+            if c_ch == "(":
+                p_d += 1
+            elif c_ch == ")":
+                p_d = max(0, p_d - 1)
+            elif p_d == 0 and c_ch == "{":
+                extracted_cls = _extract_balanced_brace_body(tmpl_text, brace_probe)
+                if extracted_cls is not None:
+                    _, close_c = extracted_cls
+                    excl_end = close_c + 1
+                break
+            elif p_d == 0 and c_ch in (";", "\n"):
+                nxt_c = tmpl_text[brace_probe + 1:].lstrip(" \t\r")
+                if not nxt_c.startswith((":", "{", "where")):
+                    break
+            brace_probe += 1
+        rest_file = tmpl_text[:excl_start] + " " + tmpl_text[excl_end:]
+        if not re.search(rf"(?:\b{re.escape(cls_name)}\b|`{re.escape(cls_name)}`)", rest_file):
+            issues.append({
+                "file": str(file_path),
+                "line": decl_line,
+                "type": "UNUSED_PRIVATE_CLASS",
+                "msg": f"Unused private {kind_kw} '{cls_name}' is never referenced in {file_path.name}. Wire it in or remove dead code.",
+            })
+
+    return issues
+
+
 def _in_string_or_comment(line: str, index: int) -> bool:
-    """True when index sits inside a // comment, /* ... */ block comment, or double-quoted string."""
     in_string = False
     in_block = False
     escaped = False
@@ -779,6 +1245,7 @@ def lint_file(file_path: Path, modified_lines: set[int] | None = None) -> list[d
             is_common_main=is_common_main,
         )
     )
+    issues.extend(_find_unused_intra_file_code(file_path, text, modified_lines, is_test=is_test))
     return issues
 
 A2UI_IMPORT_OR_SYMBOL_RE = re.compile(
@@ -1313,10 +1780,155 @@ def find_missing_architectural_kdoc(
     return advisories
 
 
+_FRAMEWORK_ENTRY_ANNOTATIONS_RE = re.compile(
+    r"@(?:Preview|DualLocalePreviews|MultiLocalePreviews|PreviewLightDark|HiltAndroidApp|AndroidEntryPoint|"
+    r"HiltViewModel|Module|InstallIn|EntryPoint|Provides|Binds|IntoSet|IntoMap|Inject|Entity|Dao|Database|"
+    r"TypeConverter|Query|Insert|Update|Delete|Upsert|GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|HTTP|"
+    r"Serializable|Parcelize|Keep|BindingAdapter|JavascriptInterface|Subscribe|WorkerThread)\b"
+)
+_FRAMEWORK_ENTRY_SUFFIXES = (
+    "Activity", "Fragment", "Service", "Receiver", "Provider", "Application",
+    "Worker", "ViewModel", "Module", "Modules", "Preview", "Previews", "Initializer",
+)
+_PUB_TYPE_DECL_RE = re.compile(
+    r"^\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s+)*"
+    r"(?!(?:[^({\n]*\b(?:private|protected|companion)\b))"
+    r"(?:(?:public|internal|open|abstract|sealed|data|enum|value|actual|expect)\s+)*"
+    r"(class|interface|object)\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+)
+_PUB_FUN_DECL_RE = re.compile(
+    r"^\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s+)*"
+    r"(?!(?:[^({\n]*\b(?:private|protected|override|abstract|operator|external|expect)\b))"
+    r"(?:(?:public|internal|open|suspend|inline|tailrec|infix|actual)\s+)*"
+    r"fun\s+(?:<[^>]+>\s*)?(?:[A-Za-z0-9_.<>?]+\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\("
+)
+_IDENT_TOKEN_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b")
+
+
+def find_unreferenced_new_declarations(
+    repo: Path,
+    target_files: list[Path],
+    modified_lines_map: dict[Path, set[int] | None],
+) -> list[dict]:
+    """Detect newly added non-private classes/objects/functions that have 0 references across the entire repository."""
+    from _modules import SKIP_PARTS, is_kmp_or_android_test_path
+
+    candidates: list[dict] = []
+    file_texts: dict[Path, str] = {}
+
+    for path in target_files:
+        posix = path.as_posix()
+        if is_kmp_or_android_test_path(posix):
+            continue
+        mod_set = modified_lines_map.get(path)
+        if mod_set is not None and len(mod_set) == 0:
+            continue
+        try:
+            raw_txt = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        file_texts[path] = raw_txt
+        raw_lines = raw_txt.splitlines()
+        tmpl_lines = _strip_kotlin_comments_keep_templates(raw_txt).splitlines()
+        brace_depth = 0
+        paren_depth = 0
+        for idx_0, c_line in enumerate(tmpl_lines):
+            ln_1 = idx_0 + 1
+            in_mod = mod_set is None or ln_1 in mod_set
+            if in_mod and paren_depth == 0 and brace_depth in (0, 1):
+                ann_win = "\n".join(raw_lines[max(0, idx_0 - 8):idx_0 + 1])
+                if not (_FRAMEWORK_ENTRY_ANNOTATIONS_RE.search(ann_win) or _SUPPRESS_UNUSED_RE.search(ann_win)):
+                    m_t = _PUB_TYPE_DECL_RE.match(c_line)
+                    if m_t and brace_depth == 0:
+                        kind_kw, sym = m_t.group(1), m_t.group(2)
+                        if len(sym) >= 3 and not sym.endswith(_FRAMEWORK_ENTRY_SUFFIXES):
+                            candidates.append({"file": path, "line": ln_1, "kind": kind_kw, "name": sym})
+                    else:
+                        m_f = _PUB_FUN_DECL_RE.match(c_line)
+                        if m_f:
+                            fn = m_f.group(1)
+                            if (
+                                len(fn) >= 3
+                                and not fn.endswith(("Preview", "Previews"))
+                                and fn not in {
+                                    "main", "invoke", "equals", "hashCode", "toString", "copy",
+                                    "describeContents", "writeToParcel", "createFromParcel", "newArray",
+                                }
+                            ):
+                                candidates.append({"file": path, "line": ln_1, "kind": "fun", "name": fn})
+            brace_depth += c_line.count("{") - c_line.count("}")
+            if brace_depth < 0:
+                brace_depth = 0
+            paren_depth += c_line.count("(") - c_line.count(")")
+            if paren_depth < 0:
+                paren_depth = 0
+
+    if not candidates:
+        return []
+
+    cand_names = {c["name"] for c in candidates}
+    skip = set(SKIP_PARTS)
+    all_source_files: list[Path] = []
+    for ext in ("*.kt", "*.java", "*.xml"):
+        for p in repo_glob(repo, f"**/{ext}"):
+            if not any(part in p.parts for part in skip) and p.is_file():
+                all_source_files.append(p)
+    if len(all_source_files) < 2:
+        return []
+
+    seen_elsewhere: set[str] = set()
+    cand_files = {c["file"].resolve() for c in candidates}
+    cand_file_tokens: dict[Path, set[str]] = {}
+    for sp in all_source_files:
+        sp_res = sp.resolve()
+        try:
+            stxt = sp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if sp.suffix == ".kt":
+            stxt = _strip_kotlin_comments_keep_templates(stxt)
+        matched_here = cand_names & set(_IDENT_TOKEN_RE.findall(stxt))
+        if sp_res in cand_files:
+            cand_file_tokens[sp_res] = matched_here
+            continue
+        if matched_here:
+            seen_elsewhere.update(matched_here)
+
+    findings: list[dict] = []
+    for cand in candidates:
+        sym = cand["name"]
+        c_path: Path = cand["file"]
+        c_res = c_path.resolve()
+        if sym in seen_elsewhere or any(sym in toks for f_res, toks in cand_file_tokens.items() if f_res != c_res):
+            continue
+        raw_c = file_texts.get(c_path, "")
+        tmpl_c_lines = _strip_kotlin_comments_keep_templates(raw_c).splitlines()
+        decl_idx_0 = cand["line"] - 1
+        if 0 <= decl_idx_0 < len(tmpl_c_lines):
+            # Replace only the declaration occurrence on `decl_idx_0`
+            tmpl_c_lines[decl_idx_0] = re.sub(rf"\b{re.escape(sym)}\b", " ", tmpl_c_lines[decl_idx_0], count=1)
+        rest_same_file = "\n".join(tmpl_c_lines)
+        if re.search(rf"(?:\b{re.escape(sym)}\b|`{re.escape(sym)}`)", rest_same_file):
+            continue
+        findings.append({
+            "file": str(c_path),
+            "line": cand["line"],
+            "symbol": sym,
+            "kind": cand["kind"],
+            "type": "UNUSED_DECLARATION",
+            "msg": (
+                f"Newly added {cand['kind']} '{sym}' has 0 callers/references across the entire project. "
+                "Wire it into its caller/test or remove dead code."
+            ),
+        })
+    return findings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fast Kotlin lint for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files under app/src/main")
     parser.add_argument("--strict-kdoc", action="store_true", help="Treat missing architectural KDoc on newly added contracts as blocking lint errors")
+    parser.add_argument("--strict-unused", action="store_true", help="Treat unreferenced newly added public/internal classes and functions as blocking lint errors")
     parser.add_argument("files", nargs="*", help="Optional explicit file path(s) to scan")
     args = parser.parse_args()
 
@@ -1473,7 +2085,9 @@ def main() -> int:
         print(f"[*] Fast Swift Lint: Scanning {len(swift_files)} Swift file(s) ({mode_label})...")
     all_issues = []
     kdoc_advisories = []
+    unused_advisories = []
     strict_kdoc = bool(args.strict_kdoc or os.environ.get("HARNESS_STRICT_KDOC") == "1")
+    strict_unused = bool(args.strict_unused or os.environ.get("HARNESS_STRICT_UNUSED") == "1")
     for path in target_files:
         mod_set = modified_lines_map.get(path)
         all_issues.extend(lint_file(path, modified_lines=mod_set))
@@ -1487,6 +2101,13 @@ def main() -> int:
                     kdoc_advisories.extend(found_kdoc)
             except OSError:
                 pass
+    if target_files and not args.all:
+        eff_scan_repo = eff_repo if args.files else REPO
+        found_unused_decls = find_unreferenced_new_declarations(eff_scan_repo, target_files, modified_lines_map)
+        if strict_unused:
+            all_issues.extend(found_unused_decls)
+        else:
+            unused_advisories.extend(found_unused_decls)
     for path in java_files:
         all_issues.extend(lint_java_file(path, modified_lines=java_lines_map.get(path)))
     for path in swift_files:
@@ -1503,6 +2124,9 @@ def main() -> int:
     for adv in kdoc_advisories[:20]:
         rel_adv = _safe_rel(adv["file"]).replace("\\", "/")
         print(f"[KDOC-ADVISORY] {rel_adv}:{adv['line']} -> {adv['msg']}")
+    for u_adv in unused_advisories[:20]:
+        rel_u = _safe_rel(u_adv["file"]).replace("\\", "/")
+        print(f"[UNUSED-ADVISORY] {rel_u}:{u_adv['line']} -> {u_adv['msg']}")
 
     if not all_issues:
         print("[SUCCESS] Fast Kotlin Lint passed! 0 syntax/architectural violations detected.")

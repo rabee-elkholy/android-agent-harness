@@ -63,6 +63,14 @@ HARDCODED_XML_TEXT = re.compile(
     re.IGNORECASE,
 )
 HAS_LETTERS = re.compile(r"[A-Za-z\u0600-\u06FF]")
+RTL_LOCALE_PREFIXES = ("ar", "fa", "he", "iw", "ur")
+RTL_XML_DIRECTIONAL_ATTR = re.compile(
+    r"\bandroid:(?:layout_margin(?:Left|Right)|padding(?:Left|Right)|drawable(?:Left|Right)|layout_alignParent(?:Left|Right)|layout_to(?:Left|Right)Of)\s*="
+)
+RTL_DIRECTIONAL_DRAWABLE_STEM = re.compile(
+    r"(?:^|_)(?:arrow|back|chevron|forward|next|prev)(?:_|$)",
+    re.IGNORECASE,
+)
 _KT_TEMPLATE_EXPR_RE = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
 _KT_STRING_LIT_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
 
@@ -543,6 +551,111 @@ def check_hardcoded_strings(
     return findings
 
 
+def _locale_dir_is_rtl(dir_name: str) -> bool:
+    lower = dir_name.lower()
+    if not lower.startswith("values-"):
+        return False
+    qual = lower[len("values-"):]
+    if qual.startswith("b+"):
+        lang = qual[2:].split("+", 1)[0].split("-", 1)[0]
+    else:
+        lang = qual.split("-", 1)[0]
+    return lang in RTL_LOCALE_PREFIXES
+
+
+def _repo_supports_rtl(
+    repo_root: Path,
+    res_dirs: list[Path],
+    pairs: list[tuple],
+) -> bool:
+    for pair in pairs:
+        if len(pair) >= 2 and isinstance(pair[1], Path) and _locale_dir_is_rtl(pair[1].parent.name):
+            return True
+    for rdir in res_dirs:
+        if not rdir.is_dir():
+            continue
+        try:
+            for child in rdir.iterdir():
+                if child.is_dir() and _locale_dir_is_rtl(child.name):
+                    return True
+        except OSError:
+            continue
+    prod_file = repo_root / ".agents" / "scripts" / "_product.py"
+    if prod_file.is_file():
+        try:
+            prod_txt = prod_file.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r"SUPPORTED_LOCALES\s*=\s*\[([^\]]*)\]", prod_txt)
+            if m:
+                for tok in re.findall(r"""['"]([A-Za-z0-9_+-]+)['"]""", m.group(1)):
+                    lang = tok.lower().replace("_", "-").split("-", 1)[0]
+                    if lang in RTL_LOCALE_PREFIXES:
+                        return True
+        except OSError:
+            pass
+    return False
+
+
+def check_rtl_xml_issues(
+    files: list[Path],
+    lines_map: dict[Path, set[int] | None] | None = None,
+    repo_root: Path | None = None,
+) -> list[str]:
+    """Diff-scoped `<1ms` RTL XML layout & directional vector drawable check."""
+    base_repo = repo_root or REPO
+    findings: list[str] = []
+    for path in files:
+        if path.suffix.lower() != ".xml" or _is_test_path(path):
+            continue
+        try:
+            rel = path.relative_to(base_repo).as_posix()
+        except ValueError:
+            rel = path.as_posix()
+        parent_name = path.parent.name.lower()
+        is_layout = parent_name == "layout" or (
+            parent_name.startswith("layout-")
+            and "ldltr" not in parent_name
+            and "ldrtl" not in parent_name
+        )
+        is_drawable = parent_name == "drawable" or (
+            parent_name.startswith("drawable-")
+            and "ldltr" not in parent_name
+            and "ldrtl" not in parent_name
+            and not any(f"-{rtl}" in parent_name for rtl in RTL_LOCALE_PREFIXES)
+        )
+        if not is_layout and not is_drawable:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if re.search(r'tools:ignore\s*=\s*"[^"]*(?:RtlHardcoded|RtlSymmetry|AutoMirrored)', content):
+            continue
+        modified_lines = lines_map.get(path) if lines_map else None
+        lines = content.splitlines()
+        if is_layout:
+            for i, line in enumerate(lines, 1):
+                if modified_lines is not None and i not in modified_lines:
+                    continue
+                stripped = line.strip()
+                if stripped.startswith("<!--"):
+                    continue
+                m_attr = RTL_XML_DIRECTIONAL_ATTR.search(line)
+                if m_attr:
+                    attr_tok = m_attr.group(0).rstrip("=").strip()
+                    findings.append(
+                        f"{rel}:{i} -> Hardcoded LTR/RTL XML attribute `{attr_tok}` (use Start/End equivalent for RTL mirroring)"
+                    )
+        elif is_drawable and RTL_DIRECTIONAL_DRAWABLE_STEM.search(path.stem):
+            if "<vector" in content and not re.search(r'\bandroid:autoMirrored\s*=\s*"true"', content):
+                vec_lines = {idx for idx, ln in enumerate(lines, 1) if "<vector" in ln or "xmlns:android" in ln}
+                if modified_lines is None or (modified_lines and (vec_lines & modified_lines or len(modified_lines) >= len(lines) - 1)):
+                    vec_line_no = min(vec_lines) if vec_lines else 1
+                    findings.append(
+                        f'{rel}:{vec_line_no} -> Directional vector drawable `{path.name}` is missing `android:autoMirrored="true"` for RTL locales'
+                    )
+    return findings
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Check Android string resource parity and hardcoded UI literals.")
     p.add_argument("--all", action="store_true", help="Check global string parity across entire repository.")
@@ -720,6 +833,16 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
             errors += len(hardcoded)
         else:
             print("[OK] No hardcoded strings detected in modified lines.")
+
+        if _repo_supports_rtl(r, res_dirs, pairs):
+            rtl_issues = check_rtl_xml_issues(modified_src, lines_map=lines_map, repo_root=r)
+            if rtl_issues:
+                print(f"[!] RTL XML layout/drawable issues in modified lines ({len(rtl_issues)}):")
+                for item in rtl_issues:
+                    print(f"   - {item}")
+                errors += len(rtl_issues)
+            else:
+                print("[OK] No RTL XML layout/drawable issues detected in modified lines.")
 
     print("\n==================================================")
     if errors == 0:

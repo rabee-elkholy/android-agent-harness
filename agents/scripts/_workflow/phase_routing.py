@@ -358,7 +358,7 @@ def phase_implementation_action(repo, task_id, plan, run_host, identity, tdir, p
                 dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
                 dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
                 ag_phase_hint = (
-                    antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched))
+                    antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched), repo=repo)
                     if str(phase_host).strip().lower() == "antigravity"
                     else ""
                 )

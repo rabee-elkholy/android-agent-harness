@@ -605,6 +605,110 @@ def _load_project_summary(repo: Path, vault: dict[str, str]) -> str:
         except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
             pass
     return "\n\n".join(parts)
+def _check_session_context_bloat(repo: Path, task_id: str) -> dict[str, Any] | None:
+    """Detect bloated local Antigravity chat context (>= 40,000 tokens) before >5m Web-Relay waits and auto-save context bridge."""
+    cand_cids: list[str] = []
+    env_cid = (_engine.os.environ.get("HARNESS_CONVERSATION_ID") or "").strip()
+    if env_cid:
+        cand_cids.append(env_cid)
+    live_cache_p = _engine.state_root(repo) / "live-session-models.json"
+    if live_cache_p.is_file():
+        try:
+            ldoc = _engine.read_json(live_cache_p)
+            latest_c = str((ldoc or {}).get("latest_lead_cid") or "").strip()
+            if latest_c and latest_c not in cand_cids:
+                cand_cids.append(latest_c)
+        except (OSError, ValueError, _engine.ValidationError):
+            pass
+    try:
+        from antigravity_runtime import extract_lead_candidates_from_state, resolve_transcript
+        for scid in extract_lead_candidates_from_state(_engine.state_root(repo)):
+            if scid not in cand_cids:
+                cand_cids.append(scid)
+    except ImportError:
+        return None
+
+    max_prompt_tokens = 0
+    matched_cid = ""
+    for cid in cand_cids[:4]:
+        try:
+            tx_p = resolve_transcript(cid)
+            if tx_p is None or not tx_p.is_file():
+                continue
+            for raw_ln in reversed(tx_p.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]):
+                if not raw_ln.strip():
+                    continue
+                row = _engine.json.loads(raw_ln)
+                usage = row.get("usageMetadata") or row.get("usage_metadata") or {}
+                ptok = int(usage.get("promptTokenCount") or usage.get("prompt_token_count") or 0)
+                if ptok > max_prompt_tokens:
+                    max_prompt_tokens = ptok
+                    matched_cid = cid
+                    break
+            if max_prompt_tokens > 0:
+                break
+        except (OSError, ValueError, TypeError):
+            continue
+
+    if max_prompt_tokens < 40_000:
+        return None
+
+    bridge_saved = False
+    try:
+        from context_bridge import save_context_bridge
+        save_context_bridge(repo, task_id=task_id or None)
+        bridge_saved = True
+    except (ImportError, OSError, ValueError, TypeError, _engine.ValidationError):
+        bridge_saved = False
+
+    return {
+        "conversation_id": matched_cid,
+        "prompt_tokens": max_prompt_tokens,
+        "bridge_saved": bridge_saved,
+        "advisory": (
+            f"Active Antigravity chat context is {max_prompt_tokens:,} tokens (implicit KV-cache expires after ~5m Web-Relay waits). "
+            + ("Task state was auto-saved to `.agents/state/context-bridge.json` — " if bridge_saved else "")
+            + "run `/compact` in Antigravity before `web-apply` (and prefer `Gemini 4 Hydrogen High` 1x for Web orchestration) to avoid full-context re-billing."
+        ),
+    }
+
+
+def _build_headless_ui_test_directive(repo: Path, active_batch_files: list[str], editable_meta: dict[str, dict[str, Any]]) -> str:
+    """Return a concise Robolectric + Compose UI / Roborazzi RTL test rule ONLY when UI files are in scope and libraries are present."""
+    has_ui_scope = False
+    for rel in active_batch_files:
+        low = rel.replace("\\", "/").lower()
+        base_txt = str((editable_meta.get(rel) or {}).get("base_text") or "")
+        if (
+            "/res/layout" in low
+            or any(low.endswith(sfx) for sfx in ("screen.kt", "card.kt", "dialog.kt", "sheet.kt", "banner.kt"))
+            or "@Composable" in base_txt
+        ):
+            has_ui_scope = True
+            break
+    if not has_ui_scope:
+        return ""
+    try:
+        from roborazzi_gate import detect_roborazzi
+        caps = detect_roborazzi(repo)
+    except (ImportError, OSError, ValueError):
+        return ""
+    has_robo_compose = bool(caps.get("robolectric_installed") and caps.get("compose_ui_test_installed"))
+    has_roborazzi = bool(caps.get("installed"))
+    if not has_robo_compose and not has_roborazzi:
+        return ""
+    rb_clause = (
+        " and `captureRoboImage()` (the local test gate runs `-Proborazzi.dumpUiTree=true` automatically on UI changes to verify zero horizontal/RTL clipping and zero-dimension nodes)"
+        if has_roborazzi
+        else ""
+    )
+    return (
+        "  7. **Headless JVM Compose & RTL Verification (Active in This Repo)**: Because this project configures Robolectric/Compose UI testing, "
+        "include or update a fast JVM unit test under `src/test/` (`@RunWith(RobolectricTestRunner::class)` + `createComposeRule()`) for touched UI screens "
+        f"covering both default LTR and Arabic RTL (`@Config(qualifiers = \"ar-rSA-ldrtl\")`){rb_clause} so UI crashes and RTL layout issues fail on JVM in seconds."
+    )
+
+
 def build_web_pack(
     repo: Path,
     *,
@@ -915,7 +1019,7 @@ def build_web_pack(
             "- **Instructions**: Fix every compiler, lint, string-parity, or unit-test failure below against the code already in this chat. "
             f"End your reply with **one fenced ```json block** using `\"schema\": \"{_engine.WEB_MERGE_SCHEMA}\"`, `\"pack_id\": \"{pack_id}\"`, `\"status\": \"READY\"`, "
             "and minimal `\"operations\"` (`MODIFY` with verbatim `hunks` `{\"search\": \"...\", \"replace\": \"...\"}`, `CREATE`, or `\"status\": \"NEED_FILES\"` with `\"need_files\": [...]` if you need an unseen file). "
-            "Include concise English KDoc (`/** ... */`) on any newly added public/internal contract and never emit truncation comments (`// ...`).",
+            "Include concise English KDoc (`/** ... */`) on any newly added public/internal contract, never leave unused parameters, unused private/helper functions, or unreferenced dead classes (`fast_kt_lint` hard-blocks `UNUSED_PARAMETER`, `UNUSED_PRIVATE_FUNCTION`, and `UNUSED_PRIVATE_CLASS`), and never emit truncation comments (`// ...`).",
         ]
         if diagnostics:
             md_sections.extend(["", "## 2. Active Local Build / Test / Gate Failures", diagnostics])
@@ -924,6 +1028,7 @@ def build_web_pack(
         if file_blocks_md:
             md_sections.extend(["", "## 4. Newly Added or Locally Modified Files Since Last Apply", *file_blocks_md])
     else:
+        headless_ui_rule = _build_headless_ui_test_directive(repo, active_batch_files, editable_meta)
         md_sections = [
             f"# Android Agent Harness — Web-Relay Context Pack (`{pack_id}`)",
             "",
@@ -931,13 +1036,14 @@ def build_web_pack(
             f"- **Task Goal**: {eff_prompt}",
             f"- **Task Kind**: `{eff_kind}` | **Suggested Task ID**: `{suggested_tid}` | **Pack ID**: `{pack_id}`{batch_banner}",
             "- **Editing Freedom & Rules**:",
-            "  1. Solve the task completely across all affected files in this pack: preserve Clean Architecture boundaries, write concise English KDoc (`/** ... */` documenting responsibility, `@param`, and `@return`) on every newly created class/interface and every newly added public/internal method on `Repository`, `UseCase`, `ViewModel`, `DataSource`/`ApiService`, or public `@Composable` screen/component, maintain bilingual EN/AR string parity (`values/strings.xml` + `values-ar/strings.xml`) when adding user-visible strings, include Room `Migration`s when changing `@Entity` schemas, and include JUnit tests (for `BUG` tasks, ensure the test FAILS before your production fix and PASSES after).",
+            "  1. Solve the task completely across all affected files in this pack: preserve Clean Architecture boundaries, write concise English KDoc (`/** ... */` documenting responsibility, `@param`, and `@return`) on every newly created class/interface and every newly added public/internal method on `Repository`, `UseCase`, `ViewModel`, `DataSource`/`ApiService`, or public `@Composable` screen/component, **never write unused parameters, unused helper/private functions, or unreferenced dead classes** (local `fast_kt_lint` hard-blocks `UNUSED_PARAMETER`, `UNUSED_PRIVATE_FUNCTION`, and `UNUSED_PRIVATE_CLASS`), maintain bilingual EN/AR string parity (`values/strings.xml` + `values-ar/strings.xml`) when adding user-visible strings, include Room `Migration`s when changing `@Entity` schemas, and include JUnit tests (for `BUG` tasks, ensure the test FAILS before your production fix and PASSES after).",
             "  2. **Compact Lossless `hunks` (Essential for `10–100` File Tasks)**: For `MODIFY` operations, ALWAYS prefer minimal `hunks` (`search` / `replace` with 2-3 surrounding context lines copied verbatim, or set `\"replace_all\": true` for repeated symbol/import/package renames across a file) instead of rewriting whole files. **NEVER** emit lazy truncation comments (`// ... rest of code unchanged`, `// existing code`).",
             "  3. **Full Freedom to Create, Rename, Delete & Patch Neighbors**: You may freely `CREATE` new classes, unit tests, or Android `<vector>` XML drawables (`res/drawable/ic_*.xml`), `DELETE` or `RENAME` (`old_path` -> `path`) scoped files, and apply surgical `hunks` to `READ_ONLY_NEIGHBOR_SIGNATURES` when updating shared interfaces/imports. Never blindly overwrite an unseen file with full `content` — emit `NEED_FILES` if you need a missing file's full body first.",
             "  4. **UI Screenshots & Drawables**: If the developer attached a UI design image/screenshot in chat alongside this pack, match its layout hierarchy, spacing, colors, typography, and RTL support faithfully, reusing existing `R.drawable.*` / `R.font.*` IDs listed in Section 2 (or `CREATE` new `<vector>` XML drawables as needed).",
             "  5. **Large Multi-File Replies (`PARTIAL` Continuation Supported)**: If your JSON output for a very large pack approaches message length limits, do NOT truncate code — emit valid JSON for the first subset with `\"status\": \"PARTIAL\"` so the developer can apply it and ask `Continue remaining files` in this same chat using the same `pack_id`.",
             "  6. Preserve any `__HARNESS_REDACTED_SECRET_N__` token verbatim (real values are restored locally). End your response with **one fenced ```json block** (or a downloadable file named "
             f"`harness-merge-{pack_id}.json`).",
+            *([headless_ui_rule] if headless_ui_rule else []),
             "",
             "### Required Output JSON Schema (`READY` / `PARTIAL` vs `NEED_FILES`)",
             "```json",
@@ -1074,7 +1180,8 @@ def build_web_pack(
         if new_chat_recommended
         else "Stay in the SAME external AI chat, attach or paste the pack (Ctrl+V), and send (open a NEW chat only for a new task)."
     )
-    return {
+    context_bloat = _check_session_context_bloat(repo, eff_tid)
+    out_payload: dict[str, Any] = {
         "status": "OK",
         "pack_id": pack_id,
         "repo_fingerprint": repo_fp,
@@ -1099,3 +1206,6 @@ def build_web_pack(
         "recommended_gemini_web_mode": "Task",
         "gemini_web_instruction": web_chat_instruction,
     }
+    if context_bloat:
+        out_payload["context_compact_advisory"] = context_bloat
+    return out_payload

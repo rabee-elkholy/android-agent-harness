@@ -409,6 +409,9 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         require_reviewers({"bug-test-reviewer-agent"}, "TEST_ONLY")
     if planning_depth == "ARCHITECTURAL" and not micro and "UNKNOWN" not in surfaces:
         require_reviewers({"arch-regression-reviewer-agent"}, "ARCHITECTURAL_PLAN")
+        plan_phases = (plan or {}).get("phases") if isinstance(plan, dict) else None
+        if isinstance(plan_phases, list) and len(plan_phases) >= 2 and review_scope != "FIX_DELTA":
+            require_reviewers({"spec-compliance-agent"}, "MULTI_PHASE_ARCHITECTURAL_SPEC_AUDIT")
     if arch_intent in ("MIGRATION", "NEW_SUBSYSTEM") and not micro and "UNKNOWN" not in surfaces:
         require_reviewers({"arch-regression-reviewer-agent"}, arch_intent)
     if changed_modules_count > 1 and not micro and "UNKNOWN" not in surfaces and (surfaces & {"COMPOSE_UI", "XML_UI", "NAVIGATION", "BUSINESS_LOGIC"}):
@@ -617,17 +620,36 @@ def decide_later_round(
             carried = []
             rerun = set(current_required)
         else:
-            # A real task fixed two bug findings and all five reviewers ran again. A reviewer whose
-            # area the fix does not touch keeps its PASS; everyone the fix routes reruns, as do the
-            # finding owners and the regression reviewer, which sees the whole change.
-            rerun |= set(fix_delta.get("reviewers") or []) & current_required
-            carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
-            # An earlier carry still stands unless this fix routes its reviewer.
-            rerun |= current_required - set(carried) - (still_carried - rerun)
+            surgical_owner_only = (
+                bool(owners)
+                and not promoted
+                and fix_delta.get("comparison") == "REVIEWED_TEXT"
+                and fix_delta.get("all_previously_reviewed") is True
+                and isinstance(fix_delta.get("changed_lines"), int)
+                and int(fix_delta["changed_lines"]) <= 40
+            )
+            if surgical_owner_only:
+                # Bounded surgical fix (<=40 LF-normalized changed lines inside already-reviewed files
+                # with zero new surfaces): re-run ONLY the finding owner(s) and carry every other
+                # reviewer that already passed in an earlier round.
+                rerun = set(owners) & current_required
+                carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
+                rerun |= current_required - set(carried) - (still_carried - rerun)
+            else:
+                # A real task fixed two bug findings and all five reviewers ran again. A reviewer whose
+                # area the fix does not touch keeps its PASS; everyone the fix routes reruns, as do the
+                # finding owners and the regression reviewer, which sees the whole change.
+                rerun |= set(fix_delta.get("reviewers") or []) & current_required
+                carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
+                # An earlier carry still stands unless this fix routes its reviewer.
+                rerun |= current_required - set(carried) - (still_carried - rerun)
             result["fix_delta"] = {
                 "files": sorted(str(item) for item in fix_delta.get("files") or []),
                 "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),
                 **({"comparison": fix_delta["comparison"]} if fix_delta.get("comparison") else {}),
+                **({"changed_lines": int(fix_delta["changed_lines"])} if "changed_lines" in fix_delta else {}),
+                **({"all_previously_reviewed": bool(fix_delta["all_previously_reviewed"])} if "all_previously_reviewed" in fix_delta else {}),
+                **({"surgical_owner_only": True} if surgical_owner_only else {}),
                 **({"developer_accepted_files": sorted(fix_delta["developer_accepted_files"])}
                    if fix_delta.get("developer_accepted_files") else {}),
             }

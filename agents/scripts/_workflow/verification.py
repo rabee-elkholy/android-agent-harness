@@ -316,7 +316,7 @@ def review_action(context: VerificationContext) -> dict | None:
                     dispatch_models = reviewer_model_map(exec_profile, sorted(not_dispatched))
                     dispatch_with_models = format_reviewers_with_models(exec_profile, sorted(not_dispatched))
                     ag_model_hint = (
-                        antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched))
+                        antigravity_dispatch_model_hint(exec_profile, sorted(not_dispatched), repo=repo)
                         if str(review_host).strip().lower() == "antigravity"
                         else ""
                     )

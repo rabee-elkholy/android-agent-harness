@@ -1154,6 +1154,20 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
         coverage_plan = {}
     capture_cases = "verification_contract" in coverage_plan and not test_filters
     extra_gradle = ["--rerun-tasks"] if args.rerun_tests else []
+    diagnostic_mode = not (args.capture_red or args.record_start or args.record_unrelated)
+    live_ui_surfaces: list[str] = []
+    if diagnostic_mode:
+        try:
+            from change_classifier import classify as _cls_pre_ui
+            from roborazzi_gate import detect_roborazzi as _detect_rb_pre
+            live_ui_surfaces = list(_cls_pre_ui(REPO, include_type_index=False).get("surfaces") or [])
+            if not live_ui_surfaces and isinstance(coverage_plan.get("expected_surfaces"), list):
+                live_ui_surfaces = [str(s) for s in coverage_plan["expected_surfaces"]]
+            if ({"COMPOSE_UI", "XML_UI"} & set(live_ui_surfaces)) and _detect_rb_pre(REPO).get("installed"):
+                if "-Proborazzi.dumpUiTree=true" not in extra_gradle:
+                    extra_gradle.append("-Proborazzi.dumpUiTree=true")
+        except (ImportError, OSError, ValueError, ValidationError):
+            live_ui_surfaces = []
     tasks = resolve_target_tasks(REPO, gradle_task_arg)
     if test_filters:
         if gradle_task_arg is None:
@@ -1164,7 +1178,6 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
     task_label = " ".join(tasks)
     _emit_human(f"[*] Unit-test gate: {task_label}")
     reports_before = report_signatures(REPO, task)
-    diagnostic_mode = not (args.capture_red or args.record_start or args.record_unrelated)
     identity = execution_identity(REPO) if diagnostic_mode else {}
     code, outcome = run_test_tasks(tasks, extra_gradle)
     if code == EXIT_ENV:
@@ -1411,11 +1424,11 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
             "detail": detail,
             **data,
         })
-    if ok and diagnostic_mode and not test_filters:
+    if ok and diagnostic_mode:
         try:
             from change_classifier import classify as _cls_ui
             from roborazzi_gate import auto_collect_after_unit_tests
-            live_surfaces = _cls_ui(REPO, include_type_index=False).get("surfaces") or []
+            live_surfaces = live_ui_surfaces or (_cls_ui(REPO, include_type_index=False).get("surfaces") or [])
             rb_res = auto_collect_after_unit_tests(REPO, live_surfaces)
             if isinstance(rb_res, dict) and rb_res.get("status") == "FAIL":
                 rb_msg = f"[FAIL] Roborazzi UI bounds check failed: {rb_res.get('detail')}"

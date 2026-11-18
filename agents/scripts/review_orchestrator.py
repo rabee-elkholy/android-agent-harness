@@ -1170,10 +1170,19 @@ def get_review_execution_status(repo: Path, task_id: str) -> dict[str, Any]:
             "ledger_initialized": False,
             "reviewers": {r: {"state": REVIEW_NOT_DISPATCHED, "effective_model": models_by_role.get(r, "inherit")} for r in required_reviewers},
         }
+    from review_models import effective_reviewer_model
     ledger = load_ledger(directory, run_id)
     revs_out = {}
     for r, info in (ledger.get("reviewers") or {}).items():
-        revs_out[r] = {**(info if isinstance(info, dict) else {}), "effective_model": models_by_role.get(r, "inherit")}
+        eff_m = models_by_role.get(r, "inherit")
+        rf_p = result_file(directory, run_id, r)
+        if rf_p.is_file():
+            try:
+                eff_m = effective_reviewer_model(read_json(rf_p).get("model_selection"))
+                models_by_role[r] = eff_m
+            except (OSError, ValueError, KeyError, ValidationError):
+                pass
+        revs_out[r] = {**(info if isinstance(info, dict) else {}), "effective_model": eff_m}
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -1335,6 +1344,13 @@ def main(argv: list[str] | None = None) -> int:
                         _freshness_checked=True,
                     )
                 eff_model = model_map.get(rev_name, "inherit")
+                try:
+                    from review_models import effective_reviewer_model
+                    rf_obs = result_file(task_dir(repo, args.task), str(read_json(task_dir(repo, args.task) / "current-run.json").get("run_id") or ""), rev_name)
+                    if rf_obs.is_file():
+                        eff_model = effective_reviewer_model(read_json(rf_obs).get("model_selection"))
+                except (ImportError, OSError, ValueError, KeyError, ValidationError):
+                    pass
                 print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")
             try:
                 st_after = get_review_execution_status(repo, args.task)
@@ -1420,6 +1436,13 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"REVIEW_NEEDS_ATTENTION: {rev_name} -> {err_s}")
                     continue
                 eff_model = model_map_all.get(rev_name, "inherit")
+                try:
+                    from review_models import effective_reviewer_model
+                    rf_obs = result_file(directory, run_id, rev_name)
+                    if rf_obs.is_file():
+                        eff_model = effective_reviewer_model(read_json(rf_obs).get("model_selection"))
+                except (ImportError, OSError, ValueError, KeyError, ValidationError):
+                    pass
                 completed_items.append({"reviewer": rev_name, "model": eff_model, "verdict": res.get("verdict")})
                 if not getattr(args, "json", False):
                     print(f"REVIEW_COMPLETED: {rev_name} [{eff_model}] verdict={res.get('verdict')}")

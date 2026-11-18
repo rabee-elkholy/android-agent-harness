@@ -602,11 +602,14 @@ def main(argv: list[str] | None = None) -> int:
                     if res.get("new_chat_recommended", True)
                     else "Stay in the SAME external AI chat"
                 )
+                compact_adv = (res.get("context_compact_advisory") or {}).get("advisory")
+                compact_line = f"\n  [QUOTA SHIELD] {compact_adv}" if compact_adv else ""
                 print(
                     f"[WEB-PACK READY] pack_id={res['pack_id']} | files={len(res['editable_files'])} | "
                     f"neighbors={res['neighbor_signatures_count']} | size={res['bundle_bytes']:,} B | clipboard={clip_mode}\n"
                     f"  Bundle file: {res['bundle_file']}\n"
                     f"  Next: {chat_step}, attach or paste (`Ctrl+V`), then copy/download its `HARNESS_WEB_MERGE_V1` reply and run `web-apply`."
+                    f"{compact_line}"
                 )
             return 0
 
@@ -643,6 +646,8 @@ def main(argv: list[str] | None = None) -> int:
                 kdoc_cli_block = ""
                 if res.get("kdoc_advisories"):
                     kdoc_cli_block = "\n  KDoc reminders:\n    " + "\n    ".join(res["kdoc_advisories"][:8])
+                if res.get("unused_advisories"):
+                    kdoc_cli_block += "\n  Unused code reminders:\n    " + "\n    ".join(res["unused_advisories"][:8])
                 print(
                     f"[WEB-APPLY OK] task_id={res['task_id']} | origin={res['origin']} | "
                     f"written={len(res.get('files_written') or [])} | deleted={len(res.get('files_deleted') or [])}\n"

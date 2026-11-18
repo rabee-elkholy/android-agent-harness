@@ -203,11 +203,14 @@ def record_live_lead_session_model(repo: Path, conversation_id: str, model_name:
         pass
 
 
-def _detect_live_parent_lead_family(repo: Path) -> str:
+def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = "") -> str:
     """Return normalized native family (e.g. 'gemini-4-hydrogen' or 'gemini-4-carbon') of the active Antigravity Lead session when observable."""
     cand_cids: list[str] = []
+    explicit_p = str(parent_conversation_id or "").strip()
+    if explicit_p:
+        cand_cids.append(explicit_p)
     env_cid = (os.environ.get("HARNESS_CONVERSATION_ID") or "").strip()
-    if env_cid:
+    if env_cid and env_cid not in cand_cids:
         cand_cids.append(env_cid)
     try:
         from antigravity_runtime import (
@@ -219,6 +222,13 @@ def _detect_live_parent_lead_family(repo: Path) -> str:
         from review_models import _split_antigravity_family_and_tier
     except ImportError:
         return ""
+    env_lead_override = str(os.environ.get("HARNESS_LEAD_MODEL_FAMILY") or "").strip()
+    if env_lead_override:
+        if "orchestrator" in env_lead_override.lower():
+            return "gemini-4-hydrogen"
+        fam_ovr, _ = _split_antigravity_family_and_tier(env_lead_override)
+        if fam_ovr:
+            return fam_ovr
     st = state_root(repo)
     live_models_map: dict[str, str] = {}
     live_cache_p = st / "live-session-models.json"
@@ -248,7 +258,7 @@ def _detect_live_parent_lead_family(repo: Path) -> str:
             tx_p = resolve_transcript(cid)
             if tx_p is None:
                 continue
-            if cid != env_cid and is_likely_subagent_transcript(tx_p):
+            if cid not in {explicit_p, env_cid} and is_likely_subagent_transcript(tx_p):
                 continue
             meta = native_model_metadata(tx_p)
         except Exception:
@@ -270,6 +280,24 @@ def _detect_live_parent_lead_family(repo: Path) -> str:
         except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
             _policy_probe_failed = True
     return ""
+
+
+def is_frontier_lead_requiring_flash_offload(
+    repo: Path,
+    parent_conversation_id: str = "",
+) -> tuple[bool, str]:
+    """Return `(True, lead_family)` when the active Lead session runs `Carbon` or `Argon` and `#200144` offload is enabled.
+
+    Because `.agents/agents/*/agent.md` omits `model:` (#200144), omitting `Model` in `invoke_subagent`
+    on a `Carbon`/`Argon` parent session inherits `Carbon`/`Argon` and burns frontier quota. Passing
+    `Model='flash'` routes natively in Antigravity's executor protobuf to `gemini-4-hydrogen-tiered-high` (`1x`).
+    """
+    if not is_quirk_enabled("200144", repo=repo):
+        return (False, "")
+    fam = _detect_live_parent_lead_family(repo, parent_conversation_id=parent_conversation_id)
+    if fam in {"gemini-4-carbon", "gemini-4-argon"}:
+        return (True, fam)
+    return (False, fam)
 
 
 
@@ -763,6 +791,9 @@ def evaluate_delegation_policy(
             }
 
     live_lead_fam = _detect_live_parent_lead_family(repo)
+    offload_scout, _ = is_frontier_lead_requiring_flash_offload(repo)
+    scout_target_m = resolve_utility_scout_model(repo, task_id=tid, plan=plan)
+    scout_invoke_model = "flash" if (offload_scout or scout_target_m.startswith("gemini-3.8-flash")) else None
 
     if act_code == "CAPTURE_RED_EVIDENCE":
         return {
@@ -777,6 +808,7 @@ def evaluate_delegation_policy(
             "worker_allowed": False,
             "worker_mode": "NONE",
             "lead_native_family": live_lead_fam,
+            "scout_invoke_model": scout_invoke_model,
             "target_files": [f for f in target_files if is_test_file(f)],
             "reason": (
                 "BUG task requires executable RED reproduction first: author only failing reproduction test(s) directly on the warm Lead session "
@@ -804,11 +836,12 @@ def evaluate_delegation_policy(
         "worker_allowed": False,
         "worker_mode": "NONE",
         "lead_native_family": live_lead_fam,
+        "scout_invoke_model": scout_invoke_model,
         "remote_mode_detected": is_remote_mode,
         "target_files": target_files,
         "reason": (
             f"Warm-cache Lead execution ({risk_tier}, {len(target_files)} planned file(s)){sens_note}: "
-            "implement approved production & test files directly on the Lead session with concise English KDoc (`/** ... */`) "
+            "implement approved production & test files directly on the warm Lead session with concise English KDoc (`/** ... */`) "
             "on newly created classes/interfaces and added public/internal `Repository`/`UseCase`/`ViewModel`/`DataSource`/`@Composable` contracts, "
             "then run `checkpoint-phase` or `verify-steps` directly (no worker subagent spawn overhead)."
         ),
@@ -865,8 +898,9 @@ def validate_utility_dispatch(
             "MIXED_SUBAGENT_BATCH",
         )
 
-    # Guard against silent frontier quota leak & ensure `.agents/agents/<role>/agent.md` frontmatter is pinned before omitted-Model dispatch!
+    # Guard against silent frontier quota leak & ensure `.agents/agents/<role>/agent.md` exists!
     expected_s_model = resolve_utility_scout_model(repo, plan=plan) if scout_items else ""
+    offload_needed, lead_fam_now = is_frontier_lead_requiring_flash_offload(repo, parent_conversation_id) if scout_items else (False, "")
     if scout_items:
         sync_utility_scout_model(repo, expected_s_model)
         if (repo / ".agents" / "agents").is_dir() and not (repo / ".agents" / "agents" / SCOUT_AGENT / "agent.md").is_file():
@@ -874,10 +908,26 @@ def validate_utility_dispatch(
         for item in scout_items:
             raw_model = str(item.get("Model") or item.get("model") or "").strip().lower()
             if expected_s_model.startswith("gemini-3.8-flash"):
+                if offload_needed and raw_model != "flash":
+                    return (
+                        False,
+                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Active Lead chat is running `{lead_fam_now}`; "
+                        f"re-invoke `{SCOUT_AGENT}` immediately with `Model='flash'` so it does not inherit `{lead_fam_now}` quota.",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
                 if raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
                     return (
                         False,
                         f"Utility subagent '{SCOUT_AGENT}' is pinned to `{expected_s_model}`; remove Model='{raw_model}' (or pass Model='flash').",
+                        "UTILITY_MODEL_QUOTA_GUARD",
+                    )
+            elif offload_needed:
+                if raw_model != "flash":
+                    return (
+                        False,
+                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Active Lead chat is running `{lead_fam_now}`, and modelless `.agents/agents/{SCOUT_AGENT}/agent.md` (#200144) "
+                        f"would inherit `{lead_fam_now}` quota if `Model` is omitted. Re-invoke `{SCOUT_AGENT}` immediately with `Model='flash'` "
+                        "(routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` 1x).",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )
             else:

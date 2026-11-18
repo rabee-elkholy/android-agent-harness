@@ -30,9 +30,30 @@ from _gate_results import current_head_sha, write_gate_result  # noqa: E402
 from _vnext_common import ValidationError  # noqa: E402
 
 ROBORAZZI_MARKER_RE = re.compile(
-    r"io\.github\.takahirom\.roborazzi|roborazzi-gradle-plugin|roborazzi-compose"
+    r"io\.github\.takahirom\.roborazzi|roborazzi-gradle-plugin|roborazzi-compose|roborazzi-junit-rule"
     r"|libs\.(?:plugins|libraries|bundles)\.[a-zA-Z0-9_.-]*roborazzi",
     re.I,
+)
+ROBORAZZI_PLUGIN_BLOCK_RE = re.compile(
+    r"id\s*\(\s*[\"']io\.github\.takahirom\.roborazzi[\"']\s*\)"
+    r"|id\s+[\"']io\.github\.takahirom\.roborazzi[\"']"
+    r"|alias\s*\(\s*libs\.plugins\.[a-zA-Z0-9_.-]*roborazzi[a-zA-Z0-9_.-]*\s*\)",
+    re.I,
+)
+ROBOLECTRIC_MARKER_RE = re.compile(
+    r"org\.robolectric:robolectric|libs\.(?:libraries\.|bundles\.)?[a-zA-Z0-9_.-]*robolectric",
+    re.I,
+)
+COMPOSE_UI_TEST_JUNIT4_RE = re.compile(
+    r"ui-test-junit4|ui\.test\.junit4",
+    re.I,
+)
+COMPOSE_UI_TEST_MANIFEST_RE = re.compile(
+    r"ui-test-manifest|ui\.test\.manifest",
+    re.I,
+)
+INCLUDE_ANDROID_RESOURCES_RE = re.compile(
+    r"\b(?:isIncludeAndroidResources|includeAndroidResources)\s*=\s*true\b"
 )
 APPLY_FALSE_RE = re.compile(r"\bapply\s+false\b", re.I)
 
@@ -57,15 +78,24 @@ def _is_clickable(node: dict[str, Any]) -> bool:
 
 
 def detect_roborazzi(repo: Path) -> dict[str, Any]:
-    """Detect Roborazzi plugin/dependency presence across root, catalog, and module Gradle files."""
+    """Detect Roborazzi plugin/dependency, Robolectric, and Compose JVM UI test readiness across Gradle files."""
     toml = repo / "gradle" / "libs.versions.toml"
     in_catalog = False
+    robolectric_found = False
+    compose_test_found = False
+    compose_manifest_found = False
     preview_scanner = False
     catalog_plugin_aliases: list[str] = []
     if toml.is_file():
         try:
             t_txt = toml.read_text(encoding="utf-8", errors="replace")
             in_catalog = bool(ROBORAZZI_MARKER_RE.search(t_txt))
+            if ROBOLECTRIC_MARKER_RE.search(t_txt):
+                robolectric_found = True
+            if COMPOSE_UI_TEST_JUNIT4_RE.search(t_txt):
+                compose_test_found = True
+            if COMPOSE_UI_TEST_MANIFEST_RE.search(t_txt):
+                compose_manifest_found = True
             if "composablepreviewscanner" in t_txt.lower():
                 preview_scanner = True
             for m in re.finditer(r"^\s*([A-Za-z0-9_-]+)\s*=\s*\{[^\n}]*roborazzi", t_txt, re.I | re.M):
@@ -75,6 +105,8 @@ def detect_roborazzi(repo: Path) -> dict[str, Any]:
             pass
 
     modules_with_roborazzi: list[str] = []
+    plugin_applied = False
+    include_android_resources = False
     for gf in sorted(repo_glob(repo, "**/build.gradle*"))[:80]:
         if not gf.is_file():
             continue
@@ -89,9 +121,20 @@ def detect_roborazzi(repo: Path) -> dict[str, Any]:
             if not ln.lstrip().startswith("//") and not APPLY_FALSE_RE.search(ln)
         ]
         active_txt = "\n".join(active_lines)
-        matched = bool(ROBORAZZI_MARKER_RE.search(active_txt)) or any(
+        if ROBOLECTRIC_MARKER_RE.search(active_txt):
+            robolectric_found = True
+        if COMPOSE_UI_TEST_JUNIT4_RE.search(active_txt):
+            compose_test_found = True
+        if COMPOSE_UI_TEST_MANIFEST_RE.search(active_txt):
+            compose_manifest_found = True
+        if INCLUDE_ANDROID_RESOURCES_RE.search(active_txt):
+            include_android_resources = True
+        has_plugin_here = bool(ROBORAZZI_PLUGIN_BLOCK_RE.search(active_txt)) or any(
             alias in active_txt for alias in catalog_plugin_aliases
         )
+        if has_plugin_here:
+            plugin_applied = True
+        matched = bool(ROBORAZZI_MARKER_RE.search(active_txt)) or has_plugin_here
         if matched:
             rel_parent = gf.parent.relative_to(repo).as_posix()
             mod_name = ":" if rel_parent in ("", ".") else ":" + rel_parent.replace("/", ":")
@@ -108,7 +151,12 @@ def detect_roborazzi(repo: Path) -> dict[str, Any]:
     ]
     return {
         "installed": bool(modules_with_roborazzi or in_catalog),
+        "plugin_applied": plugin_applied,
         "modules": modules_with_roborazzi,
+        "robolectric_installed": robolectric_found,
+        "compose_ui_test_installed": compose_test_found,
+        "compose_ui_test_manifest_installed": compose_manifest_found,
+        "include_android_resources": include_android_resources,
         "composable_preview_scanner": preview_scanner,
         "uitree_files": uitree_files[:50],
     }
@@ -265,10 +313,11 @@ def run_roborazzi_verify(repo: Path, module: str | None = None) -> tuple[int, di
         return 0, {"status": "SKIPPED", "reason": "Roborazzi is not configured in this repository."}
 
     target_mod = module or (info["modules"][0] if info["modules"] else ":app")
+    leaf_task = "verifyRoborazziDebug" if info.get("plugin_applied") else "testDebugUnitTest"
     if target_mod == ":":
-        gradle_task = "verifyRoborazziDebug"
+        gradle_task = leaf_task
     else:
-        gradle_task = f"{target_mod.rstrip(':')}:verifyRoborazziDebug"
+        gradle_task = f"{target_mod.rstrip(':')}:{leaf_task}"
 
     proc = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "run_gradle_task.py"), gradle_task, "-Proborazzi.dumpUiTree=true"],
