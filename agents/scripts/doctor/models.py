@@ -26,6 +26,7 @@ CORE_SCRIPTS = (
     "artifact_set.py",
     "change_classifier.py",
     "delegation_policy.py",
+    "dep_inspect.py",
     "maestro_bridge.py",
     "roborazzi_gate.py",
     "session_forensics.py",

@@ -734,6 +734,17 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
         )
 
         sorted_dirty = sorted(dirty)
+        gradle_build_touched = any(
+            Path(p).name in {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "libs.versions.toml"}
+            or p.replace("\\", "/").endswith(".gradle.kts")
+            or p.replace("\\", "/").endswith(".gradle")
+            for p in sorted_dirty
+        )
+        gradle_sync_note = (
+            "Gradle dependency/build scripts were modified: include 1 short bullet reminding the developer to run `Sync Project with Gradle Files` in Android Studio so IDE indexing & `-sources.jar` match Gradle CLI.\n"
+            if gradle_build_touched
+            else ""
+        )
         return {
             "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
             "kind": "DEVELOPER_ACTION",
@@ -754,12 +765,14 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 "verified_run_id": ready_run_id,
                 "verified_snapshot_sha256": ready_snapshot,
                 "dirty_task_files": sorted_dirty,
+                "gradle_sync_recommended": gradle_build_touched,
                 "suggested_commit_message": suggested_commit,
                 "suggested_commit_block": suggested_commit_full,
             },
             "instructions": (
                 f"Developer action required: Review in Android Studio Git Diff and commit uncommitted task files ({', '.join(sorted_dirty)}).\n"
                 + (f"Tell the developer these files also contain their own uncommitted edits from before the task: {', '.join(mixed)}.\n" if mixed else "")
+                + gradle_sync_note
                 + refinement_commit_note
                 + f"Suggested commit:\n```text\n{suggested_commit_full}\n```\n"
                 "Invoke `ask_question` IMMEDIATELY with ZERO chat prose before the tool call, placing an ULTRA-COMPACT Commit & Delivery Card "

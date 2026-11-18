@@ -1058,8 +1058,8 @@ def _normalize_repo_rel(repo: Path, raw_target: str) -> str:
 
 _SCOUT_SAFE_COMMAND_RE = re.compile(
     r"^\s*(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-(?:3(?:\.\d+)?|u|B|S|E)\s+)*"
-    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|delegate-plan|diagnose-session|android-inspect|android-ui|debug\s+(?:status|logs)|device\s+(?:status|ios-status)|roborazzi\s+(?:capabilities|inspect-tree)|maestro\s+(?:capabilities|list)|pm\s+(?:discover|status|find-item)|context\s+(?:preview|status|drift-report)|task\s+(?:status|coverage|metrics|plan-check|bridge)|journey\s+(?:list|validate)|policy|doctor|health|version|commands|symbol\s+(?:outline|read)|web-pack|web-relay\s+(?:pack|status)|execution-mode(?:\s+show)?(?!\s+set))\b"
-    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|delegation_policy\.py|session_forensics\.py|android_inspect\.py|static_health_bridge\.py|logcat_doctor\.py)\"?\b"
+    r"(?:\"?[^\"]*?(?:harness\.py|harness_cli\.py)\"?\s+(?:graph|task-context|dep-inspect|delegate-plan|diagnose-session|android-inspect|android-ui|debug\s+(?:status|logs)|device\s+(?:status|ios-status)|roborazzi\s+(?:capabilities|inspect-tree)|maestro\s+(?:capabilities|list)|pm\s+(?:discover|status|find-item)|context\s+(?:preview|status|drift-report)|task\s+(?:status|coverage|metrics|plan-check|bridge)|journey\s+(?:list|validate)|policy|doctor|health|version|commands|symbol\s+(?:outline|read)|web-pack|web-relay\s+(?:pack|status)|execution-mode(?:\s+show)?(?!\s+set))\b"
+    r"|\"?[^\"]*?(?:project_graph\.py|task_context\.py|dep_inspect\.py|delegation_policy\.py|session_forensics\.py|android_inspect\.py|static_health_bridge\.py|logcat_doctor\.py)\"?\b"
     r"|\"?[^\"]*?(?:symbol_edit\.py\"?\s+(?:outline|read)|web_relay\.py\"?\s+(?:pack|status)|execution_mode\.py\"?\s+show)\b)",
     re.IGNORECASE,
 )

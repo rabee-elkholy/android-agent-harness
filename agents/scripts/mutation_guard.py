@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge", "dep_inspect"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -430,7 +430,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             ["maestro", "capabilities"], ["maestro", "list"],
         ):
             return True
-        if args[:1] in (["health"], ["diagnose-session"]):
+        if args[:1] in (["health"], ["diagnose-session"], ["dep-inspect"]):
             return True
         if args in (["device", "status"], ["device", "ios-status"]):
             return True

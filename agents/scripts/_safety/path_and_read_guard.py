@@ -647,3 +647,35 @@ def _is_large_step_output_paginated_read(raw_target: str, args: dict) -> bool:
     except OSError:
         return offset_val >= 24576
     return offset_val >= 24576
+
+
+def _is_large_build_artifact_paginated_read(raw_target: str, args: dict) -> bool:
+    """True when `read_file`/`view_file` paginates (`ByteOffset > 0`) a `> 48 KB` file inside repository `build/` directories."""
+    norm = str(raw_target or "").strip().strip('"').strip("'").replace("\\", "/")
+    if not norm:
+        return False
+    raw_offset = args.get("ByteOffset")
+    if raw_offset is None:
+        raw_offset = args.get("byteOffset")
+    if raw_offset is None:
+        raw_offset = args.get("byte_offset")
+    try:
+        offset_val = int(raw_offset or 0)
+    except (TypeError, ValueError):
+        offset_val = 0
+    if offset_val <= 0:
+        return False
+    try:
+        cand = Path(norm).expanduser()
+        resolved = cand.resolve() if cand.is_absolute() else (_engine.REPO / cand).resolve()
+        rel = resolved.relative_to(_engine.REPO.resolve()).as_posix().lower()
+    except (OSError, ValueError):
+        return False
+    if not (rel.startswith("build/") or "/build/" in f"/{rel}"):
+        return False
+    try:
+        if resolved.is_file():
+            return resolved.stat().st_size > 49152
+    except OSError:
+        return offset_val >= 46080
+    return offset_val >= 46080

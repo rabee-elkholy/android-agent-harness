@@ -545,6 +545,16 @@ def _main() -> None:
                     reason_code="LARGE_STEP_OUTPUT_PAGINATION_BLOCKED",
                 )
                 return
+            if name in {"view_file", "read_file", "read"} and _is_large_build_artifact_paginated_read(target, args):
+                emit(
+                    "deny",
+                    "BUILD_ARTIFACT_PAGINATION_BLOCKED: Never paginate large generated or bytecode dump files inside `build/**` via `ByteOffset` (causes 200K+ token context bloat). "
+                    "Inspect third-party library Kotlin/Java sources (`-sources.jar`, auto-fetched even before Android Studio Sync) via "
+                    "`python .agents/harness.py dep-inspect <group:artifact[:version]> --query <symbol>`.",
+                    tool=name,
+                    reason_code="BUILD_ARTIFACT_PAGINATION_BLOCKED",
+                )
+                return
             if _is_native_transcript_read_target(target):
                 emit(
                     "deny",
@@ -752,6 +762,7 @@ from .path_and_read_guard import (
     _is_background_task_log_target,
     _deny_engine_read,
     _is_large_step_output_paginated_read,
+    _is_large_build_artifact_paginated_read,
 )
 
 if __name__ == "__main__":

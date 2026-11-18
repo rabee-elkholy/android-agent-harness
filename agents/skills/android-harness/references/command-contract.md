@@ -434,6 +434,7 @@ When an exception occurs:
 | :--- | :--- | :--- |
 | **Discovery** | `python .agents/harness.py graph --feature <name> --json` (or `--find <Symbol>`; engine: `project_graph.py`) | Fast AST/symbol project graph analysis |
 | **Task Context** | `python .agents/harness.py task-context --file <path> --json` (or `--symbol <name>`) | Bounded context for one task target; records the discovery receipt |
+| **Library Sources** | `python .agents/harness.py dep-inspect <group:artifact[:version]> --query <symbol>` | Inspect third-party Kotlin/Java `-sources.jar` (auto-fetched before Studio Sync) or clean `javap -public` signatures |
 | **Clarification** | `ask_question` tool | Interactive question modal before drafting plan |
 | **Draft Plan** | `python .agents/harness.py task draft --repo . --task-id <id> ...` | Register the plan and print the approval material |
 | **Revise Plan** | `python .agents/harness.py task revise --repo . --task-id <id> ...` | Change the plan; approval is asked again |

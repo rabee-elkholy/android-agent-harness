@@ -2022,6 +2022,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for sub_name, script_file, help_txt in (
         ("symbol", "symbol_edit.py", "Semantic symbol outline, read, replace-body, and insert-after surgery."),
+        ("dep-inspect", "dep_inspect.py", "Inspect third-party library Kotlin/Java sources (-sources.jar auto-fetch) or clean public signatures."),
         ("health", "static_health_bridge.py", "Task-scoped SARIF, Gradle BuildHealth, and LeakCanary inspection."),
         ("roborazzi", "roborazzi_gate.py", "Roborazzi headless JVM UI verification and .uitree.json bounds audit."),
         ("maestro", "maestro_bridge.py", "Physical-device Maestro YAML execution and phone_e2e YAML exporter."),

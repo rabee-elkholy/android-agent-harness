@@ -40,7 +40,7 @@ Authoritative always-loaded contract. Detailed domain guides load on demand from
 
 | Step | Canonical command |
 |---|---|
-| Task context / graph | `python .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` |
+| Task context / graph / dep | `python .agents/harness.py task-context --file <path> --json` / `graph --feature <name> --json` / `dep-inspect <group:artifact[:ver]> --query <sym>` |
 | Context note / bridge | `python .agents/harness.py context note "<english-note>"` / `task bridge --save` |
 | Task guidance | `python .agents/harness.py task status --task-id <id> --next` |
 | Consecutive verification / Ship | `python .agents/harness.py verify-steps --task-id <id> --host antigravity` / `task ship --task-id <id> --host antigravity` |

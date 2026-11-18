@@ -40,7 +40,7 @@ def _run(script: str, args: list[str]) -> int:
     from _vnext_common import ValidationError, read_json
     from host_continuation import assert_execution_session
     from evidence_store import StateLock
-    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "delegation_policy.py", "android_inspect.py"}
+    read_only = script in {"project_graph.py", "task_context.py", "harness_doctor.py", "task_metrics.py", "review_policy.py", "delegation_policy.py", "android_inspect.py", "dep_inspect.py"}
     read_only = read_only or (script == "debug_instrumentation.py" and args[:1] == ["status"])
     read_only = read_only or (script == "run_device.py" and (args[:1] in (["status"], ["ios-status"]) or any(a in ("-h", "--help") for a in args)))
     read_only = read_only or (script == "workflow.py" and args[:1] in (["status"], ["coverage"], ["metrics"], ["continue"], ["plan-check"], ["bridge"]))
@@ -83,7 +83,7 @@ def _run(script: str, args: list[str]) -> int:
     in_process_ok = (
         os.environ.get("HARNESS_FORCE_SUBPROCESS") != "1"
         and (
-            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py", "session_forensics.py"}
+            script in {"project_graph.py", "task_context.py", "delegation_policy.py", "review_policy.py", "session_forensics.py", "dep_inspect.py"}
             or (script == "static_health_bridge.py" and args[:1] in (["capabilities"], ["report"]))
             or (script == "symbol_edit.py" and args[:1] in (["outline"], ["read"]))
             or (script == "workflow.py" and args[:1] == ["status"])
@@ -325,7 +325,7 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|symbol|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|symbol|dep-inspect|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
@@ -393,6 +393,8 @@ def _main(argv: list[str] | None = None) -> int:
         return _run("execution_mode.py", ["show", *forwarded_em])
     if command == "symbol":
         return _run("symbol_edit.py", _with_repo_arg(args))
+    if command == "dep-inspect":
+        return _run("dep_inspect.py", _with_repo_arg(args))
     if command == "health":
         return _run("static_health_bridge.py", _with_repo_arg(args))
     if command == "roborazzi":

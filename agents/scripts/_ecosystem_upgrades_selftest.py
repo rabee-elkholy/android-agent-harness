@@ -2230,6 +2230,141 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
         for expected_tok in ("delete_file", "create_file", "move_file", "rename_file", "apply_patch", "mcp_.*", "schedules:.*"):
             self.assertIn(expected_tok, pre_m)
 
+    def test_10_dep_inspect_sources_fetch_build_pagination_guard_and_gradle_sync_note(self) -> None:
+        """Verify `dep-inspect` on-demand `-sources.jar` fetch, KMP `-android` fallback, binary `.aar` fallback, `BUILD_ARTIFACT_PAGINATION_BLOCKED`, and Gradle Sync reminder."""
+        import zipfile
+        import dep_inspect
+        from delegation_policy import scout_command_allowed
+
+        kit_root = Path(__file__).resolve().parents[2]
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            fake_maven = root / "maven"
+            app_repo = root / "app"
+            (app_repo / "gradle").mkdir(parents=True)
+            (app_repo / "app").mkdir(parents=True)
+            (app_repo / ".agents/state").mkdir(parents=True)
+
+            # 1) Configure `libs.versions.toml` + `app/build.gradle` variable interpolation
+            (app_repo / "gradle/libs.versions.toml").write_text(
+                '[versions]\ncoil = "99.3.0"\n[libraries]\ncoil-compose = { module = "io.synthetic.coil3:coil-compose", version.ref = "coil" }\n',
+                encoding="utf-8",
+            )
+            (app_repo / "app/build.gradle").write_text(
+                'def rc_ver = "99.1.0"\ndependencies {\n    implementation "com.synthetic.testsdk:purchases-ui:$rc_ver"\n    implementation "com.closed.sdk:pay:2.1.0"\n}\n',
+                encoding="utf-8",
+            )
+
+            # 2) Populate fake Maven repository (`file://`) with:
+            #    - `purchases-ui-99.1.0-sources.jar` (simulating pre-Android Studio Sync download!)
+            #    - KMP `coil-compose-android-3.0.4-sources.jar`
+            #    - Closed-source `pay-2.1.0.aar` (containing `classes.jar`, NO `-sources.jar`)
+            rc_dir = fake_maven / "com/synthetic/testsdk/purchases-ui/99.1.0"
+            rc_dir.mkdir(parents=True)
+            with zipfile.ZipFile(rc_dir / "purchases-ui-99.1.0-sources.jar", "w") as zf:
+                zf.writestr(
+                    "com/revenuecat/purchases/ui/revenuecatui/checkpoints/CheckpointsExtensions.kt",
+                    "/* Copyright */\npackage com.revenuecat.purchases.ui.revenuecatui.checkpoints\n\n"
+                    "import com.revenuecat.purchases.Purchases\n\n"
+                    "/** Presents a targeted checkpoint flow before Android Studio Sync. */\n"
+                    "@InviteOnlyCheckpointsAPI\n"
+                    "fun Purchases.checkpoint(identifier: String, params: CheckpointParams = CheckpointParams()): Unit {}\n",
+                )
+
+            kmp_dir = fake_maven / "io/synthetic/coil3/coil-compose-android/99.3.0"
+            kmp_dir.mkdir(parents=True)
+            with zipfile.ZipFile(kmp_dir / "coil-compose-android-99.3.0-sources.jar", "w") as zf:
+                zf.writestr(
+                    "coil3/compose/AsyncImage.kt",
+                    "package coil3.compose\n\n/** Composable image loader. */\nfun AsyncImage(model: Any?) {}\n",
+                )
+
+            closed_dir = fake_maven / "com/closed/sdk/pay/2.1.0"
+            closed_dir.mkdir(parents=True)
+            inner_jar_bytes = io.BytesIO() if "io" in globals() else __import__("io").BytesIO()
+            with zipfile.ZipFile(inner_jar_bytes, "w") as cz:
+                cz.writestr("com/closed/sdk/PayGateway.class", b"\xca\xfe\xba\xbe")
+                cz.writestr("com/closed/sdk/PayGateway$WhenMappings.class", b"\xca\xfe\xba\xbe")
+            with zipfile.ZipFile(closed_dir / "pay-2.1.0.aar", "w") as az:
+                az.writestr("classes.jar", inner_jar_bytes.getvalue())
+
+            maven_uri = fake_maven.resolve().as_uri()
+
+            # 2a) Auto-resolves `purchases-ui` -> `com.synthetic.testsdk:purchases-ui:99.1.0` & fetches `-sources.jar` on demand!
+            res_rc = dep_inspect.inspect_dependency(
+                app_repo,
+                "purchases-ui",
+                query="checkpoint",
+                maven_repos=[maven_uri],
+            )
+            self.assertEqual("com.synthetic.testsdk:purchases-ui:99.1.0", res_rc["coordinate"])
+            self.assertEqual("sources_jar", res_rc["mode"])
+            self.assertTrue(res_rc["downloaded_on_demand"])
+            self.assertEqual(1, res_rc["matched_count"])
+            excerpt = res_rc["matches"][0]["source"]
+            self.assertIn("fun Purchases.checkpoint", excerpt)
+            self.assertNotIn("import com.revenuecat.purchases.Purchases", excerpt)
+
+            # Second call hits local `.agents/state/cache/dep-sources/` offline with `downloaded_on_demand == False`!
+            res_cached = dep_inspect.inspect_dependency(app_repo, "purchases-ui", query="checkpoint", offline=True)
+            self.assertFalse(res_cached["downloaded_on_demand"])
+            self.assertIn("fun Purchases.checkpoint", res_cached["matches"][0]["source"])
+
+            # 2b) Auto-resolves KMP `coil-compose` from `libs.versions.toml` -> fetches `-android` sources jar!
+            res_kmp = dep_inspect.inspect_dependency(
+                app_repo,
+                "io.synthetic.coil3:coil-compose",
+                query="AsyncImage",
+                maven_repos=[maven_uri],
+            )
+            self.assertEqual("io.synthetic.coil3:coil-compose:99.3.0", res_kmp["coordinate"])
+            self.assertEqual("sources_jar", res_kmp["mode"])
+            self.assertIn("fun AsyncImage", res_kmp["matches"][0]["source"])
+
+            # 2c) Closed-source `.aar` fallback filters `$WhenMappings` noise cleanly!
+            res_bin = dep_inspect.inspect_dependency(
+                app_repo,
+                "com.closed.sdk:pay",
+                query="PayGateway",
+                maven_repos=[maven_uri],
+            )
+            self.assertEqual("binary_public_signatures", res_bin["mode"])
+            self.assertEqual(["com.closed.sdk.PayGateway"], res_bin["classes"])
+
+            # 3) Scout & read-only guard allow `dep-inspect`
+            self.assertTrue(scout_command_allowed("python .agents/harness.py dep-inspect purchases-ui --query checkpoint --json"))
+
+            # 4) `BUILD_ARTIFACT_PAGINATION_BLOCKED`: blocks `ByteOffset > 0` on `> 48 KB` `app/build/**` dumps while allowing page 0!
+            big_dump = app_repo / "app/build/rc_11_4_0_deep.txt"
+            big_dump.parent.mkdir(parents=True, exist_ok=True)
+            big_dump.write_bytes(b"B" * (65 * 1024))
+
+            allow_p0 = subprocess.run(
+                [sys.executable, str(kit_root / "agents/scripts/pre_tool_safety.py")],
+                input=json.dumps({
+                    "conversationId": "conv-dep-1",
+                    "toolName": "read_file",
+                    "toolArgs": {"Path": str(big_dump), "StartLine": 1, "EndLine": 100},
+                }),
+                capture_output=True, text=True, env={**os.environ, "HARNESS_REPO": str(app_repo)}, check=False,
+            )
+            self.assertEqual("allow", json.loads(allow_p0.stdout)["decision"])
+
+            deny_paged = subprocess.run(
+                [sys.executable, str(kit_root / "agents/scripts/pre_tool_safety.py")],
+                input=json.dumps({
+                    "conversationId": "conv-dep-1",
+                    "toolName": "read_file",
+                    "toolArgs": {"Path": str(big_dump), "StartLine": 1, "EndLine": 800, "ByteOffset": 46080},
+                }),
+                capture_output=True, text=True, env={**os.environ, "HARNESS_REPO": str(app_repo)}, check=False,
+            )
+            paged_out = json.loads(deny_paged.stdout)
+            self.assertEqual("deny", paged_out["decision"])
+            self.assertIn("BUILD_ARTIFACT_PAGINATION_BLOCKED", paged_out.get("reason", ""))
+            self.assertIn("dep-inspect", paged_out.get("reason", ""))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
