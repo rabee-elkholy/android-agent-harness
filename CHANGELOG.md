@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.4.3] - 2026-11-18
+
+### Threshold-Prompted 3-Choice Web-Relay Advisor & Subagent Enum Hygiene
+- **Threshold-Prompted `Web-Relay` Advisor & Retirement of Silent `auto-project` (`execution_mode.py`, `_safety/command_policy.py`, `pre_invocation_reminder.py`, `GEMINI.md.template`)**: Retired silent automatic mode switching (`auto-project` / `auto-task`) while seamlessly migrating legacy `"mode": "auto"` state records on disk without `doctor` integrity errors. Ordinary compact tasks (`< 10` files, `< 80 KB` non-test code mass, single-phase, single-module or small 2-module `< 6` files / `< 48 KB`, and small `< 4`-file / `< 32 KB` tweaks) now run locally in Antigravity by default with zero prompts; heavy tasks (`10+` files, `80+ KB` code mass, `2+` phases, substantial multi-module scope, or `4+`-file / `32+ KB` `T5` scope — including pre-approval `task revise` escalations) prompt via `ask_question` with concrete scope metrics, approximate quota savings (`~60%–85%`), and 3 developer choices: `normal-task` (continue locally for this task), `web-task` (execute externally via Web-Relay), or `normal-project` (always continue locally and do not ask again, guarded by `LOCAL_EXECUTION_MODE_ACTIVE` against unrequested `web-pack` calls).
+- **Strict Antigravity Subagent Enum Hygiene in `delegate-plan` (`_delegation/engine.py`)**: Replaced stale internal model strings (`gemini-4-hydrogen-medium`) inside `quota_strategy.scout_model`, `quota_strategy.subagent_workhorse_model`, and `PRE_PLAN_DISCOVERY` output with the exact Antigravity `invoke_subagent` `Model` enum (`"flash"` on `Carbon`/`Argon` Lead sessions or `"inherit"` on `Hydrogen` sessions), clarifying that thinking-effort labels apply only to the main-chat UI selector.
+
 ## [1.4.2] - 2026-11-18
 
 ### Carbon/Argon Flash Subagent Offload, Surgical Review Carry, Unused-Code Guard & Headless JVM UI Stack
