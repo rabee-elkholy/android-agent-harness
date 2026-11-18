@@ -3364,8 +3364,11 @@ class TestV139AuditFixes(unittest.TestCase):
 
         gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         global_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "gemini-runtime" / "android-harness-global.md.template").read_text(encoding="utf-8")
-        self.assertIn("auto-project", gemini_tpl)
-        self.assertIn("auto-project", global_tpl)
+        for expected_choice in ("normal-task", "web-task", "normal-project"):
+            self.assertIn(expected_choice, gemini_tpl)
+            self.assertIn(expected_choice, global_tpl)
+        self.assertNotIn("auto-project", gemini_tpl)
+        self.assertNotIn("auto-project", global_tpl)
         self.assertNotIn("4 simple choices", gemini_tpl)
         self.assertLess(len(global_tpl), 6000)
 
@@ -3563,9 +3566,10 @@ class TestV139AuditFixes(unittest.TestCase):
                 self.assertEqual(child_id, bound_entry.get("execution_id"))
                 self.assertEqual(parent_id, bound_entry.get("parent_execution_id"))
 
-        # 4) harness-rules.md 5-choice and V2 self-certification parity
+        # 4) harness-rules.md execution-mode choices and V2 self-certification parity
         rules_txt = (REPO_ROOT / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
-        self.assertIn("auto-project", rules_txt)
+        self.assertIn("normal-project", rules_txt)
+        self.assertNotIn("auto-project", rules_txt)
         self.assertIn("Review Protocol V2", rules_txt)
 
     def test_v139_06_jetski_utility_subagent_post_tool_ide_artifact_and_define_subagent_snake_case(self) -> None:
@@ -3750,7 +3754,7 @@ class TestV139AuditFixes(unittest.TestCase):
 
             # Verify prepare-verification --json outputs valid JSON with review_protocol_version == 2
             subprocess.run(
-                [sys.executable, ".agents/harness.py", "execution-mode", "set", "--choice", "auto-project", "--source", "conversation", "--proof-reference", "auto"],
+                [sys.executable, ".agents/harness.py", "execution-mode", "set", "--choice", "normal-project", "--source", "conversation", "--proof-reference", "Always local"],
                 cwd=app_repo,
                 env=doc_env,
                 check=True,
@@ -5230,7 +5234,7 @@ class TestV1316LiveSessionHardening(unittest.TestCase):
             with self.assertRaises(ValidationError) as q_ctx:
                 execution_mode.set_execution_mode(
                     repo,
-                    choice="auto-project",
+                    choice="normal-project",
                     source="conversation",
                     proof_reference="Which mode is best for this task?",
                 )
@@ -8267,6 +8271,12 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertEqual((True, "gemini-4-carbon"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-carbon"))
             pol_del_c = dp.evaluate_delegation_policy(repo, task_id="t-offload", plan=plan_impl, router_action="IMPLEMENT")
             self.assertEqual("flash", pol_del_c["scout_invoke_model"])
+            self.assertEqual("flash", pol_del_c["quota_strategy"]["scout_model"])
+            self.assertEqual("flash", pol_del_c["quota_strategy"]["subagent_workhorse_model"])
+            self.assertNotIn("gemini-4-hydrogen-medium", json.dumps(pol_del_c))
+            pol_pre_c = dp.evaluate_delegation_policy(repo, plan={})
+            self.assertEqual("flash", pol_pre_c["scout_invoke_model_arg"])
+            self.assertEqual("flash", pol_pre_c["scout_model"])
 
             deny_scout_no_m = _run_guard("cid-carbon", {
                 "TypeName": "harness-scout-agent",
@@ -8351,6 +8361,8 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-hydro"))
             pol_del_h = dp.evaluate_delegation_policy(repo, task_id="t-offload", plan=plan_impl, router_action="IMPLEMENT")
             self.assertIsNone(pol_del_h["scout_invoke_model"])
+            self.assertEqual("inherit", pol_del_h["quota_strategy"]["scout_model"])
+            self.assertEqual("inherit", pol_del_h["quota_strategy"]["subagent_workhorse_model"])
 
             allow_hydro_omit = _run_guard("cid-hydro", {
                 "TypeName": "harness-scout-agent",

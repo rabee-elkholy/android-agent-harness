@@ -1906,7 +1906,7 @@ class WebRelaySelftest(unittest.TestCase):
 
     def test_15_git_dirty_working_tree_capture_and_web_apply_dry_run_preview(self) -> None:
         """Studio-to-Web Git dirty capture (`--dirty` & IDLE auto-dirty) + read-only `web-apply --dry-run` preview & lint warning."""
-        self._run_harness("execution-mode", "set", "--choice", "auto-project", "--source", "conversation", "--proof-reference", "Use smart auto")
+        self._run_harness("execution-mode", "set", "--choice", "web-project", "--source", "conversation", "--proof-reference", "Use web relay")
 
         # 1) Create 2 modified tracked Kotlin files + 1 untracked new Kotlin screen + 1 secret file + 1 build artifact
         mod_a = "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt"

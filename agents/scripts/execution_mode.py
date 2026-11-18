@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-"""Interactive Execution Mode Selector & Tamper-Evident State Engine.
+"""Threshold-Prompted Execution Mode Advisor & Tamper-Evident State Engine.
 
 Manages per-task and per-project execution mode routing between:
-- `normal` (100% local Antigravity execution with Hydrogen/Carbon orchestration)
+- `normal` (100% local Antigravity execution — default for ordinary tasks)
 - `web`    (Manual Web-Relay clipboard pack/apply workflow via external AI web chat)
 
-Supports all 4 canonical developer choices (`normal-task`, `normal-project`,
-`web-task`, `web-project`) plus `ask-every-task` reset, with strict precedence:
-  1. Live Task Override (`.agents/state/tasks/<task_id>/execution-mode.json`)
-  2. Pending Pre-Draft Single-Task Choice (`.agents/state/pending-task-execution-mode.json`)
-  3. Project-Wide Default (`.agents/state/execution-mode.json`)
-  4. Unset (`selection_required = True` at the start of a new implementation task)
+Ordinary compact tasks run locally (`normal`) without interrupting the developer.
+When a task crosses heavy implementation thresholds (10+ files, 80+ KB non-test code
+mass, 2+ phases, substantial multi-module scope, or 4+-file / 32+-KB T5 critical scope)
+and no project lock (`normal-project` / `web-project`) is saved, the harness prompts via
+`ask_question` with estimated quota savings and 3 professional choices:
+  1. `normal-task`    — Continue locally here in Antigravity (this task only)
+  2. `web-task`       — Execute externally via Web-Relay (saves ~60%-85% local quota)
+  3. `normal-project` — Always continue locally in this project (do not ask again)
+
+(`web-project` and `ask-every-task` remain available via `execution-mode set`.)
 
 Zero external dependencies (Python 3.10+ stdlib only).
 """
@@ -55,64 +59,71 @@ AUTO_WEB_TWO_MODULE_MIN_FILES = 6
 AUTO_WEB_TWO_MODULE_MIN_MASS_KB = 48
 AUTO_WEB_TWO_MODULE_MIN_MASS_BYTES = AUTO_WEB_TWO_MODULE_MIN_MASS_KB * 1024
 AUTO_CRITICAL_SURFACES = frozenset({"AUTH", "BILLING", "CRYPTO", "SECURITY", "SENSITIVE_DATA", "MANIFEST_PERMISSION"})
+AUTO_CRITICAL_MIN_FILES = 4
+AUTO_CRITICAL_MIN_MASS_BYTES = 32 * 1024
+DEFAULT_ESTIMATED_SAVINGS_PCT = "60%-80%"
+
+PROMPT_EXECUTION_MODE_CHOICE_IDS: tuple[str, ...] = (
+    "normal-task",
+    "web-task",
+    "normal-project",
+)
 
 EXECUTION_MODE_CHOICES: dict[str, dict[str, str]] = {
-    "auto-project": {
-        "mode": "auto",
-        "scope": "project",
-        "label": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
-        "label_en": "Smart Auto — always for this project (Normal for small tasks, Web for large/complex)",
-        "description": "Save Smart Auto routing project-wide: compact tasks (<10 files, <80 KB non-test code mass, and single-module or small 2-module <6 files / <48 KB) run locally in Antigravity; large (10+ files or 80+ KB), substantial multi-module (3+ modules, or 2 modules with 6+ files / 48+ KB), multi-phase, T5 critical, or 2-Strike tasks route to external AI web chat (Web-Relay).",
-    },
-    "auto-task": {
-        "mode": "auto",
-        "scope": "task",
-        "label": "Smart Auto — this task only (route automatically by task size & complexity)",
-        "label_en": "Smart Auto — this task only (route automatically by task size & complexity)",
-        "description": "Route this task automatically between Normal mode and Web-Relay based on file count, modules, risk tier, and handoff state.",
-    },
     "normal-task": {
         "mode": "normal",
         "scope": "task",
-        "label": "Normal mode — this task only (run locally in Antigravity)",
-        "label_en": "Normal mode — this task only (run locally in Antigravity)",
-        "description": "Run planning, coding, and verification locally inside Antigravity for this task only; ask again on the next new task.",
-    },
-    "normal-project": {
-        "mode": "normal",
-        "scope": "project",
-        "label": "Normal mode — always for this project (run locally in Antigravity)",
-        "label_en": "Normal mode — always for this project (run locally in Antigravity)",
-        "description": "Save local Antigravity execution as the project default and stop asking on future tasks.",
+        "label": "Continue locally here in Antigravity (this task only)",
+        "label_en": "Continue locally here in Antigravity (this task only)",
+        "description": "Keep planning, implementation, and verification inside Antigravity for this task; prompt again only when a future heavy task warrants Web-Relay.",
     },
     "web-task": {
         "mode": "web",
         "scope": "task",
-        "label": "Web mode — this task only (copy Context Pack for external AI chat to save quota)",
-        "label_en": "Web mode — this task only (copy Context Pack for external AI chat to save quota)",
-        "description": "Scope files locally and build a Clipboard Context Pack via `web-pack` for an external AI chat on this task only.",
+        "label": "Execute externally via Web-Relay (saves ~60%-80% local quota)",
+        "label_en": "Execute externally via Web-Relay (saves ~60%-80% local quota)",
+        "description": "Offload multi-file code generation to an external AI chat via `web-pack` / `web-apply` on this task while keeping builds, tests, and review local.",
+    },
+    "normal-project": {
+        "mode": "normal",
+        "scope": "project",
+        "label": "Always continue locally in this project (do not ask again)",
+        "label_en": "Always continue locally in this project (do not ask again)",
+        "description": "Lock local Antigravity execution across this project and never prompt for Web-Relay on future tasks unless reset.",
     },
     "web-project": {
         "mode": "web",
         "scope": "project",
-        "label": "Web mode — always for this project (use external AI chat by default)",
-        "label_en": "Web mode — always for this project (use external AI chat by default)",
-        "description": "Save Manual Web-Relay mode as the project default and stop asking on future tasks.",
+        "label": "Always execute via external Web-Relay in this project",
+        "label_en": "Always execute via external Web-Relay in this project",
+        "description": "Save Manual Web-Relay mode as the project-wide default and stop prompting on future tasks.",
     },
     "ask-every-task": {
         "mode": "unset",
         "scope": "reset",
-        "label": "Ask on every new task (clear project default)",
-        "label_en": "Ask on every new task (clear project default)",
-        "description": "Clear any saved project default so the harness asks at the start of each new task.",
+        "label": "Prompt again when a heavy task warrants Web-Relay (clear project lock)",
+        "label_en": "Prompt again when a heavy task warrants Web-Relay (clear project lock)",
+        "description": "Clear any saved project-wide lock so compact tasks run locally and heavy tasks prompt for Web-Relay again.",
     },
 }
+
+_RETIRED_AUTO_CHOICES = frozenset({
+    "auto",
+    "auto-project",
+    "auto-task",
+    "auto-always",
+    "smart",
+    "smart-auto",
+    "smart-project",
+    "smart-task",
+})
 
 _CHOICE_ALIASES: dict[str, str] = {
     "normal-always": "normal-project",
     "antigravity-project": "normal-project",
     "local-project": "normal-project",
     "antigravity-always": "normal-project",
+    "local-always": "normal-project",
     "antigravity-task": "normal-task",
     "local-task": "normal-task",
     "web-always": "web-project",
@@ -121,16 +132,13 @@ _CHOICE_ALIASES: dict[str, str] = {
     "gemini-web-project": "web-project",
     "web-relay-task": "web-task",
     "gemini-web-task": "web-task",
-    "auto": "auto-project",
-    "smart": "auto-project",
-    "smart-auto": "auto-project",
-    "auto-always": "auto-project",
-    "smart-project": "auto-project",
-    "smart-task": "auto-task",
+    "external-web": "web-task",
     "reset": "ask-every-task",
     "unset": "ask-every-task",
     "clear": "ask-every-task",
     "ask": "ask-every-task",
+    "ask-when-warranted": "ask-every-task",
+    "ask-when-heavy": "ask-every-task",
 }
 
 
@@ -227,6 +235,14 @@ def normalize_choice(
     raw_mode = str(mode or "").strip().lower()
     raw_scope = str(scope or "").strip().lower()
 
+    if raw_choice in _RETIRED_AUTO_CHOICES or raw_mode in {"auto", "smart", "smart-auto"}:
+        valid = ", ".join(EXECUTION_MODE_CHOICES.keys())
+        raise ValidationError(
+            "INVALID_EXECUTION_MODE_CHOICE: Automatic silent mode switching ('auto-project' / 'auto-task') "
+            "has been retired; ordinary tasks run locally by default and heavy tasks prompt for developer "
+            f"confirmation. Valid choices: {valid}."
+        )
+
     if raw_choice in _CHOICE_ALIASES:
         raw_choice = _CHOICE_ALIASES[raw_choice]
 
@@ -239,9 +255,6 @@ def normalize_choice(
         raw_choice = ""
     elif raw_choice in {"web", "web-relay", "gemini-web"} and not raw_mode:
         raw_mode = "web"
-        raw_choice = ""
-    elif raw_choice in {"auto", "smart", "smart-auto"} and not raw_mode:
-        raw_mode = "auto"
         raw_choice = ""
 
     if raw_choice:
@@ -257,13 +270,11 @@ def normalize_choice(
         raw_mode = "normal"
     elif raw_mode in {"web-relay", "gemini-web"}:
         raw_mode = "web"
-    elif raw_mode in {"smart", "smart-auto"}:
-        raw_mode = "auto"
 
-    if raw_mode not in {"normal", "web", "auto"}:
+    if raw_mode not in {"normal", "web"}:
         valid = ", ".join(EXECUTION_MODE_CHOICES.keys())
         raise ValidationError(
-            f"MISSING_EXECUTION_MODE_CHOICE: Provide `--choice <{valid}>` (or `--mode <auto|normal|web> --scope <task|project>`)."
+            f"MISSING_EXECUTION_MODE_CHOICE: Provide `--choice <{valid}>` (or `--mode <normal|web> --scope <task|project>`)."
         )
 
     if not raw_scope:
@@ -320,17 +331,44 @@ def has_conflict_signals(
     return False, ""
 
 
-def build_execution_mode_prompt(repo: Path, task_id: str = "") -> dict[str, Any]:
+def build_execution_mode_prompt(
+    repo: Path,
+    task_id: str = "",
+    *,
+    scope_summary: str = "",
+    savings_pct_range: str = "",
+) -> dict[str, Any]:
+    del repo
     tid_flag = f"--task-id {task_id} " if str(task_id or "").strip() else ""
+    savings_pct = str(savings_pct_range or DEFAULT_ESTIMATED_SAVINGS_PCT).strip().lstrip("~")
+    clean_scope = str(scope_summary or "").strip()
+    if clean_scope:
+        question = (
+            f"This task spans {clean_scope}; offloading implementation via external Web-Relay saves "
+            f"~{savings_pct} of local Antigravity quota while keeping builds, tests, and review local. "
+            "How would you like to proceed?"
+        )
+    else:
+        question = (
+            f"This task qualifies for external Web-Relay execution, saving ~{savings_pct} of local "
+            "Antigravity quota by offloading code generation while keeping builds, tests, and review local. "
+            "How would you like to proceed?"
+        )
+
     options = []
-    for cid in ("auto-project", "normal-task", "normal-project", "web-task", "web-project"):
+    for cid in PROMPT_EXECUTION_MODE_CHOICE_IDS:
         meta = EXECUTION_MODE_CHOICES[cid]
+        label = (
+            f"Execute externally via Web-Relay (saves ~{savings_pct} local quota)"
+            if cid == "web-task"
+            else meta["label"]
+        )
         options.append({
             "id": cid,
             "mode": meta["mode"],
             "scope": meta["scope"],
-            "label": meta["label"],
-            "label_en": meta["label_en"],
+            "label": label,
+            "label_en": label,
             "command": (
                 f'python .agents/harness.py execution-mode set {tid_flag}'
                 f'--choice {cid} --source conversation --proof-reference "<developer answer>"'
@@ -340,12 +378,14 @@ def build_execution_mode_prompt(repo: Path, task_id: str = "") -> dict[str, Any]
         "code": "SELECT_EXECUTION_MODE",
         "tool": "ask_question",
         "blocking": True,
-        "question": "How would you like to run this task?",
-        "question_en": "How would you like to run this task?",
+        "question": question,
+        "question_en": question,
+        "estimated_quota_savings_pct": savings_pct,
+        "scope_summary": clean_scope,
         "options": options,
         "command_template": (
             f'python .agents/harness.py execution-mode set {tid_flag}'
-            f'--choice <auto-project|normal-task|normal-project|web-task|web-project> '
+            f'--choice <normal-task|web-task|normal-project> '
             f'--source conversation --proof-reference "<exact developer answer>"'
         ),
         "reset_command_template": (
@@ -353,12 +393,14 @@ def build_execution_mode_prompt(repo: Path, task_id: str = "") -> dict[str, Any]
             '--source conversation --proof-reference "<exact developer answer>"'
         ),
         "instructions": (
-            "Invoke `ask_question` IMMEDIATELY (zero pre-tool prose), translating the question and 5 options naturally "
-            "into the developer's active conversation language (in RTL languages, start every line and option with a word "
-            "in that language and wrap CLI/English terms in backticks). Once answered, run "
+            f"Invoke `ask_question` IMMEDIATELY (zero pre-tool prose), translating the question (stating the scope and "
+            f"~{savings_pct} approximate quota savings) and all 3 options into polished, natural phrasing in the "
+            "developer's active conversation language (in RTL languages, start every line and option with a word in "
+            "that language and wrap terms like `Antigravity` and `Web-Relay` in backticks; never use informal slang). "
+            "Once answered, run "
             '`python .agents/harness.py execution-mode set ... --source conversation --proof-reference "<answer>"`: '
-            "if `auto-*` or `normal-*` was chosen, proceed with `task draft` (Smart Auto promotes heavy/complex plans to Web automatically); if `web-*` was chosen, scope target files with "
-            '`graph`/`task-context` and run `python .agents/harness.py web-pack --files <csv> --prompt "<goal>"` directly.'
+            "if `normal-task` or `normal-project` was chosen, proceed locally with `task draft`; if `web-task` was chosen, "
+            'scope target files and run `python .agents/harness.py web-pack --files <csv> --prompt "<goal>"` directly.'
         ),
     }
 
@@ -417,21 +459,51 @@ def _measure_non_test_code_mass_bytes(repo: Path, rel_paths: list[str]) -> int:
     return total
 
 
-def evaluate_smart_auto_routing(
+def _infer_distinct_modules_from_paths(rel_paths: list[str], explicit_modules: list[str] | None = None) -> set[str]:
+    mods: set[str] = {
+        str(m).strip()
+        for m in (explicit_modules or [])
+        if str(m).strip() and str(m).strip() != ":"
+    }
+    if mods:
+        return mods
+    for raw in rel_paths or []:
+        norm = str(raw or "").replace("\\", "/").strip().lstrip("./")
+        if not norm:
+            continue
+        padded = f"/{norm}"
+        idx = padded.lower().find("/src/")
+        if idx > 1:
+            mod_prefix = padded[1:idx].strip("/")
+            if mod_prefix:
+                mods.add(":" + mod_prefix.replace("/", ":"))
+    return mods
+
+
+def evaluate_web_offload_advisory(
     repo: Path,
-    tid: str,
-    plan: dict[str, Any] | None,
+    tid: str = "",
+    plan: dict[str, Any] | None = None,
+    *,
     candidate_files: list[str] | None = None,
-) -> tuple[str, str, bool]:
-    """Deterministically resolve Smart Auto (`auto-*`) into `('normal' | 'web', trigger_code, conflict_override)`."""
+    candidate_modules: list[str] | None = None,
+    candidate_surfaces: list[str] | None = None,
+    candidate_phases_count: int = 0,
+) -> dict[str, Any]:
+    """Deterministically evaluate whether a task warrants prompting for external Web-Relay offload."""
     is_conflict, conflict_sig = has_conflict_signals(repo, plan=plan, candidate_files=candidate_files)
     if is_conflict:
-        return ("normal", f"CONFLICT_AUTO_LOCAL_OVERRIDE ({conflict_sig})", True)
+        return {
+            "web_recommended": False,
+            "trigger": f"CONFLICT_AUTO_LOCAL_OVERRIDE ({conflict_sig})",
+            "conflict_override": True,
+            "scope_summary": "",
+            "savings_pct_range": "",
+        }
 
     plan_status = str((plan or {}).get("status") or "").strip().upper()
     is_live = bool(tid and isinstance(plan, dict) and plan_status and plan_status not in TERMINAL_TASK_STATES)
     if is_live and isinstance(plan, dict):
-        # 1. If task already has active Web-Relay state (pack or receipt), keep it on `web` cleanly
         tdir = task_dir(repo, tid)
         if (tdir / "web-relay-receipt.json").is_file() or (tdir / "latest-web-pack.json").is_file():
             t_ptr = tdir / "latest-web-pack.json"
@@ -442,40 +514,132 @@ def evaluate_smart_auto_routing(
                 except (OSError, ValueError, ValidationError):
                     superseded = False
             if not superseded:
-                return ("web", "AUTO_WEB_EXISTING_PACK_CONTINUITY", False)
-        # 3. Critical T5 surfaces (`AUTH`, `BILLING`, `CRYPTO`, `SECURITY`, `SENSITIVE_DATA`, `MANIFEST_PERMISSION`)
-        surfs = {str(s).strip().upper() for s in (plan.get("expected_surfaces") or []) if str(s).strip()}
-        ra_tier = str((plan.get("readiness_assessment") or {}).get("risk_tier") or "").strip().upper()
-        if (surfs & AUTO_CRITICAL_SURFACES) or ra_tier == "T5_CRITICAL":
-            return ("web", "AUTO_WEB_CRITICAL_T5_SURFACE", False)
-        # 4. Multi-phase (`p1 -> p2`) or substantial multi-module (`>= 3` non-root modules, OR `2` modules with `>= 6` files or `>= 48 KB` non-test code mass)
-        phases = [p for p in (plan.get("phases") or []) if isinstance(p, dict)]
-        mods = [str(m).strip() for m in (plan.get("expected_modules") or []) if str(m).strip() and str(m).strip() != ":"]
-        exp_files = [str(f).strip() for f in (plan.get("expected_files") or []) if str(f).strip()]
-        mass_bytes = _measure_non_test_code_mass_bytes(repo, exp_files)
-        distinct_mods = len(set(mods))
-        if len(phases) >= 2:
-            return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
-        if distinct_mods >= AUTO_WEB_MULTI_MODULE_UNCONDITIONAL or (
-            distinct_mods >= 2
-            and (len(exp_files) >= AUTO_WEB_TWO_MODULE_MIN_FILES or mass_bytes >= AUTO_WEB_TWO_MODULE_MIN_MASS_BYTES)
-        ):
-            return ("web", "AUTO_WEB_MULTI_MODULE_OR_PHASE", False)
-        # 5. Large file scope (`>= 10` planned files) OR heavy non-test code mass (`>= 80 KB`, e.g. heavy multi-ViewModel or 120 KB monolithic ViewModels)
-        if len(exp_files) >= AUTO_WEB_FILE_THRESHOLD:
-            return ("web", f"AUTO_WEB_LARGE_SCOPE_{len(exp_files)}_FILES", False)
-        if mass_bytes >= AUTO_WEB_CODE_MASS_BYTES:
-            return ("web", f"AUTO_WEB_HEAVY_CODE_MASS_{mass_bytes // 1024}KB", False)
-        return ("normal", f"AUTO_NORMAL_COMPACT_SCOPE_{len(exp_files)}_FILES", False)
+                return {
+                    "web_recommended": True,
+                    "trigger": "AUTO_WEB_EXISTING_PACK_CONTINUITY",
+                    "conflict_override": False,
+                    "scope_summary": "an active Web-Relay Context Pack",
+                    "savings_pct_range": DEFAULT_ESTIMATED_SAVINGS_PCT,
+                }
 
-    # Pre-plan / IDLE evaluation
-    cands = [str(f).strip() for f in (candidate_files or []) if str(f).strip()]
-    if len(cands) >= AUTO_WEB_FILE_THRESHOLD:
-        return ("web", f"AUTO_WEB_LARGE_CANDIDATE_SCOPE_{len(cands)}_FILES", False)
-    cand_mass_bytes = _measure_non_test_code_mass_bytes(repo, cands)
-    if cand_mass_bytes >= AUTO_WEB_CODE_MASS_BYTES:
-        return ("web", f"AUTO_WEB_HEAVY_CANDIDATE_CODE_MASS_{cand_mass_bytes // 1024}KB", False)
-    return ("normal", "AUTO_IDLE_EVALUATES_ON_PLAN", False)
+    has_plan_scope = bool(is_live and isinstance(plan, dict) and not candidate_files and not candidate_phases_count and not candidate_modules and not candidate_surfaces)
+    files = (
+        [str(f).strip() for f in (candidate_files or []) if str(f).strip()]
+        if candidate_files
+        else [str(f).strip() for f in ((plan or {}).get("expected_files") or []) if str(f).strip()]
+    )
+    explicit_mods = (
+        [str(m).strip() for m in (candidate_modules or []) if str(m).strip() and str(m).strip() != ":"]
+        if candidate_modules
+        else [str(m).strip() for m in ((plan or {}).get("expected_modules") or []) if str(m).strip() and str(m).strip() != ":"]
+    )
+    surfs = {
+        str(s).strip().upper()
+        for s in ((candidate_surfaces or []) + list((plan or {}).get("expected_surfaces") or []))
+        if str(s).strip()
+    }
+    ra_tier = str(((plan or {}).get("readiness_assessment") or {}).get("risk_tier") or "").strip().upper()
+    plan_phases = [p for p in ((plan or {}).get("phases") or []) if isinstance(p, dict)]
+    phases_count = max(int(candidate_phases_count or 0), len(plan_phases))
+    mass_bytes = _measure_non_test_code_mass_bytes(repo, files)
+    mass_kb = mass_bytes // 1024
+    distinct_mods = len(_infer_distinct_modules_from_paths(files, explicit_mods))
+
+    # 1. Critical T5 surfaces when non-trivial (`4+` files or `>= 32 KB` code mass)
+    if ((surfs & AUTO_CRITICAL_SURFACES) or ra_tier == "T5_CRITICAL") and (
+        len(files) >= AUTO_CRITICAL_MIN_FILES or mass_bytes >= AUTO_CRITICAL_MIN_MASS_BYTES
+    ):
+        mass_part = f", ~{mass_kb} KB code" if mass_kb > 0 else ""
+        return {
+            "web_recommended": True,
+            "trigger": "AUTO_WEB_CRITICAL_T5_SURFACE",
+            "conflict_override": False,
+            "scope_summary": f"critical T5 scope ({len(files)} files{mass_part})",
+            "savings_pct_range": "60%-75%",
+        }
+
+    # 2. Multi-phase (`>= 2` phases) or substantial multi-module (`>= 3` modules, OR `2` modules with `6+` files / `48+ KB`)
+    if phases_count >= 2:
+        savings = "70%-85%" if (phases_count >= 3 or len(files) >= 10 or mass_kb >= 80) else "60%-75%"
+        file_part = f" across {len(files)} files" if files else ""
+        return {
+            "web_recommended": True,
+            "trigger": "AUTO_WEB_MULTI_MODULE_OR_PHASE",
+            "conflict_override": False,
+            "scope_summary": f"{phases_count} implementation phases{file_part}",
+            "savings_pct_range": savings,
+        }
+
+    if distinct_mods >= AUTO_WEB_MULTI_MODULE_UNCONDITIONAL or (
+        distinct_mods >= 2
+        and (len(files) >= AUTO_WEB_TWO_MODULE_MIN_FILES or mass_bytes >= AUTO_WEB_TWO_MODULE_MIN_MASS_BYTES)
+    ):
+        savings = "70%-85%" if (distinct_mods >= 3 or len(files) >= 10 or mass_kb >= 80) else "65%-80%"
+        mass_part = f", ~{mass_kb} KB code" if mass_kb > 0 else ""
+        return {
+            "web_recommended": True,
+            "trigger": "AUTO_WEB_MULTI_MODULE_OR_PHASE",
+            "conflict_override": False,
+            "scope_summary": f"{distinct_mods} Gradle modules ({len(files)} files{mass_part})",
+            "savings_pct_range": savings,
+        }
+
+    # 3. Large file scope (`>= 10` files) or heavy non-test code mass (`>= 80 KB`)
+    if len(files) >= AUTO_WEB_FILE_THRESHOLD:
+        trig = (
+            f"AUTO_WEB_LARGE_SCOPE_{len(files)}_FILES"
+            if (is_live and not candidate_files)
+            else f"AUTO_WEB_LARGE_CANDIDATE_SCOPE_{len(files)}_FILES"
+        )
+        savings = "75%-85%" if (len(files) >= 14 or mass_kb >= 120) else "65%-80%"
+        mass_part = f" (~{mass_kb} KB code)" if mass_kb > 0 else ""
+        return {
+            "web_recommended": True,
+            "trigger": trig,
+            "conflict_override": False,
+            "scope_summary": f"{len(files)} target files{mass_part}",
+            "savings_pct_range": savings,
+        }
+
+    if mass_bytes >= AUTO_WEB_CODE_MASS_BYTES:
+        trig = (
+            f"AUTO_WEB_HEAVY_CODE_MASS_{mass_kb}KB"
+            if (is_live and not candidate_files)
+            else f"AUTO_WEB_HEAVY_CANDIDATE_CODE_MASS_{mass_kb}KB"
+        )
+        savings = "75%-85%" if mass_kb >= 120 else "65%-80%"
+        noun = "file" if len(files) == 1 else "files"
+        return {
+            "web_recommended": True,
+            "trigger": trig,
+            "conflict_override": False,
+            "scope_summary": f"{max(1, len(files))} {noun} (~{mass_kb} KB non-test code)",
+            "savings_pct_range": savings,
+        }
+
+    compact_trig = (
+        f"AUTO_NORMAL_COMPACT_SCOPE_{len(files)}_FILES"
+        if (has_plan_scope or (is_live and isinstance(plan, dict) and not candidate_files))
+        else "AUTO_IDLE_EVALUATES_ON_PLAN"
+    )
+    return {
+        "web_recommended": False,
+        "trigger": compact_trig,
+        "conflict_override": False,
+        "scope_summary": "",
+        "savings_pct_range": "",
+    }
+
+
+def evaluate_smart_auto_routing(
+    repo: Path,
+    tid: str,
+    plan: dict[str, Any] | None,
+    candidate_files: list[str] | None = None,
+) -> tuple[str, str, bool]:
+    """Compatibility threshold evaluator returning `('normal' | 'web', trigger_code, conflict_override)`."""
+    adv = evaluate_web_offload_advisory(repo, tid, plan, candidate_files=candidate_files)
+    return ("web" if adv["web_recommended"] else "normal", str(adv["trigger"]), bool(adv["conflict_override"]))
 
 
 def resolve_effective_execution_mode(
@@ -484,6 +648,10 @@ def resolve_effective_execution_mode(
     plan: dict[str, Any] | None = None,
     *,
     candidate_files: list[str] | None = None,
+    candidate_modules: list[str] | None = None,
+    candidate_surfaces: list[str] | None = None,
+    candidate_phases_count: int = 0,
+    kickoff_kind: str = "",
     strict: bool = False,
 ) -> dict[str, Any]:
     """Pure read-only resolution of effective execution mode (zero disk writes)."""
@@ -493,6 +661,10 @@ def resolve_effective_execution_mode(
             task_id=task_id,
             plan=plan,
             candidate_files=candidate_files,
+            candidate_modules=candidate_modules,
+            candidate_surfaces=candidate_surfaces,
+            candidate_phases_count=candidate_phases_count,
+            kickoff_kind=kickoff_kind,
             strict=strict,
         )
 
@@ -503,83 +675,91 @@ def _resolve_effective_execution_mode_unlocked(
     plan: dict[str, Any] | None = None,
     *,
     candidate_files: list[str] | None = None,
+    candidate_modules: list[str] | None = None,
+    candidate_surfaces: list[str] | None = None,
+    candidate_phases_count: int = 0,
+    kickoff_kind: str = "",
     strict: bool = False,
 ) -> dict[str, Any]:
     repo = Path(repo).resolve()
     tid, resolved_plan = _resolve_target_task_and_plan(repo, task_id=task_id, plan=plan)
     plan_status = str((resolved_plan or {}).get("status") or "").strip().upper()
     is_live_task = bool(tid and resolved_plan and plan_status not in TERMINAL_TASK_STATES)
+    norm_kickoff = str(kickoff_kind or "").strip().lower()
 
     integrity_errors: list[str] = []
 
     proj_rec, proj_err = _read_verified_record(project_mode_file(repo), strict=strict)
     if proj_err:
         integrity_errors.append(proj_err)
-    proj_mode = str((proj_rec or {}).get("mode") or "")
-    proj_choice = str((proj_rec or {}).get("choice") or "")
+    raw_proj_mode = str((proj_rec or {}).get("mode") or "")
+    legacy_auto_migrated = (raw_proj_mode == "auto")
+    proj_mode = "" if legacy_auto_migrated else raw_proj_mode
+    proj_choice = "" if legacy_auto_migrated else str((proj_rec or {}).get("choice") or "")
 
-    # 1. Task-scoped override on a live task (highest precedence)
+    # 1. Task-scoped override on a live task (highest precedence; legacy `auto` falls through to threshold advisor)
     if is_live_task:
         t_rec, t_err = _read_verified_record(task_mode_file(repo, tid), strict=strict)
         if t_err:
             integrity_errors.append(t_err)
-        if t_rec is not None:
+        if t_rec is not None and str(t_rec.get("mode") or "") in {"normal", "web"}:
             cfg_m = str(t_rec.get("mode") or "normal")
             ch = str(t_rec.get("choice") or f"{cfg_m}-task")
-            auto_trig = ""
             conf_over = False
-            if cfg_m == "auto":
-                eff_m, auto_trig, conf_over = evaluate_smart_auto_routing(repo, tid, resolved_plan, candidate_files)
-            else:
-                eff_m = cfg_m
+            conf_sig = ""
+            eff_m = cfg_m
+            if cfg_m == "web":
+                is_c, c_sig = has_conflict_signals(repo, plan=resolved_plan, candidate_files=candidate_files)
+                if is_c:
+                    eff_m = "normal"
+                    conf_over = True
+                    conf_sig = c_sig
             return {
                 "mode": eff_m,
                 "configured_mode": cfg_m,
-                "auto_routed": (cfg_m == "auto"),
-                "auto_route_trigger": auto_trig,
                 "choice": ch,
                 "effective_scope": "task",
                 "selection_required": False,
+                "web_recommended": (eff_m == "web"),
                 "task_id": tid,
                 "task_status": plan_status,
                 "project_default": proj_mode or None,
                 "project_choice": proj_choice or None,
                 "conflict_auto_local_override": conf_over,
-                "conflict_signal": (auto_trig if conf_over else ""),
+                "conflict_signal": conf_sig,
                 "integrity_error": "; ".join(integrity_errors),
                 "updated_at": str(t_rec.get("updated_at") or ""),
-                "reason": (f"Smart Auto (`{ch}`) routed task `{tid}` to `{eff_m}` ({auto_trig})." if cfg_m == "auto" else f"Task-scoped execution mode `{ch}` (`{eff_m}`) active for task `{tid}`."),
+                "reason": f"Task-scoped execution mode `{ch}` (`{eff_m}`) active for task `{tid}`.",
                 "prompt_contract": None,
             }
 
-    # 2. Pending pre-draft single-task choice (when starting a new task or matching intended_task_id)
+    # 2. Pending pre-draft single-task choice (`normal-task` or `web-task`)
     pend_rec, pend_err = _read_verified_record(pending_task_mode_file(repo), strict=strict)
     if pend_err:
         integrity_errors.append(pend_err)
-    if pend_rec is not None and not _is_pending_expired(pend_rec):
+    if pend_rec is not None and not _is_pending_expired(pend_rec) and str(pend_rec.get("mode") or "") in {"normal", "web"}:
         intended_tid = str(pend_rec.get("intended_task_id") or "").strip()
         if (not is_live_task and (not tid or not intended_tid or intended_tid == tid)) or (
             tid and intended_tid == tid
         ):
             cfg_pm = str(pend_rec.get("mode") or "normal")
             ch = str(pend_rec.get("choice") or f"{cfg_pm}-task")
-            auto_ptrig = ""
             p_conf = False
             p_conf_sig = ""
-            if cfg_pm == "auto":
-                eff_pm, auto_ptrig, p_conf = evaluate_smart_auto_routing(repo, tid or intended_tid, resolved_plan, candidate_files)
-                if p_conf:
-                    _, p_conf_sig = has_conflict_signals(repo, resolved_plan, candidate_files)
-            else:
-                eff_pm = cfg_pm
+            eff_pm = cfg_pm
+            if cfg_pm == "web":
+                is_pc, pc_sig = has_conflict_signals(repo, resolved_plan, candidate_files)
+                if is_pc:
+                    eff_pm = "normal"
+                    p_conf = True
+                    p_conf_sig = pc_sig
             return {
                 "mode": eff_pm,
                 "configured_mode": cfg_pm,
-                "auto_routed": (cfg_pm == "auto"),
-                "auto_route_trigger": auto_ptrig,
                 "choice": ch,
                 "effective_scope": "pending_task",
                 "selection_required": False,
+                "web_recommended": (eff_pm == "web"),
                 "task_id": tid or intended_tid,
                 "task_status": plan_status,
                 "project_default": proj_mode or None,
@@ -592,31 +772,10 @@ def _resolve_effective_execution_mode_unlocked(
                 "prompt_contract": None,
             }
 
-    # 3. Project-wide default (`auto-project`, `normal-project`, or `web-project` + CONFLICT safety override)
-    if proj_rec is not None:
-        m = str(proj_rec.get("mode") or "normal")
-        ch = str(proj_rec.get("choice") or f"{m}-project")
-        if m == "auto":
-            eff_auto_m, auto_trig_p, auto_conf = evaluate_smart_auto_routing(repo, tid, resolved_plan, candidate_files)
-            return {
-                "mode": eff_auto_m,
-                "configured_mode": "auto",
-                "auto_routed": True,
-                "auto_route_trigger": auto_trig_p,
-                "choice": ch,
-                "effective_scope": "project",
-                "selection_required": False,
-                "task_id": tid,
-                "task_status": plan_status,
-                "project_default": "auto",
-                "project_choice": ch,
-                "conflict_auto_local_override": auto_conf,
-                "conflict_signal": (auto_trig_p if auto_conf else ""),
-                "integrity_error": "; ".join(integrity_errors),
-                "updated_at": str(proj_rec.get("updated_at") or ""),
-                "reason": f"Smart Auto (`{ch}`) resolved `{eff_auto_m}` mode ({auto_trig_p}).",
-                "prompt_contract": None,
-            }
+    # 3. Project-wide lock (`normal-project` — "do not ask again", or `web-project` + CONFLICT safety override)
+    if proj_rec is not None and proj_mode in {"normal", "web"}:
+        m = proj_mode
+        ch = proj_choice or f"{m}-project"
         if m == "web":
             is_conflict, conflict_sig = has_conflict_signals(repo, plan=resolved_plan, candidate_files=candidate_files)
             if is_conflict:
@@ -626,6 +785,7 @@ def _resolve_effective_execution_mode_unlocked(
                     "choice": ch,
                     "effective_scope": "project",
                     "selection_required": False,
+                    "web_recommended": False,
                     "task_id": tid,
                     "task_status": plan_status,
                     "project_default": proj_mode,
@@ -646,6 +806,7 @@ def _resolve_effective_execution_mode_unlocked(
             "choice": ch,
             "effective_scope": "project",
             "selection_required": False,
+            "web_recommended": (m == "web"),
             "task_id": tid,
             "task_status": plan_status,
             "project_default": proj_mode,
@@ -658,9 +819,10 @@ def _resolve_effective_execution_mode_unlocked(
             "prompt_contract": None,
         }
 
-    # 4. If an in-progress live task already exists on disk (e.g., created in CLI/legacy chat before selector),
-    # treat its implicit mode cleanly without blocking mid-task resume, UNLESS no live task exists yet.
-    if is_live_task:
+    # 4. In-progress live task already on disk continues without mid-flight interruption
+    #    (unless `revise` in pre-approval state expands scope into Web-Relay territory or `web-pack` is requested cold)
+    is_pre_approval_revise = bool(norm_kickoff == "revise" and plan_status in {"DRAFT", "AWAITING_DEVELOPER_APPROVAL"})
+    if is_live_task and not is_pre_approval_revise and norm_kickoff != "web-pack":
         has_web_state = (
             (task_dir(repo, tid) / "web-relay-receipt.json").is_file()
             or (task_dir(repo, tid) / "latest-web-pack.json").is_file()
@@ -672,6 +834,8 @@ def _resolve_effective_execution_mode_unlocked(
             "choice": "unset",
             "effective_scope": "inferred_active_task",
             "selection_required": False,
+            "web_recommended": has_web_state,
+            "legacy_auto_migrated": legacy_auto_migrated,
             "task_id": tid,
             "task_status": plan_status,
             "project_default": None,
@@ -684,13 +848,83 @@ def _resolve_effective_execution_mode_unlocked(
             "prompt_contract": None,
         }
 
-    # 5. Unset on IDLE / pre-draft new task -> prompt required before starting a new task
+    # 5. Threshold-prompted advisor when unset (or migrated from legacy `auto`):
+    #    - Ordinary/compact tasks default directly to local `normal` mode with zero prompt!
+    #    - Heavy tasks (or explicit cold-start `web-pack`) prompt with estimated quota savings + 3 clean choices.
+    adv = evaluate_web_offload_advisory(
+        repo,
+        tid,
+        resolved_plan,
+        candidate_files=candidate_files,
+        candidate_modules=candidate_modules,
+        candidate_surfaces=candidate_surfaces,
+        candidate_phases_count=candidate_phases_count,
+    )
+    if adv["conflict_override"]:
+        return {
+            "mode": "normal",
+            "configured_mode": "unset",
+            "choice": "unset",
+            "effective_scope": "default_local",
+            "selection_required": False,
+            "web_recommended": False,
+            "legacy_auto_migrated": legacy_auto_migrated,
+            "task_id": tid,
+            "task_status": plan_status,
+            "project_default": None,
+            "project_choice": None,
+            "conflict_auto_local_override": True,
+            "conflict_signal": str(adv["trigger"]),
+            "integrity_error": "; ".join(integrity_errors),
+            "updated_at": "",
+            "reason": f"{adv['trigger']}: Conflict tasks run locally in Antigravity.",
+            "prompt_contract": None,
+        }
+
+    if adv["web_recommended"] or norm_kickoff == "web-pack":
+        savings_pct = str(adv["savings_pct_range"] or DEFAULT_ESTIMATED_SAVINGS_PCT)
+        scope_sum = str(adv["scope_summary"] or "")
+        trig_code = str(adv["trigger"] if adv["web_recommended"] else "EXPLICIT_WEB_PACK_REQUEST")
+        return {
+            "mode": "unset",
+            "configured_mode": "unset",
+            "choice": "unset",
+            "effective_scope": "unset",
+            "selection_required": True,
+            "web_recommended": True,
+            "web_recommendation_trigger": trig_code,
+            "estimated_quota_savings_pct": savings_pct,
+            "scope_summary": scope_sum,
+            "legacy_auto_migrated": legacy_auto_migrated,
+            "task_id": tid,
+            "task_status": plan_status,
+            "project_default": None,
+            "project_choice": None,
+            "conflict_auto_local_override": False,
+            "conflict_signal": "",
+            "integrity_error": "; ".join(integrity_errors),
+            "updated_at": "",
+            "reason": (
+                f"Task qualifies for external Web-Relay ({trig_code}; saves ~{savings_pct} local quota); "
+                "ask the developer via `ask_question` before proceeding."
+            ),
+            "prompt_contract": build_execution_mode_prompt(
+                repo,
+                task_id=tid,
+                scope_summary=scope_sum,
+                savings_pct_range=savings_pct,
+            ),
+        }
+
     return {
-        "mode": "unset",
+        "mode": "normal",
         "configured_mode": "unset",
         "choice": "unset",
-        "effective_scope": "unset",
-        "selection_required": True,
+        "effective_scope": "default_local",
+        "selection_required": False,
+        "web_recommended": False,
+        "web_recommendation_trigger": str(adv["trigger"]),
+        "legacy_auto_migrated": legacy_auto_migrated,
         "task_id": tid,
         "task_status": plan_status,
         "project_default": None,
@@ -699,8 +933,8 @@ def _resolve_effective_execution_mode_unlocked(
         "conflict_signal": "",
         "integrity_error": "; ".join(integrity_errors),
         "updated_at": "",
-        "reason": "No execution mode selected yet; ask the developer via `ask_question` before starting a new implementation task.",
-        "prompt_contract": build_execution_mode_prompt(repo, task_id=tid),
+        "reason": "Compact task scope runs locally in Antigravity by default (prompts for Web-Relay only on heavy tasks).",
+        "prompt_contract": None,
     }
 
 
@@ -784,9 +1018,10 @@ def set_execution_mode(
             "and a non-empty `--proof-reference \"<developer words>\"`."
         )
     _confirm_tokens = (
-        "normal", "web", "auto", "local", "ask-every-task", "yes", "ok", "approve", "continue",
-        "\u0639\u0627\u062f\u064a", "\u0648\u064a\u0628", "\u062a\u0644\u0642\u0627\u0626\u064a",
-        "\u0645\u062d\u0644\u064a", "\u0646\u0639\u0645", "\u0627\u064a\u0648\u0629", "\u0623\u064a\u0648\u0629", "\u0645\u0648\u0627\u0641\u0642",
+        "normal", "web", "external", "local", "ask-every-task", "yes", "ok", "approve", "continue", "always",
+        "\u0639\u0627\u062f\u064a", "\u0648\u064a\u0628", "\u062e\u0627\u0631\u062c\u064a", "\u0647\u0646\u0627",
+        "\u0645\u062a\u0627\u0628\u0639\u0629", "\u0645\u062d\u0644\u064a", "\u0646\u0639\u0645",
+        "\u0627\u064a\u0648\u0629", "\u0623\u064a\u0648\u0629", "\u0645\u0648\u0627\u0641\u0642",
     )
     if norm_proof.rstrip().endswith(("?", "\u061f")) and not any(tok in norm_proof.lower() for tok in _confirm_tokens):
         raise ValidationError(
@@ -1243,6 +1478,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = sub.add_parser("show", help="Resolve and show the effective execution mode (read-only).")
     p_show.add_argument("--repo", default=".", help="Repository root.")
     p_show.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task identifier.")
+    p_show.add_argument("--files", default="", help="Optional comma-separated candidate files for pre-draft evaluation.")
+    p_show.add_argument("--modules", default="", help="Optional comma-separated candidate modules.")
+    p_show.add_argument("--surfaces", default="", help="Optional comma-separated candidate surfaces.")
+    p_show.add_argument("--phases", type=int, default=0, help="Optional candidate phase count.")
     p_show.add_argument("--json", action="store_true", help="Emit JSON output.")
 
     p_set = sub.add_parser("set", help="Record developer's execution-mode choice (`--source conversation` required).")
@@ -1256,9 +1495,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_set.add_argument(
         "--choice",
         default="",
-        help="Canonical choice: `auto-project`, `auto-task`, `normal-task`, `normal-project`, `web-task`, `web-project`, or `ask-every-task`.",
+        help="Canonical choice: `normal-task`, `web-task`, `normal-project`, `web-project`, or `ask-every-task`.",
     )
-    p_set.add_argument("--mode", default="", help="Alternative mode selector (`auto`, `normal`, `web`, or `unset`).")
+    p_set.add_argument("--mode", default="", help="Alternative mode selector (`normal`, `web`, or `unset`).")
     p_set.add_argument("--scope", default="", help="Alternative scope selector (`task`, `project`, or `reset`).")
     p_set.add_argument("--source", required=True, help="Authority source (must be `conversation`).")
     p_set.add_argument("--proof-reference", required=True, help="Exact developer phrase authorizing this mode choice.")
@@ -1276,7 +1515,18 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if subcmd in ("", "show"):
-            result = resolve_effective_execution_mode(repo, task_id=tid)
+            raw_files = [f.strip() for f in str(getattr(args, "files", "") or "").split(",") if f.strip()]
+            raw_mods = [m.strip() for m in str(getattr(args, "modules", "") or "").split(",") if m.strip()]
+            raw_surfs = [s.strip() for s in str(getattr(args, "surfaces", "") or "").split(",") if s.strip()]
+            raw_phases = int(getattr(args, "phases", 0) or 0)
+            result = resolve_effective_execution_mode(
+                repo,
+                task_id=tid,
+                candidate_files=raw_files or None,
+                candidate_modules=raw_mods or None,
+                candidate_surfaces=raw_surfs or None,
+                candidate_phases_count=raw_phases,
+            )
             configure_utf8_output()
             print(json.dumps(result, indent=2, ensure_ascii=False))
             return 0

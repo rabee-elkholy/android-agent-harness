@@ -986,7 +986,7 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
         em_eff = resolve_effective_execution_mode(repo, task_id=str(result["task_id"]), plan=result)
         if em_eff.get("mode") in ("normal", "web") and not em_eff.get("selection_required"):
             lines.append(
-                f"Execution mode: {em_eff['mode']} (choice: {em_eff.get('choice') or 'auto'}; {em_eff.get('reason') or ''})"
+                f"Execution mode: {em_eff['mode']} (choice: {em_eff.get('choice') or 'default_local'}; {em_eff.get('reason') or ''})"
             )
     except (ImportError, OSError, ValueError, _engine.ValidationError):
         pass

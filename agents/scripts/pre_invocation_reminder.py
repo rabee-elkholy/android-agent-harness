@@ -232,9 +232,9 @@ def _compact_message() -> str:
         from execution_mode import resolve_effective_execution_mode
         em = resolve_effective_execution_mode(REPO, plan=plan if isinstance(plan, dict) and plan else None)
         if em.get("selection_required"):
-            mode_tag = " [Execution Mode: unset — ask via `ask_question` before starting a new task]"
-        elif em.get("configured_mode") == "auto":
-            mode_tag = f" [Execution Mode: auto->{em['mode']} ({em.get('effective_scope')})]"
+            mode_tag = " [Execution Mode: heavy task warrants Web-Relay — ask via `ask_question`]"
+        elif em.get("configured_mode") == "unset" and em.get("effective_scope") == "default_local":
+            mode_tag = " [Execution Mode: local-default (prompts for Web-Relay only on heavy tasks)]"
         elif em.get("mode") in {"normal", "web"}:
             mode_tag = f" [Execution Mode: {em['mode']} ({em.get('effective_scope')})]"
     except Exception:
@@ -252,7 +252,7 @@ def _compact_message() -> str:
         nov15 = {}
     if not plan:
         bridge_rem = _bridge_reminder()
-        return f"Android Harness: Idle (no active task).{mode_tag} Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery; ask execution mode if unset before starting an implementation task.{notes_rem}{bridge_rem}"
+        return f"Android Harness: Idle (no active task).{mode_tag} Use `python .agents/harness.py graph` (or `harness-scout-agent` for multi-file sweeps) for discovery.{notes_rem}{bridge_rem}"
     status = str(plan.get("status") or "UNKNOWN")
     task_id = str(plan.get("task_id") or "unknown")
     if status == "IMPLEMENTING":

@@ -227,27 +227,129 @@ def _check_web_mode_direct_write_guard(
         )
     except (ImportError, OSError, ValueError, _engine.ValidationError):
         return True, "", ""
-def _extract_execution_mode_kickoff(command: str) -> tuple[str, str, str]:
-    """Return `(kickoff_kind, task_id, task_kind)` when `command` starts a new task (`draft`, `quick-start`, or `web-pack`), else `('', '', '')`."""
+def _collect_csv_or_multi_flag(rest: list[str], flag_names: tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        matched_eq = False
+        for fn in flag_names:
+            if tok.startswith(fn + "="):
+                raw_val = tok.split("=", 1)[1].strip(";&|").strip().strip("\"'")
+                out.extend(p.strip().strip("\"'") for p in raw_val.split(",") if p.strip().strip("\"'"))
+                matched_eq = True
+                break
+        if matched_eq:
+            idx += 1
+            continue
+        if tok in flag_names:
+            idx += 1
+            while idx < len(rest) and not rest[idx].startswith("-"):
+                raw_val = rest[idx].strip(";&|").strip().strip("\"'")
+                if raw_val in {"&&", "||", ";", "|"}:
+                    break
+                out.extend(p.strip().strip("\"'") for p in raw_val.split(",") if p.strip().strip("\"'"))
+                idx += 1
+            continue
+        idx += 1
+    return out
+
+
+def _estimate_cli_phases_count(repo: Path, raw_phases: str) -> int:
+    s = str(raw_phases or "").strip().strip("\"'")
+    if not s:
+        return 0
+    cand_file = (repo / s.replace("\\", "/").lstrip("/"))
+    if not s.startswith(("[", "{")) and cand_file.is_file():
+        try:
+            loaded_f = _engine.json.loads(cand_file.read_text(encoding="utf-8"))
+            if isinstance(loaded_f, list):
+                return len(loaded_f)
+            if isinstance(loaded_f, dict) and isinstance(loaded_f.get("phases"), list):
+                return len(loaded_f["phases"])
+        except (OSError, ValueError):
+            pass
+    for attempt in (s, s.replace(r'\"', '"')):
+        try:
+            loaded = _engine.json.loads(attempt)
+            if isinstance(loaded, list):
+                return len(loaded)
+            if isinstance(loaded, dict) and isinstance(loaded.get("phases"), list):
+                return len(loaded["phases"])
+        except ValueError:
+            pass
+    if not s.startswith(("[", "{")):
+        return len([p.strip() for p in s.split(",") if p.strip()])
+    return 0
+
+
+def _extract_execution_mode_kickoff_details(command: str, repo: Path | None = None) -> dict[str, object]:
+    """Extract kickoff metadata (`draft`, `revise`, `quick-start`, or `web-pack`) for threshold-prompted Web-Relay evaluation."""
+    empty: dict[str, object] = {
+        "kind": "",
+        "task_id": "",
+        "task_kind": "",
+        "files": [],
+        "modules": [],
+        "surfaces": [],
+        "phases_count": 0,
+    }
     cmd = str(command or "").strip()
     if not cmd or any(h in cmd for h in (" --help", " -h")):
-        return ("", "", "")
+        return empty
     tokens = _engine._split_command_tokens(cmd)
+    eff_repo = repo or _engine.REPO
     for pos, tok in enumerate(tokens):
         base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
         rest = _strip_leading_cli_flags(tokens[pos + 1:])
-        if (base == "workflow.py" and rest[:1] in (["draft"], ["quick-start"])) or (
-            base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["task"] and _strip_leading_cli_flags(rest[1:])[:1] in (["draft"], ["quick-start"])
+        wf_subs = (["draft"], ["revise"], ["quick-start"])
+        if (base == "workflow.py" and rest[:1] in wf_subs) or (
+            base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["task"] and _strip_leading_cli_flags(rest[1:])[:1] in wf_subs
         ):
             sub_k = rest[0] if base == "workflow.py" else _strip_leading_cli_flags(rest[1:])[0]
-            return (sub_k, _engine._flag(rest, "--task-id"), _engine._flag(rest, "--kind").upper())
+            tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
+            tkind = _engine._flag(rest, "--kind").upper()
+            files = _collect_csv_or_multi_flag(rest, ("--expected-files", "--files", "--file"))
+            modules = _collect_csv_or_multi_flag(rest, ("--expected-modules", "--modules", "--module"))
+            surfaces = [s.upper() for s in _collect_csv_or_multi_flag(rest, ("--expected-surfaces", "--surfaces", "--surface"))]
+            phases_count = _estimate_cli_phases_count(eff_repo, _engine._flag(rest, "--phases"))
+            return {
+                "kind": sub_k,
+                "task_id": tid,
+                "task_kind": tkind,
+                "files": files,
+                "modules": modules,
+                "surfaces": surfaces,
+                "phases_count": phases_count,
+            }
         if (base == "web_relay.py" and rest[:1] == ["pack"]) or (
             base in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-pack"] or rest[:2] == ["web-relay", "pack"])
         ):
             if any(a in {"--retry", "--retry-failure", "--add-files"} or a.startswith("--add-files=") for a in rest):
-                return ("", "", "")
-            return ("web-pack", _engine._flag(rest, "--task-id"), _engine._flag(rest, "--kind").upper())
-    return ("", "", "")
+                return empty
+            tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
+            tkind = _engine._flag(rest, "--kind").upper()
+            files = _collect_csv_or_multi_flag(rest, ("--files", "--file", "--expected-files"))
+            return {
+                "kind": "web-pack",
+                "task_id": tid,
+                "task_kind": tkind,
+                "files": files,
+                "modules": [],
+                "surfaces": [],
+                "phases_count": 0,
+            }
+    return empty
+
+
+def _extract_execution_mode_kickoff(command: str) -> tuple[str, str, str]:
+    """Return `(kickoff_kind, task_id, task_kind)` when `command` starts/revises a task (`draft`, `revise`, `quick-start`, or `web-pack`), else `('', '', '')`."""
+    details = _extract_execution_mode_kickoff_details(command)
+    return (
+        str(details.get("kind") or ""),
+        str(details.get("task_id") or ""),
+        str(details.get("task_kind") or ""),
+    )
 def _audited_harness_command(command: str) -> bool:
     """One harness entry-point call and nothing chained to it.
 
@@ -477,22 +579,55 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 mark_lead_edit_or_transition(_engine.REPO, conversation)
             except (ImportError, OSError, ValueError):
                 pass
-    kickoff_kind, kickoff_tid, kickoff_task_kind = _engine._extract_execution_mode_kickoff(command)
+    ko_details = _extract_execution_mode_kickoff_details(command, repo=_engine.REPO)
+    kickoff_kind = str(ko_details.get("kind") or "")
+    kickoff_tid = str(ko_details.get("task_id") or "")
+    kickoff_task_kind = str(ko_details.get("task_kind") or "")
     if kickoff_kind and kickoff_task_kind not in {"CONFLICT", "FIX_CONFLICT", "MERGE"} and _engine._is_live_interactive_antigravity_lead(conversation, transcript_hint=transcript_hint):
         try:
             from execution_mode import build_execution_mode_prompt, resolve_effective_execution_mode
-            em_state = resolve_effective_execution_mode(_engine.REPO, task_id=kickoff_tid or None)
+            ko_files = list(ko_details.get("files") or [])
+            ko_modules = list(ko_details.get("modules") or [])
+            ko_surfaces = list(ko_details.get("surfaces") or [])
+            ko_phases = int(ko_details.get("phases_count") or 0)
+            em_state = resolve_effective_execution_mode(
+                _engine.REPO,
+                task_id=kickoff_tid or active_tid or None,
+                candidate_files=ko_files or None,
+                candidate_modules=ko_modules or None,
+                candidate_surfaces=ko_surfaces or None,
+                candidate_phases_count=ko_phases,
+                kickoff_kind=kickoff_kind,
+            )
             if em_state.get("selection_required"):
-                prompt_c = build_execution_mode_prompt(_engine.REPO, task_id=kickoff_tid)
+                prompt_c = em_state.get("prompt_contract") or build_execution_mode_prompt(
+                    _engine.REPO,
+                    task_id=kickoff_tid or active_tid,
+                    scope_summary=str(em_state.get("scope_summary") or ""),
+                    savings_pct_range=str(em_state.get("estimated_quota_savings_pct") or ""),
+                )
                 opts_summary = " | ".join(f"`{o['id']}` ({o['label']})" for o in prompt_c["options"])
                 _engine.emit(
                     "deny",
-                    f"SELECT_EXECUTION_MODE_REQUIRED: Before starting `{kickoff_kind}`, ask the developer via `ask_question` "
-                    f"({prompt_c['question']}) with options: {opts_summary}. "
-                    f"Then record their choice via `{prompt_c['command_template']}` and continue.",
+                    f"SELECT_EXECUTION_MODE_REQUIRED: Before running `{kickoff_kind}`, ask the developer via `ask_question` "
+                    f"({prompt_c['question']}) with the 3 options: {opts_summary}. "
+                    f"Translate the question (stating the approximate quota savings) and options professionally into the active conversation language, "
+                    f"then record their choice via `{prompt_c['command_template']}` and continue.",
                     tool="run_command",
                     command=command,
                     reason_code="SELECT_EXECUTION_MODE_REQUIRED",
+                    task_id=kickoff_tid or active_tid,
+                )
+                return
+            if kickoff_kind == "web-pack" and em_state.get("mode") == "normal" and em_state.get("effective_scope") in {"project", "task", "pending_task"}:
+                _engine.emit(
+                    "deny",
+                    f"LOCAL_EXECUTION_MODE_ACTIVE: Local execution (`{em_state.get('choice')}`) is active. "
+                    "Continue locally in Antigravity, or if the developer explicitly asked to offload this task via Web-Relay, run "
+                    '`python .agents/harness.py execution-mode set --choice web-task --source conversation --proof-reference "<developer request>"` first.',
+                    tool="run_command",
+                    command=command,
+                    reason_code="LOCAL_EXECUTION_MODE_ACTIVE",
                     task_id=kickoff_tid or active_tid,
                 )
                 return

@@ -4,7 +4,7 @@ description: Optional stateless Manual Web-Relay Mode (`web-pack` / `web-apply`)
 
 # Optional Manual Web-Relay Workflow (`web-pack` -> External AI Chat -> `web-apply`)
 
-**Execution Mode Integration (`normal-*` vs `web-*`)**: Execution mode is controlled exclusively by the developer via `python .agents/harness.py execution-mode set --choice <auto-project|auto-task|normal-task|normal-project|web-task|web-project|ask-every-task> --source conversation --proof-reference "<words>"` (defaulting to `hydrogen-dynamic-project` inside Antigravity when `normal` mode is selected). Single-task overrides (`normal-task` / `web-task`) apply to one task without altering the saved project default, and `CONFLICT` tasks automatically resolve locally while preserving `web-project`.
+**Execution Mode Integration (`normal-*` vs `web-*`)**: Ordinary tasks run locally in Antigravity by default without prompting. When a heavy task (`10+` files, `80+ KB` code mass, `2+` phases, substantial multi-module scope, or non-trivial `T5` scope) warrants external Web-Relay and no project lock is set, the harness asks the developer via `ask_question` stating the approximate quota savings (`~60%-85%`) with 3 choices (`normal-task`, `web-task`, `normal-project`), recorded via `python .agents/harness.py execution-mode set --choice <normal-task|web-task|normal-project|web-project|ask-every-task> --source conversation --proof-reference "<words>"`. Single-task overrides (`normal-task` / `web-task`) apply to one task without altering any saved project lock, and `CONFLICT` tasks always resolve locally while preserving `web-project`.
 
 ## When to use `Mode 2: Manual Web-Relay`
 

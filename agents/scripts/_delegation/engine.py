@@ -467,6 +467,10 @@ def evaluate_delegation_policy(
     """Compute the deterministic Option 4 risk-gated delegation strategy for the current repo/task."""
     active_scout_model = resolve_utility_scout_model(repo, task_id=task_id, plan=plan)
     sync_utility_scout_model(repo, active_scout_model)
+    live_lead_fam = _detect_live_parent_lead_family(repo)
+    offload_scout, _ = is_frontier_lead_requiring_flash_offload(repo)
+    effective_scout_invoke_arg = "flash" if (offload_scout or active_scout_model.startswith("gemini-3.8-flash")) else None
+    effective_subagent_enum = effective_scout_invoke_arg or "inherit"
     quota_guide = {
         "primary_chat_model": "Gemini 4 Carbon (Medium)",
         "fast_fallback_chat_model": "Gemini 4 Hydrogen (High)",
@@ -475,9 +479,12 @@ def evaluate_delegation_policy(
             "All Gemini models share ONE `/usage` quota pool (Carbon/Argon at 3.00x vs Hydrogen/Flash at 1.00x); "
             "offload heavy runs via Web-Relay (external AI chat) or switch main chat to Claude 5.5 (separate pool) at ~50%."
         ),
-        "orchestrator_guard": "Keep main chat on explicit Carbon Medium / Hydrogen High (1x) / Claude 5.5; do NOT select Antigravity Orchestrator over the harness.",
-        "scout_model": active_scout_model,
-        "subagent_workhorse_model": active_scout_model,
+        "orchestrator_guard": (
+            "Main-chat UI selector names above are human dropdown labels only; `invoke_subagent` accepts ONLY "
+            "`Model` in `{\"inherit\", \"flash_lite\", \"flash\", \"pro\"}` (no raw `gemini-4-*` strings and no subagent thinking-weight parameter)."
+        ),
+        "scout_model": effective_subagent_enum,
+        "subagent_workhorse_model": effective_subagent_enum,
         "anti_reread_contract": (
             f"Never re-read files already analyzed by `{SCOUT_AGENT}`, specialists, or reviewers "
             f"(hard cap: <={MAX_LEAD_POST_SUBAGENT_READS} surgical gap reads per subagent wave)."
@@ -549,15 +556,19 @@ def evaluate_delegation_policy(
                 "project_context": _project_context_handoff(None, set()),
                 "quota_strategy": quota_guide,
             }
-        scout_invoke_arg = "flash" if active_scout_model.startswith("gemini-3.8-flash") else None
+        scout_invoke_arg = effective_scout_invoke_arg
         scout_call_hint = (
-            f"pass `Model='flash'`" if scout_invoke_arg == "flash" else "omit `Model` in `invoke_subagent` so Antigravity inherits the session model cleanly"
+            "pass `Model='flash'` (routes to Antigravity's 1x `flash` tier)"
+            if scout_invoke_arg == "flash"
+            else "omit `Model` in `invoke_subagent` (`inherit` default)"
         )
         return {
             "status": "PRE_PLAN_DISCOVERY",
             "strategy": "DELEGATE_SCOUT_FIRST",
             "recommended_subagent": SCOUT_AGENT,
-            "scout_model": active_scout_model,
+            "lead_native_family": live_lead_fam,
+            "scout_model": effective_subagent_enum,
+            "scout_invoke_model": scout_invoke_arg,
             "scout_invoke_model_arg": scout_invoke_arg,
             "scout_allowed": True,
             "parallel_scout_cap": 3,
@@ -567,7 +578,7 @@ def evaluate_delegation_policy(
             "reason": (
                 "No active implementation task yet. For 1-3 known target files, inspect inline on the warm Lead session (`task-context` / `view_file`) "
                 f"to avoid cold subagent startup overhead; for 4+ files or unknown cross-module exploration, delegate to 1-3 parallel `{SCOUT_AGENT}` subagents "
-                f"(`{active_scout_model}`, {scout_call_hint}), then synthesize their digests directly without re-reading the codebase."
+                f"({scout_call_hint}), then synthesize their digests directly without re-reading the codebase."
             ),
             "project_context": _project_context_handoff(None, set()),
             "quota_strategy": quota_guide,
@@ -790,10 +801,10 @@ def evaluate_delegation_policy(
                 "quota_strategy": quota_guide,
             }
 
-    live_lead_fam = _detect_live_parent_lead_family(repo)
-    offload_scout, _ = is_frontier_lead_requiring_flash_offload(repo)
     scout_target_m = resolve_utility_scout_model(repo, task_id=tid, plan=plan)
     scout_invoke_model = "flash" if (offload_scout or scout_target_m.startswith("gemini-3.8-flash")) else None
+    quota_guide["scout_model"] = scout_invoke_model or "inherit"
+    quota_guide["subagent_workhorse_model"] = scout_invoke_model or "inherit"
 
     if act_code == "CAPTURE_RED_EVIDENCE":
         return {

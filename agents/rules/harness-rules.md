@@ -48,5 +48,5 @@ Authoritative always-loaded contract. Detailed domain guides load on demand from
 | Review package | `python .agents/harness.py review package --task-id <id>` |
 | Record review | Antigravity V2: `review complete --task <id> --reviewer <role> --execution-id <id>` (or `review complete-all --task <id>`); V1: `record_review.py` per host rules |
 | Resume / Assemble / Device | `python .agents/harness.py task resume --task-id <id>` / `assemble` / `device install-start` |
-| Execution mode & Web-Relay | `python .agents/harness.py execution-mode set --choice <auto-project\|normal-task\|normal-project\|web-task\|web-project> --source conversation --proof-reference "<words>"` / `web-pack [--retry-failure]` / `web-apply --source conversation --proof-reference "<words>"` |
+| Execution mode & Web-Relay | `python .agents/harness.py execution-mode set --choice <normal-task\|web-task\|normal-project\|web-project\|ask-every-task> --source conversation --proof-reference "<words>"` / `web-pack [--retry-failure]` / `web-apply --source conversation --proof-reference "<words>"` |
 | Verify | `python .agents/harness.py verify --task-id <id>` |

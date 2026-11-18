@@ -153,6 +153,7 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             KIT_ROOT / "agents/scripts/execution_mode.py",
             KIT_ROOT / "agents/scripts/review_models.py",
             KIT_ROOT / "agents/tool-adapters/GEMINI.md.template",
+            KIT_ROOT / "agents/tool-adapters/gemini-runtime/android-harness-global.md.template",
             KIT_ROOT / "agents/rules/harness-rules.md",
             KIT_ROOT / "agents/workflows/web-relay.md",
             KIT_ROOT / "agents/skills/android-harness/SKILL.md",
@@ -161,15 +162,34 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             txt = path.read_text(encoding="utf-8")
             self.assertIsNone(arabic_re.search(txt), f"Unexpected Arabic text found in {path}")
 
-        em_prompt = execution_mode.build_execution_mode_prompt(self.base_repo)
+        em_prompt = execution_mode.build_execution_mode_prompt(
+            self.base_repo,
+            scope_summary="12 target files (~96 KB code)",
+            savings_pct_range="65%-80%",
+        )
         self.assertEqual(em_prompt["code"], "SELECT_EXECUTION_MODE")
         self.assertEqual(em_prompt["tool"], "ask_question")
-        self.assertEqual(em_prompt["question"], "How would you like to run this task?")
+        self.assertIn("12 target files (~96 KB code)", em_prompt["question"])
+        self.assertIn("~65%-80%", em_prompt["question"])
         self.assertNotIn("question_ar", em_prompt)
-        self.assertEqual([o["id"] for o in em_prompt["options"]], ["auto-project", "normal-task", "normal-project", "web-task", "web-project"])
+        self.assertEqual(
+            [o["id"] for o in em_prompt["options"]],
+            ["normal-task", "web-task", "normal-project"],
+        )
         for opt in em_prompt["options"]:
             self.assertNotIn("label_ar", opt)
             self.assertLessEqual(len(opt["label"]), 95)
+
+        # Retired silent automatic modes (`auto-project`, `auto-task`, `smart-auto`) must fail cleanly
+        for retired in ("auto-project", "auto-task", "smart-auto"):
+            with self.assertRaises(ValidationError) as ctx_ret:
+                execution_mode.set_execution_mode(
+                    self.base_repo,
+                    choice=retired,
+                    source="conversation",
+                    proof_reference="use auto",
+                )
+            self.assertIn("INVALID_EXECUTION_MODE_CHOICE", str(ctx_ret.exception))
 
         for key, item in review_models.ANTIGRAVITY_INTERACTIVE_CHOICES.items():
             self.assertNotIn("label_ar", item, f"Arabic label left in {key}")
@@ -178,21 +198,26 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
     def test_02_edge_case_1_and_2_idle_readonly_allowed_vs_kickoff_enforced(self) -> None:
         repo, brain, cid = self._fresh_repo("ec1_ec2")
 
-        # Edge Case 1: Read-only tools & commands are 100% allowed when mode is unset
+        # Edge Case 1: Read-only tools & commands AND ordinary compact `task draft` (<10 files, <80 KB, 1 phase)
+        # are 100% allowed when mode is unset (local execution by default, zero pestering!)
         for ro_payload in (
             {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": "python .agents/harness.py graph --feature Cart --json"}},
             {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": "python .agents/harness.py doctor --quick"}},
             {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": "python .agents/harness.py execution-mode show --json"}},
             {"conversationId": cid, "toolName": "view_file", "toolArgs": {"AbsolutePath": str(repo / "app/src/main/java/com/example/sample/CartViewModel.kt")}},
-            {"conversationId": cid, "toolName": "ask_question", "toolArgs": {"question": "How would you like to run this task?"}},
+            {"conversationId": cid, "toolName": "ask_question", "toolArgs": {"question": "How would you like to proceed?"}},
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": 'python .agents/harness.py task draft --repo . --task-id compact-1 --outcome "Add discount" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt'}},
         ):
             res = _run_pre_tool_hook(repo, ro_payload, brain_root=brain)
             decision = (res.get("hookSpecificOutput") or {}).get("permissionDecision") or res.get("decision")
-            self.assertEqual(decision, "allow", f"Read-only call unexpectedly blocked: {ro_payload} -> {res}")
+            self.assertEqual(decision, "allow", f"Compact or read-only call unexpectedly blocked: {ro_payload} -> {res}")
 
-        # Edge Case 2: `task draft` and cold-start `web-pack` are hard-blocked with SELECT_EXECUTION_MODE_REQUIRED when unset
+        # Edge Case 2: Heavy `task draft` (10+ files or multi-phase) and cold-start `web-pack` are hard-blocked
+        # with SELECT_EXECUTION_MODE_REQUIRED + approximate quota savings + 3 choices when unset!
+        files_11 = ",".join(f"app/src/main/java/com/example/sample/Screen{i}.kt" for i in range(1, 12))
         for ko_cmd in (
-            'python .agents/harness.py task draft --repo . --task-id feat-1 --outcome "Add discount" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt',
+            f'python .agents/harness.py task draft --repo . --task-id heavy-11 --outcome "Refactor screens" --kind REFACTOR --expected-files {files_11}',
+            'python .agents/harness.py task draft --repo . --task-id mp-2 --outcome "Two-phase rollout" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt --phases "p1:Core,p2:UI"',
             'python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt --prompt "Add discount"',
         ):
             res = _run_pre_tool_hook(
@@ -202,8 +227,12 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             )
             reason = str((res.get("hookSpecificOutput") or {}).get("permissionDecisionReason") or res.get("reason") or "")
             decision = (res.get("hookSpecificOutput") or {}).get("permissionDecision") or res.get("decision")
-            self.assertEqual(decision, "deny")
+            self.assertEqual(decision, "deny", f"Expected heavy/web kickoff deny for {ko_cmd}: {res}")
             self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", reason)
+            self.assertIn("normal-task", reason)
+            self.assertIn("web-task", reason)
+            self.assertIn("normal-project", reason)
+            self.assertNotIn("auto-project", reason)
 
         # Edge Case 9a: Synthetic non-transcript CLI calls (empty conversationId) are NOT blocked
         res_non_tx = _run_pre_tool_hook(
@@ -460,11 +489,17 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         wp_out = json.loads(wp_proc.stdout)
         self.assertIn("app/src/main/java/com/example/sample/CartViewModel.kt", wp_out["editable_files"])
 
-        # Edge Case 9b: Reset via `--choice ask-every-task` clears project default cleanly
-        rst = execution_mode.set_execution_mode(repo, choice="ask-every-task", source="conversation", proof_reference="Ask me on every new task")
+        # Edge Case 9b: Reset via `--choice ask-every-task` clears project lock back to local-default (prompts only when heavy)
+        rst = execution_mode.set_execution_mode(repo, choice="ask-every-task", source="conversation", proof_reference="Ask me when heavy")
         self.assertEqual(rst["status"], "RESET_TO_ASK_EVERY_TASK")
-        self.assertTrue(rst["effective"]["selection_required"])
-        self.assertEqual(rst["effective"]["mode"], "unset")
+        self.assertFalse(rst["effective"]["selection_required"])
+        self.assertEqual(rst["effective"]["mode"], "normal")
+        self.assertEqual(rst["effective"]["effective_scope"], "default_local")
+        eff_heavy_after_rst = execution_mode.resolve_effective_execution_mode(
+            repo, candidate_files=[f"app/src/main/Screen{i}.kt" for i in range(12)]
+        )
+        self.assertTrue(eff_heavy_after_rst["selection_required"])
+        self.assertTrue(eff_heavy_after_rst["web_recommended"])
 
 
     def test_07_windows_backslash_paths_and_large_transcript_lead_detection(self) -> None:
@@ -477,14 +512,29 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
                 fh.write(json.dumps({"type": "TOOL_OUTPUT", "seq": i, "blob": "X" * 900}) + "\n")
         self.assertGreater(tp.stat().st_size, 48 * 1024)
 
-        # 2) Invoke `task draft` using a Windows backslash launcher path `.agents\harness.py`!
+        # 2a) Compact 1-file `task draft` with Windows backslash launcher `.agents\harness.py` is ALLOWED locally without pestering!
+        verdict_compact = _run_pre_tool_hook(
+            repo,
+            {
+                "conversationId": cid,
+                "toolName": "run_command",
+                "toolArgs": {
+                    "CommandLine": 'python .agents\\harness.py task draft --repo . --task-id win-small --outcome "Fix bug" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt'
+                },
+            },
+            brain_root=brain,
+        )
+        dec_compact = (verdict_compact.get("hookSpecificOutput") or {}).get("permissionDecision") or verdict_compact.get("decision")
+        self.assertEqual(dec_compact, "allow")
+
+        # 2b) Heavy multi-phase `task draft` using Windows backslash launcher `.agents\harness.py` IS caught & asks the 3-choice prompt!
         verdict_win = _run_pre_tool_hook(
             repo,
             {
                 "conversationId": cid,
                 "toolName": "run_command",
                 "toolArgs": {
-                    "CommandLine": 'python .agents\\harness.py task draft --repo . --task-id win-t1 --outcome "Fix bug" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt'
+                    "CommandLine": 'python .agents\\harness.py task draft --repo . --task-id win-t1 --outcome "Two-phase refactor" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt --phases "p1:Core,p2:UI"'
                 },
             },
             brain_root=brain,
@@ -493,6 +543,7 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         reason_w = str((verdict_win.get("hookSpecificOutput") or {}).get("permissionDecisionReason") or verdict_win.get("reason") or "")
         self.assertEqual(decision_w, "deny")
         self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", reason_w)
+        self.assertIn("saves ~", reason_w)
 
         # 3) Verify developer authority check ALSO catches Windows backslash `execution-mode set` without `--source conversation`!
         verdict_spoof = _run_pre_tool_hook(
@@ -622,7 +673,7 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         repo, brain, cid = self._fresh_repo("round3_concurrency_and_phase_state")
 
         # 1) 12-thread concurrent TOCTOU stress across set/show/verify_execution_mode_integrity
-        choices = ["auto-project", "auto-task", "normal-task", "web-task", "normal-project", "web-project", "ask-every-task"]
+        choices = ["normal-task", "web-task", "normal-project", "web-project", "ask-every-task"]
 
         def _worker(i: int) -> None:
             rng = random.Random(500 + i)
@@ -697,129 +748,158 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         self.assertIn(f"web-pack --task-id {tid}", adv_p2["next_command"])
 
 
-    def test_10_smart_auto_project_routing_across_size_modules_t5_handoff_and_overrides(self) -> None:
-        repo, brain, cid = self._fresh_repo("smart_auto_project")
+    def test_10_threshold_prompted_advisor_3_choices_dont_ask_again_and_legacy_auto_migration(self) -> None:
+        repo, brain, cid = self._fresh_repo("threshold_prompted_advisor")
 
-        # 1) Save `auto-project` via alias `smart-auto` -> no longer requires prompt on IDLE!
-        res_set = execution_mode.set_execution_mode(
-            repo, choice="smart-auto", source="conversation", proof_reference="Use smart auto mode"
+        # 1) Legacy `"mode": "auto"` signed record on disk (upgraded repo) passes integrity (`doctor`),
+        #    NEVER silently switches to `web`, allows compact tasks locally, and prompts on heavy tasks!
+        legacy_auto_rec = execution_mode._sign_record({
+            "schema_version": 1,
+            "choice": "auto-project",
+            "mode": "auto",
+            "scope": "project",
+            "source": "conversation",
+            "proof_reference": "legacy smart auto",
+            "updated_at": "2026-11-01T00:00:00Z",
+            "updated_at_epoch": 1793491200.0,
+        })
+        p_file = execution_mode.project_mode_file(repo)
+        p_file.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(p_file, legacy_auto_rec)
+
+        ok_leg, errs_leg = execution_mode.verify_execution_mode_integrity(repo)
+        self.assertTrue(ok_leg, errs_leg)
+
+        eff_leg_idle = execution_mode.resolve_effective_execution_mode(repo)
+        self.assertEqual(eff_leg_idle["mode"], "normal")
+        self.assertFalse(eff_leg_idle["selection_required"])
+        self.assertTrue(eff_leg_idle["legacy_auto_migrated"])
+
+        large_files_15 = [f"app/src/main/java/com/example/sample/Screen{i}.kt" for i in range(1, 16)]
+        eff_leg_heavy = execution_mode.resolve_effective_execution_mode(repo, candidate_files=large_files_15)
+        self.assertTrue(eff_leg_heavy["selection_required"])
+        self.assertTrue(eff_leg_heavy["web_recommended"])
+        self.assertEqual(eff_leg_heavy["estimated_quota_savings_pct"], "75%-85%")
+        prompt_leg = eff_leg_heavy["prompt_contract"]
+        self.assertEqual([o["id"] for o in prompt_leg["options"]], ["normal-task", "web-task", "normal-project"])
+        self.assertIn("~75%-85%", prompt_leg["question"])
+
+        # 2) Heavy monolith (`85 KB` single file), 3-module inferred from paths, and 4-file `T5` scope all trigger prompt;
+        #    tiny 1-file `AUTH` tweak (<4 files & <32 KB) stays local without bothering the developer!
+        mono_f = repo / "app/src/main/java/com/example/sample/HugeViewModel.kt"
+        mono_f.write_bytes(b"k" * (85 * 1024))
+        eff_mono = execution_mode.resolve_effective_execution_mode(
+            repo, candidate_files=["app/src/main/java/com/example/sample/HugeViewModel.kt"]
         )
-        self.assertEqual(res_set["choice"], "auto-project")
-        self.assertEqual(res_set["configured_mode"], "auto")
-        eff_idle = execution_mode.resolve_effective_execution_mode(repo)
-        self.assertFalse(eff_idle["selection_required"])
-        self.assertEqual(eff_idle["configured_mode"], "auto")
-        self.assertEqual(eff_idle["mode"], "normal")
+        self.assertTrue(eff_mono["selection_required"])
+        self.assertIn("85 KB", eff_mono["scope_summary"])
 
-        # PreToolUse allows both `task draft` and `web-pack` immediately under `auto-project`
-        allow_draft = _run_pre_tool_hook(
+        eff_3m = execution_mode.resolve_effective_execution_mode(
             repo,
-            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": 'python .agents/harness.py task draft --repo . --task-id small-3 --outcome "Fix step" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt'}},
-            brain_root=brain,
-        )
-        self.assertEqual((allow_draft.get("hookSpecificOutput") or {}).get("permissionDecision") or allow_draft.get("decision"), "allow")
-
-        # 2) Compact 3-file single-module T2 plan -> Smart Auto resolves to `normal`!
-        small_plan = {
-            "task_id": "auto-small-3",
-            "status": "IMPLEMENTING",
-            "task_kind": "FEATURE",
-            "expected_files": [
-                "app/src/main/java/com/example/sample/CartViewModel.kt",
-                "app/src/main/java/com/example/sample/OrderRepository.kt",
-                "app/src/test/java/com/example/sample/CartViewModelTest.kt",
+            candidate_files=[
+                "core/src/main/kotlin/C.kt",
+                "data/src/main/kotlin/D.kt",
+                "app/src/main/kotlin/A.kt",
             ],
-            "expected_modules": [":app"],
-            "expected_surfaces": ["BUSINESS_LOGIC"],
-        }
-        (repo / ".agents/state/tasks/auto-small-3").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-small-3/plan.json", small_plan)
-        eff_small = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-small-3", plan=small_plan)
-        self.assertEqual(eff_small["mode"], "normal")
-        self.assertEqual(eff_small["configured_mode"], "auto")
-        self.assertTrue(eff_small["auto_routed"])
-        self.assertEqual(eff_small["auto_route_trigger"], "AUTO_NORMAL_COMPACT_SCOPE_3_FILES")
+        )
+        self.assertTrue(eff_3m["selection_required"])
+        self.assertEqual(eff_3m["web_recommendation_trigger"], "AUTO_WEB_MULTI_MODULE_OR_PHASE")
 
-        # 3) Large 15-file plan -> Smart Auto promotes to `web` + delegation_policy returns `WEB_RELAY_ACTIVE`!
-        large_files = [f"app/src/main/java/com/example/sample/Screen{i}.kt" for i in range(1, 16)]
-        large_plan = {
-            "task_id": "auto-large-15",
-            "status": "IMPLEMENTING",
-            "task_kind": "REFACTOR",
-            "expected_files": large_files,
-            "expected_modules": [":app"],
-            "expected_surfaces": ["COMPOSE_UI"],
-        }
-        (repo / ".agents/state/tasks/auto-large-15").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-large-15/plan.json", large_plan)
-        eff_large = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-large-15", plan=large_plan)
-        self.assertEqual(eff_large["mode"], "web")
-        self.assertEqual(eff_large["auto_route_trigger"], "AUTO_WEB_LARGE_SCOPE_15_FILES")
-        dp_large = delegation_policy.evaluate_delegation_policy(repo, task_id="auto-large-15", plan=large_plan)
-        self.assertEqual(dp_large["strategy"], "WEB_RELAY_ACTIVE")
+        eff_t5_tiny = execution_mode.resolve_effective_execution_mode(
+            repo,
+            candidate_files=["app/src/main/java/com/example/sample/CartViewModel.kt"],
+            candidate_surfaces=["AUTH"],
+        )
+        self.assertFalse(eff_t5_tiny["selection_required"])
+        self.assertEqual(eff_t5_tiny["mode"], "normal")
 
-        # 4) Compact 2-module (`<6` files & `<48 KB`) stays `normal`; substantial 2-module (`6+` files / `48+ KB`), 3-module, and `T5` promote to `web`!
-        mm_small_plan = {
-            "task_id": "auto-mm-small",
-            "status": "IMPLEMENTING",
-            "task_kind": "FEATURE",
-            "expected_files": ["core/src/main/Core.kt", "app/src/main/App.kt"],
-            "expected_modules": [":core", ":app"],
-            "expected_surfaces": ["BUSINESS_LOGIC"],
-        }
-        (repo / ".agents/state/tasks/auto-mm-small").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-mm-small/plan.json", mm_small_plan)
-        eff_mm_small = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-mm-small", plan=mm_small_plan)
-        self.assertEqual(eff_mm_small["mode"], "normal")
-        self.assertEqual(eff_mm_small["auto_route_trigger"], "AUTO_NORMAL_COMPACT_SCOPE_2_FILES")
+        eff_t5_substantial = execution_mode.resolve_effective_execution_mode(
+            repo,
+            candidate_files=[f"app/src/main/java/com/example/sample/Auth{i}.kt" for i in range(1, 5)],
+            candidate_surfaces=["AUTH"],
+        )
+        self.assertTrue(eff_t5_substantial["selection_required"])
+        self.assertEqual(eff_t5_substantial["web_recommendation_trigger"], "AUTO_WEB_CRITICAL_T5_SURFACE")
 
-        mm_plan = {
-            "task_id": "auto-mm",
-            "status": "IMPLEMENTING",
-            "task_kind": "FEATURE",
-            "expected_files": [f"core/src/main/Core{i}.kt" for i in range(1, 4)] + [f"app/src/main/App{i}.kt" for i in range(1, 4)],
-            "expected_modules": [":core", ":app"],
-            "expected_surfaces": ["BUSINESS_LOGIC"],
-        }
-        (repo / ".agents/state/tasks/auto-mm").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-mm/plan.json", mm_plan)
-        eff_mm = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-mm", plan=mm_plan)
-        self.assertEqual(eff_mm["mode"], "web")
-        self.assertEqual(eff_mm["auto_route_trigger"], "AUTO_WEB_MULTI_MODULE_OR_PHASE")
-
-        t5_plan = {
-            "task_id": "auto-t5",
-            "status": "IMPLEMENTING",
-            "task_kind": "FEATURE",
-            "expected_files": ["app/src/main/AuthManager.kt"],
-            "expected_modules": [":app"],
-            "expected_surfaces": ["AUTH"],
-        }
-        (repo / ".agents/state/tasks/auto-t5").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-t5/plan.json", t5_plan)
-        eff_t5 = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-t5", plan=t5_plan)
-        self.assertEqual(eff_t5["mode"], "web")
-        self.assertEqual(eff_t5["auto_route_trigger"], "AUTO_WEB_CRITICAL_T5_SURFACE")
-
-        # 5) Conflict task under `auto-project` stays local (`normal`) + manual `normal-task` override works on `auto-large-15`!
-        conf_plan = {
-            "task_id": "auto-conf",
-            "status": "IMPLEMENTING",
-            "task_kind": "CONFLICT",
-            "expected_files": large_files,
-        }
-        (repo / ".agents/state/tasks/auto-conf").mkdir(parents=True, exist_ok=True)
-        atomic_write_json(repo / ".agents/state/tasks/auto-conf/plan.json", conf_plan)
-        eff_conf = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-conf", plan=conf_plan)
-        self.assertEqual(eff_conf["mode"], "normal")
-        self.assertTrue(eff_conf["conflict_auto_local_override"])
+        # 3) Option 1 (`normal-task`): allows THIS heavy `task draft` locally, then prompts AGAIN on the NEXT heavy task!
+        heavy_cmd = (
+            'python .agents/harness.py task draft --repo . --task-id heavy-opt1 --outcome "Big refactor" '
+            f'--kind REFACTOR --expected-files {",".join(large_files_15)}'
+        )
+        deny_before = _run_pre_tool_hook(
+            repo, {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": heavy_cmd}}, brain_root=brain
+        )
+        self.assertEqual((deny_before.get("hookSpecificOutput") or {}).get("permissionDecision") or deny_before.get("decision"), "deny")
 
         execution_mode.set_execution_mode(
-            repo, choice="normal-task", task_id="auto-large-15", source="conversation", proof_reference="Run this 15-file refactor locally"
+            repo, choice="normal-task", source="conversation", proof_reference="Continue locally here for this task"
         )
-        eff_over = execution_mode.resolve_effective_execution_mode(repo, task_id="auto-large-15", plan=large_plan)
-        self.assertEqual(eff_over["mode"], "normal")
-        self.assertEqual(eff_over["project_choice"], "auto-project")
+        allow_opt1 = _run_pre_tool_hook(
+            repo, {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": heavy_cmd}}, brain_root=brain
+        )
+        self.assertEqual((allow_opt1.get("hookSpecificOutput") or {}).get("permissionDecision") or allow_opt1.get("decision"), "allow")
+
+        # Consume pending choice by binding to `heavy-opt1` and finishing/cancelling it -> next heavy task prompts again!
+        (repo / ".agents/state/tasks/heavy-opt1").mkdir(parents=True, exist_ok=True)
+        atomic_write_json(repo / ".agents/state/tasks/heavy-opt1/plan.json", {"task_id": "heavy-opt1", "status": "CANCELLED"})
+        execution_mode.bind_pending_execution_mode_to_task(repo, "heavy-opt1")
+
+        deny_next_heavy = _run_pre_tool_hook(
+            repo,
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": heavy_cmd.replace("heavy-opt1", "heavy-opt2")}},
+            brain_root=brain,
+        )
+        self.assertEqual((deny_next_heavy.get("hookSpecificOutput") or {}).get("permissionDecision") or deny_next_heavy.get("decision"), "deny")
+
+        # 4) Pre-approval `task revise` escalation: compact 1-file draft revised to 15 files prompts via `SELECT_EXECUTION_MODE_REQUIRED`!
+        (repo / ".agents/state/tasks/rev-escalate").mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            repo / ".agents/state/tasks/rev-escalate/plan.json",
+            {"task_id": "rev-escalate", "status": "AWAITING_DEVELOPER_APPROVAL", "expected_files": ["app/src/main/A.kt"]},
+        )
+        rev_cmd = f'python .agents/harness.py task revise --repo . --task-id rev-escalate --expected-files {",".join(large_files_15)}'
+        deny_rev = _run_pre_tool_hook(
+            repo, {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": rev_cmd}}, brain_root=brain
+        )
+        self.assertEqual((deny_rev.get("hookSpecificOutput") or {}).get("permissionDecision") or deny_rev.get("decision"), "deny")
+        self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", str(deny_rev))
+        atomic_write_json(repo / ".agents/state/tasks/rev-escalate/plan.json", {"task_id": "rev-escalate", "status": "CANCELLED"})
+
+        # 5) Option 3 (`normal-project` — "Always continue locally in this project (do not ask again)"):
+        #    NEVER prompts again even on 15-file / 85 KB heavy tasks, AND blocks accidental Lead `web-pack` unless `web-task` is set!
+        execution_mode.set_execution_mode(
+            repo,
+            choice="normal-project",
+            source="conversation",
+            proof_reference="Always continue locally in this project (do not ask again)",
+        )
+        allow_locked_heavy = _run_pre_tool_hook(
+            repo,
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": heavy_cmd.replace("heavy-opt1", "heavy-locked")}},
+            brain_root=brain,
+        )
+        self.assertEqual((allow_locked_heavy.get("hookSpecificOutput") or {}).get("permissionDecision") or allow_locked_heavy.get("decision"), "allow")
+
+        deny_accidental_wp = _run_pre_tool_hook(
+            repo,
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": 'python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt --prompt "Pack"'}},
+            brain_root=brain,
+        )
+        dec_wp = (deny_accidental_wp.get("hookSpecificOutput") or {}).get("permissionDecision") or deny_accidental_wp.get("decision")
+        rsn_wp = str((deny_accidental_wp.get("hookSpecificOutput") or {}).get("permissionDecisionReason") or deny_accidental_wp.get("reason") or "")
+        self.assertEqual(dec_wp, "deny")
+        self.assertIn("LOCAL_EXECUTION_MODE_ACTIVE", rsn_wp)
+
+        # Explicit developer single-task override (`web-task`) still works cleanly on top of `normal-project`!
+        execution_mode.set_execution_mode(
+            repo, choice="web-task", new_task=True, source="conversation", proof_reference="Offload this one task to web"
+        )
+        allow_explicit_wp = _run_pre_tool_hook(
+            repo,
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": 'python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt --prompt "Pack"'}},
+            brain_root=brain,
+        )
+        self.assertEqual((allow_explicit_wp.get("hookSpecificOutput") or {}).get("permissionDecision") or allow_explicit_wp.get("decision"), "allow")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -90,13 +90,13 @@ Task A
 → task status --next (python .agents/harness.py task status --task-id <id> --next)
 ```
 
-## Execution Modes (`auto-project` & Stateless `Web-Relay`)
+## Execution Modes (Local Default & Threshold-Prompted `Web-Relay`)
 
-Set Smart Auto once per project (`auto-project`) to keep compact tasks (`<10` files, `<80 KB` non-test code mass, and single-module or small 2-module `<6` files / `<48 KB`) local in Antigravity while automatically promoting `10+`-file or `80+ KB` refactors, substantial multi-module (`3+` modules, or `2` modules with `6+` files / `48+ KB`), multi-phase, `T5` critical surfaces, or `2-Strike` escalations to an **external AI chat (`Web-Relay`)**:
+Ordinary tasks (`<10` files, `<80 KB` non-test code mass, single-phase, and single-module or compact 2-module `<6` files / `<48 KB`) run locally in Antigravity by default without interrupting you. When a heavy task (`10+` files, `80+ KB`, `2+` phases, substantial multi-module, or `4+`-file / `32+ KB` `T5` scope) warrants offloading code generation to an **external AI chat (`Web-Relay`)**, Antigravity prompts once with estimated quota savings (`~60%–85%`) and 3 choices (`normal-task`, `web-task`, or `normal-project` to lock local execution and stop asking):
 
 ```bash
-# 1. Enable Smart Auto project-wide (or choose normal-project / web-project)
-python .agents/harness.py execution-mode set --choice auto-project --source developer_terminal --proof-reference "Use Smart Auto"
+# 1. Optional: lock local execution project-wide (or web-project / ask-every-task to reset)
+python .agents/harness.py execution-mode set --choice normal-project --source conversation --proof-reference "Always run locally"
 
 # 2. Pack modified/staged/untracked Android Studio files (or --feature <Name>) into 1 secret-scrubbed .md bundle
 #    (Then open a NEW external AI chat, attach or paste via Ctrl+V, and send)
