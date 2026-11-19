@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.3] - 2026-11-19
+
+### Resilient `HARNESS_WEB_PATCH_V1` Parsing, Gemini Web HTML-Entity Repair, `.txt` Downloads & Foreign Clipboard Isolation
+
+- **Tolerate Optional `<<<END_FILE>>>` After `<<<DELETE>>>` / `<<<RENAME>>>` (`_web_relay/merge_applier.py`)**: External LLMs naturally close `<<<DELETE path>>>` and `<<<RENAME old -> new>>>` directives with `<<<END_FILE>>>`; `_parse_web_patch_v1_from_text()` and `_detect_truncated_patch_pack_id()` now accept optional trailing `<<<END_FILE>>>` cleanly instead of discarding the entire patch as malformed.
+- **Safe Gemini Web HTML-Entity Unescaping (`_web_relay/merge_applier.py`)**: Added `_unescape_patch_protocol_markers()` and `_repair_web_ui_html_entities_for_file()` to repair web-UI HTML-entity corruption (`&lt;&lt;&lt;END_FILE&gt;&gt;&gt;`, `&gt;&gt;&gt;&gt;&gt;&gt;&gt; REPLACE`, nested Kotlin/Java/Swift generics like `Result&lt;List&lt;String&gt;&gt;`, and manifest/navigation/layout XML tags) while leaving `res/values*/strings*.xml` and `.html` assets untouched.
+- **Prefer `.txt` Downloadable Payloads & Isolate Foreign Clipboard Packs (`_web_relay/pack_builder.py`, `_web_relay/merge_applier.py`, `_web_relay/engine.py`)**: Updated Web-Relay context packs (full + `--retry-failure`) to target universally downloadable `harness-merge-<pack_id>.txt` (or `.patch` / `.json`) files, and fixed `_resolve_incoming_merge_payload()` priority so an unrelated foreign-repo pack left in the clipboard never shadows a local unapplied pack's truncation/parse diagnostic in `Downloads` or `.user_uploaded`.
+
 ## [1.5.2] - 2026-11-19
 
 ### Flexible Multi-Value CLI Parsing, Two-Key Sensitive Surface Auto-Inference & Downloadable-File-First Web-Relay
