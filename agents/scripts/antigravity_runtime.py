@@ -442,6 +442,34 @@ def inspect_language_server_logs(env: dict[str, str] | None = None) -> dict[str,
     return {"checked_paths": checked, "bloated_logs": bloated}
 
 
+def _parse_semver_prefix(raw: str) -> tuple[int, int, int] | None:
+    m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(raw or ""))
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+LATEST_KNOWN_ANTIGRAVITY_VERSIONS: dict[str, str] = {
+    "app_version": "2.33.0",
+    "ide_version": "2.7.1",
+    "cli_version": "1.5.12",
+    "vscode_extension_version": "1.13.0",
+}
+
+
+def detect_antigravity_versions(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Read declared Antigravity App, CLI, IDE, and VS Code extension versions from environment metadata when present."""
+    environ = env if env is not None else os.environ
+    return {
+        "app_version": str(environ.get("ANTIGRAVITY_APP_VERSION") or environ.get("AGY_APP_VERSION") or "").strip(),
+        "cli_version": str(environ.get("ANTIGRAVITY_CLI_VERSION") or environ.get("AGY_CLI_VERSION") or "").strip(),
+        "ide_version": str(environ.get("ANTIGRAVITY_IDE_VERSION") or environ.get("AGY_IDE_VERSION") or "").strip(),
+        "vscode_extension_version": str(
+            environ.get("ANTIGRAVITY_VSCODE_VERSION") or environ.get("AGY_VSCODE_VERSION") or ""
+        ).strip(),
+    }
+
+
 def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None) -> dict[str, object]:
     """Detect multi-server stdio MCP setups on Windows susceptible to #199301 AcceptEx pipe-handle aborts."""
     import json as _json
@@ -493,9 +521,17 @@ def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None
         except (OSError, ValueError, TypeError):
             continue
 
+    vers = detect_antigravity_versions(environ)
+    cli_v = _parse_semver_prefix(vers["cli_version"])
+    app_v = _parse_semver_prefix(vers["app_version"])
+    mitigated_upstream = bool(
+        (cli_v is not None and cli_v >= (1, 5, 10))
+        or (app_v is not None and app_v >= (2, 33, 0))
+    )
     return {
         "applicable": True,
-        "at_risk": len(stdio_servers) >= 2,
+        "at_risk": (len(stdio_servers) >= 2) and not mitigated_upstream,
+        "mitigated_upstream": mitigated_upstream,
         "stdio_servers": stdio_servers,
         "config_paths": inspected,
     }
@@ -540,33 +576,46 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
             "issue": "Orchestrator+Harness",
             "remedy": (
                 "Antigravity built-in Orchestrator runs its own internal Carbon<->Hydrogen planning/handoff loop, "
-                "which conflicts with Harness PreToolUse gates. Select explicit 'Gemini 4 Carbon (Medium)' (or Hydrogen High/Claude 5.5) "
+                "which conflicts with Harness PreToolUse gates. Select explicit 'Gemini 4 Carbon (Medium)' or 'Gemini 4 Neon (High)' (or Hydrogen High/Claude 5.5) "
                 "on the main chat and let 'hydrogen-dynamic-project' govern subagents."
             ),
         }
     if (
         ("invalid model" in low or "unsupported model" in low or "model_id" in low or "not a valid model" in low)
-        and any(tok in low for tok in ("gemini-4-", "hydrogen", "argon", "carbon", "inherit", "flash", "flash_lite"))
+        and any(tok in low for tok in ("gemini-4-", "hydrogen", "argon", "carbon", "neon", "inherit", "flash", "flash_lite"))
     ) or ("expected" in low and "'inherit'" in low and "'flash'" in low):
         return {
             "code": "AGY_CLI_SUBAGENT_MODEL_ID_UNSUPPORTED",
             "issue": "#200144",
             "remedy": (
-                "Antigravity CLI (agy v1.5.8) rejected an explicit model ID in subagent frontmatter (#200144 — CLI schema only accepts "
-                "inherit|flash|pro|flash_lite). Run in Antigravity Desktop App v2.31.2, or switch subagents to inherit for CLI sessions via: "
+                "Antigravity CLI (agy v1.5.8-v1.5.12) rejected an explicit model ID in subagent frontmatter (#200144 — CLI schema only accepts "
+                "inherit|flash|pro|flash_lite). Run in Antigravity Desktop App v2.33.0+, or switch subagents to inherit for CLI sessions via: "
                 "python .agents/harness.py review models set --choice inherit-task --source conversation --proof-reference 'CLI inherit fallback (#200144)'"
             ),
         }
     if (
+        ("0 thinking tokens" in low or "thinking_tokens=0" in low or "thinking_tokens: 0" in low or "thoughtstokencount=0" in low or "zero thinking tokens" in low)
+        and "hydrogen" in low
+    ):
+        return {
+            "code": "HYDROGEN_MEDIUM_ZERO_THINKING_AFTER_TOOL",
+            "issue": "#1649/#201731",
+            "remedy": (
+                "Gemini 4 Hydrogen (Medium) on Windows can drop thinking_tokens to 0 on turns following workspace file-read tool calls "
+                "(#1649/#201731). Switch the selector to 'Gemini 4 Hydrogen (High)' (same 1.00x quota cost, immune to #1649), and prefer "
+                "'python .agents/harness.py symbol outline/read' or 'task-context' over raw read_file sweeps."
+            ),
+        }
+    if (
         ("marked unavailable" in low or "shows unavailable" in low or "model unavailable" in low or "is unavailable" in low or "entitlement" in low)
-        and any(tok in low for tok in ("hydrogen", "argon", "gemini 4", "gemini-4"))
+        and any(tok in low for tok in ("hydrogen", "argon", "neon", "gemini 4", "gemini-4"))
         and "503" not in low
     ):
         return {
             "code": "GEMINI4_ENTITLEMENT_DESYNC_UNAVAILABLE",
             "issue": "#200147/#199992",
             "remedy": (
-                "Account entitlement desync marked Gemini 4 Hydrogen/Argon as Unavailable (#200147/#199992). "
+                "Account entitlement desync marked Gemini 4 Hydrogen/Neon/Argon as Unavailable (#200147/#199992). "
                 "Run 'Antigravity: Reset Onboarding' (or sign out and back in), or unblock this task immediately via "
                 "'python .agents/harness.py task heal --task-id <id>' followed by '--choice inherit-once' or '--choice flash-project'."
             ),
@@ -598,13 +647,14 @@ def classify_antigravity_quota_or_capacity_error(err_text: str) -> dict[str, str
         or "0 input tokens per minute" in low
         or "antigravity-preview-09-2026" in low
         or ("carbon" in low and ("ultra" in low or "entitle" in low or "tier" in low))
+        or ("neon" in low and ("pro" in low or "ultra" in low or "entitle" in low or "tier" in low))
     )
     if is_429 and is_zero_limit:
         return {
             "code": "MANAGED_AGENT_ZERO_QUOTA_429",
             "issue": "#199769/#199770",
             "remedy": (
-                "Managed Agent API / tier returned zero Argon/Carbon quota (limit: 0). "
+                "Managed Agent API / tier returned zero Argon/Carbon/Neon quota (limit: 0). "
                 "Switch subagents immediately to 100% Pure Gemini 4 Hydrogen (zero Argon/Carbon quota) via: "
                 "python .agents/harness.py review models set --choice hydrogen-dynamic-project --source conversation "
                 "--proof-reference \"Switch to Pure Hydrogen (#199769)\" "
@@ -908,9 +958,23 @@ def inspect_nov15_antigravity_hazards(
                 active_lead_model = chosen
                 break
 
+    import sys as _sys
     norm_model = re.sub(r"[\s()]+", "-", active_lead_model.lower().removeprefix("models/")).strip("-")
     hydrogen_extra_leak_active = bool(
         re.search(r"gemini-4-hydrogen-(?:tiered-)?(?:extra|xhigh)\b|hydrogen@(?:extra|xhigh)\b", norm_model)
+    )
+    sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
+    is_win_host = sim_plat == "win32" or (not sim_plat and _sys.platform == "win32")
+    quirk_1649_on = True
+    try:
+        from platform_quirks import is_quirk_enabled
+        quirk_1649_on = is_quirk_enabled("1649", repo=repo, env=environ)
+    except ImportError:
+        quirk_1649_on = True
+    hydrogen_medium_win_tool_risk = bool(
+        is_win_host
+        and quirk_1649_on
+        and re.search(r"gemini-4-hydrogen-(?:tiered-)?medium\b|hydrogen@medium\b", norm_model)
     )
 
     auto_accept_state = "no_vscode_settings"
@@ -947,6 +1011,7 @@ def inspect_nov15_antigravity_hazards(
 
     return {
         "hydrogen_extra_leak_active": hydrogen_extra_leak_active,
+        "hydrogen_medium_win_tool_risk": hydrogen_medium_win_tool_risk,
         "active_lead_model": active_lead_model,
         "active_lead_conversation_id": active_lead_cid,
         "auto_accept_on_chat_state": auto_accept_state,

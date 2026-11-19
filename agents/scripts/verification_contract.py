@@ -79,8 +79,10 @@ def load_definition(repo: Path, relative: str) -> dict:
             # values at spaces, so three inline attempts failed. A file has no quoting problem.
             raise ValidationError(
                 "invalid inline JSON definition (Windows PowerShell strips double quotes from native "
-                "arguments). Write the JSON to a .json file with your file tool (any folder, e.g. the "
-                "conversation scratch folder) and pass its path: --verification-contract <path-to-file.json>"
+                "arguments). Write the JSON to a repo-local .json file with your file tool (e.g. "
+                ".agents/cache/tmp-contract.json — avoid the conversation scratch/ folder so /fork "
+                "parent cleanup in agy 1.5.12+ never deletes shared files) and pass its path: "
+                "--verification-contract <path-to-file.json>"
             ) from exc
     candidate = Path(value).expanduser()
     if candidate.is_absolute() and not candidate.resolve().is_relative_to(repo.resolve()):

@@ -3,6 +3,7 @@ name: gradle-build-optimizer
 description: Use when Gradle builds hang, lock on Windows, or targeted module and variant tasks can replace a full rebuild.
 version: 1.1.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Gradle Build Optimizer

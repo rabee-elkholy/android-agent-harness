@@ -51,6 +51,13 @@ def scan_file(file_path: Path) -> list[dict]:
         "androidx.compose" in l or "org.jetbrains.compose" in l or "@Composable" in l
         for l in lines
     )
+    from _modules import is_kmp_or_android_test_path
+    norm_fp = str(file_path).replace("\\", "/")
+    is_test_source = (
+        is_kmp_or_android_test_path(norm_fp)
+        or "/src/test/" in f"/{norm_fp}"
+        or "/src/androidTest/" in f"/{norm_fp}"
+    )
     in_block_comment = False
     in_triple_string = False
 
@@ -76,21 +83,17 @@ def scan_file(file_path: Path) -> list[dict]:
         if stripped.startswith("//") or stripped.startswith("*"):
             continue
 
-        # 1. runBlocking check
-        if _has_real_match(line, _RUNBLOCKING_RE):
-            # Exclude test files (Android & KMP test source sets)
-            from _modules import is_kmp_or_android_test_path
-            norm_fp = str(file_path).replace("\\", "/")
-            if not is_kmp_or_android_test_path(norm_fp) and "src/test" not in norm_fp and "src/androidTest" not in norm_fp:
-                findings.append({
-                    "file": str(file_path),
-                    "line": idx,
-                    "severity": "CRITICAL (ANR)",
-                    "message": "Found 'runBlocking' on production code. This blocks threads and causes ANRs. Use coroutineScope or viewModelScope.launch instead."
-                })
+        # 1. runBlocking check (production sources only)
+        if not is_test_source and _has_real_match(line, _RUNBLOCKING_RE):
+            findings.append({
+                "file": str(file_path),
+                "line": idx,
+                "severity": "CRITICAL (ANR)",
+                "message": "Found 'runBlocking' on production code. This blocks threads and causes ANRs. Use coroutineScope or viewModelScope.launch instead."
+            })
 
-        # 2. Thread.sleep check
-        if _has_real_match(line, _THREAD_SLEEP_RE):
+        # 2. Thread.sleep check (production sources only)
+        if not is_test_source and _has_real_match(line, _THREAD_SLEEP_RE):
             findings.append({
                 "file": str(file_path),
                 "line": idx,
@@ -98,8 +101,8 @@ def scan_file(file_path: Path) -> list[dict]:
                 "message": "Found 'Thread.sleep()'. This halts thread execution. Use kotlinx.coroutines.delay() instead."
             })
 
-        # 3. allowMainThreadQueries check
-        if _has_real_match(line, _ALLOW_MAIN_THREAD_RE):
+        # 3. allowMainThreadQueries check (production sources only; valid in inMemoryDatabaseBuilder unit/UI tests)
+        if not is_test_source and _has_real_match(line, _ALLOW_MAIN_THREAD_RE):
             findings.append({
                 "file": str(file_path),
                 "line": idx,

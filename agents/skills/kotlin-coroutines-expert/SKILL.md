@@ -3,6 +3,7 @@ name: kotlin-coroutines-expert
 description: Use when implementing, refactoring, or reviewing Kotlin Coroutines, asynchronous Flows, threading dispatchers, and structured concurrency in Android.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Kotlin Coroutines Expert

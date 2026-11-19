@@ -295,7 +295,8 @@ def check_kmp_common_main_purity(repo: Path, changed_rel_paths: list[str] | None
             raw = kt_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        clean = strip_gradle_comments_preserving_strings(raw)
+        from _source_text import mask_comments_and_strings
+        clean = mask_comments_and_strings(raw)
         try:
             rel_posix = kt_file.relative_to(repo).as_posix()
         except ValueError:
@@ -427,7 +428,8 @@ def _extract_kmp_declaration_signatures(
             raw = kt_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        clean = strip_gradle_comments_preserving_strings(raw)
+        from _source_text import mask_comments_and_strings
+        clean = mask_comments_and_strings(raw)
         for match in pattern.finditer(clean):
             raw_kind = match.group(1)
             raw_recv = match.group(2) or ""

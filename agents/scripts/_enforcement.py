@@ -7,15 +7,75 @@ import shlex
 import shutil
 from pathlib import Path
 
+_PY_EXE_NAME_RE = re.compile(r"(?:python(?:\d+(?:\.\d+)*)?|py)(?:\.exe)?", re.I)
+_ALLOWED_PY_FLAGS_RE = re.compile(r"^-(?:3(?:\.\d+)?|[SuBE]+)$")
+
+
+def _tokenize_hook_command(command: str) -> list[str]:
+    raw = str(command or "").strip()
+    if not raw:
+        return []
+    try:
+        parts = shlex.split(raw, posix=False)
+    except ValueError:
+        return []
+    cleaned: list[str] = []
+    for part in parts:
+        if len(part) >= 2 and part[0] == part[-1] and part[0] in ("'", '"'):
+            part = part[1:-1]
+        cleaned.append(part)
+    return cleaned
+
+
+def parse_python_hook_command(command: str) -> tuple[str, tuple[str, ...], str] | None:
+    """Parse `<python|py> [safe-flags...] <script.py>` without rejecting `py -3`, `-S`, or quoted paths."""
+    tokens = _tokenize_hook_command(command)
+    if len(tokens) < 2:
+        return None
+    exe = tokens[0].strip()
+    if not exe:
+        return None
+    exe_name = Path(exe.replace("\\", "/")).name
+    if not _PY_EXE_NAME_RE.fullmatch(exe_name):
+        return None
+    flags: list[str] = []
+    for mid in tokens[1:-1]:
+        if not _ALLOWED_PY_FLAGS_RE.fullmatch(mid):
+            return None
+        flags.append(mid)
+    script = tokens[-1].strip()
+    if not script or script.startswith("-"):
+        return None
+    return exe, tuple(flags), script
+
+
+def _executable_exists(exe: str) -> bool:
+    if shutil.which(exe):
+        return True
+    try:
+        p = Path(exe)
+        return p.is_file() and not p.is_dir()
+    except OSError:
+        return False
+
 
 def _antigravity_hooks_valid(root: Path) -> bool:
     """Validate installed interception configuration, not host execution attestation."""
     try:
-        data = json.loads((root / ".agents/hooks.json").read_text(encoding="utf-8"))
+        data = json.loads((root / ".agents/hooks.json").read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
             return False
-        required = {"run_command", "write_to_file", "replace_file_content", "multi_replace_file_content", "call_mcp_tool", "invoke_subagent"}
+        required = {
+            "run_command",
+            "write_to_file",
+            "replace_file_content",
+            "multi_replace_file_content",
+            "call_mcp_tool",
+            "invoke_subagent",
+            "run_workflow",
+        }
         covered = set()
+        expected_script = (root / ".agents/scripts/pre_tool_safety.py").resolve()
         for group in data.values():
             if not isinstance(group, dict) or group.get("enabled") is not True:
                 continue
@@ -26,14 +86,15 @@ def _antigravity_hooks_valid(root: Path) -> bool:
                 for hook in entry.get("hooks", []):
                     if not isinstance(hook, dict) or hook.get("type") != "command":
                         continue
-                    tokens = [s.strip('"\'') for s in shlex.split(str(hook.get("command") or ""), posix=False)]
-                    if len(tokens) != 2 or not re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", Path(tokens[0]).name, re.I):
+                    parsed = parse_python_hook_command(str(hook.get("command") or ""))
+                    if parsed is None:
                         continue
-                    script = Path(tokens[1])
+                    exe, _flags, raw_script = parsed
+                    script = Path(raw_script)
                     script = script if script.is_absolute() else root / ".agents" / script
-                    if script.resolve() != (root / ".agents/scripts/pre_tool_safety.py").resolve() or not script.is_file():
+                    if script.resolve() != expected_script or not script.is_file():
                         continue
-                    if not shutil.which(tokens[0]) or not isinstance(hook.get("timeout"), (int, float)) or hook["timeout"] <= 0:
+                    if not _executable_exists(exe) or not isinstance(hook.get("timeout"), (int, float)) or hook["timeout"] <= 0:
                         continue
                     covered.update(tool for tool in required if matcher.fullmatch(tool))
         return required <= covered

@@ -73,7 +73,7 @@ class GraphNode:
     def to_dict(self, compact: bool = False) -> dict[str, Any]:
         if not compact:
             return asdict(self)
-        meta = {k: v for k, v in (self.metadata or {}).items() if k not in ("same_package_refs", "xml_refs")}
+        meta = {k: v for k, v in (self.metadata or {}).items() if k not in ("same_package_refs", "xml_refs", "di_bindings", "supertypes", "is_interface")}
         out: dict[str, Any] = {
             "id": self.id,
             "name": self.name,
@@ -322,6 +322,17 @@ class DependencyGraph:
                 self._adj[s].discard(node_id)
         self.edges = [e for e in self.edges if e.source != node_id and e.target != node_id]
         self._edge_keys = {(e.source, e.target, e.kind) for e in self.edges}
+
+    def remove_edges_by_kind(self, kind: str) -> None:
+        if not any(e.kind == kind for e in self.edges):
+            return
+        self.edges = [e for e in self.edges if e.kind != kind]
+        self._edge_keys = {(e.source, e.target, e.kind) for e in self.edges}
+        self._adj = {nid: set() for nid in self.nodes}
+        self._rev_adj = {nid: set() for nid in self.nodes}
+        for e in self.edges:
+            self._adj.setdefault(e.source, set()).add(e.target)
+            self._rev_adj.setdefault(e.target, set()).add(e.source)
 
     def get_targets(self, node_id: str) -> set[str]:
         return self._adj.get(node_id, set())
@@ -1046,6 +1057,99 @@ def parse_gradle_modules(repo: Path) -> tuple[dict[str, GraphNode], list[GraphEd
     return nodes, edges
 
 
+
+_KT_BINDS_PATTERN = re.compile(
+    r"@Binds\b[\s\S]{0,240}?\bfun\s+[A-Za-z0-9_]+\s*\(\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s*)*[A-Za-z0-9_]+\s*:\s*([A-Z][A-Za-z0-9_]*)[<>?A-Za-z0-9_,\s]*\)\s*:\s*([A-Z][A-Za-z0-9_]*)"
+)
+_JAVA_BINDS_PATTERN = re.compile(
+    r"@Binds\b[\s\S]{0,240}?\b([A-Z][A-Za-z0-9_]*)(?:<[^>]+>)?\s+[a-zA-Z_][A-Za-z0-9_]*\s*\(\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s*)*([A-Z][A-Za-z0-9_]*)(?:<[^>]+>)?\s+[a-zA-Z_][A-Za-z0-9_]*\s*\)"
+)
+_KT_PROVIDES_PATTERN = re.compile(
+    r"@Provides\b[\s\S]{0,260}?\bfun\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*:\s*([A-Z][A-Za-z0-9_]*)(?:<[^>]+>)?\s*(?:=\s*([A-Z][A-Za-z0-9_]*)\s*\(|\{[\s\S]{0,360}?\breturn\s+([A-Z][A-Za-z0-9_]*)\s*\()"
+)
+_KOIN_GENERIC_DSL_PATTERN = re.compile(
+    r"\b(?:single|factory|scoped|viewModel)\s*<\s*([A-Z][A-Za-z0-9_]*)\s*>\s*(?:\([^)]*\))?\s*\{\s*(?:[A-Za-z0-9_,\s]+->\s*)?([A-Z][A-Za-z0-9_]*)\s*\("
+)
+_KOIN_OF_DSL_PATTERN = re.compile(
+    r"\b(?:singleOf|factoryOf|scopedOf|viewModelOf)\s*\(\s*::\s*([A-Z][A-Za-z0-9_]*)\s*\)\s*\{[^}]{0,200}?\bbind\s*<\s*([A-Z][A-Za-z0-9_]*)\s*>"
+)
+_KOIN_INFIX_BIND_PATTERN = re.compile(
+    r"\b(?:single|factory|scoped)\s*(?:\([^)]*\))?\s*\{\s*([A-Z][A-Za-z0-9_]*)\s*\([^)]*\)\s*\}\s*bind\s+([A-Z][A-Za-z0-9_]*)\s*::\s*class"
+)
+_KT_CLASS_SUPERTYPES_PATTERN = re.compile(
+    r"\b(?:class|object)\s+([A-Z][A-Za-z0-9_]*)\b(?:\s*<[^>\r\n]+>)?(?:\s*(?:internal|private|protected|public)?\s*(?:@[A-Za-z0-9_.]+(?:\([^)]*\))?\s*)*(?:constructor\s*)?\([^)]*\))?\s*:\s*([^{=\r\n]+)"
+)
+_KT_INTERFACE_DECL_PATTERN = re.compile(
+    r"\b(?:sealed\s+)?interface\s+([A-Z][A-Za-z0-9_]*)\b"
+)
+
+
+def _extract_di_and_contract_metadata(clean_text: str, is_java: bool) -> tuple[list[list[str]], dict[str, list[str]], set[str]]:
+    """Return (di_bindings [[contract, impl, via], ...], supertypes_by_decl {Impl: [Contract, ...]}, interface_names)."""
+    di_bindings: list[list[str]] = []
+    seen_di: set[tuple[str, str]] = set()
+
+    def _add_di(contract: str, impl: str, via: str) -> None:
+        if not contract or not impl or contract == impl:
+            return
+        if contract in FRAMEWORK_ROOT_TYPES or impl in FRAMEWORK_ROOT_TYPES:
+            return
+        if (contract, impl) not in seen_di:
+            seen_di.add((contract, impl))
+            di_bindings.append([contract, impl, via])
+
+    for m in _KT_BINDS_PATTERN.finditer(clean_text):
+        _add_di(m.group(2).strip(), m.group(1).strip(), "hilt_binds")
+    if is_java:
+        for m in _JAVA_BINDS_PATTERN.finditer(clean_text):
+            _add_di(m.group(1).strip(), m.group(2).strip(), "dagger_binds")
+    for m in _KT_PROVIDES_PATTERN.finditer(clean_text):
+        contract = m.group(1).strip()
+        impl = (m.group(2) or m.group(3) or "").strip()
+        _add_di(contract, impl, "hilt_provides")
+    for m in _KOIN_GENERIC_DSL_PATTERN.finditer(clean_text):
+        _add_di(m.group(1).strip(), m.group(2).strip(), "koin_dsl")
+    for m in _KOIN_OF_DSL_PATTERN.finditer(clean_text):
+        _add_di(m.group(2).strip(), m.group(1).strip(), "koin_of")
+    for m in _KOIN_INFIX_BIND_PATTERN.finditer(clean_text):
+        _add_di(m.group(2).strip(), m.group(1).strip(), "koin_bind")
+
+    interface_names = {m.group(1).strip() for m in _KT_INTERFACE_DECL_PATTERN.finditer(clean_text)}
+    if is_java:
+        interface_names.update(m.group(1).strip() for m in re.finditer(r"\binterface\s+([A-Z][A-Za-z0-9_]*)\b", clean_text))
+
+    supertypes_by_decl: dict[str, list[str]] = {}
+    if is_java:
+        for m in re.finditer(r"\bclass\s+([A-Z][A-Za-z0-9_]*)\b[^{]*?\bimplements\s+([^{]+)", clean_text):
+            cls_name = m.group(1).strip()
+            supers = [
+                tok for tok in re.findall(r"\b([A-Z][A-Za-z0-9_]*)\b", m.group(2))
+                if tok != cls_name and tok not in FRAMEWORK_ROOT_TYPES
+            ]
+            if supers:
+                supertypes_by_decl[cls_name] = list(dict.fromkeys(supers))
+    else:
+        for m in _KT_CLASS_SUPERTYPES_PATTERN.finditer(clean_text):
+            cls_name = m.group(1).strip()
+            clause = re.split(r"\bwhere\b", m.group(2), maxsplit=1)[0]
+            clause = re.sub(r"\([^)]*\)", " ", clause)
+            for _ in range(4):
+                next_clause = re.sub(r"<[^<>]*>", " ", clause)
+                if next_clause == clause:
+                    break
+                clause = next_clause
+            clause = re.sub(r"\bby\s+[A-Za-z0-9_.]+", " ", clause)
+            supers = [
+                tok.split(".")[-1]
+                for tok in re.findall(r"\b([A-Z][A-Za-z0-9_.]*)\b", clause)
+                if tok.split(".")[-1] != cls_name and tok.split(".")[-1] not in FRAMEWORK_ROOT_TYPES
+            ]
+            if supers:
+                supertypes_by_decl[cls_name] = list(dict.fromkeys(supers))
+
+    return di_bindings, supertypes_by_decl, interface_names
+
+
 def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
     """Extract classes, screens, viewmodels, and layers from a Java, Kotlin, or Swift source file."""
     try:
@@ -1134,6 +1238,12 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
         if m.group(1).strip().lower() not in KOTLIN_RESERVED_DECLARATIONS
     ]
 
+    di_bindings: list[list[str]] = []
+    supertypes_by_decl: dict[str, list[str]] = {}
+    interface_names: set[str] = set()
+    if not is_swift:
+        di_bindings, supertypes_by_decl, interface_names = _extract_di_and_contract_metadata(clean_text, is_java)
+
     nodes: list[GraphNode] = []
 
     for fn in composable_funcs:
@@ -1153,11 +1263,20 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                 )
             )
 
+    attached_di = False
     for decl in declarations:
         if decl in function_names and decl not in declared_type_names:
             continue  # Don't create separate top-level node for functions, they are indexed within class/file declarations
         node_id = f"{pkg}.{decl}" if pkg else decl
         etype = classify_entity_type(decl, rel_path, declarations, raw_text)
+        node_meta: dict[str, Any] = {"language": lang, "same_package_refs": same_package_refs}
+        if decl in interface_names:
+            node_meta["is_interface"] = True
+        if decl in supertypes_by_decl:
+            node_meta["supertypes"] = supertypes_by_decl[decl]
+        if di_bindings and not attached_di:
+            node_meta["di_bindings"] = di_bindings
+            attached_di = True
         nodes.append(
             GraphNode(
                 id=node_id,
@@ -1168,7 +1287,7 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                 package=pkg,
                 declarations=declarations,
                 imports=imports,
-                metadata={"language": lang, "same_package_refs": same_package_refs},
+                metadata=node_meta,
             )
         )
 
@@ -1177,6 +1296,9 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
         if name.lower() not in KOTLIN_RESERVED_DECLARATIONS:
             etype = classify_entity_type(name, rel_path, [], raw_text)
             node_id = f"{pkg}.{name}" if pkg else name
+            fallback_meta: dict[str, Any] = {"language": lang, "same_package_refs": same_package_refs}
+            if di_bindings:
+                fallback_meta["di_bindings"] = di_bindings
             nodes.append(
                 GraphNode(
                     id=node_id,
@@ -1187,9 +1309,11 @@ def parse_code_file(path: Path, repo: Path) -> list[GraphNode]:
                     package=pkg,
                     declarations=[name],
                     imports=imports,
-                    metadata={"language": lang, "same_package_refs": same_package_refs},
+                    metadata=fallback_meta,
                 )
             )
+    elif di_bindings and not attached_di:
+        nodes[0].metadata["di_bindings"] = di_bindings
 
     return nodes
 
@@ -1383,6 +1507,8 @@ class GraphEngine:
             return False
         try:
             data = json.loads(self.cache_file.read_text(encoding="utf-8"))
+            if data.get("version") != "1.2.0":
+                return False
             self.file_hashes = data.get("file_hashes", {})
             self.file_metadata = data.get("file_metadata", {})
             self.graph = DependencyGraph.from_dict(data.get("graph", {}))
@@ -1396,7 +1522,7 @@ class GraphEngine:
         try:
             self.cache_file.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                "version": "1.1.0",
+                "version": "1.2.0",
                 "file_hashes": self.file_hashes,
                 "file_metadata": self.file_metadata,
                 "graph": self.graph.to_dict(),
@@ -1651,6 +1777,25 @@ class GraphEngine:
 
             self._rebuild_symbol_index()
             self._rebuild_file_index()
+            self.graph.remove_edges_by_kind(EdgeKind.BINDS.value)
+            from _modules import is_kmp_or_android_test_path as _is_test_p
+
+            def _resolve_type_for_node(owner: GraphNode, sym_name: str) -> str | None:
+                if not sym_name:
+                    return None
+                for imp in owner.imports:
+                    if imp == sym_name or imp.endswith(f".{sym_name}"):
+                        tid = self.fqn_to_node_id.get(imp) or (imp if imp in self.graph.nodes else None)
+                        if tid:
+                            return tid
+                if owner.package:
+                    same_pkg = self.fqn_to_node_id.get(f"{owner.package}.{sym_name}")
+                    if same_pkg:
+                        return same_pkg
+                cands = self.symbol_to_node_ids.get(sym_name, [])
+                if len(cands) == 1:
+                    return cands[0]
+                return None
 
             for node in list(self.graph.nodes.values()):
                 if node.type == EntityType.MODULE.value:
@@ -1673,6 +1818,28 @@ class GraphEngine:
                             target_node = self.graph.nodes.get(target_id)
                             if target_node and target_node.file_path != node.file_path:
                                 self.graph.add_edge(node.id, target_id, kind=EdgeKind.DEPENDS_ON.value)
+
+                # Explicit Hilt / Dagger / Koin DI bindings (`Contract --BINDS--> Impl`)
+                for binding in (node.metadata or {}).get("di_bindings") or []:
+                    if isinstance(binding, (list, tuple)) and len(binding) >= 2:
+                        contract_sym, impl_sym = str(binding[0]), str(binding[1])
+                        via_kind = str(binding[2]) if len(binding) >= 3 else "di"
+                        contract_id = _resolve_type_for_node(node, contract_sym)
+                        impl_id = _resolve_type_for_node(node, impl_sym)
+                        if contract_id and impl_id and contract_id != impl_id:
+                            self.graph.add_edge(contract_id, impl_id, kind=EdgeKind.BINDS.value, metadata={"via": via_kind, "module_file": node.file_path})
+                            if node.id not in (contract_id, impl_id):
+                                self.graph.add_edge(node.id, contract_id, kind=EdgeKind.DEPENDS_ON.value)
+                                self.graph.add_edge(node.id, impl_id, kind=EdgeKind.DEPENDS_ON.value)
+
+                # Clean Architecture interface-to-implementation supertypes (`Interface --BINDS--> Impl`)
+                for super_sym in (node.metadata or {}).get("supertypes") or []:
+                    contract_id = _resolve_type_for_node(node, str(super_sym))
+                    if contract_id and contract_id != node.id:
+                        contract_node = self.graph.nodes.get(contract_id)
+                        if contract_node and (contract_node.metadata or {}).get("is_interface"):
+                            if not (node.file_path and _is_test_p(node.file_path)):
+                                self.graph.add_edge(contract_id, node.id, kind=EdgeKind.BINDS.value, metadata={"via": "implements"})
 
             xml_refs_by_id: dict[str, list[str]] = {
                 xnode.id: list(refs) for xnode, refs in xml_connections

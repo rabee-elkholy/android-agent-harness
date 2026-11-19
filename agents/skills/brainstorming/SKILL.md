@@ -1,6 +1,7 @@
 ---
 name: brainstorming
 description: Use when planning architectural tasks, multi-module restructuring, new system integrations, or exploring trade-offs between design options.
+disable-slash-command: true
 ---
 
 # Brainstorming & Architecture Exploration Skill

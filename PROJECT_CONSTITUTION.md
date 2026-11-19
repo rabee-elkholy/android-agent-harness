@@ -217,7 +217,7 @@ See ADR-015. The maintainer explicitly approved this amendment.
 For Antigravity Review Protocol V2:
 
 ```text
-model_policy = INHERIT_PARENT_BY_OMISSION (or Model="flash" quota offload on Carbon/Argon Lead sessions)
+model_policy = INHERIT_PARENT_BY_OMISSION (or Model="flash" quota offload on Carbon/Neon/Argon Lead sessions)
 ```
 
 Do not pass:
@@ -228,7 +228,7 @@ Do not pass:
 
 Reasoning escalation is allowed only through a trusted host-native capability whose real supported argument/schema was detected.
 
-Do not create a cross-provider model-routing subsystem. Because `.agents/agents/<role>/agent.md` omits `model:` for Antigravity CLI `#200144` compatibility, `Hydrogen` and `inherit` Lead sessions dispatch subagents via `INHERIT_PARENT_BY_OMISSION` (`Prompt`, `Role`, `TypeName`, and `Workspace` only), while `Carbon` and `Argon` Lead sessions pass native `Model="flash"` (which Antigravity's executor routes directly to `gemini-4-hydrogen-tiered-high` `1.00x`) whenever a `Hydrogen` or `Flash` scout/specialist/reviewer policy is active so frontier Lead quota is never burned on subagent turns (`Model="pro"` remains available only for explicit `gemini-3.1-pro-*` profiles). Reviewer summaries and completion outputs must always display the ground-truth observed SQLite `host_configured_model` / `actual_model` rather than unverified requested policy strings. The maintainer explicitly approved this amendment.
+Do not create a cross-provider model-routing subsystem. Because `.agents/agents/<role>/agent.md` omits `model:` for Antigravity CLI `#200144` compatibility, `Hydrogen` and `inherit` Lead sessions dispatch subagents via `INHERIT_PARENT_BY_OMISSION` (`Prompt`, `Role`, `TypeName`, and `Workspace` only), while `Carbon`, `Neon`, and `Argon` Lead sessions pass native `Model="flash"` (which Antigravity's executor routes directly to `gemini-4-hydrogen-tiered-high` `1.00x`) whenever a `Hydrogen` or `Flash` scout/specialist/reviewer policy is active so frontier Lead quota is never burned on subagent turns (`Model="pro"` remains available only for explicit `gemini-3.1-pro-*` profiles). Reviewer summaries and completion outputs must always display the ground-truth observed SQLite `host_configured_model` / `actual_model` rather than unverified requested policy strings. The maintainer explicitly approved this amendment.
 
 ### 3.8 Review proof cannot be self-certified
 

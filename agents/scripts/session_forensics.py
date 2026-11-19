@@ -152,6 +152,13 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     orchestrator_handoff_hits = 0
     tos_violation_403_hits = 0
     hydrogen_extra_leak_hits = 0
+    hydrogen_medium_zero_thinking_hits = 0
+    saw_workspace_read_tool = False
+    session_seen_hydrogen_medium = False
+    workspace_read_tools = frozenset({
+        "read_file", "view_file", "view_file_outline", "view_code_item",
+        "grep_search", "find_by_name", "list_dir",
+    })
     turn3_cache_drop_hits = 0
     cache_regression_hits = 0
     long_wait_cache_ttl_drops = 0
@@ -182,6 +189,16 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         return None
 
     try:
+        from antigravity_runtime import native_model_metadata
+        n_meta = native_model_metadata(tp)
+        if isinstance(n_meta, dict):
+            hm_raw = str(n_meta.get("host_configured_model") or "").lower()
+            if re.search(r"gemini-4-hydrogen-(?:tiered-)?medium\b|hydrogen[\s@(-]+medium\b", hm_raw):
+                session_seen_hydrogen_medium = True
+    except (ImportError, OSError, ValueError, ValidationError):
+        session_seen_hydrogen_medium = False
+
+    try:
         lines = tp.read_text(encoding="utf-8", errors="replace").splitlines()[-800:]
         for idx, ln in enumerate(lines, start=1):
             low = ln.lower()
@@ -199,6 +216,13 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 orchestrator_handoff_hits += 1
             if "gemini-4-hydrogen-extra" in low or "gemini-4-hydrogen-xhigh" in low:
                 hydrogen_extra_leak_hits += 1
+            if (
+                "gemini-4-hydrogen-medium" in low
+                or "gemini-4-hydrogen-tiered-medium" in low
+                or "gemini 4 hydrogen (medium)" in low
+                or "hydrogen@medium" in low
+            ):
+                session_seen_hydrogen_medium = True
             if "search_web" in low and "unexpected eof" in low:
                 search_web_eof_stalls += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
@@ -225,9 +249,12 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 search_web_eof_stalls += 1
                 pending_search_web_ts = None
 
+            step_had_workspace_read = False
             t_name = str(obj.get("tool_name") or ((obj.get("toolCall") or {}).get("name") if isinstance(obj.get("toolCall"), dict) else "") or "")
             if t_name:
                 tool_counts[t_name] += 1
+                if t_name in workspace_read_tools:
+                    step_had_workspace_read = True
             t_calls_arr = obj.get("tool_calls") if isinstance(obj.get("tool_calls"), list) else []
             sw_in_turn = 0
             for tc_item in t_calls_arr:
@@ -237,6 +264,24 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         tool_counts[tc_n] += 1
                         if tc_n == "search_web":
                             sw_in_turn += 1
+                        if tc_n in workspace_read_tools:
+                            step_had_workspace_read = True
+            step_model_str = str(
+                obj.get("model")
+                or obj.get("model_name")
+                or obj.get("modelName")
+                or ((obj.get("metadata") or {}).get("model") if isinstance(obj.get("metadata"), dict) else "")
+                or ""
+            ).strip().lower()
+            step_is_non_medium_model = bool(
+                step_model_str
+                and not (
+                    "hydrogen-medium" in step_model_str
+                    or "hydrogen-tiered-medium" in step_model_str
+                    or "hydrogen (medium)" in step_model_str
+                    or "hydrogen@medium" in step_model_str
+                )
+            )
             if t_name == "search_web":
                 sw_in_turn = max(sw_in_turn, 1)
             if sw_in_turn > max_parallel_search_web:
@@ -277,6 +322,30 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                     if tok > peak_tokens:
                         peak_tokens = tok
                         peak_step = cur_step
+                    has_thinking_field = (
+                        "thinking_tokens" in u
+                        or "thoughtsTokenCount" in u
+                        or "thought_tokens" in u
+                    )
+                    thinking_tok = int(
+                        u.get("thinking_tokens")
+                        if u.get("thinking_tokens") is not None
+                        else (
+                            u.get("thoughtsTokenCount")
+                            if u.get("thoughtsTokenCount") is not None
+                            else (u.get("thought_tokens") or 0)
+                        )
+                    )
+                    out_tok = int(u.get("candidatesTokenCount") or u.get("output_tokens") or u.get("completion_tokens") or 0)
+                    if (
+                        saw_workspace_read_tool
+                        and session_seen_hydrogen_medium
+                        and not step_is_non_medium_model
+                        and has_thinking_field
+                        and thinking_tok == 0
+                        and (raw_prompt > 0 or cached_tok > 0 or out_tok > 0)
+                    ):
+                        hydrogen_medium_zero_thinking_hits += 1
                     if raw_prompt > 0 or cached_tok > 0:
                         turn_gap_sec = inter_turn_tool_wait_sec
                         if (
@@ -316,6 +385,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         inter_turn_tool_wait_sec = 0.0
                         usage_turn_index += 1
                     break
+            if step_had_workspace_read:
+                saw_workspace_read_tool = True
     except OSError:
         pass
 
@@ -333,6 +404,7 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "orchestrator_handoff_hits": orchestrator_handoff_hits,
         "tos_violation_403_hits": tos_violation_403_hits,
         "hydrogen_extra_leak_hits": hydrogen_extra_leak_hits,
+        "hydrogen_medium_zero_thinking_hits": hydrogen_medium_zero_thinking_hits,
         "turn3_cache_drop_hits": turn3_cache_drop_hits,
         "cache_regression_hits": cache_regression_hits,
         "long_wait_cache_ttl_drops": long_wait_cache_ttl_drops,
@@ -493,6 +565,26 @@ def diagnose_session(
             "evidence": f"{transcript['hydrogen_extra_leak_hits']} reference(s) to `gemini-4-hydrogen-extra` / `xhigh` detected (#200467).",
             "remedy": "Switch Antigravity model selector from `Gemini 4 Hydrogen Extra` down to `Gemini 4 Hydrogen High` (1x) or `Carbon Medium` to stop silent 3x Argon weekly quota drain.",
         })
+    quirk_1649_on = True
+    try:
+        from platform_quirks import is_quirk_enabled as _is_q1649
+        quirk_1649_on = _is_q1649("1649", repo=repo)
+    except ImportError:
+        pass
+    if quirk_1649_on and transcript.get("hydrogen_medium_zero_thinking_hits", 0) > 0:
+        findings.append({
+            "code": "HYDROGEN_MEDIUM_ZERO_THINKING_AFTER_TOOL",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected {transcript['hydrogen_medium_zero_thinking_hits']} post-tool response(s) with `thinking_tokens=0` "
+                "on `Gemini 4 Hydrogen (Medium)` after workspace file-read tool calls (#1649/#201731)."
+            ),
+            "remedy": (
+                "Switch Antigravity model selector from `Gemini 4 Hydrogen (Medium)` to `Gemini 4 Hydrogen (High)` "
+                "(same 1.00x quota cost, immune to #1649), pass `Model='flash'` on `harness-scout-agent`, and prefer "
+                "`python .agents/harness.py symbol outline/read` or `task-context` over raw `read_file` calls."
+            ),
+        })
     if transcript.get("tos_violation_403_hits", 0) > 0:
         findings.append({
             "code": "HYDROGEN_403_TOS_FALSE_POSITIVE",
@@ -551,13 +643,13 @@ def diagnose_session(
             "code": "ORCHESTRATOR_DOUBLE_PLANNING_HAZARD",
             "severity": "MEDIUM",
             "evidence": f"{transcript['orchestrator_handoff_hits']} Antigravity Orchestrator internal handoff/effort event(s) observed.",
-            "remedy": "Select explicit `Gemini 4 Carbon (Medium)` (or Argon/Claude 5.5) on the main chat instead of `Orchestrator` to avoid double-planning over Harness hooks.",
+            "remedy": "Select explicit `Gemini 4 Carbon (Medium)` or `Gemini 4 Neon (High)` (or Argon/Claude 5.5) on the main chat instead of `Orchestrator` to avoid double-planning over Harness hooks.",
         })
     if transcript.get("zero_quota_429_hits", 0) > 0:
         findings.append({
             "code": "MANAGED_AGENT_ZERO_QUOTA_429",
             "severity": "HIGH",
-            "evidence": f"{transcript['zero_quota_429_hits']} zero-quota HTTP 429 (`limit: 0`) error(s) on Argon/Carbon (#199769/#199770).",
+            "evidence": f"{transcript['zero_quota_429_hits']} zero-quota HTTP 429 (`limit: 0`) error(s) on Argon/Carbon/Neon (#199769/#199770).",
             "remedy": "Switch reviewer/subagent routing to 100% Pure Gemini 4 Hydrogen (`hydrogen-dynamic-project`) or `flash-project` fallback.",
         })
     if transcript.get("http_503_retries", 0) > 0:

@@ -24,7 +24,7 @@ from .models import (
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from harness_shared.commands import split_command
-from _enforcement import detect as detect_enforcement  # noqa: E402
+from _enforcement import detect as detect_enforcement, parse_python_hook_command  # noqa: E402
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -771,12 +771,14 @@ class HarnessDoctor:
             for sk_md in sorted(skills_dir.glob("*/SKILL.md")):
                 dir_slug = sk_md.parent.name.strip().lower()
                 fm_name = ""
+                slash_disabled = False
                 try:
                     fm_parsed = _parse_frontmatter(sk_md.read_text(encoding="utf-8", errors="ignore"))
                     fm_name = str(fm_parsed.get("name") or "").strip().lower()
+                    slash_disabled = fm_parsed.get("disable-slash-command") is True or str(fm_parsed.get("disable-slash-command") or "").strip().lower() == "true"
                 except Exception:
                     fm_name = ""
-                if dir_slug in builtin_cli_slash_commands or fm_name in builtin_cli_slash_commands:
+                if not slash_disabled and (dir_slug in builtin_cli_slash_commands or fm_name in builtin_cli_slash_commands):
                     hit_label = dir_slug if dir_slug in builtin_cli_slash_commands else f"{dir_slug} (name={fm_name})"
                     colliding_skills.append(hit_label)
         if colliding_skills:
@@ -786,7 +788,7 @@ class HarnessDoctor:
                 "WARN",
                 f"Custom skill(s) collide with non-disableable agy CLI built-in slash command(s): {', '.join(colliding_skills)} (#1620).",
                 [
-                    "Rename colliding skill directories/frontmatter (e.g. `brainstorming` or `project-grill`) so `agy` CLI built-in commands like `/grill-me` do not hijack invocation (#1620).",
+                    "Rename colliding skill directories/frontmatter (e.g. `brainstorming` or `project-grill`) or set `disable-slash-command: true` in `SKILL.md` frontmatter (`agy` CLI >= 1.1.12) so built-in commands like `/grill-me` do not collide (#1620).",
                 ],
             )
         else:
@@ -1372,19 +1374,18 @@ class HarnessDoctor:
                                 if not cmd_str or cmd_str in checked_cmds:
                                     continue
                                 checked_cmds.add(cmd_str)
-                                parts = split_command(cmd_str)
-                                if len(parts) < 2:
-                                    hook_errors.append(f"Hook command has no script: '{cmd_str}'")
+                                parsed_hook = parse_python_hook_command(cmd_str)
+                                if parsed_hook is None:
+                                    hook_errors.append(f"Hook command is not a valid Python hook launcher: '{cmd_str}'")
                                     continue
-                                py_exe = parts[0]
-                                resolved_py = shutil.which(py_exe)
+                                py_exe, py_flags, script_rel = parsed_hook
+                                resolved_py = shutil.which(py_exe) or (py_exe if Path(py_exe).is_file() else None)
                                 if not resolved_py and self.is_raw_kit and py_exe in {"python", "python3"}:
                                     # Raw kit hooks are templates; installed hooks must resolve literally.
                                     resolved_py = shutil.which("python3") or sys.executable
                                 if not resolved_py:
                                     hook_errors.append(f"Python executable '{py_exe}' not found for hook '{cmd_str}'")
                                     continue
-                                script_rel = parts[1] if len(parts) > 1 else ""
                                 resolved_script = None
                                 for base in (self.repo, self.agents_dir, self.repo / ".agents"):
                                     cand = base / script_rel
@@ -1398,7 +1399,7 @@ class HarnessDoctor:
                                     smoke_payload = json.dumps({"tool": "view_file", "arguments": {"AbsolutePath": "README.md"}}).encode("utf-8")
                                     try:
                                         p_proc = subprocess.run(
-                                            [resolved_py, str(resolved_script)],
+                                            [resolved_py, *py_flags, str(resolved_script)],
                                             input=smoke_payload,
                                             cwd=str(self.repo),
                                             capture_output=True,
@@ -1729,7 +1730,7 @@ class HarnessDoctor:
                 f"Bloated language_server.log detected: {first['path']} ({first['size_mb']} MB){spin_note} (#198689).",
                 [
                     "Close Antigravity and truncate language_server.log to reclaim disk space immediately.",
-                    "Upgrade Antigravity IDE / Language Server from v2.29.0 to v2.31.0+.",
+                    "Upgrade Antigravity App to v2.33.0+ (fixes Windows background git.exe leaks) and IDE / Language Server to v2.31.0+.",
                 ],
             )
         elif is_remote and not rem_override:
@@ -1822,7 +1823,7 @@ class HarnessDoctor:
                 f"Antigravity IDE v2.7.0 / Windows 11 Smart App Control Error 4551 hazard detected ({arts}) (#200037).",
                 [
                     "Do NOT disable Windows 11 Smart App Control (cannot be re-enabled without reinstalling Windows).",
-                    "Keep your existing signed Antigravity IDE build and use agy CLI 1.5.7 until Google ships a re-signed v2.7.1 installer.",
+                    "Upgrade to re-signed Antigravity IDE v2.7.1+ / Antigravity App v2.33.0+ / VS Code extension v1.13.0+ (or use agy CLI 1.5.12+), and delete leftover unsigned v2.7.0 installers from Downloads.",
                 ],
             )
         else:
@@ -1845,6 +1846,11 @@ class HarnessDoctor:
                         f"Active Lead chat is set to {nov15_rep.get('active_lead_model')} (Hydrogen Extra / xhigh), which silently drains 3x Gemini 4 Argon weekly quota (#200467)."
                     )
                     rems_15.append("Switch Antigravity model selector from 'Gemini 4 Hydrogen Extra' down to 'Gemini 4 Hydrogen High' (1x) or 'Gemini 4 Carbon (Medium)'.")
+                if nov15_rep.get("hydrogen_medium_win_tool_risk"):
+                    warns_15.append(
+                        f"Active Windows Lead chat is set to {nov15_rep.get('active_lead_model')} (Hydrogen Medium), which can drop thinking_tokens to 0 after workspace read_file/view_file calls (#1649/#201731)."
+                    )
+                    rems_15.append("Switch Antigravity model selector from 'Gemini 4 Hydrogen (Medium)' to 'Gemini 4 Hydrogen (High)' (same 1.00x quota, immune to #1649).")
                 if nov15_rep.get("auto_accept_at_risk"):
                     warns_15.append(
                         ".vscode/settings.json sets 'antigravity.autoAcceptOnChat': true, which silently merges unreviewed agent Inline Diffs on follow-up chat messages (#200619)."

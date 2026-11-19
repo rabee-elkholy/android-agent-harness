@@ -40,6 +40,12 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "default_enabled": True,
         "summary": "Detects >=120s tool/subagent wait gaps followed by cachedContentTokenCount=0 KV prompt-cache TTL expiration drops.",
     },
+    "AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING": {
+        "issues": ("#1649", "#201731"),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "summary": "Detects 0-thinking-token collapse on Gemini 4 Hydrogen (Medium) after workspace read_file/view_file calls on Windows (#1649/#201731), warns on Hydrogen Medium Lead sessions, and escalates Scout/subagents via Model='flash' (routes natively to Hydrogen Tiered High 1x).",
+    },
     "AGY_198333_FLASH_503_BACKOFF": {
         "issues": ("#198333",),
         "platforms": ("all",),
@@ -50,13 +56,15 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "issues": ("#198417", "#199301"),
         "platforms": ("win32",),
         "default_enabled": True,
-        "summary": "Warns when multiple high-churn stdio MCP servers risk Win32 pipe-handle collisions.",
+        "fixed_upstream_in": {"agy_cli": "1.5.10", "antigravity_app": "2.33.0"},
+        "summary": "Warns on pre-v2.33.0 / pre-1.5.10 Windows setups when multiple high-churn stdio MCP servers risk Win32 pipe-handle collisions.",
     },
     "AGY_198689_LANGUAGE_SERVER_LOG_BLOAT": {
         "issues": ("#198689",),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Detects multi-GB language_server.log WatchVersionControlState spin bloat.",
+        "fixed_upstream_in": {"antigravity_app": "2.33.0"},
+        "summary": "Detects multi-GB language_server.log WatchVersionControlState spin bloat (background git.exe leak fixed in App v2.33.0).",
     },
     "AGY_198819_REMOTE_MODE_ARGON_LEAK": {
         "issues": ("#198819",),
@@ -80,7 +88,7 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "issues": ("#199769", "#199770"),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Detects Managed Agent API zero-quota (limit: 0) HTTP 429 responses on Argon/Carbon.",
+        "summary": "Detects Managed Agent API zero-quota (limit: 0) HTTP 429 responses on Argon/Carbon/Neon.",
     },
     "AGY_199971_200029_HYDROGEN_BURST_403": {
         "issues": ("#199971", "#200029"),
@@ -92,7 +100,7 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "issues": ("#199992", "#200147"),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Classifies transient Gemini 4 Hydrogen/Argon entitlement desync Unavailable states.",
+        "summary": "Classifies transient Gemini 4 Hydrogen/Neon/Argon entitlement desync Unavailable states.",
     },
     "AGY_200026_TURN3_KV_CACHE_DROP": {
         "issues": ("#200026",),
@@ -104,13 +112,14 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "issues": ("#200037",),
         "platforms": ("win32",),
         "default_enabled": True,
-        "summary": "Detects Windows 11 Smart App Control Error 4551 on unsigned Antigravity v2.7.0 installers.",
+        "fixed_upstream_in": {"antigravity_ide": "2.7.1", "antigravity_app": "2.33.0", "agy_cli": "1.5.11"},
+        "summary": "Detects leftover unsigned Antigravity IDE v2.7.0 installers triggering Windows 11 Smart App Control Error 4551 (fixed in IDE v2.7.1+ / App v2.33.0+).",
     },
     "AGY_200144_CLI_SUBAGENT_MODEL_ID": {
         "issues": ("#200144", "#171228"),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Omits unsupported explicit model IDs from subagent YAML frontmatter (#200144) and offloads Hydrogen Scout/Reviewer subagents on Carbon/Argon Lead sessions via Model='flash' (routes natively to Gemini 4 Hydrogen Tiered High 1x).",
+        "summary": "Omits unsupported explicit model IDs from subagent YAML frontmatter (#200144) and offloads Hydrogen Scout/Reviewer subagents on Carbon/Neon/Argon Lead sessions via Model='flash' (routes natively to Gemini 4 Hydrogen Tiered High 1x).",
     },
     "AGY_200467_HYDROGEN_EXTRA_ARGON_LEAK": {
         "issues": ("#200467",),

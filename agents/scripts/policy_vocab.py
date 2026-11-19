@@ -16,6 +16,7 @@ ANTIGRAVITY_TOOLS = frozenset({
     "find_by_name",
     "grep_search",
     "invoke_subagent",
+    "run_workflow",
     "define_subagent",
     "send_message",
     "manage_subagents",
@@ -59,6 +60,7 @@ READ_ONLY_TOOLS = frozenset({
 
 SUBAGENT_ORCHESTRATION_TOOLS = frozenset({
     "invoke_subagent",
+    "run_workflow",
     "send_message",
     "define_subagent",
     "manage_subagents",

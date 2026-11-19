@@ -101,6 +101,297 @@ def _dep_sources_cache_dir(repo: Path) -> Path:
     return state_root(repo) / "cache" / "dep-sources"
 
 
+
+_COORD_VERSIONLESS_RE = re.compile(
+    r"""(?:implementation|api|compileOnly|runtimeOnly|ksp|kapt|testImplementation|androidTestImplementation)\s*\(\s*['"]([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+)['"]\s*\)"""
+)
+_PLATFORM_COORD_RE = re.compile(
+    r"""(?:enforcedPlatform|platform)\s*\(\s*['"]([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+):([^'"\s$]+|\$\{?[A-Za-z0-9_.-]+\}?)['"]\s*\)"""
+)
+
+
+def _parse_repo_catalog_and_boms(
+    repo: Path,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]], list[tuple[str, str, str]]]:
+    """Return `(versioned_deps, versionless_deps, declared_boms)` across `libs.versions.toml` and `build.gradle*`."""
+    versioned: list[tuple[str, str, str]] = []
+    seen_ver: set[tuple[str, str, str]] = set()
+    versionless: list[tuple[str, str]] = []
+    seen_vless: set[tuple[str, str]] = set()
+    boms: list[tuple[str, str, str]] = []
+    seen_boms: set[tuple[str, str, str]] = set()
+
+    def _rec_ver(g: str, a: str, v: str, *, is_bom_hint: bool = False) -> None:
+        tup = (g.strip(), a.strip(), v.strip())
+        if tup[0] and tup[1] and tup[2] and not tup[2].startswith("$"):
+            if tup not in seen_ver:
+                seen_ver.add(tup)
+                versioned.append(tup)
+            if (is_bom_hint or tup[1].lower().endswith("-bom") or tup[1].lower() == "bom") and tup not in seen_boms:
+                seen_boms.add(tup)
+                boms.append(tup)
+
+    def _rec_vless(g: str, a: str) -> None:
+        tup = (g.strip(), a.strip())
+        if tup[0] and tup[1] and tup not in seen_vless:
+            seen_vless.add(tup)
+            versionless.append(tup)
+
+    for toml_rel in ("gradle/libs.versions.toml", "libs.versions.toml"):
+        toml_p = repo / toml_rel
+        if not toml_p.is_file():
+            continue
+        try:
+            txt = toml_p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        versions_map: dict[str, str] = {}
+        section = ""
+        for raw_line in txt.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip().lower()
+                continue
+            if section == "versions" and "=" in line:
+                k, val = line.split("=", 1)
+                v_clean = val.strip().strip("\"'")
+                if k.strip() and v_clean:
+                    versions_map[k.strip()] = v_clean
+            elif section == "libraries" and "=" in line:
+                alias_k, rhs = line.split("=", 1)
+                alias_low = alias_k.strip().lower()
+                rhs = rhs.strip()
+                is_bom_alias = "bom" in alias_low
+                if rhs.startswith(("\"", "'")):
+                    parts = rhs.strip("\"'").split(":")
+                    if len(parts) == 3:
+                        _rec_ver(parts[0], parts[1], parts[2], is_bom_hint=is_bom_alias)
+                    elif len(parts) == 2:
+                        _rec_vless(parts[0], parts[1])
+                elif rhs.startswith("{"):
+                    m_mod = re.search(r"""module\s*=\s*['"]([^'"]+)['"]""", rhs)
+                    m_grp = re.search(r"""group\s*=\s*['"]([^'"]+)['"]""", rhs)
+                    m_nam = re.search(r"""name\s*=\s*['"]([^'"]+)['"]""", rhs)
+                    m_vref = re.search(r"""version\.ref\s*=\s*['"]([^'"]+)['"]""", rhs)
+                    m_ver = re.search(r"""(?<!\.)version\s*=\s*['"]([^'"]+)['"]""", rhs)
+                    grp, art = "", ""
+                    if m_mod and ":" in m_mod.group(1):
+                        grp, art = m_mod.group(1).split(":", 1)
+                    elif m_grp and m_nam:
+                        grp, art = m_grp.group(1), m_nam.group(1)
+                    ver = ""
+                    if m_vref:
+                        ver = versions_map.get(m_vref.group(1), "")
+                    elif m_ver:
+                        ver = m_ver.group(1)
+                    if grp and art:
+                        if ver:
+                            _rec_ver(grp, art, ver, is_bom_hint=is_bom_alias)
+                        else:
+                            _rec_vless(grp, art)
+
+    gradle_files: list[Path] = []
+    seen_gf: set[Path] = set()
+    skip_dirs = {"build", ".gradle", ".git", ".idea", "node_modules", ".agents"}
+
+    def _add_gf(p: Path) -> None:
+        if len(gradle_files) >= 120 or not p.is_file() or p.name not in {"build.gradle", "build.gradle.kts"}:
+            return
+        try:
+            rel_parts = p.relative_to(repo).parts
+        except ValueError:
+            rel_parts = p.parts
+        if any(part in skip_dirs for part in rel_parts):
+            return
+        if p not in seen_gf:
+            seen_gf.add(p)
+            gradle_files.append(p)
+
+    for root_gf in ("build.gradle", "build.gradle.kts"):
+        _add_gf(repo / root_gf)
+    for pattern in ("*/build.gradle*", "*/*/build.gradle*", "*/*/*/build.gradle*"):
+        for sub_gf in sorted(repo.glob(pattern)):
+            _add_gf(sub_gf)
+            if len(gradle_files) >= 120:
+                break
+
+    vars_map: dict[str, str] = {}
+    file_texts: list[str] = []
+    for gf in gradle_files:
+        try:
+            gtxt = gf.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        file_texts.append(gtxt)
+        for vm in _GROOVY_OR_KTS_VAR_RE.finditer(gtxt):
+            vars_map[vm.group(1)] = vm.group(2)
+
+    for gtxt in file_texts:
+        for pm in _PLATFORM_COORD_RE.finditer(gtxt):
+            grp, art, raw_v = pm.group(1), pm.group(2), pm.group(3)
+            if raw_v.startswith("$"):
+                raw_v = vars_map.get(raw_v.lstrip("$").strip("{}"), "")
+            if raw_v:
+                _rec_ver(grp, art, raw_v, is_bom_hint=True)
+        for cm in _COORD_LITERAL_RE.finditer(gtxt):
+            grp, art, raw_v = cm.group(1), cm.group(2), cm.group(3)
+            if raw_v.startswith("$"):
+                v_key = raw_v.lstrip("$").strip("{}")
+                raw_v = vars_map.get(v_key, "")
+            if raw_v:
+                _rec_ver(grp, art, raw_v)
+        for vlm in _COORD_VERSIONLESS_RE.finditer(gtxt):
+            _rec_vless(vlm.group(1), vlm.group(2))
+
+    return versioned, versionless, boms
+
+
+def _load_or_fetch_bom_pom(
+    repo: Path,
+    bom_group: str,
+    bom_artifact: str,
+    bom_version: str,
+    cache_roots: list[Path],
+    *,
+    offline: bool = False,
+    maven_repos: list[str] | None = None,
+) -> str:
+    """Locate `<bom>-<version>.pom` in local caches or fetch from Maven repos."""
+    local_cache = _dep_sources_cache_dir(repo)
+    safe_pom = f"{bom_group}__{bom_artifact}__{bom_version}.pom".replace(":", "_")
+    cached_pom = local_cache / safe_pom
+    if cached_pom.is_file():
+        try:
+            return cached_pom.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+
+    for croot in cache_roots:
+        ver_dir = croot / bom_group / bom_artifact / bom_version
+        if ver_dir.is_dir():
+            try:
+                for cand in sorted(ver_dir.rglob(f"{bom_artifact}-{bom_version}.pom")):
+                    if cand.is_file():
+                        return cand.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+
+    if offline:
+        return ""
+
+    grp_path = bom_group.replace(".", "/")
+    pom_name = f"{bom_artifact}-{bom_version}.pom"
+    for base_url in _configured_maven_repos(repo, custom_repos=maven_repos):
+        url = f"{base_url}/{grp_path}/{bom_artifact}/{bom_version}/{pom_name}"
+        req = urllib.request.Request(url, headers={"User-Agent": "android-agent-harness-dep-inspect/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=NETWORK_TIMEOUT_SECONDS) as resp:
+                resp_status = getattr(resp, "status", None)
+                if resp_status is not None and int(resp_status) != 200:
+                    continue
+                data = resp.read(2 * 1024 * 1024 + 1)
+                if len(data) > 2 * 1024 * 1024:
+                    continue
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+            continue
+        try:
+            local_cache.mkdir(parents=True, exist_ok=True)
+            cached_pom.write_bytes(data)
+        except OSError:
+            pass
+        return data.decode("utf-8", errors="replace")
+    return ""
+
+
+def _parse_bom_managed_versions(pom_xml: str, bom_version: str) -> dict[tuple[str, str], str]:
+    """Extract `(groupId, artifactId) -> version` from a Maven BOM `.pom` `<dependencyManagement>` section."""
+    import xml.etree.ElementTree as ET
+
+    if not pom_xml.strip():
+        return {}
+    # Strip default XML namespaces for clean tag matching
+    cleaned_xml = re.sub(r"""\sxmlns(?::[A-Za-z0-9_-]+)?=['"][^'"]*['"]""", "", pom_xml)
+    try:
+        root = ET.fromstring(cleaned_xml)
+    except ET.ParseError:
+        return {}
+
+    props: dict[str, str] = {"project.version": bom_version, "pom.version": bom_version}
+    props_el = root.find("properties")
+    if props_el is not None:
+        for child in props_el:
+            tag = child.tag.split("}", 1)[-1].strip()
+            val = (child.text or "").strip()
+            if tag and val:
+                props[tag] = val
+
+    def _resolve_prop(raw_v: str) -> str:
+        val = raw_v.strip()
+        # Strip Maven version range brackets like `[1.4.0]` -> `1.4.0`
+        if val.startswith("[") and val.endswith("]") and "," not in val:
+            val = val[1:-1].strip()
+        for _ in range(3):
+            m_p = re.fullmatch(r"\$\{([^}]+)\}", val)
+            if not m_p:
+                break
+            resolved = props.get(m_p.group(1).strip(), "")
+            if not resolved:
+                return ""
+            val = resolved
+        return "" if "$" in val else val
+
+    managed: dict[tuple[str, str], str] = {}
+    for dep_el in root.findall(".//dependencyManagement/dependencies/dependency"):
+        g_txt = (dep_el.findtext("groupId") or "").strip()
+        a_txt = (dep_el.findtext("artifactId") or "").strip()
+        v_txt = _resolve_prop(dep_el.findtext("version") or "")
+        if g_txt and a_txt and v_txt:
+            managed[(g_txt, a_txt)] = v_txt
+    return managed
+
+
+def _resolve_version_from_boms(
+    repo: Path,
+    group: str,
+    artifact: str,
+    declared_boms: list[tuple[str, str, str]],
+    cache_roots: list[Path],
+    *,
+    offline: bool = False,
+    maven_repos: list[str] | None = None,
+) -> str:
+    if not declared_boms:
+        return ""
+    grp_prefix = ".".join(group.split(".")[:2])
+
+    def _bom_priority(b: tuple[str, str, str]) -> int:
+        bg = b[0]
+        if bg == group:
+            return 0
+        if bg.startswith(grp_prefix) or group.startswith(bg):
+            return 1
+        return 2
+
+    candidates = [artifact]
+    if not artifact.endswith(("-android", "-jvm")):
+        candidates.extend([f"{artifact}-android", f"{artifact}-jvm"])
+
+    for bom_g, bom_a, bom_v in sorted(declared_boms, key=_bom_priority):
+        pom_txt = _load_or_fetch_bom_pom(
+            repo, bom_g, bom_a, bom_v, cache_roots, offline=offline, maven_repos=maven_repos
+        )
+        if not pom_txt:
+            continue
+        managed = _parse_bom_managed_versions(pom_txt, bom_v)
+        for cand_art in candidates:
+            ver = managed.get((group, cand_art))
+            if ver:
+                return ver
+    return ""
+
+
 def _parse_repo_declared_dependencies(repo: Path) -> list[tuple[str, str, str]]:
     """Scan `gradle/libs.versions.toml` and `build.gradle*` for `(group, artifact, version)` declarations."""
     found: list[tuple[str, str, str]] = []
@@ -163,15 +454,29 @@ def _parse_repo_declared_dependencies(repo: Path) -> list[tuple[str, str, str]]:
 
     # 2. Root and module `build.gradle` / `build.gradle.kts`
     gradle_files: list[Path] = []
+    seen_gf: set[Path] = set()
+    skip_dirs = {"build", ".gradle", ".git", ".idea", "node_modules", ".agents"}
+
+    def _add_gf(p: Path) -> None:
+        if len(gradle_files) >= 120 or not p.is_file() or p.name not in {"build.gradle", "build.gradle.kts"}:
+            return
+        try:
+            rel_parts = p.relative_to(repo).parts
+        except ValueError:
+            rel_parts = p.parts
+        if any(part in skip_dirs for part in rel_parts):
+            return
+        if p not in seen_gf:
+            seen_gf.add(p)
+            gradle_files.append(p)
+
     for root_gf in ("build.gradle", "build.gradle.kts"):
-        if (repo / root_gf).is_file():
-            gradle_files.append(repo / root_gf)
-    for sub_gf in sorted(repo.glob("*/build.gradle*"))[:30]:
-        if sub_gf.is_file() and sub_gf.name in {"build.gradle", "build.gradle.kts"}:
-            gradle_files.append(sub_gf)
-    for sub_gf2 in sorted(repo.glob("*/*/build.gradle*"))[:30]:
-        if sub_gf2.is_file() and sub_gf2.name in {"build.gradle", "build.gradle.kts"}:
-            gradle_files.append(sub_gf2)
+        _add_gf(repo / root_gf)
+    for pattern in ("*/build.gradle*", "*/*/build.gradle*", "*/*/*/build.gradle*"):
+        for sub_gf in sorted(repo.glob(pattern)):
+            _add_gf(sub_gf)
+            if len(gradle_files) >= 120:
+                break
 
     vars_map: dict[str, str] = {}
     file_texts: list[str] = []
@@ -209,6 +514,8 @@ def resolve_dependency_coordinate(
     raw_target: str,
     *,
     extra_cache_dirs: list[Path] | None = None,
+    offline: bool = False,
+    maven_repos: list[str] | None = None,
 ) -> tuple[str, str, str]:
     cleaned = str(raw_target or "").strip().strip("\"'")
     if not cleaned:
@@ -218,8 +525,24 @@ def resolve_dependency_coordinate(
     if len(parts) >= 3:
         return parts[0], parts[1], parts[2]
 
-    declared = _parse_repo_declared_dependencies(repo)
+    declared, versionless, declared_boms = _parse_repo_catalog_and_boms(repo)
     cache_roots = _discover_gradle_files21_roots(repo, extra_cache_dirs=extra_cache_dirs)
+
+    def _find_cached_version(grp_q: str, art_q: str) -> str:
+        cached_vers: list[str] = []
+        variants_q = [art_q] if art_q.endswith(("-android", "-jvm")) else [art_q, f"{art_q}-android", f"{art_q}-jvm"]
+        for croot in cache_roots:
+            for v_art in variants_q:
+                art_dir = croot / grp_q / v_art
+                if art_dir.is_dir():
+                    try:
+                        cached_vers.extend(d.name for d in art_dir.iterdir() if d.is_dir())
+                    except OSError:
+                        pass
+        if cached_vers:
+            cached_vers.sort(key=_semver_sort_key, reverse=True)
+            return cached_vers[0]
+        return ""
 
     if len(parts) == 2:
         grp, art = parts[0], parts[1]
@@ -227,20 +550,17 @@ def resolve_dependency_coordinate(
         if matching_vers:
             matching_vers.sort(key=_semver_sort_key, reverse=True)
             return grp, art, matching_vers[0]
-        cached_vers: list[str] = []
-        for croot in cache_roots:
-            art_dir = croot / grp / art
-            if art_dir.is_dir():
-                try:
-                    cached_vers.extend(d.name for d in art_dir.iterdir() if d.is_dir())
-                except OSError:
-                    pass
-        if cached_vers:
-            cached_vers.sort(key=_semver_sort_key, reverse=True)
-            return grp, art, cached_vers[0]
+        bom_ver = _resolve_version_from_boms(
+            repo, grp, art, declared_boms, cache_roots, offline=offline, maven_repos=maven_repos
+        )
+        if bom_ver:
+            return grp, art, bom_ver
+        c_ver = _find_cached_version(grp, art)
+        if c_ver:
+            return grp, art, c_ver
         raise ValidationError(
             f"DEPENDENCY_VERSION_NOT_FOUND: Could not auto-resolve version for `{grp}:{art}` from `build.gradle*`, "
-            "`libs.versions.toml`, or local Gradle cache. Pass the explicit version: `<group>:<artifact>:<version>`."
+            "`libs.versions.toml` (including declared BOMs), or local Gradle cache. Pass `<group>:<artifact>:<version>`."
         )
 
     art_only = parts[0]
@@ -251,17 +571,33 @@ def resolve_dependency_coordinate(
         exact_decl.sort(key=lambda item: _semver_sort_key(item[2]), reverse=True)
         return exact_decl[0]
 
+    # Check versionless catalog entries (BOM-managed libraries such as `material3` or `firebase-auth`)
+    # Prefer the repository's declared BOM version before falling back to global `~/.gradle` caches.
+    vless_matches = [(g, a) for g, a in versionless if a == art_only] or [
+        (g, a) for g, a in versionless if art_only.lower() in a.lower()
+    ]
+    for vl_grp, vl_art in vless_matches:
+        bom_ver = _resolve_version_from_boms(
+            repo, vl_grp, vl_art, declared_boms, cache_roots, offline=offline, maven_repos=maven_repos
+        )
+        if bom_ver:
+            return vl_grp, vl_art, bom_ver
+        c_ver = _find_cached_version(vl_grp, vl_art)
+        if c_ver:
+            return vl_grp, vl_art, c_ver
+
     cached_matches: list[tuple[str, str, str]] = []
     for croot in cache_roots:
         try:
             for grp_dir in croot.iterdir():
                 if not grp_dir.is_dir():
                     continue
-                cand_art = grp_dir / art_only
-                if cand_art.is_dir():
-                    for v_dir in cand_art.iterdir():
-                        if v_dir.is_dir():
-                            cached_matches.append((grp_dir.name, art_only, v_dir.name))
+                for v_art in ([art_only] if art_only.endswith(("-android", "-jvm")) else [art_only, f"{art_only}-android", f"{art_only}-jvm"]):
+                    cand_art = grp_dir / v_art
+                    if cand_art.is_dir():
+                        for v_dir in cand_art.iterdir():
+                            if v_dir.is_dir():
+                                cached_matches.append((grp_dir.name, art_only, v_dir.name))
         except OSError:
             continue
     if cached_matches:
@@ -658,7 +994,11 @@ def inspect_dependency(
 ) -> dict[str, Any]:
     repo = Path(repo).resolve()
     group, artifact, version = resolve_dependency_coordinate(
-        repo, target, extra_cache_dirs=extra_cache_dirs
+        repo,
+        target,
+        extra_cache_dirs=extra_cache_dirs,
+        offline=offline,
+        maven_repos=maven_repos,
     )
 
     src_jar = _locate_local_artifact(

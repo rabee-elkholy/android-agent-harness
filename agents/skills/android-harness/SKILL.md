@@ -3,6 +3,7 @@ name: android-harness
 description: Use when working on this Android app architecture, Compose or XML UI, Room, performance, or daily checkout facts.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Android harness (domain knowledge)

@@ -76,9 +76,16 @@ def _baseline_reader(repo: Path, task_id: str | None):
     return read
 
 
+_XML_BINDING_TOKEN_RE = re.compile(
+    r"\binflate\s*\(|\bR\.layout\.[A-Za-z0-9_]+|\b(?:ViewBinding|DataBindingUtil)\b|\b[A-Z][A-Za-z0-9_]*Binding\b|\bviewBinding\s*\("
+)
+
+
 def _is_compose_screen(txt: str) -> bool:
-    has_comp_content = "@Composable" in txt or "setContent" in txt
-    has_xml_binding = "inflate(" in txt or "binding" in txt or "R.layout." in txt
+    from _source_text import mask_comments_and_strings
+    masked = mask_comments_and_strings(txt)
+    has_comp_content = "@Composable" in masked or "setContent" in masked
+    has_xml_binding = bool(_XML_BINDING_TOKEN_RE.search(masked))
     return has_comp_content and not has_xml_binding
 
 
@@ -101,7 +108,7 @@ _DATA_SOURCE_DAO_PROP_RE = re.compile(
 
 def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
     """Detect direct data-source (Room DAO / SQLite / SQLDelight / Retrofit / Ktor) usage inside a UI entry file."""
-    from _modules import strip_gradle_comments_preserving_strings
+    from _source_text import mask_comments_and_strings
 
     lower_stem = stem.lower()
     base_stem = re.sub(r"_?impl$", "", lower_stem)
@@ -139,7 +146,7 @@ def _detect_ui_data_source_bypass(stem: str, txt: str) -> str | None:
         for tok in ("viewmodel", "screenmodel", "presenter", "repository", "database", "dao")
     ):
         return None
-    clean_txt = strip_gradle_comments_preserving_strings(txt)
+    clean_txt = mask_comments_and_strings(txt)
     is_ui_entry = (
         "@Composable" in clean_txt
         or "setContent" in clean_txt

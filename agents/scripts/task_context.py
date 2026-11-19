@@ -725,21 +725,52 @@ def _resolve_task_context(
     target_nodes = candidates
     primary = target_nodes[0]
     target_ids = {node.id for node in target_nodes}
+    from _graph_core import EdgeKind
+    binds_out: dict[str, set[str]] = {}
+    binds_in: dict[str, set[str]] = {}
+    for edge in engine.graph.edges:
+        if edge.kind == EdgeKind.BINDS.value:
+            binds_out.setdefault(edge.source, set()).add(edge.target)
+            binds_in.setdefault(edge.target, set()).add(edge.source)
+
     dependency_ids: set[str] = set()
     dependent_ids: set[str] = set()
+    bound_impl_ids: set[str] = set()
+    contract_dependent_ids: set[str] = set()
+    implemented_contract_ids: set[str] = set()
     for node_id in target_ids:
-        dependency_ids.update(engine.graph.get_targets(node_id))
-        dependent_ids.update(engine.graph.get_sources(node_id))
+        direct_out = engine.graph.get_targets(node_id)
+        direct_in = engine.graph.get_sources(node_id)
+        dependency_ids.update(direct_out)
+        dependent_ids.update(direct_in)
+        # 1. Target IS an interface/contract -> bound implementations are already in binds_out[node_id]
+        for b_impl in binds_out.get(node_id, ()):
+            bound_impl_ids.add(b_impl)
+        # 2. Target depends on an interface/contract (e.g. ViewModel -> Repo) -> follow Contract --BINDS--> RepoImpl
+        for dep_id in list(direct_out):
+            for b_impl in binds_out.get(dep_id, ()):
+                if b_impl not in target_ids:
+                    bound_impl_ids.add(b_impl)
+                    dependency_ids.add(b_impl)
+        # 3. Target IS a concrete Impl (e.g. RepoImpl) -> follow Contract <--DEPENDS_ON-- ViewModel/UseCase/Tests
+        for contract_id in binds_in.get(node_id, ()):
+            implemented_contract_ids.add(contract_id)
+            for consumer_id in engine.graph.get_sources(contract_id):
+                if consumer_id not in target_ids and consumer_id not in binds_out.get(contract_id, ()):
+                    contract_dependent_ids.add(consumer_id)
+                    dependent_ids.add(consumer_id)
     dependencies = [engine.graph.nodes[item] for item in dependency_ids if item in engine.graph.nodes and item not in target_ids]
     dependents = [engine.graph.nodes[item] for item in dependent_ids if item in engine.graph.nodes and item not in target_ids]
+    bound_implementations = [engine.graph.nodes[item] for item in sorted(bound_impl_ids) if item in engine.graph.nodes and item not in target_ids]
     # Bounded test discovery
     from _modules import is_kmp_or_android_test_path, is_test_source_set_name
     all_test_nodes = [
         node for node in engine.graph.nodes.values()
         if is_test_source_set_name(_source_set(node.file_path)) or (node.file_path and is_kmp_or_android_test_path(node.file_path))
     ]
-    target_names = {node.name for node in target_nodes}
-    target_stems = {Path(node.file_path).stem for node in target_nodes}
+    contract_nodes = [engine.graph.nodes[cid] for cid in implemented_contract_ids if cid in engine.graph.nodes]
+    target_names = {node.name for node in target_nodes + contract_nodes}
+    target_stems = {Path(node.file_path).stem for node in target_nodes + contract_nodes if node.file_path}
     target_module = primary.module
     target_package = primary.package
 
@@ -768,7 +799,7 @@ def _resolve_task_context(
     files_opened = len(files_to_open)
     tests = [
         node for node in files_to_open
-        if any(target.name in (_safe_read(root / node.file_path)) for target in target_nodes)
+        if any(sym_name in (_safe_read(root / node.file_path)) for sym_name in target_names)
     ]
     test_discovery_status = "BOUNDED_COMPLETE" if len(test_candidates) <= MAX_OPEN_FILES else "PARTIAL"
 
@@ -859,6 +890,7 @@ def _resolve_task_context(
 
     base.update({
         "status": result_status,
+        **({"bound_implementations": [_node_summary(n) for n in bound_implementations[:bounded_limit]]} if bound_implementations else {}),
         "graph_basis": graph_basis,
         "graph_expansion_required": graph_expansion_required,
         "target": {

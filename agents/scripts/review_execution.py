@@ -318,7 +318,7 @@ def resolve_execution_profile(repo: Path, task_id: str, host: str = "generic") -
                 "agent_frontmatter_field": "model",
                 "instructions": (
                     "Pass Model='flash' in invoke_subagent ONLY for legacy gemini-3.8-flash-* reviewers (and Model='pro' for gemini-3.1-pro-*). "
-                    "Omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-argon-*, and gemini-4-carbon-* reviewers."
+                    "Omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-neon-*, gemini-4-argon-*, and gemini-4-carbon-* reviewers."
                 ),
             }
         else:

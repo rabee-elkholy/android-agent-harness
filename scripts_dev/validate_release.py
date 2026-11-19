@@ -247,6 +247,37 @@ def validate_release(repo_root: Path, tag: str) -> list[str]:
     if not re.search(rf'^version:[ \t]*[\"\']?{re.escape(version)}[\"\']?[ \t]*$', citation, re.MULTILINE):
         errors.append("CITATION.cff software version must match agents/VERSION")
 
+    plugin_manifest_path = repo_root / ".antigravity-plugin" / "plugin.json"
+    if plugin_manifest_path.is_file():
+        allowed_plugin_fields = {
+            "name",
+            "displayName",
+            "version",
+            "description",
+            "author",
+            "homepage",
+            "repository",
+            "logo",
+            "suggestedPrompts",
+            "disabled",
+        }
+        try:
+            pm_data = json.loads(plugin_manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(pm_data, dict):
+                errors.append(".antigravity-plugin/plugin.json must be a JSON object")
+            else:
+                unknown_fields = sorted(set(pm_data) - allowed_plugin_fields)
+                if unknown_fields:
+                    errors.append(
+                        f".antigravity-plugin/plugin.json contains unsupported Antigravity top-level fields: {', '.join(unknown_fields)}"
+                    )
+                if pm_data.get("name") != "android-agent-harness":
+                    errors.append(".antigravity-plugin/plugin.json name must be 'android-agent-harness'")
+                if pm_data.get("version") != version:
+                    errors.append(f".antigravity-plugin/plugin.json version ({pm_data.get('version')}) does not match agents/VERSION ({version})")
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append(f".antigravity-plugin/plugin.json is invalid: {exc}")
+
     changelog = (repo_root / "CHANGELOG.md").read_text(encoding="utf-8")
     if not re.search(rf"^## \[{re.escape(version)}\]", changelog, re.MULTILINE):
         errors.append(f"Version {version} not found as a CHANGELOG.md release heading")

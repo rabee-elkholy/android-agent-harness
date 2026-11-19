@@ -22,16 +22,71 @@ from _vnext_common import read_json  # noqa: E402
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
+def _run_static_gate_in_process(script_name: str, target_repo: Path) -> tuple[int, str] | None:
+    """Execute `check_strings.py` and `fast_kt_lint.py` in-memory without spawning extra Python processes."""
+    if script_name not in {"check_strings.py", "fast_kt_lint.py"}:
+        return None
+    if getattr(run_streaming, "__module__", "") != "_live_process":
+        # Respect test mocks on `preflight_check.run_streaming`
+        return None
+    import contextlib
+    import io
+    import _repo_files
+
+    buf = io.StringIO()
+    saved_env_repo = os.environ.get("HARNESS_REPO")
+    saved_rf_repo = _repo_files.REPO
+    saved_cwd = Path.cwd()
+    os.environ["HARNESS_REPO"] = str(target_repo)
+    _repo_files.REPO = target_repo
+    try:
+        os.chdir(target_repo)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            if script_name == "check_strings.py":
+                import check_strings
+                saved_cs_repo = check_strings.REPO
+                check_strings.REPO = target_repo
+                try:
+                    rc = int(check_strings.main([], repo=target_repo))
+                finally:
+                    check_strings.REPO = saved_cs_repo
+            else:
+                import fast_kt_lint
+                rc = int(fast_kt_lint.main([], repo_override=target_repo))
+    except SystemExit as exc:
+        rc = int(exc.code) if isinstance(exc.code, int) else (1 if exc.code else 0)
+    finally:
+        try:
+            os.chdir(saved_cwd)
+        except OSError:
+            pass
+        _repo_files.REPO = saved_rf_repo
+        if saved_env_repo is None:
+            os.environ.pop("HARNESS_REPO", None)
+        else:
+            os.environ["HARNESS_REPO"] = saved_env_repo
+    return rc, buf.getvalue()
+
+
 def run_step(title: str, script_name: str, cwd: Path | None = None, *, diagnostics: dict | None = None) -> int:
+    target_cwd = (cwd or REPO).resolve()
     with step_progress(title):
-        code, output, _ = run_streaming(
-            [sys.executable, str(SCRIPTS_DIR / script_name)],
-            cwd=str(cwd or REPO),
-            heartbeat_sec=10.0,
-            should_echo=lambda line: bool(line.strip()),
-            label=script_name,
-            echo=diagnostics is None,
-        )
+        in_proc = _run_static_gate_in_process(script_name, target_cwd)
+        if in_proc is not None:
+            code, output = in_proc
+            if diagnostics is None and output:
+                for ln in output.splitlines():
+                    if ln.strip():
+                        live_print(ln)
+        else:
+            code, output, _ = run_streaming(
+                [sys.executable, str(SCRIPTS_DIR / script_name)],
+                cwd=str(target_cwd),
+                heartbeat_sec=10.0,
+                should_echo=lambda line: bool(line.strip()),
+                label=script_name,
+                echo=diagnostics is None,
+            )
     if code and diagnostics is not None:
         diagnostics[title] = output.strip() or f"{script_name} failed with exit code {code}; no output was produced."
     return code

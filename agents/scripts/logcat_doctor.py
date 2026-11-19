@@ -23,6 +23,27 @@ from _repo_files import adb_serial_is_emulator, first_adb_serial  # noqa: E402
 
 enable_line_buffered_stdio()
 
+_THREADTIME_OR_EPOCH_RE = re.compile(
+    r"^\s*(?:(?:\d{4}-)?\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+|\d+\.\d+)\s+(\d+)\s+\d+\s+[VDIWEFA]\s+([^:]+?):\s?(.*)$"
+)
+_BRIEF_RE = re.compile(r"^\s*[VDIWEFA]/([^(:]+)\(\s*(\d+)\):\s?(.*)$")
+_STACK_CONT_RE = re.compile(
+    r"^(?:\s*at\s+[A-Za-z0-9_$.]+|\s*Caused by:|\s*Suppressed:|\s*\.\.\.\s+\d+\s+more\b|"
+    r"Process:\s*|PID:\s*|[A-Za-z0-9_$.]+(?:Exception|Error|Throwable)\b|"
+    r"\s*#\d+\s+pc\b|\s*(?:Build fingerprint|Revision|ABI|Timestamp|pid:|tid:|uid:|signal |Abort message:|backtrace:))"
+)
+_MAX_FATAL_LINES = 80
+
+
+def _parse_logcat_line(line: str) -> tuple[str, str, str]:
+    """Return `(pid, tag, message_payload)` across threadtime, epoch, brief, or raw log lines."""
+    m_tt = _THREADTIME_OR_EPOCH_RE.match(line)
+    if m_tt:
+        return m_tt.group(1), m_tt.group(2).strip(), m_tt.group(3)
+    m_br = _BRIEF_RE.match(line)
+    if m_br:
+        return m_br.group(2), m_br.group(1).strip(), m_br.group(3)
+    return "", "", line
 
 
 def fetch_logcat(serial: str, num_lines: int = 1000) -> str:
@@ -36,58 +57,121 @@ def fetch_logcat(serial: str, num_lines: int = 1000) -> str:
             errors="replace",
         )
         return proc.stdout or ""
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return f"Failed to fetch logcat: {e}"
 
 
-def filter_forensics(raw_logs: str) -> dict:
-    crash_patterns = [
-        r"FATAL EXCEPTION",
-        rf"Process:\s*{re.escape(APPLICATION_ID)}",
-        r"AndroidRuntime:\s*FATAL",
-        r"CoroutineExceptionHandler",
-        rf"ANR in {re.escape(APPLICATION_ID)}",
-        r"Fatal signal\s+\d+",
-        r"DEBUG\s*:\s*\*\*\*",
+def filter_forensics(raw_logs: str, *, app_id: str | None = None, pkg_prefix: str | None = None) -> dict:
+    eff_app_id = str(APPLICATION_ID if app_id is None else app_id).strip()
+    eff_pkg_prefix = str(PACKAGE_PREFIX if pkg_prefix is None else pkg_prefix).strip()
+    enforce_pkg_owner = bool(eff_app_id and eff_app_id != "com.example.app")
+
+    new_block_starters = [
+        re.compile(r"FATAL EXCEPTION", re.IGNORECASE),
+        re.compile(r"AndroidRuntime:\s*FATAL", re.IGNORECASE),
+        re.compile(r"CoroutineExceptionHandler", re.IGNORECASE),
+        re.compile(rf"ANR in {re.escape(eff_app_id)}", re.IGNORECASE) if eff_app_id else re.compile(r"(?!)"),
+        re.compile(r"Fatal signal\s+\d+", re.IGNORECASE),
+        re.compile(r"DEBUG\s*:\s*\*\*\*", re.IGNORECASE),
     ]
+    proc_line_re = re.compile(r"\bProcess:\s*([^,\s]+)")
+    tombstone_pkg_re = re.compile(r">>>\s*([^\s<]+)\s*<<<")
+
     warning_patterns = [
-        r"Choreographer.*Skipped \d+ frames",
-        r"OutOfMemoryError",
-        r"SQLiteException",
-        r"NetworkOnMainThreadException",
-        r"StrictMode",
+        re.compile(r"Choreographer.*Skipped \d+ frames", re.IGNORECASE),
+        re.compile(r"OutOfMemoryError", re.IGNORECASE),
+        re.compile(r"SQLiteException", re.IGNORECASE),
+        re.compile(r"NetworkOnMainThreadException", re.IGNORECASE),
+        re.compile(r"StrictMode", re.IGNORECASE),
     ]
 
-    fatal_blocks = []
-    warning_logs = []
-    app_logs = []
+    fatal_blocks: list[str] = []
+    warning_logs: list[str] = []
+    app_logs: list[str] = []
 
-    lines = raw_logs.splitlines()
     in_fatal = False
-    current_fatal = []
+    fatal_pid = ""
+    fatal_tag = ""
+    fatal_foreign_pkg = False
+    current_fatal: list[str] = []
 
-    for line in lines:
-        if any(re.search(p, line, re.IGNORECASE) for p in crash_patterns):
+    def _flush_fatal() -> None:
+        nonlocal in_fatal, fatal_pid, fatal_tag, fatal_foreign_pkg, current_fatal
+        if current_fatal and not fatal_foreign_pkg:
+            fatal_blocks.append("\n".join(current_fatal))
+        in_fatal = False
+        fatal_pid = ""
+        fatal_tag = ""
+        fatal_foreign_pkg = False
+        current_fatal = []
+
+    for line in raw_logs.splitlines():
+        pid, tag, payload = _parse_logcat_line(line)
+        is_starter = any(rx.search(line) for rx in new_block_starters)
+        is_own_proc_line = bool(eff_app_id and re.search(rf"Process:\s*{re.escape(eff_app_id)}\b", line))
+
+        if is_starter:
+            # Keep `DEBUG : ***` attached right after `Fatal signal` if no frames were collected yet
+            is_tombstone_after_signal = (
+                in_fatal
+                and len(current_fatal) <= 2
+                and "Fatal signal" in current_fatal[0]
+                and ("DEBUG" in tag or "DEBUG" in line)
+            )
+            if in_fatal and not is_tombstone_after_signal:
+                _flush_fatal()
             in_fatal = True
+            if pid and not fatal_pid:
+                fatal_pid = pid
+            if tag:
+                fatal_tag = tag
             current_fatal.append(line)
         elif in_fatal:
-            if re.search(rf"^\s*at\s+{re.escape(PACKAGE_PREFIX)}\.", line) or re.search(r"^\s*Caused by:", line) or re.search(r"^\s*at\s+android\.", line):
+            same_crash_stream = bool(
+                tag
+                and tag in {"AndroidRuntime", "DEBUG", "System.err", "ActivityManager"}
+                and (not fatal_pid or not pid or pid == fatal_pid or tag == "DEBUG")
+                and (not fatal_tag or tag == fatal_tag or (fatal_tag == "libc" and tag == "DEBUG"))
+            )
+            is_cont = (
+                same_crash_stream
+                or bool(_STACK_CONT_RE.search(payload))
+                or (bool(eff_pkg_prefix) and bool(re.search(rf"\bat\s+{re.escape(eff_pkg_prefix)}\.", payload)))
+                or (not tag and line.startswith((" ", "\t")))
+            )
+            if is_cont and len(current_fatal) < _MAX_FATAL_LINES:
                 current_fatal.append(line)
-            elif current_fatal and len(current_fatal) < 30 and line.startswith(" "):
-                current_fatal.append(line)
+                m_proc = proc_line_re.search(payload)
+                if m_proc and enforce_pkg_owner:
+                    crash_pkg = m_proc.group(1).split(":", 1)[0]
+                    if crash_pkg != eff_app_id:
+                        fatal_foreign_pkg = True
+                m_tomb = tombstone_pkg_re.search(payload)
+                if m_tomb and enforce_pkg_owner:
+                    tomb_pkg = m_tomb.group(1).split(":", 1)[0]
+                    if tomb_pkg != eff_app_id:
+                        fatal_foreign_pkg = True
             else:
-                fatal_blocks.append("\n".join(current_fatal))
-                current_fatal = []
-                in_fatal = False
+                _flush_fatal()
+                if is_own_proc_line:
+                    in_fatal = True
+                    fatal_pid = pid
+                    fatal_tag = tag
+                    current_fatal.append(line)
+        elif is_own_proc_line:
+            in_fatal = True
+            fatal_pid = pid
+            fatal_tag = tag
+            current_fatal.append(line)
 
-        if any(re.search(p, line, re.IGNORECASE) for p in warning_patterns):
+        if any(rx.search(line) for rx in warning_patterns):
             warning_logs.append(line)
 
-        if APPLICATION_ID in line:
+        if eff_app_id and eff_app_id in line:
             app_logs.append(line)
 
     if current_fatal:
-        fatal_blocks.append("\n".join(current_fatal))
+        _flush_fatal()
 
     return {
         "fatals": fatal_blocks,
@@ -119,8 +203,6 @@ def main() -> int:
         return 1
 
     print(f"[*] Connected Device: {serial}")
-
-
     print(f"[*] Fetching last {args.lines} lines from {serial}...")
     raw = fetch_logcat(serial, args.lines)
     forensics = filter_forensics(raw)

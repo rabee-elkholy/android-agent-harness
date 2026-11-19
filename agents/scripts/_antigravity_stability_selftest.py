@@ -8828,5 +8828,1378 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             self.assertEqual(3, len(r2_large["reviewers"]))
 
 
+
+class TestV145AntigravityUpgrades(unittest.TestCase):
+    """End-to-end verification of v1.4.5 Antigravity v2.33.0 / CLI 1.5.11 upgrades & performance fast-paths."""
+    _KIT = Path(__file__).resolve().parents[2]
+
+    def test_pep562_lazy_safety_imports_and_mock_patch_compatibility(self) -> None:
+        import contextlib
+        import io
+        import pre_tool_safety as pts
+
+        probe = chr(10).join([
+            "import json, sys",
+            f"sys.path.insert(0, {str(self._KIT / 'agents/scripts')!r})",
+            "import pre_tool_safety",
+            "loaded = [m for m in sys.modules if m.startswith('_safety.')]",
+            "print(json.dumps(sorted(loaded)))",
+        ])
+        proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
+        eager = json.loads(proc.stdout.strip())
+        self.assertEqual(["_safety.engine"], eager)
+
+        with tempfile.TemporaryDirectory() as td_probe:
+            read_probe = chr(10).join([
+                "import contextlib, io, json, os, sys",
+                "from unittest.mock import patch",
+                f"os.environ['HARNESS_REPO'] = {str(self._KIT)!r}",
+                f"os.environ['HARNESS_HOOK_STATE'] = {str(Path(td_probe) / 'hook-state.json')!r}",
+                f"sys.path.insert(0, {str(self._KIT / 'agents/scripts')!r})",
+                "import pre_tool_safety",
+                "buf = io.StringIO()",
+                "payload = json.dumps({'toolName': 'view_file', 'toolArgs': {'AbsolutePath': 'README.md'}})",
+                "with patch('sys.stdin', io.StringIO(payload)), contextlib.redirect_stdout(buf):",
+                "    pre_tool_safety.main()",
+                "loaded = sorted(m for m in sys.modules if m.startswith('_safety.'))",
+                "print(json.dumps({'out': json.loads(buf.getvalue()), 'loaded': loaded}))",
+            ])
+            proc_r = subprocess.run([sys.executable, "-c", read_probe], capture_output=True, text=True, check=True)
+            res_r = json.loads(proc_r.stdout.strip())
+            self.assertEqual("allow", res_r["out"]["decision"])
+            self.assertNotIn("_safety.command_policy", res_r["loaded"])
+            self.assertNotIn("_safety.subagent_guard", res_r["loaded"])
+            self.assertNotIn("_safety.mcp_guard", res_r["loaded"])
+
+        with tempfile.TemporaryDirectory() as td_m, unittest.mock.patch.dict(
+            os.environ, {"HARNESS_HOOK_STATE": str(Path(td_m) / "hs.json")}
+        ), unittest.mock.patch.object(pts, "_handle_command") as mocked_cmd:
+            buf_c = io.StringIO()
+            payload_c = json.dumps({"toolName": "run_command", "toolArgs": {"CommandLine": "git status"}})
+            with unittest.mock.patch("sys.stdin", io.StringIO(payload_c)), contextlib.redirect_stdout(buf_c):
+                pts.main()
+            mocked_cmd.assert_called_once()
+
+    def test_run_workflow_fail_closed_and_governed_v2_dynamic_workflow(self) -> None:
+        from policy_vocab import ANTIGRAVITY_TOOLS, SUBAGENT_ORCHESTRATION_TOOLS
+        self.assertIn("run_workflow", ANTIGRAVITY_TOOLS)
+        self.assertIn("run_workflow", SUBAGENT_ORCHESTRATION_TOOLS)
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "gradlew").write_text("#!/bin/sh" + chr(10), encoding="utf-8")
+            app_kt = repo / "app/src/main/kotlin/com/demo/App.kt"
+            app_kt.parent.mkdir(parents=True)
+            app_kt.write_text("package com.demo" + chr(10) + "class App { fun x() = 1 }" + chr(10), encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+
+            env = {**os.environ, "HARNESS_REPO": str(repo)}
+            hook_script = str(repo / ".agents/scripts/pre_tool_safety.py")
+
+            # 1) Inline Python workflow (`code` or native Antigravity `Script`, even alongside `ScriptPath`) -> DENIED
+            for inline_args in (
+                {"code": "print('pwn')"},
+                {"Script": "print('pwn')"},
+                {"ScriptPath": ".agents/scripts/dynamic_review_workflow.py", "Script": "print('pwn')"},
+            ):
+                p_inline = subprocess.run(
+                    [sys.executable, hook_script],
+                    input=json.dumps({"toolName": "run_workflow", "toolArgs": inline_args}),
+                    capture_output=True, text=True, env=env, check=True,
+                )
+                d_inline = json.loads(p_inline.stdout)
+                self.assertEqual("deny", d_inline["decision"], inline_args)
+                self.assertIn("UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED", d_inline["reason"])
+
+            # 1b) Out-of-repo Cwd -> DENIED
+            p_cwd = subprocess.run(
+                [sys.executable, hook_script],
+                input=json.dumps({
+                    "toolName": "run_workflow",
+                    "toolArgs": {
+                        "ScriptPath": ".agents/scripts/dynamic_review_workflow.py",
+                        "Cwd": str(repo.parent),
+                    },
+                }),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            d_cwd = json.loads(p_cwd.stdout)
+            self.assertEqual("deny", d_cwd["decision"])
+            self.assertIn("UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED", d_cwd["reason"])
+
+            # 2) Untrusted file path -> DENIED
+            p_untrusted = subprocess.run(
+                [sys.executable, hook_script],
+                input=json.dumps({"toolName": "run_workflow", "toolArgs": {"ScriptPath": "app/evil.py"}}),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            self.assertEqual("deny", json.loads(p_untrusted.stdout)["decision"])
+
+            # 3) Governed script when no VERIFYING V2 task exists -> DENIED (DYNAMIC_WORKFLOW_NOT_READY)
+            p_not_ready = subprocess.run(
+                [sys.executable, hook_script],
+                input=json.dumps({"toolName": "run_workflow", "toolArgs": {"ScriptPath": ".agents/scripts/dynamic_review_workflow.py"}}),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            d_nr = json.loads(p_not_ready.stdout)
+            self.assertEqual("deny", d_nr["decision"])
+            self.assertIn("DYNAMIC_WORKFLOW_NOT_READY", d_nr["reason"])
+
+            # 4) Advance a real task to VERIFYING V2 and verify governed `run_workflow` + `--plan-json` succeed!
+            wf_py = str(repo / ".agents/scripts/workflow.py")
+            d_proc = subprocess.run(
+                [
+                    sys.executable, wf_py, "draft", "--repo", str(repo), "--task-id", "t-dyn",
+                    "--kind", "FEATURE", "--outcome", "Update App", "--expected-files", "app/src/main/kotlin/com/demo/App.kt",
+                    "--expected-surfaces", "BUSINESS_LOGIC",
+                ],
+                capture_output=True, text=True, check=True,
+            )
+            plan_sha = json.loads((repo / ".agents/state/tasks/t-dyn/plan.json").read_text(encoding="utf-8"))["plan_sha256"]
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "task", "approve", "--task-id", "t-dyn",
+                    "--plan-hash", plan_sha, "--source", "conversation", "--proof-reference", "Approve", "--enforcement-tier", "RULE_ENFORCED",
+                ],
+                cwd=repo,
+                capture_output=True, text=True, check=True,
+            )
+            subprocess.run([sys.executable, wf_py, "begin", "--repo", str(repo), "--task-id", "t-dyn"], capture_output=True, text=True, check=True)
+            app_kt.write_text("package com.demo" + chr(10) + "/** Updated App. */" + chr(10) + "class App { fun x() = 2 }" + chr(10), encoding="utf-8")
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "review", "models", "set",
+                    "--host", "antigravity", "--choice", "hydrogen-dynamic-project", "--source", "conversation", "--proof-reference", "Use Hydrogen",
+                ],
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+            subprocess.run(
+                [sys.executable, wf_py, "prepare-verification", "--repo", str(repo), "--task-id", "t-dyn", "--host", "antigravity"],
+                capture_output=True, text=True, check=True,
+            )
+            subprocess.run(
+                [sys.executable, str(repo / ".agents/scripts/review_package.py"), "--repo", str(repo), "--task-id", "t-dyn"],
+                capture_output=True, text=True, check=True,
+            )
+            p_plan = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "review", "dynamic-workflow", "--task", "t-dyn", "--plan-json"],
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+            spec = json.loads(p_plan.stdout)
+            self.assertEqual("HARNESS_DYNAMIC_REVIEW_WORKFLOW_V1", spec["fingerprint"])
+            self.assertTrue(len(spec["pending_reviewers"]) >= 1)
+
+            p_allow = subprocess.run(
+                [sys.executable, hook_script],
+                input=json.dumps({"toolName": "run_workflow", "toolArgs": {"ScriptPath": ".agents/scripts/dynamic_review_workflow.py"}}),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            d_allow = json.loads(p_allow.stdout)
+            self.assertEqual("allow", d_allow["decision"], d_allow)
+
+    def test_btw_side_question_isolation_and_zero_token_idle_pre_invocation(self) -> None:
+        import contextlib
+        import io
+        import pre_invocation_reminder as pir
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            (repo / "README.md").write_text("# Demo" + chr(10), encoding="utf-8")
+            env = {**os.environ, "HARNESS_REPO": str(repo)}
+            hook_script = str(repo / ".agents/scripts/pre_tool_safety.py")
+
+            # 1) `/btw` side question read is allowed and does NOT create active-conversation.json
+            p_read = subprocess.run(
+                [sys.executable, hook_script],
+                input=json.dumps({
+                    "toolName": "view_file",
+                    "toolArgs": {"AbsolutePath": str(repo / "README.md")},
+                    "conversationId": "c-btw-side-1",
+                    "isSideQuestion": True,
+                }),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            self.assertEqual("allow", json.loads(p_read.stdout)["decision"])
+            self.assertFalse((repo / ".agents/state/active-conversation.json").exists())
+
+            # 2) `/btw` side question write / subagent / MCP is strictly blocked
+            for mut_tool, mut_args in (
+                ("edit_file", {"TargetFile": str(repo / "README.md")}),
+                ("invoke_subagent", {"TypeName": "harness-scout-agent", "Prompt": "scan"}),
+                ("call_mcp_tool", {"ServerName": "zoho", "ToolName": "get_items"}),
+            ):
+                p_mut = subprocess.run(
+                    [sys.executable, hook_script],
+                    input=json.dumps({"toolName": mut_tool, "toolArgs": mut_args, "mode": "btw"}),
+                    capture_output=True, text=True, env=env, check=True,
+                )
+                d_mut = json.loads(p_mut.stdout)
+                self.assertEqual("deny", d_mut["decision"], mut_tool)
+                self.assertIn("SIDE_QUESTION_READ_ONLY_BOUNDARY", d_mut["reason"])
+
+            # 3) `PreInvocation`: `/btw` emits `{}`, Turn 0 IDLE emits onboarding, Turn 1+ unchanged IDLE emits `{}`!
+            with unittest.mock.patch.object(pir, "REPO", repo), unittest.mock.patch.object(pir, "_update_notice", return_value=""):
+                b_btw = io.StringIO()
+                with unittest.mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 0, "conversationId": "c-btw", "isSideQuestion": True}))), contextlib.redirect_stdout(b_btw):
+                    pir.main()
+                self.assertEqual({}, json.loads(b_btw.getvalue()))
+
+                b_t0 = io.StringIO()
+                with unittest.mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 0, "conversationId": "c-consult-1"}))), contextlib.redirect_stdout(b_t0):
+                    pir.main()
+                m_t0 = json.loads(b_t0.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertIn("Android Harness: Idle (no active task).", m_t0)
+
+                b_t1 = io.StringIO()
+                with unittest.mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 1, "conversationId": "c-consult-1"}))), contextlib.redirect_stdout(b_t1):
+                    pir.main()
+                self.assertEqual({}, json.loads(b_t1.getvalue()))
+
+                # Retired Nov 18 model still surfaces explicit warning even on subsequent idle turns
+                b_ret = io.StringIO()
+                with unittest.mock.patch("sys.stdin", io.StringIO(json.dumps({"invocationNum": 2, "conversationId": "c-consult-1", "modelName": "Claude Sonnet 4.6 (Thinking)"}))), contextlib.redirect_stdout(b_ret):
+                    pir.main()
+                m_ret = json.loads(b_ret.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                self.assertIn("MODEL RETIRED (Nov 18, 2026)", m_ret)
+
+    def test_py_launcher_flags_slash_skill_disable_and_version_gated_quirks(self) -> None:
+        from _enforcement import detect, parse_python_hook_command
+        import antigravity_runtime as agr
+        from doctor.engine import HarnessDoctor
+
+        self.assertEqual(("py", ("-3",), "scripts/pre_tool_safety.py"), parse_python_hook_command("py -3 scripts/pre_tool_safety.py"))
+        self.assertEqual(("python3", ("-S", "-u"), "scripts/pre_tool_safety.py"), parse_python_hook_command("python3 -S -u scripts/pre_tool_safety.py"))
+        self.assertIsNone(parse_python_hook_command('python3 -c "import os" scripts/pre_tool_safety.py'))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            (repo / "README.md").write_text("# Test" + chr(10), encoding="utf-8")
+            hooks_file = repo / ".agents/hooks.json"
+            hooks_obj = json.loads(hooks_file.read_text(encoding="utf-8"))
+            hooks_obj["adb-and-git-safety"]["PreToolUse"][0]["hooks"][0]["command"] = f'"{sys.executable}" -S scripts/pre_tool_safety.py'
+            hooks_file.write_bytes(b"\xef\xbb\xbf" + json.dumps(hooks_obj, indent=2).encode("utf-8"))
+
+            enf = detect(repo, ["antigravity"])
+            self.assertEqual("HARD_ENFORCED", enf["mutation_boundary_by_host"]["antigravity"])
+
+            plan_sk = repo / ".agents/skills/plan/SKILL.md"
+            plan_sk.parent.mkdir(parents=True, exist_ok=True)
+            plan_sk.write_text(
+                chr(10).join([
+                    "---",
+                    "name: plan",
+                    "description: Internal helper",
+                    "disable-slash-command: true",
+                    "version: 1.0.0",
+                    "kernel-major: 1",
+                    "---",
+                    "# Plan",
+                ]) + chr(10),
+                encoding="utf-8",
+            )
+            doc = HarnessDoctor(repo, run_selftest=False)
+            doc.check_skills_and_workflows()
+            slash_res = next(r for r in doc.results if r.name == "CLI Slash-Command Skill Collision")
+            self.assertEqual("PASS", slash_res.status)
+
+            (repo / ".agents/mcp_config.json").write_text(
+                json.dumps({"mcpServers": {"s1": {"command": "node"}, "s2": {"command": "python"}}}),
+                encoding="utf-8",
+            )
+            legacy_mcp = agr.inspect_windows_stdio_mcp_risk(repo, env={"HARNESS_SIMULATE_WINDOWS_MCP": "1"})
+            self.assertTrue(legacy_mcp["at_risk"])
+            modern_mcp = agr.inspect_windows_stdio_mcp_risk(
+                repo,
+                env={"HARNESS_SIMULATE_WINDOWS_MCP": "1", "ANTIGRAVITY_APP_VERSION": "2.33.0", "ANTIGRAVITY_CLI_VERSION": "1.5.11"},
+            )
+            self.assertFalse(modern_mcp["at_risk"])
+            self.assertTrue(modern_mcp["mitigated_upstream"])
+
+
+
+
+class TestV150CoreProductivityUpgrades(unittest.TestCase):
+    """End-to-end verification of v1.5.0 core Android productivity & architecture intelligence upgrades."""
+
+    def test_v150_smart_build_logic_scoping_and_impacted_tests(self):
+        import _product
+        import _repo_files
+        import run_tests_gate
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "settings.gradle.kts").write_text(
+                'pluginManagement { includeBuild("build-logic") }\n'
+                'include(":app", ":core:domain", ":core:data", ":feature:paywall", ":feature:unrelated")\n',
+                encoding="utf-8",
+            )
+            # Static convention plugin in build-logic (no dynamic project(var); injects :core:domain into custom plugin consumers)
+            bl_src = repo / "build-logic/convention/src/main/kotlin"
+            bl_src.mkdir(parents=True)
+            (repo / "build-logic/settings.gradle.kts").write_text('rootProject.name = "build-logic"\n', encoding="utf-8")
+            (bl_src / "AndroidFeatureConventionPlugin.kt").write_text(
+                'import org.gradle.api.Plugin\nimport org.gradle.api.Project\n'
+                'class AndroidFeatureConventionPlugin : Plugin<Project> {\n'
+                '    override fun apply(target: Project) {\n'
+                '        target.dependencies.add("implementation", target.project(":core:domain"))\n'
+                '    }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            for mod, build_body in {
+                "app": 'plugins { id("com.android.application") }\ndependencies { implementation(project(":feature:paywall")) }\n',
+                "core/domain": 'plugins { id("com.android.library") }\n',
+                "core/data": 'plugins { id("com.android.library") }\ndependencies { implementation(project(":core:domain")) }\n',
+                "feature/paywall": 'plugins { id("app.android.feature") }\n',
+                "feature/unrelated": 'plugins { id("com.android.library") }\n',
+            }.items():
+                mdir = repo / mod
+                mdir.mkdir(parents=True, exist_ok=True)
+                (mdir / "build.gradle.kts").write_text(build_body, encoding="utf-8")
+
+            paywall_vm = repo / "feature/paywall/src/main/kotlin/com/demo/paywall/PaywallViewModel.kt"
+            paywall_vm.parent.mkdir(parents=True, exist_ok=True)
+            paywall_vm.write_text(
+                "package com.demo.paywall\nclass PaywallViewModel { fun load() = 1 }\n",
+                encoding="utf-8",
+            )
+            paywall_test = repo / "feature/paywall/src/test/kotlin/com/demo/paywall/PaywallViewModelTest.kt"
+            paywall_test.parent.mkdir(parents=True, exist_ok=True)
+            paywall_test.write_text(
+                "package com.demo.paywall\nimport org.junit.Test\nclass PaywallViewModelTest { @Test fun loads() { PaywallViewModel().load() } }\n",
+                encoding="utf-8",
+            )
+            unrel_test = repo / "feature/unrelated/src/test/kotlin/com/demo/unrel/UnrelatedTest.kt"
+            unrel_test.parent.mkdir(parents=True, exist_ok=True)
+            unrel_test.write_text(
+                "package com.demo.unrel\nimport org.junit.Test\nclass UnrelatedTest { @Test fun noop() {} }\n",
+                encoding="utf-8",
+            )
+
+            # 1. Changing :feature:paywall does NOT run :feature:unrelated or :core:data despite build-logic existing!
+            with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True),                     mock.patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"),                     mock.patch.object(_repo_files, "changed_paths", return_value=[paywall_vm]):
+                scoped_tasks = run_tests_gate.resolve_target_tasks(repo, None)
+                self.assertEqual([":app:testDebugUnitTest", ":feature:paywall:testDebugUnitTest"], scoped_tasks)
+                impacted = run_tests_gate.resolve_impacted_test_patterns(repo, [paywall_vm])
+                self.assertEqual(["com.demo.paywall.PaywallViewModelTest"], impacted)
+
+            # 2. Convention-injected `:core:domain` change automatically includes `:feature:paywall` (which applied `app.android.feature`)!
+            domain_file = repo / "core/domain/src/main/kotlin/com/demo/domain/Offer.kt"
+            domain_file.parent.mkdir(parents=True, exist_ok=True)
+            domain_file.write_text("package com.demo.domain\ndata class Offer(val id: String)\n", encoding="utf-8")
+            with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True),                     mock.patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"),                     mock.patch.object(_repo_files, "changed_paths", return_value=[domain_file]):
+                domain_tasks = run_tests_gate.resolve_target_tasks(repo, None)
+                self.assertIn(":feature:paywall:testDebugUnitTest", domain_tasks)
+                self.assertNotIn(":feature:unrelated:testDebugUnitTest", domain_tasks)
+
+            # 3. Editing a file inside `build-logic/` itself safely broadens to ALL modules including `:feature:unrelated`!
+            with mock.patch.object(_product, "UNIT_TEST_SCOPE", "changed_modules", create=True),                     mock.patch("baseline_capture._unit_test_task", return_value=":app:testDebugUnitTest"),                     mock.patch.object(_repo_files, "changed_paths", return_value=[bl_src / "AndroidFeatureConventionPlugin.kt"]):
+                broad_tasks = run_tests_gate.resolve_target_tasks(repo, None)
+                self.assertIn(":feature:unrelated:testDebugUnitTest", broad_tasks)
+
+    def test_v150_di_binds_graph_edges_and_task_context(self):
+        from _graph_core import EdgeKind, GraphEngine
+        import task_context
+        import web_relay
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+
+            repo_iface = repo / "app/src/main/java/com/demo/domain/SubRepository.kt"
+            repo_impl = repo / "app/src/main/java/com/demo/data/SubRepositoryImpl.kt"
+            di_mod = repo / "app/src/main/java/com/demo/di/SubModule.kt"
+            vm_file = repo / "app/src/main/java/com/demo/ui/SubViewModel.kt"
+            vm_test = repo / "app/src/test/java/com/demo/ui/SubViewModelTest.kt"
+            for p in (repo_iface, repo_impl, di_mod, vm_file, vm_test):
+                p.parent.mkdir(parents=True, exist_ok=True)
+
+            repo_iface.write_text(
+                "package com.demo.domain\ninterface SubRepository { suspend fun fetchPlan(): String }\n",
+                encoding="utf-8",
+            )
+            repo_impl.write_text(
+                "package com.demo.data\nimport com.demo.domain.SubRepository\n"
+                "class SubRepositoryImpl : SubRepository { override suspend fun fetchPlan(): String = \"pro\" }\n",
+                encoding="utf-8",
+            )
+            di_mod.write_text(
+                "package com.demo.di\nimport com.demo.data.SubRepositoryImpl\nimport com.demo.domain.SubRepository\n"
+                "import dagger.Binds\nimport dagger.Module\n"
+                "@Module abstract class SubModule { @Binds abstract fun bindSub(impl: SubRepositoryImpl): SubRepository }\n",
+                encoding="utf-8",
+            )
+            vm_file.write_text(
+                "package com.demo.ui\nimport com.demo.domain.SubRepository\n"
+                "class SubViewModel(private val repo: SubRepository) { suspend fun load() = repo.fetchPlan() }\n",
+                encoding="utf-8",
+            )
+            vm_test.write_text(
+                "package com.demo.ui\nimport com.demo.domain.SubRepository\nimport org.junit.Test\n"
+                "class SubViewModelTest { @Test fun loadsPlan() { val r: SubRepository? = null } }\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+
+            ge = GraphEngine(repo)
+            ge.sync(persist=True)
+            binds_edges = [(e.source, e.target) for e in ge.graph.edges if e.kind == EdgeKind.BINDS.value]
+            self.assertIn(("com.demo.domain.SubRepository", "com.demo.data.SubRepositoryImpl"), binds_edges)
+
+            # Forward: inspecting SubViewModel surfaces SubRepositoryImpl in `bound_implementations`
+            ctx_vm = task_context.resolve_task_context(repo, file="app/src/main/java/com/demo/ui/SubViewModel.kt")
+            bound_paths = [b["path"] for b in ctx_vm.get("bound_implementations") or []]
+            self.assertIn("app/src/main/java/com/demo/data/SubRepositoryImpl.kt", bound_paths)
+
+            # Reverse: inspecting SubRepositoryImpl surfaces SubViewModel as dependent AND SubViewModelTest in `tests`!
+            ctx_impl = task_context.resolve_task_context(repo, file="app/src/main/java/com/demo/data/SubRepositoryImpl.kt")
+            dep_paths = [d["path"] for d in ctx_impl.get("direct_dependents") or []]
+            test_paths = [t["path"] for t in ctx_impl.get("tests") or []]
+            self.assertIn("app/src/main/java/com/demo/ui/SubViewModel.kt", dep_paths)
+            self.assertIn("app/src/test/java/com/demo/ui/SubViewModelTest.kt", test_paths)
+
+            # Web-Relay neighbor signatures automatically include SubRepositoryImpl when SubViewModel is scoped!
+            neighbors = web_relay._extract_neighbor_signatures(repo, ["app/src/main/java/com/demo/ui/SubViewModel.kt"], {})
+            neighbor_paths = [n["path"] for n in neighbors]
+            self.assertIn("app/src/main/java/com/demo/data/SubRepositoryImpl.kt", neighbor_paths)
+
+    def test_v150_android_gradle_error_parser_families(self):
+        from gradle_error_parser import parse_compiler_errors
+
+        sample_log = """
+> Task :app:kspDebugKotlin FAILED
+e: [ksp] /work/app/src/main/java/com/demo/db/MealDao.kt:34: There is a problem with the query: [SQLITE_ERROR] SQL error or missing database (no such column: calories_kcal)
+  Columns: id, title, calories
+> Task :app:hiltJavaCompileDebug FAILED
+/work/app/build/generated/hilt/component_sources/debug/com/demo/App_HiltComponents.java:128: error: [Dagger/MissingBinding] com.demo.domain.BillingGateway cannot be provided without an @Provides-annotated method.
+  com.demo.domain.BillingGateway is injected at
+    [com.demo.App_HiltComponents.ViewModelC] com.demo.ui.CheckoutViewModel(gateway, savedStateHandle)
+> Task :app:processDebugResources FAILED
+ERROR: /work/app/src/main/res/layout/fragment_checkout.xml:19: AAPT: error: resource string/pay_cta_missing (aka com.demo:string/pay_cta_missing) not found.
+> Task :app:processDebugMainManifest FAILED
+/work/app/src/main/AndroidManifest.xml:22:9-48 Error:
+	Attribute application@allowBackup value=(false) from AndroidManifest.xml:22:9-48
+	is also present at [com.sdk:tracker:1.0] AndroidManifest.xml:11:9-45 value=(true).
+"""
+        errs = parse_compiler_errors(sample_log)
+        by_type = {e["type"]: e for e in errs}
+        self.assertIn("KSP", by_type)
+        self.assertEqual(34, by_type["KSP"]["line"])
+        self.assertIn("calories_kcal", by_type["KSP"]["message"])
+        self.assertIn("Columns: id, title, calories", by_type["KSP"]["message"])
+
+        self.assertIn("Dagger/Hilt", by_type)
+        self.assertIn("BillingGateway", by_type["Dagger/Hilt"]["message"])
+        self.assertIn("com.demo.ui.CheckoutViewModel", by_type["Dagger/Hilt"]["message"])
+
+        self.assertIn("AAPT2", by_type)
+        self.assertEqual(19, by_type["AAPT2"]["line"])
+        self.assertIn("pay_cta_missing", by_type["AAPT2"]["message"])
+
+        self.assertIn("Manifest", by_type)
+        self.assertEqual(22, by_type["Manifest"]["line"])
+        self.assertIn("allowBackup", by_type["Manifest"]["message"])
+
+    def test_v150_web_patch_v1_zero_escaping_and_truncation_guard(self):
+        import web_relay
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "app"
+            (repo / ".agents/state").mkdir(parents=True)
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "demo"\ninclude(":app")\n', encoding="utf-8")
+            src = repo / "app/src/main/java/com/demo/PriceFormatter.kt"
+            src.parent.mkdir(parents=True, exist_ok=True)
+            src.write_text(
+                'package com.demo\nclass PriceFormatter {\n    fun format(amount: Int): String = "$amount EGP"\n}\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@local"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            pack_res = web_relay.build_web_pack(
+                repo,
+                files=["app/src/main/java/com/demo/PriceFormatter.kt"],
+                prompt="Format currency with raw template and add test",
+                no_clipboard=True,
+            )
+            pack_id = pack_res["pack_id"]
+            pack_md = Path(pack_res["bundle_file"]).read_text(encoding="utf-8")
+            # Outgoing Context Pack MUST NEVER be mistaken for an incoming reply!
+            self.assertIsNone(web_relay._extract_merge_json_from_text(pack_md))
+
+            # Truncated HARNESS_WEB_PATCH_V1 must be caught fail-closed!
+            truncated_patch = (
+                f"<<<HARNESS_WEB_PATCH_V1>>>\nPACK_ID: {pack_id}\nSTATUS: READY\n"
+                "<<<MODIFY app/src/main/java/com/demo/PriceFormatter.kt>>>\n<<<<<<< SEARCH\nfoo\n"
+            )
+            self.assertEqual(pack_id, web_relay._detect_truncated_merge_pack_id(truncated_patch, {pack_id}))
+
+            # Complete zero-escaping HARNESS_WEB_PATCH_V1 with "$${amount}" and """raw string""" applies cleanly!
+            patch_reply = '''Here is the fix:
+<<<HARNESS_WEB_PATCH_V1>>>
+PACK_ID: __PACK_ID__
+STATUS: READY
+TASK_ID: price-raw-fmt
+KIND: FEATURE
+OUTCOME: Support raw currency template formatting
+APPROACH: Update PriceFormatter and add JUnit test
+RISKS: Verify formatting output
+
+<<<MODIFY app/src/main/java/com/demo/PriceFormatter.kt>>>
+<<<<<<< SEARCH
+    fun format(amount: Int): String = "$amount EGP"
+=======
+    /** Formats price cleanly. */
+    fun format(amount: Int): String = """Price: "$${amount}" EGP""".trim()
+>>>>>>> REPLACE
+<<<END_FILE>>>
+
+<<<CREATE app/src/test/java/com/demo/PriceFormatterTest.kt>>>
+package com.demo
+
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Verifies PriceFormatter output. */
+class PriceFormatterTest {
+    @Test
+    fun formatsAmount() {
+        assertTrue(PriceFormatter().format(50).contains("50"))
+    }
+}
+<<<END_FILE>>>
+<<<END_HARNESS_WEB_PATCH_V1>>>
+'''.replace('__PACK_ID__', pack_id)
+            reply_file = Path(td) / "reply.txt"
+            reply_file.write_text(patch_reply, encoding="utf-8")
+            applied = web_relay.apply_web_merge(
+                repo,
+                merge_file=str(reply_file),
+                use_stdin=False,
+                dry_run=False,
+                source="conversation",
+                proof_reference="apply reply",
+            )
+            self.assertEqual("APPLIED", applied["status"])
+            updated_code = src.read_text(encoding="utf-8")
+            self.assertIn('"""Price: "$', updated_code)
+            self.assertTrue((repo / "app/src/test/java/com/demo/PriceFormatterTest.kt").is_file())
+
+    def test_v150_compound_draft_with_context_and_approve_with_delegation(self):
+        import workflow
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('rootProject.name = "demo"\ninclude(":app")\n', encoding="utf-8")
+            (repo / "app").mkdir()
+            (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+            vm = repo / "app/src/main/java/com/demo/HomeViewModel.kt"
+            vm.parent.mkdir(parents=True, exist_ok=True)
+            vm.write_text("package com.demo\nclass HomeViewModel { fun refresh() = Unit }\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@local"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            proc_draft = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow.py"),
+                    "draft",
+                    "--repo", str(repo),
+                    "--task-id", "home-refresh",
+                    "--outcome", "Add retry state to HomeViewModel refresh",
+                    "--kind", "FEATURE",
+                    "--expected-files", "app/src/main/java/com/demo/HomeViewModel.kt",
+                    "--with-context",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            draft_json = json.loads(proc_draft.stdout)
+            self.assertIn("inline_task_context", draft_json)
+            self.assertTrue(draft_json["inline_task_context"]["read_ranges"])
+            plan_hash = draft_json["plan_sha256"][:12]
+
+            proc_app = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "workflow.py"),
+                    "approve",
+                    "--repo", str(repo),
+                    "--task-id", "home-refresh",
+                    "--source", "conversation",
+                    "--proof-reference", "Approve plan",
+                    "--enforcement-tier", "RULE_ENFORCED",
+                    "--plan-hash", plan_hash,
+                    "--with-delegation",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            app_json = json.loads(proc_app.stdout)
+            self.assertEqual("IMPLEMENTING", app_json["status"])
+            self.assertIn("delegation_brief", app_json)
+            self.assertTrue(app_json["delegation_brief"]["strategy"])
+
+
+
+class TestV151DeepAuditUpgrades(unittest.TestCase):
+    """End-to-end verification of all 6 v1.5.1 deep-audit fixes and performance upgrades."""
+
+    def test_v151_01_logcat_doctor_threadtime_and_tombstone_capture(self):
+        import logcat_doctor
+
+        raw_log = (
+            "11-18 23:20:01.100 14205 14205 E AndroidRuntime: FATAL EXCEPTION: main\n"
+            "11-18 23:20:01.101 14205 14205 E AndroidRuntime: Process: com.demo.rashaqa, PID: 14205\n"
+            "11-18 23:20:01.102 14205 14205 E AndroidRuntime: java.lang.IllegalStateException: Discount offer missing\n"
+            "11-18 23:20:01.103 14205 14205 E AndroidRuntime: \tat com.demo.rashaqa.paywall.PaywallViewModel.select(PaywallViewModel.kt:88)\n"
+            "11-18 23:20:01.104 14205 14205 E AndroidRuntime: Caused by: java.lang.NullPointerException: token\n"
+            "11-18 23:20:01.105 14205 14205 E AndroidRuntime: \tat com.demo.rashaqa.data.BillingRepo.fetch(BillingRepo.kt:41)\n"
+            "11-18 23:20:02.000 19999 19999 E AndroidRuntime: FATAL EXCEPTION: main\n"
+            "11-18 23:20:02.001 19999 19999 E AndroidRuntime: Process: com.google.android.gms.persistent, PID: 19999\n"
+            "11-18 23:20:02.002 19999 19999 E AndroidRuntime: java.lang.RuntimeException: Foreign crash\n"
+        )
+        res = logcat_doctor.filter_forensics(raw_log, app_id="com.demo.rashaqa", pkg_prefix="com.demo.rashaqa")
+        self.assertEqual(1, len(res["fatals"]))
+        crash_txt = res["fatals"][0]
+        self.assertIn("IllegalStateException: Discount offer missing", crash_txt)
+        self.assertIn("PaywallViewModel.kt:88", crash_txt)
+        self.assertIn("Caused by: java.lang.NullPointerException", crash_txt)
+        self.assertNotIn("Foreign crash", crash_txt)
+
+    def test_v151_02_fast_kt_lint_brace_masking_and_kmp_swift_callers(self):
+        import fast_kt_lint
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            vm_path = repo / "shared/src/commonMain/kotlin/com/demo/DietRepository.kt"
+            swift_caller = repo / "iosApp/iosApp/ContentView.swift"
+            vm_path.parent.mkdir(parents=True, exist_ok=True)
+            swift_caller.parent.mkdir(parents=True, exist_ok=True)
+
+            # Unbalanced `{` inside string literal must NOT corrupt brace_depth for `missingKdocContract()`!
+            vm_code = (
+                "package com.demo\n"
+                "/** Shared KMP repository. */\n"
+                "class DietRepository {\n"
+                "    /** Parses raw JSON payload. */\n"
+                "    fun isJsonObject(raw: String): Boolean = raw.trim().startsWith(\"{\")\n\n"
+                '    fun calculateMacros(calories: Int): Int = if (isJsonObject("{}")) calories / 4 else 0\n'
+                "}\n"
+            )
+            vm_path.write_text(vm_code, encoding="utf-8")
+            swift_caller.write_text(
+                "import Shared\nstruct ContentView { func render() { let _ = DietRepository().calculateMacros(calories: 1200) } }\n",
+                encoding="utf-8",
+            )
+
+            kdoc_issues = fast_kt_lint.find_missing_architectural_kdoc(vm_path, vm_code, modified_lines=None)
+            missing_syms = [i["msg"] for i in kdoc_issues]
+            self.assertTrue(any("calculateMacros" in m for m in missing_syms), missing_syms)
+
+            unused_issues = fast_kt_lint.find_unreferenced_new_declarations(repo, [vm_path], {vm_path: None})
+            self.assertEqual([], unused_issues, f"Swift KMP caller should satisfy reference scan: {unused_issues}")
+
+    def test_v151_03_dep_inspect_bom_versionless_catalog_resolution(self):
+        import dep_inspect
+        import zipfile as zf_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "app"
+            maven_dir = Path(td) / "maven"
+            (repo / "gradle").mkdir(parents=True)
+            (repo / ".agents/state").mkdir(parents=True)
+            (repo / "gradle/libs.versions.toml").write_text(
+                '[versions]\ncomposeBom = "2026.05.00"\n\n'
+                '[libraries]\n'
+                'androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }\n'
+                'androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }\n',
+                encoding="utf-8",
+            )
+            # Create local file:// Maven repo hosting compose-bom POM + material3-android-1.4.0-sources.jar
+            bom_dir = maven_dir / "androidx/compose/compose-bom/2026.05.00"
+            bom_dir.mkdir(parents=True)
+            (bom_dir / "compose-bom-2026.05.00.pom").write_text(
+                '<project xmlns="http://maven.apache.org/POM/4.0.0">\n'
+                '  <properties><material3Version>1.4.0</material3Version></properties>\n'
+                '  <dependencyManagement><dependencies>\n'
+                '    <dependency>\n'
+                '      <groupId>androidx.compose.material3</groupId>\n'
+                '      <artifactId>material3</artifactId>\n'
+                '      <version>${material3Version}</version>\n'
+                '    </dependency>\n'
+                '  </dependencies></dependencyManagement>\n'
+                '</project>\n',
+                encoding="utf-8",
+            )
+            m3_dir = maven_dir / "androidx/compose/material3/material3-android/1.4.0"
+            m3_dir.mkdir(parents=True)
+            with zf_mod.ZipFile(m3_dir / "material3-android-1.4.0-sources.jar", "w") as zf:
+                zf.writestr(
+                    "androidx/compose/material3/ModalBottomSheet.kt",
+                    "package androidx.compose.material3\n/** Material3 modal sheet. */\nfun ModalBottomSheet(sheetState: SheetState) {}\n",
+                )
+
+            report = dep_inspect.inspect_dependency(
+                repo,
+                "material3",
+                query="ModalBottomSheet",
+                maven_repos=[maven_dir.as_uri()],
+            )
+            self.assertEqual("OK", report["status"])
+            self.assertEqual("androidx.compose.material3:material3:1.4.0", report["coordinate"])
+            self.assertTrue(any("ModalBottomSheet" in m["source"] for m in report["matches"]))
+
+    def test_v151_04_check_strings_arabic_cldr_plurals_and_non_positional_specifiers(self):
+        import check_strings
+        import io
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            base_xml = repo / "app/src/main/res/values/strings.xml"
+            ar_xml = repo / "app/src/main/res/values-ar/strings.xml"
+            base_xml.parent.mkdir(parents=True)
+            ar_xml.parent.mkdir(parents=True)
+
+            # 1. Incomplete Arabic plurals (missing zero, two, few, many) + unnumbered `%s %d` -> FAIL
+            base_xml.write_text(
+                '<resources>\n'
+                '  <string name="greeting">Hello %1$s (%2$d)</string>\n'
+                '  <plurals name="meals"><item quantity="one">%d meal</item><item quantity="other">%d meals</item></plurals>\n'
+                '</resources>\n',
+                encoding="utf-8",
+            )
+            ar_xml.write_text(
+                '<resources>\n'
+                '  <string name="greeting">مرحبا %s (%d)</string>\n'
+                '  <plurals name="meals"><item quantity="one">وجبة واحدة</item><item quantity="other">%d وجبة</item></plurals>\n'
+                '</resources>\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            out_fail = io.StringIO()
+            with contextlib.redirect_stdout(out_fail):
+                rc_fail = check_strings.main(["--all"], repo=repo)
+            self.assertEqual(1, rc_fail)
+            self.assertIn("NON_POSITIONAL_FORMAT_SPECIFIERS", out_fail.getvalue())
+            self.assertIn("missing required CLDR quantity item(s): zero, two, few, many", out_fail.getvalue())
+
+            # 2. Complete 6-form idiomatic Arabic plurals (`zero`/`one`/`two` omitting `%d` naturally!) + positional `%1$s (%2$d)` -> PASS
+            ar_xml.write_text(
+                '<resources>\n'
+                '  <string name="greeting">مرحبا %1$s (%2$d)</string>\n'
+                '  <plurals name="meals">\n'
+                '    <item quantity="zero">لا توجد وجبات</item>\n'
+                '    <item quantity="one">وجبة واحدة</item>\n'
+                '    <item quantity="two">وجبتان</item>\n'
+                '    <item quantity="few">%d وجبات</item>\n'
+                '    <item quantity="many">%d وجبة</item>\n'
+                '    <item quantity="other">%d وجبة</item>\n'
+                '  </plurals>\n'
+                '</resources>\n',
+                encoding="utf-8",
+            )
+            out_ok = io.StringIO()
+            with contextlib.redirect_stdout(out_ok):
+                rc_ok = check_strings.main(["--all"], repo=repo)
+            self.assertEqual(0, rc_ok, out_ok.getvalue())
+
+    def test_v151_05_in_process_preflight_and_retry_failure_web_patch_v1(self):
+        import preflight_check
+        import web_relay
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "app"
+            (repo / ".agents/state/results").mkdir(parents=True)
+            (repo / ".agents/state/logs/gradle").mkdir(parents=True)
+            (repo / "gradlew").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (repo / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+            src = repo / "app/src/main/java/com/demo/Calc.kt"
+            src.parent.mkdir(parents=True)
+            src.write_text("package com.demo\nclass Calc { fun add(a: Int, b: Int) = a + b }\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@local"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            # Verify preflight_check.run_step runs check_strings.py & fast_kt_lint.py in-process without calling run_streaming!
+            with mock.patch("_live_process.run_streaming", side_effect=AssertionError("subprocess should not spawn")):
+                self.assertEqual(0, preflight_check.run_step("1. String parity", "check_strings.py", cwd=repo, diagnostics={}))
+                self.assertEqual(0, preflight_check.run_step("3. Fast lint", "fast_kt_lint.py", cwd=repo, diagnostics={}))
+
+            # Verify `web-pack --retry-failure` advertises `<<<HARNESS_WEB_PATCH_V1>>>` while staying compact (< 3500 bytes)
+            p1 = web_relay.build_web_pack(repo, files=["app/src/main/java/com/demo/Calc.kt"], prompt="Fix calc", no_clipboard=True)
+            (repo / ".agents/state/results/gradle-compiledebugkotlin.json").write_text(
+                '{"schema_version":1,"task":":app:compileDebugKotlin","status":"FAIL","exit_code":1,"detail":"err"}',
+                encoding="utf-8",
+            )
+            (repo / ".agents/state/logs/gradle/20261119-000000-compile.log").write_text(
+                f"e: file:///{src.as_posix()}:2:20: Type mismatch.\n",
+                encoding="utf-8",
+            )
+            rf = web_relay.build_web_pack(repo, task_id=p1["suggested_task_id"], retry_failure=True, no_clipboard=True)
+            self.assertLess(rf["bundle_bytes"], 3500)
+            rf_md = Path(rf["bundle_file"]).read_text(encoding="utf-8")
+            self.assertIn("<<<HARNESS_WEB_PATCH_V1>>>", rf_md)
+
+
+class TestV152Gemini4NeonStandaloneParity(unittest.TestCase):
+    def test_v152_gemini4_neon_standalone_parity(self):
+        """Verify standalone Gemini 4 Neon parity with Argon/Carbon across offload, pacer, guards, and hazards."""
+        import antigravity_runtime as ar
+        import delegation_policy as dp
+        import pre_tool_safety as pts
+        import review_execution
+        import review_models
+        from _vnext_common import atomic_write_json
+
+        # 1. Anti-burst pacer exempts standalone Neon (all tiers) while keeping Hydrogen & Orchestrator non-exempt
+        self.assertTrue(pts._model_exempt_from_hydrogen_burst_pacer("Gemini 4 Neon"))
+        self.assertTrue(pts._model_exempt_from_hydrogen_burst_pacer("gemini-4-neon-high"))
+        self.assertTrue(pts._model_exempt_from_hydrogen_burst_pacer("gemini-4-neon-xhigh"))
+        self.assertFalse(pts._model_exempt_from_hydrogen_burst_pacer("gemini-4-hydrogen-high"))
+        self.assertFalse(pts._model_exempt_from_hydrogen_burst_pacer("Orchestrator (Neon)"))
+
+        # 2. Runtime hazard classifiers cover Gemini 4 Neon entitlement desync & zero-quota 429
+        hz_desync = ar.classify_antigravity_quota_or_capacity_error(
+            "Model Gemini 4 Neon is marked Unavailable due to account entitlement sync"
+        )
+        self.assertIsNotNone(hz_desync)
+        self.assertEqual("GEMINI4_ENTITLEMENT_DESYNC_UNAVAILABLE", hz_desync["code"])
+        hz_429 = ar.classify_antigravity_quota_or_capacity_error(
+            "HTTP 429 RESOURCE_EXHAUSTED: gemini-4-neon limit: 0 on pro tier"
+        )
+        self.assertIsNotNone(hz_429)
+        self.assertEqual("MANAGED_AGENT_ZERO_QUOTA_429", hz_429["code"])
+
+        # 3. Active Lead on standalone Gemini 4 Neon triggers Model='flash' offload for Scouts, Specialists & Hydrogen Reviewers
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "app"
+            (repo / ".agents/state/tasks/t-neon").mkdir(parents=True)
+            shutil.copytree(REPO_ROOT / "agents/subagents", repo / ".agents/subagents", dirs_exist_ok=True)
+            dp.record_live_lead_session_model(repo, "cid-neon", "Gemini 4 Neon (High)")
+            self.assertEqual((True, "gemini-4-neon"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-neon"))
+
+            plan_impl = {
+                "schema_version": 1,
+                "task_id": "t-neon",
+                "status": "IMPLEMENTING",
+                "execution_nonce": "nonce-neon",
+                "task_kind": "FEATURE",
+                "risk_tier": "T2_FEATURE",
+                "expected_files": ["app/src/main/java/A.kt"],
+            }
+            atomic_write_json(repo / ".agents/state/active-task.json", {"task_id": "t-neon"})
+            atomic_write_json(repo / ".agents/state/tasks/t-neon/plan.json", plan_impl)
+            review_models.set_policy(
+                repo,
+                review_models.resolve_preset_policy("hydrogen-dynamic"),
+                task_id=None,
+                host="antigravity",
+                source="conversation",
+                proof_reference="Use hydrogen-dynamic subagents on Neon Lead",
+                scope="project",
+            )
+            pol_del = dp.evaluate_delegation_policy(repo, task_id="t-neon", plan=plan_impl, router_action="IMPLEMENT")
+            self.assertEqual("flash", pol_del["scout_invoke_model"])
+
+            engine_script = REPO_ROOT / "agents/scripts/pre_tool_safety.py"
+            env = {**os.environ, "HARNESS_REPO": str(repo), "HARNESS_HOST": "antigravity"}
+
+            # Omitting Model on Scout when Lead is Neon -> denied (must offload via Model='flash')
+            pr_deny = subprocess.run(
+                [sys.executable, str(engine_script)],
+                input=json.dumps({
+                    "conversationId": "cid-neon",
+                    "toolCall": {
+                        "name": "invoke_subagent",
+                        "args": {"Subagents": [{
+                            "TypeName": "harness-scout-agent",
+                            "Role": "harness-scout-agent",
+                            "Workspace": "inherit",
+                            "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
+                        }]},
+                    },
+                }),
+                capture_output=True, text=True, env=env, check=False,
+            )
+            self.assertEqual("deny", json.loads(pr_deny.stdout)["decision"], pr_deny.stdout)
+
+            # Passing Model='flash' on Scout & Specialist when Lead is Neon -> allowed
+            for role_name, prompt_txt in (
+                ("harness-scout-agent", "Inspect A.kt, B.kt, C.kt, and D.kt callers."),
+                ("android-ui-expert-agent", "Audit RTL padding in A.kt."),
+            ):
+                pr_ok = subprocess.run(
+                    [sys.executable, str(engine_script)],
+                    input=json.dumps({
+                        "conversationId": "cid-neon",
+                        "toolCall": {
+                            "name": "invoke_subagent",
+                            "args": {"Subagents": [{
+                                "TypeName": role_name,
+                                "Role": role_name,
+                                "Workspace": "inherit",
+                                "Model": "flash",
+                                "Prompt": prompt_txt,
+                            }]},
+                        },
+                    }),
+                    capture_output=True, text=True, env=env, check=False,
+                )
+                self.assertEqual("allow", json.loads(pr_ok.stdout)["decision"], pr_ok.stdout)
+
+            # When reviewer policy is explicitly neon-dynamic, reviewer omits Model (INHERIT_PARENT_BY_OMISSION)
+            review_models.set_policy(
+                repo,
+                review_models.resolve_preset_policy("neon-dynamic"),
+                task_id="t-neon",
+                host="antigravity",
+                source="conversation",
+                proof_reference="Explicit Neon reviewers",
+                scope="task",
+            )
+            pol_path = repo / ".agents/state/tasks/t-neon/policy.json"
+            atomic_write_json(pol_path, {"reviewers": ["bug-test-reviewer-agent"], "surfaces": ["BUSINESS_LOGIC"], "risk_tier": "T2_FEATURE"})
+            frozen_n = review_models.freeze_models(repo, "t-neon", "antigravity", ["bug-test-reviewer-agent"])
+            atomic_write_json(
+                repo / ".agents/state/tasks/t-neon/current-run.json",
+                {
+                    "run_id": "RUN_NEON_1",
+                    "review_host": "antigravity",
+                    "review_protocol_version": 2,
+                    "policy": str(pol_path),
+                    "review_models": frozen_n,
+                },
+            )
+            exec_prof_n = review_execution.resolve_execution_profile(repo, "t-neon", host="antigravity")
+            self.assertEqual({}, exec_prof_n["reviewers"]["bug-test-reviewer-agent"]["native_arguments"])
+
+        gemini_tpl = (REPO_ROOT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
+        self.assertIn("Gemini 4 Neon (High)", gemini_tpl)
+        self.assertIn("`Carbon`/`Neon`/`Argon`", gemini_tpl)
+        self.assertNotIn("Orchestrator (Neon)", gemini_tpl)
+
+
+
+class TestV153PrecisionAuditFixes(unittest.TestCase):
+    """End-to-end regression suite for all 5 v1.5.3 AST, String-Interpolation, Room KMP, Perf & Architecture fixes."""
+
+    def test_v153_01_symbol_edit_and_source_outline_multiline_expr_default_eq_and_annotations(self):
+        import _source_outline
+        import _source_text
+        import symbol_edit
+
+        with tempfile.TemporaryDirectory() as td:
+            kt = Path(td) / "MealViewModel.kt"
+            kt.write_text(
+                'package com.demo\n\n'
+                'class MealViewModel {\n'
+                '    @Query(\n'
+                '        """\n'
+                '        SELECT * FROM meals\n'
+                '        WHERE note LIKE \'%{daily\'\n'
+                '        """\n'
+                '    )\n'
+                '    fun observeMeals(): Flow<List<String>> =\n'
+                '        flow {\n'
+                '            val s = "state=${if (true) "{" else "}"}"\n'
+                '            emit(listOf(s))\n'
+                '        }\n\n'
+                '    fun sync(force: Boolean = false)\n'
+                '    {\n'
+                '        println(force)\n'
+                '    }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            syms = {s["qualified_name"]: s for s in symbol_edit.parse_symbols(kt)}
+            # Multi-line @Query("""...""") + multi-line `= flow { ... }` span L4..L14 cleanly!
+            self.assertEqual(4, syms["MealViewModel.observeMeals"]["start_line"])
+            self.assertEqual(14, syms["MealViewModel.observeMeals"]["end_line"])
+            # Default parameter `= false` does not prematurely terminate brace-next function L16..L19!
+            self.assertEqual(16, syms["MealViewModel.sync"]["start_line"])
+            self.assertEqual(19, syms["MealViewModel.sync"]["end_line"])
+            # Nested string interpolation `"state=${if (true) "{" else "}"}"` maintains exact 0 brace delta!
+            self.assertEqual((0, 0), symbol_edit.code_brace_delta(kt.read_text(encoding="utf-8").splitlines()))
+
+            # _source_outline handles unbalanced `{` inside `"""..."""` without breaking enclosing class depth
+            out = {(e["kind"], e["name"]): (e["line"], e["end_line"]) for e in _source_outline.outline(kt)}
+            self.assertEqual((3, 20), out[("class", "MealViewModel")])
+            self.assertEqual((10, 14), out[("fun", "observeMeals")])
+            self.assertEqual((16, 19), out[("fun", "sync")])
+
+            # _source_text.mask_comments_and_strings preserves exact length & masks inner `{` inside `${...}`
+            sample = 'val msg = "status=${if (ok) "{open" else "ok"}"'
+            masked = _source_text.mask_comments_and_strings(sample)
+            self.assertEqual(len(sample), len(masked))
+            self.assertNotIn("{", masked)
+
+    def test_v153_02_room_guard_kmp_reified_builder_large_header_and_sql_comments(self):
+        import room_guard
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "kmp_app"
+            db_dir = repo / "shared/src/commonMain/kotlin/com/demo/db"
+            db_dir.mkdir(parents=True)
+            (repo / "shared/build.gradle.kts").write_text('plugins { kotlin("multiplatform") }\n', encoding="utf-8")
+
+            # >4500 chars of imports before @Database so old [:4000] truncation would miss AppDatabase completely!
+            long_imports = "".join(f"import com.demo.model.EntityModelNumber{i:03d}\n" for i in range(110))
+            assert len(long_imports) > 4500
+
+            entity_p = db_dir / "MealEntity.kt"
+            db_p = db_dir / "AppDatabase.kt"
+            di_p = db_dir / "DatabaseModule.kt"
+
+            entity_p.write_text("package com.demo.db\nimport androidx.room.Entity\n@Entity data class MealEntity(val id: Int)\n", encoding="utf-8")
+            db_p.write_text(
+                f"package com.demo.db\n{long_imports}import androidx.room.Database\nimport androidx.room.RoomDatabase\n"
+                "@Database(entities = [MealEntity::class], version = 1)\nabstract class AppDatabase : RoomDatabase()\n",
+                encoding="utf-8",
+            )
+            di_p.write_text(
+                f"package com.demo.db\n{long_imports}import androidx.room.Room\nimport androidx.room.migration.Migration\n"
+                "fun provideOther(ctx: Any) = Room.databaseBuilder(ctx, LegacyDb::class.java, \"legacy.db\").build()\n"
+                "fun provideMain() = Room.databaseBuilder<AppDatabase>(name = \"app.db\").build()\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@local"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "v1"], cwd=repo, check=True)
+
+            # Mutate MealEntity without bumping >4500-char AppDatabase -> MUST FAIL (proves [:4000] blind spot is gone!)
+            entity_p.write_text(
+                "package com.demo.db\nimport androidx.room.Entity\n@Entity data class MealEntity(val id: Int, val kcal: Int)\n",
+                encoding="utf-8",
+            )
+            ok_unbumped, msg_unbumped = room_guard.check_room_working_tree(repo=repo)
+            self.assertFalse(ok_unbumped, msg_unbumped)
+
+            # Bump version to 2 + register via KMP `Room.databaseBuilder<AppDatabase>` + include warning SQL comment -> MUST PASS!
+            db_p.write_text(
+                f"package com.demo.db\n{long_imports}import androidx.room.Database\nimport androidx.room.RoomDatabase\n"
+                "@Database(entities = [MealEntity::class], version = 2)\nabstract class AppDatabase : RoomDatabase()\n",
+                encoding="utf-8",
+            )
+            di_p.write_text(
+                f"package com.demo.db\n{long_imports}import androidx.room.Room\nimport androidx.room.migration.Migration\n"
+                "// WARNING: Never run ALTER TABLE MealEntity ADD COLUMN kcal INTEGER NOT NULL without DEFAULT!\n"
+                "val MIGRATION_1_2 = Migration(1, 2) { db -> db.execSQL(\"ALTER TABLE MealEntity ADD COLUMN kcal INTEGER NOT NULL DEFAULT 0\") }\n"
+                "fun provideOther(ctx: Any) = Room.databaseBuilder(ctx, LegacyDb::class.java, \"legacy.db\").build()\n"
+                "fun provideMain() = Room.databaseBuilder<AppDatabase>(name = \"app.db\").addMigrations(MIGRATION_1_2).build()\n",
+                encoding="utf-8",
+            )
+            ok_mig, msg_mig = room_guard.check_room_working_tree(repo=repo)
+            self.assertTrue(ok_mig, msg_mig)
+
+    def test_v153_03_perf_guard_test_exclusion_architecture_binding_and_kmp_raw_strings(self):
+        import _modules
+        import architecture_drift
+        import perf_guard
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "kmp_proj"
+            unit_test = repo / "app/src/test/java/com/demo/MealDaoTest.kt"
+            android_test = repo / "app/src/androidTest/java/com/demo/UiTest.kt"
+            kmp_test = repo / "shared/src/commonTest/kotlin/com/demo/SharedTest.kt"
+            prod_file = repo / "app/src/main/java/com/demo/ProdRepo.kt"
+            for p in (unit_test, android_test, kmp_test, prod_file):
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(
+                    "package com.demo\nclass Sample { fun run() { Room.inMemoryDatabaseBuilder().allowMainThreadQueries(); Thread.sleep(10); runBlocking { } } }\n",
+                    encoding="utf-8",
+                )
+            self.assertEqual([], perf_guard.scan_file(unit_test))
+            self.assertEqual([], perf_guard.scan_file(android_test))
+            self.assertEqual([], perf_guard.scan_file(kmp_test))
+            self.assertEqual(3, len(perf_guard.scan_file(prod_file)))
+
+            # architecture_drift._is_compose_screen ignores `bindingState` variable while catching real `FragmentHomeBinding`
+            self.assertTrue(architecture_drift._is_compose_screen("@Composable fun S(bindingState: String) { Text(bindingState) }"))
+            self.assertFalse(architecture_drift._is_compose_screen("@Composable fun S(b: FragmentHomeBinding) { }"))
+
+            # KMP commonMain purity & expect/actual ignore fake imports/declarations inside triple-quoted raw strings
+            cm = repo / "shared/src/commonMain/kotlin/com/demo/DocSample.kt"
+            am = repo / "shared/src/androidMain/kotlin/com/demo/DocSample.android.kt"
+            cm.parent.mkdir(parents=True, exist_ok=True)
+            am.parent.mkdir(parents=True, exist_ok=True)
+            cm.write_text(
+                'package com.demo\nval guide = """\nimport android.os.Bundle\nexpect fun notReal(): String\n"""\nexpect fun realPlatform(): String\n',
+                encoding="utf-8",
+            )
+            am.write_text('package com.demo\nactual fun realPlatform(): String = "Android"\n', encoding="utf-8")
+            pure_ok, pure_v = _modules.check_kmp_common_main_purity(repo, ["shared/src/commonMain/kotlin/com/demo/DocSample.kt"])
+            self.assertTrue(pure_ok, pure_v)
+            ea_ok, ea_msg = _modules.check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/com/demo/DocSample.kt"])
+            self.assertTrue(ea_ok, ea_msg)
+
+
+
+class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
+    """End-to-end regression suite for v1.5.0 (#1649/#201731 Hydrogen Medium 0-thinking guard, /fork scratch-free hint, and agy 1.5.12 metadata)."""
+    _KIT = Path(__file__).resolve().parents[2]
+
+    def test_v154_quirk_1649_windows_hydrogen_medium_offload_reminder_doctor_and_forensics(self) -> None:
+        import contextlib
+        import io
+        import antigravity_runtime as agr
+        import delegation_policy as dp
+        import platform_quirks as pq
+        import pre_invocation_reminder as pir
+        import review_models as rm
+        import session_forensics as sf
+        from _vnext_common import atomic_write_json
+        from doctor.engine import HarnessDoctor
+
+        self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("#1649"))
+        self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("201731"))
+        self.assertEqual("1.5.12", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
+        self.assertEqual("1.13.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["vscode_extension_version"])
+        vers = agr.detect_antigravity_versions({"ANTIGRAVITY_CLI_VERSION": "1.5.12", "ANTIGRAVITY_VSCODE_VERSION": "1.13.0"})
+        self.assertEqual("1.5.12", vers["cli_version"])
+        self.assertEqual("1.13.0", vers["vscode_extension_version"])
+
+        cls_1649 = agr.classify_antigravity_quota_or_capacity_error(
+            "Hydrogen Medium reported 0 thinking tokens (thinking_tokens=0) after read_file"
+        )
+        self.assertIsNotNone(cls_1649)
+        self.assertEqual("HYDROGEN_MEDIUM_ZERO_THINKING_AFTER_TOOL", cls_1649["code"])
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            repo = root / "app"
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            (repo / ".agents" / "state").mkdir(parents=True, exist_ok=True)
+            (repo / ".agents" / "cache").mkdir(parents=True, exist_ok=True)
+            for sub in ("harness-scout-agent", "android-ui-expert-agent", "bug-test-reviewer-agent"):
+                md_p = repo / ".agents" / "agents" / sub / "agent.md"
+                md_p.parent.mkdir(parents=True, exist_ok=True)
+                md_p.write_text("---\nname: role\ndescription: role\n---\nPrompt\n", encoding="utf-8")
+
+            dp.record_live_lead_session_model(repo, "cid-h-med", "Gemini 4 Hydrogen (Medium)")
+
+            # Non-Windows host -> does NOT force Model='flash' on Hydrogen Medium
+            with unittest.mock.patch.dict(os.environ, {"HARNESS_SIMULATE_PLATFORM": "linux"}, clear=False):
+                self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+                haz_linux = agr.inspect_nov15_antigravity_hazards(
+                    repo, env={"HARNESS_SIMULATE_PLATFORM": "linux", "ANTIGRAVITY_ACTIVE_MODEL": "Gemini 4 Hydrogen (Medium)"}
+                )
+                self.assertFalse(haz_linux["hydrogen_medium_win_tool_risk"])
+
+            # Windows host -> Hydrogen Medium triggers #1649 offload (`Model='flash'` -> Hydrogen Tiered High 1x), Doctor WARN, and PreInvocation guard;
+            # Hydrogen High on Windows remains INHERIT_PARENT_BY_OMISSION!
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_ACTIVE_MODEL": "Gemini 4 Hydrogen (Medium)"},
+                clear=False,
+            ):
+                self.assertEqual((True, "gemini-4-hydrogen-medium"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+                haz_win = agr.inspect_nov15_antigravity_hazards(repo)
+                self.assertTrue(haz_win["hydrogen_medium_win_tool_risk"])
+
+                # Scout without Model='flash' is denied with #1649 guidance; with Model='flash' is allowed!
+                ok_no_m, reason_no_m, code_no_m = dp.validate_utility_dispatch(
+                    repo,
+                    None,
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": "Inspect app/src/main/kotlin/com/demo/A.kt and B.kt callers."}],
+                    parent_conversation_id="cid-h-med",
+                )
+                self.assertFalse(ok_no_m)
+                self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_no_m)
+                self.assertIn("HYDROGEN_MEDIUM_WIN_TOOL_THINKING_GUARD", reason_no_m)
+
+                ok_flash, reason_flash, _ = dp.validate_utility_dispatch(
+                    repo,
+                    None,
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": "Inspect app/src/main/kotlin/com/demo/A.kt and B.kt callers."}],
+                    parent_conversation_id="cid-h-med",
+                )
+                self.assertTrue(ok_flash, reason_flash)
+
+                # Proven parent session justifies flash offload in review_models
+                self.assertTrue(
+                    rm._is_proven_frontier_parent_session(
+                        {}, {"repo": str(repo)}, {"execution_id": "sub-1"}
+                    )
+                )
+
+                # PreInvocation surfaces #1649 warning on Windows Hydrogen Medium
+                with unittest.mock.patch.object(pir, "REPO", repo), unittest.mock.patch.object(pir, "_update_notice", return_value=""):
+                    buf_p = io.StringIO()
+                    with unittest.mock.patch(
+                        "sys.stdin",
+                        io.StringIO(json.dumps({"invocationNum": 0, "conversationId": "cid-h-med", "modelName": "Gemini 4 Hydrogen (Medium)"})),
+                    ), contextlib.redirect_stdout(buf_p):
+                        pir.main()
+                    ephem = json.loads(buf_p.getvalue())["injectSteps"][0]["ephemeralMessage"]
+                    self.assertIn("THINKING-DROP GUARD #1649", ephem)
+
+                # Doctor check_antigravity_installation logs WARN for Windows Hydrogen Medium
+                doc = HarnessDoctor(repo, run_selftest=False)
+                doc.check_antigravity_installation()
+                nov15_chk = next(r for r in doc.results if r.name == "Nov 15 Quota & Diff Guard")
+                self.assertEqual("WARN", nov15_chk.status)
+                self.assertIn("#1649", nov15_chk.message)
+
+                # Switching Lead to Hydrogen High on Windows clears #1649 offload immediately
+                dp.record_live_lead_session_model(repo, "cid-h-high", "Gemini 4 Hydrogen (High)")
+                self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-high"))
+
+                # Disabling quirk 1649 suppresses Windows Hydrogen Medium offload cleanly
+                with unittest.mock.patch.dict(os.environ, {"HARNESS_DISABLE_QUIRKS": "1649"}, clear=False):
+                    self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+
+            # Forensics: detect thinking_tokens == 0 after read_file on Hydrogen Medium in transcript_full.jsonl
+            brain_root = root / "brain"
+            conv_dir = brain_root / "conv-1649" / ".system_generated" / "logs"
+            conv_dir.mkdir(parents=True)
+            tx_full = conv_dir / "transcript_full.jsonl"
+            tx_full.write_text(
+                "\n".join([
+                    json.dumps({"step_index": 1, "model": "gemini-4-hydrogen-medium", "usage": {"input_tokens": 1200, "output_tokens": 80, "thinking_tokens": 140}}),
+                    json.dumps({"step_index": 2, "model": "gemini-4-hydrogen-medium", "tool_name": "read_file"}),
+                    json.dumps({"step_index": 3, "model": "gemini-4-hydrogen-medium", "usage": {"input_tokens": 2400, "cache_read_tokens": 1200, "output_tokens": 95, "thinking_tokens": 0}}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            atomic_write_json(repo / ".agents/state/active-conversation.json", {"conversation_id": "conv-1649"})
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}, clear=False):
+                diag = sf.diagnose_session(repo, conversation_id="conv-1649")
+                self.assertEqual(1, diag["transcript"]["hydrogen_medium_zero_thinking_hits"])
+                codes = [f["code"] for f in diag["findings"]]
+                self.assertIn("HYDROGEN_MEDIUM_ZERO_THINKING_AFTER_TOOL", codes)
+
+    def test_v154_verification_contract_fork_safe_path_hint_and_policy_vocab_zero_diff(self) -> None:
+        import verification_contract as vc
+        from _vnext_common import ValidationError
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            with self.assertRaises(ValidationError) as ctx:
+                vc.load_definition(repo, "{broken-powershell-json")
+            err_msg = str(ctx.exception)
+            self.assertIn(".agents/cache/tmp-contract.json", err_msg)
+            self.assertIn("/fork", err_msg)
+            self.assertNotIn("e.g. the conversation scratch folder", err_msg)
+
+            # Confirm a repo-local .agents/cache/tmp-contract.json loads cleanly
+            tmp_c = repo / ".agents" / "cache" / "tmp-contract.json"
+            tmp_c.parent.mkdir(parents=True, exist_ok=True)
+            tmp_c.write_text(json.dumps({"unit_tests": ["testDebugUnitTest"]}), encoding="utf-8")
+            loaded = vc.load_definition(repo, ".agents/cache/tmp-contract.json")
+            self.assertEqual(["testDebugUnitTest"], loaded["unit_tests"])
+
+    def test_v150_hardening_chained_expr_nested_generics_and_non_arabic_plurals(self) -> None:
+        import _graph_core
+        import _source_outline
+        import check_strings
+        import symbol_edit
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            # 1) Chained expression body spans all continuation lines in both outline & symbol_edit
+            kt = repo / "Chain.kt"
+            kt.write_text(
+                "\n".join([
+                    "class Chain {",
+                    "    fun filterNames(items: List<String>): List<String> =",
+                    "        items",
+                    "            .filter { it.isNotBlank() }",
+                    "            .map { it.trim() }",
+                    "",
+                    "    fun nextFn() = 42",
+                    "}",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            syms = {s["name"]: s for s in symbol_edit.parse_symbols(kt)}
+            self.assertEqual((2, 5), (syms["filterNames"]["start_line"], syms["filterNames"]["end_line"]))
+            self.assertEqual((7, 7), (syms["nextFn"]["start_line"], syms["nextFn"]["end_line"]))
+            out_map = {e["name"]: e for e in _source_outline.outline(kt)}
+            self.assertEqual((2, 5), (out_map["filterNames"]["line"], out_map["filterNames"]["end_line"]))
+
+            # 2) Nested generics & `where` constraints do not pollute Kotlin supertype edges
+            _, supers, _ = _graph_core._extract_di_and_contract_metadata(
+                "class RepoImpl<T> : BaseRepo<List<Map<String, Foo>>>(), RealContract where T : Comparable<T> {\n}\n",
+                is_java=False,
+            )
+            self.assertEqual(["BaseRepo", "RealContract"], supers.get("RepoImpl"))
+
+            # 3) Non-Arabic plural where base `one` omits `%d` and `other` repeats `%1$d` produces zero false positives
+            (repo / "app/src/main/res/values").mkdir(parents=True)
+            (repo / "app/src/main/res/values-fr").mkdir(parents=True)
+            (repo / "app/src/main/res/values/strings.xml").write_text(
+                "<resources>\n"
+                "  <plurals name=\"items_count\">\n"
+                "    <item quantity=\"one\">One item</item>\n"
+                "    <item quantity=\"other\">%1$d of %1$d items</item>\n"
+                "  </plurals>\n"
+                "</resources>\n",
+                encoding="utf-8",
+            )
+            (repo / "app/src/main/res/values-fr/strings.xml").write_text(
+                "<resources>\n"
+                "  <plurals name=\"items_count\">\n"
+                "    <item quantity=\"one\">Un element</item>\n"
+                "    <item quantity=\"other\">%1$d sur %1$d elements</item>\n"
+                "  </plurals>\n"
+                "</resources>\n",
+                encoding="utf-8",
+            )
+            saved_cs = check_strings.REPO
+            check_strings.REPO = repo
+            try:
+                rc = check_strings.main([], repo=repo)
+            finally:
+                check_strings.REPO = saved_cs
+            self.assertEqual(0, rc)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

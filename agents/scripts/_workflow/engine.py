@@ -481,6 +481,39 @@ def draft(args: argparse.Namespace) -> dict:
                     "Use 'workflow.py revise' to update it or cancel it first via 'workflow.py cancel'."
                 )
 
+    inline_ctx_summary: dict[str, Any] | None = None
+    if getattr(args, "with_context", False):
+        try:
+            from task_context import resolve_task_contexts
+            existing_targets = [
+                rel for rel in (candidate.get("expected_files") or [])
+                if (repo / rel).is_file() and Path(rel).suffix.lower() in {".kt", ".java", ".xml", ".swift"}
+            ][:8]
+            if existing_targets:
+                ctx_res = resolve_task_contexts(repo, files=existing_targets, trust_stat=True)
+                rows = ctx_res.get("results") if isinstance(ctx_res.get("results"), list) else [ctx_res]
+                bound_impls = [
+                    b.get("path") or b.get("name")
+                    for r in rows if isinstance(r, dict)
+                    for b in (r.get("bound_implementations") or [])
+                    if isinstance(b, dict) and (b.get("path") or b.get("name"))
+                ]
+                cand_tests = [
+                    t.get("path") or t.get("name")
+                    for r in rows if isinstance(r, dict)
+                    for t in (r.get("tests") or [])
+                    if isinstance(t, dict) and (t.get("path") or t.get("name"))
+                ]
+                inline_ctx_summary = {
+                    "status": ctx_res.get("status"),
+                    "discovery_id": (ctx_res.get("discovery") or {}).get("id") or (rows[0].get("discovery") or {}).get("id") if rows and isinstance(rows[0], dict) else None,
+                    "read_ranges": list(ctx_res.get("read_ranges") or [])[:16],
+                    "bound_implementations": list(dict.fromkeys(bound_impls))[:12],
+                    "candidate_tests": list(dict.fromkeys(cand_tests))[:12],
+                }
+        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+            inline_ctx_summary = None
+
     plan = _build_and_save_plan(repo, args, task_id, is_revision=False)
     try:
         from execution_mode import bind_pending_execution_mode_to_task
@@ -488,6 +521,8 @@ def draft(args: argparse.Namespace) -> dict:
     except (ImportError, OSError, ValueError, ValidationError):
         pass
     _write_plan_document(repo, task_id, plan)
+    if inline_ctx_summary is not None:
+        return {**plan, "inline_task_context": inline_ctx_summary}
     return plan
 
 
@@ -1371,6 +1406,27 @@ def record_approval(args: argparse.Namespace) -> dict:
             save_stable_snapshot(repo, args.task_id, "approved", plan=plan)
         except (OSError, ValueError, ImportError, ValidationError):
             pass
+    if getattr(args, "with_delegation", False):
+        try:
+            from delegation_policy import evaluate_delegation_policy
+            del_plan = evaluate_delegation_policy(repo, task_id=args.task_id, plan=plan)
+            compact_del = {
+                "strategy": del_plan.get("strategy") or del_plan.get("execution_strategy") or "INLINE_LEAD_DIRECT",
+                "risk_tier": del_plan.get("risk_tier") or plan.get("risk_tier"),
+                "quota_strategy": del_plan.get("quota_strategy"),
+                "phases": [
+                    {
+                        "id": ph.get("id") or ph.get("phase_id"),
+                        "mode": ph.get("mode") or ph.get("execution_mode") or "INLINE_LEAD_DIRECT",
+                        "expected_files": (ph.get("expected_files") or [])[:12],
+                    }
+                    for ph in (del_plan.get("phases") or [])
+                    if isinstance(ph, dict)
+                ],
+            }
+            return {**plan, "delegation_brief": compact_del}
+        except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError) as _del_exc:
+            sublog(f"Optional delegation brief skipped: {_del_exc}")
     return plan
 
 
@@ -2724,6 +2780,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Adopt pre-existing uncommitted WIP edits in expected_files into this task's delta rather than isolating them in task-baseline.json",
     )
+    draft_cmd.add_argument(
+        "--with-context",
+        action="store_true",
+        help="Resolve graph task-context (including DI-bound implementations, read_ranges, and candidate tests) and publish DiscoveryReceipt in the same call",
+    )
     draft_cmd.set_defaults(handler=draft)
     qs_cmd = sub.add_parser(
         "quick-start",
@@ -2776,6 +2837,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("--proof-reference", required=True)
     command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
     command.add_argument("--plan-hash", default=None, help="Plan hash shown in the approved PLAN_SUMMARY (at least 12 hex characters)")
+    command.add_argument(
+        "--with-delegation",
+        action="store_true",
+        help="Compute and attach the delegate-plan execution brief in the same approval call to eliminate a separate post-approval CLI roundtrip",
+    )
     command.set_defaults(handler=record_approval)
     command = sub.add_parser("approve-sensitive", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
@@ -3218,6 +3284,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.action in ("draft", "revise") or (args.action == "quick-start" and result.get("status") == "AWAITING_DEVELOPER_APPROVAL") or (args.action == "merge" and args.apply):
             if args.action == "quick-start" and result.get("express_fallback_reason"):
                 print(f"EXPRESS_FALLBACK_REASON={result['express_fallback_reason']}")
+            inline_ctx = result.get("inline_task_context") if isinstance(result, dict) else None
+            if isinstance(inline_ctx, dict):
+                if inline_ctx.get("bound_implementations"):
+                    print("CONTEXT_BOUND_IMPLEMENTATIONS=" + ",".join(str(x) for x in inline_ctx["bound_implementations"]))
+                if inline_ctx.get("candidate_tests"):
+                    print("CONTEXT_CANDIDATE_TESTS=" + ",".join(str(x) for x in inline_ctx["candidate_tests"]))
+                for rng in inline_ctx.get("read_ranges") or []:
+                    print(f"CONTEXT_READ_RANGE={rng}")
             for line in approval_material_lines(Path(args.repo).resolve(), result, "draft" if args.action == "quick-start" else args.action):
                 print(line)
         if args.action in ("approve", "quick-start") and result.get("status") == "IMPLEMENTING":
@@ -3225,6 +3299,9 @@ def main(argv: list[str] | None = None) -> int:
             if result.get("express_track"):
                 print(f"EXPRESS_TRACK=true RISK_TIER={result.get('express_risk_tier', 'T1_LOW_RISK')}")
             print(f"APPROVED_PLAN_HASH={str(result.get('plan_sha256') or '')[:12]}")
+            del_brief = result.get("delegation_brief") if isinstance(result, dict) else None
+            if isinstance(del_brief, dict):
+                print("DELEGATION_BRIEF=" + json.dumps(del_brief, ensure_ascii=False))
         print(f"TASK_STATUS={result.get('status', 'READY')}")
         if args.action == "checkpoint-phase" and result.get("auto_advanced_phases"):
             print("AUTO_ADVANCED_PHASES=" + ",".join(str(x) for x in result["auto_advanced_phases"]))

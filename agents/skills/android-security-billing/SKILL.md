@@ -3,6 +3,7 @@ name: android-security-billing
 description: Use when implementing, modifying, or reviewing Android authentication, cryptography, sensitive data handling, or Google Play Billing flows.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Android Security, Authentication, and Billing

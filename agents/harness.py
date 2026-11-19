@@ -56,11 +56,12 @@ def _run(script: str, args: list[str]) -> int:
         or (script == "roborazzi_gate.py" and args[:1] in (["capabilities"], ["inspect-tree"]))
         or (script == "maestro_bridge.py" and args[:1] in (["capabilities"], ["list"]))
         or (script == "session_forensics.py")
+        or (script == "dynamic_review_workflow.py" and "--plan-json" in args)
         or (script == "web_relay.py" and (args[:1] in (["pack"], ["status"]) or (args[:1] == ["apply"] and "--dry-run" in args)))
     )
     # The bounded verification runner (and `task ship`, which invokes it) owns its
     # execution lease; taking it here too would create a nested lock.
-    owns_own_lease = script == "verification_steps.py" or (script == "workflow.py" and args[:1] == ["ship"])
+    owns_own_lease = script in {"verification_steps.py", "dynamic_review_workflow.py"} or (script == "workflow.py" and args[:1] == ["ship"])
     if not owns_own_lease and not read_only and not {"--help", "-h"} & set(args):
         active = AGENTS_ROOT / "state/active-task.json"
         task_id = ""
@@ -89,6 +90,7 @@ def _run(script: str, args: list[str]) -> int:
             or (script == "workflow.py" and args[:1] == ["status"])
             or (script == "web_relay.py" and args[:1] == ["status"])
             or (script == "execution_mode.py" and (not args or args[:1] == ["show"]))
+            or (script == "dynamic_review_workflow.py" and "--plan-json" in args)
         )
     )
     if in_process_ok:
@@ -144,6 +146,8 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
     import io
     import json
 
+    if step_args and step_args[:2] == ["review", "dynamic-workflow"]:
+        return
     if step_args and step_args[0] == "device" and (
         exit_code != 0 or step_args[1:2] in (["install-start"], ["start"])
     ):

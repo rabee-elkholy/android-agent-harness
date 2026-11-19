@@ -203,8 +203,8 @@ def record_live_lead_session_model(repo: Path, conversation_id: str, model_name:
         pass
 
 
-def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = "") -> str:
-    """Return normalized native family (e.g. 'gemini-4-hydrogen' or 'gemini-4-carbon') of the active Antigravity Lead session when observable."""
+def _detect_live_parent_lead_family_and_tier(repo: Path, parent_conversation_id: str = "") -> tuple[str, str | None]:
+    """Return `(family, thinking_tier)` of the active Antigravity Lead session when observable."""
     cand_cids: list[str] = []
     explicit_p = str(parent_conversation_id or "").strip()
     if explicit_p:
@@ -219,16 +219,21 @@ def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = ""
             native_model_metadata,
             resolve_transcript,
         )
-        from review_models import _split_antigravity_family_and_tier
+        from review_models import _split_antigravity_family_and_tier, normalize_model_token
     except ImportError:
-        return ""
+        return ("", None)
+
+    def _split_norm(raw_val: str) -> tuple[str, str | None]:
+        norm_tok = normalize_model_token(raw_val)
+        return _split_antigravity_family_and_tier(norm_tok if isinstance(norm_tok, str) and norm_tok else raw_val)
+
     env_lead_override = str(os.environ.get("HARNESS_LEAD_MODEL_FAMILY") or "").strip()
     if env_lead_override:
         if "orchestrator" in env_lead_override.lower():
-            return "gemini-4-hydrogen"
-        fam_ovr, _ = _split_antigravity_family_and_tier(env_lead_override)
+            return ("gemini-4-hydrogen", None)
+        fam_ovr, tier_ovr = _split_norm(env_lead_override)
         if fam_ovr:
-            return fam_ovr
+            return (fam_ovr, tier_ovr)
     st = state_root(repo)
     live_models_map: dict[str, str] = {}
     live_cache_p = st / "live-session-models.json"
@@ -250,10 +255,10 @@ def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = ""
         cached_m = live_models_map.get(cid, "")
         if cached_m:
             if "orchestrator" in cached_m.lower():
-                return "gemini-4-hydrogen"
-            fam_c, _ = _split_antigravity_family_and_tier(cached_m)
+                return ("gemini-4-hydrogen", None)
+            fam_c, tier_c = _split_norm(cached_m)
             if fam_c:
-                return fam_c
+                return (fam_c, tier_c)
         try:
             tx_p = resolve_transcript(cid)
             if tx_p is None:
@@ -266,37 +271,46 @@ def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = ""
         if isinstance(meta, dict) and meta.get("host_configured_model"):
             raw_hm = str(meta["host_configured_model"])
             if "orchestrator" in raw_hm.lower():
-                return "gemini-4-hydrogen"
-            fam, _ = _split_antigravity_family_and_tier(raw_hm)
+                return ("gemini-4-hydrogen", None)
+            fam, tier = _split_norm(raw_hm)
             if fam:
-                return fam
+                return (fam, tier)
     if cand_cids and os.environ.get("HARNESS_HOST", "").strip().lower() == "antigravity":
         try:
             from review_models import load_policy
             pol, pol_src = load_policy(repo, None)
             def_m = str((pol or {}).get("default") or "").strip().lower()
             if pol_src != "default" and def_m.startswith("hydrogen"):
-                return "gemini-4-hydrogen"
+                return ("gemini-4-hydrogen", None)
         except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
             _policy_probe_failed = True
-    return ""
+    return ("", None)
+
+
+def _detect_live_parent_lead_family(repo: Path, parent_conversation_id: str = "") -> str:
+    """Return normalized native family (e.g. 'gemini-4-hydrogen' or 'gemini-4-carbon') of the active Antigravity Lead session when observable."""
+    return _detect_live_parent_lead_family_and_tier(repo, parent_conversation_id=parent_conversation_id)[0]
 
 
 def is_frontier_lead_requiring_flash_offload(
     repo: Path,
     parent_conversation_id: str = "",
 ) -> tuple[bool, str]:
-    """Return `(True, lead_family)` when the active Lead session runs `Carbon` or `Argon` and `#200144` offload is enabled.
+    """Return `(True, lead_label)` when `invoke_subagent` must pass `Model='flash'` (`gemini-4-hydrogen-tiered-high` 1x).
 
-    Because `.agents/agents/*/agent.md` omits `model:` (#200144), omitting `Model` in `invoke_subagent`
-    on a `Carbon`/`Argon` parent session inherits `Carbon`/`Argon` and burns frontier quota. Passing
-    `Model='flash'` routes natively in Antigravity's executor protobuf to `gemini-4-hydrogen-tiered-high` (`1x`).
+    Activates when:
+    1. Active Lead session runs `Carbon`, `Neon`, or `Argon` (#200144 frontier quota shield), OR
+    2. Active Windows Lead session runs `Gemini 4 Hydrogen (Medium)` (#1649/#201731: inheriting Hydrogen Medium
+       on Windows drops `thinking_tokens` to 0 after `read_file`/`view_file`, whereas `Model='flash'` routes
+       natively to `gemini-4-hydrogen-tiered-high` at the exact same `1.00x` quota cost).
     """
     if not is_quirk_enabled("200144", repo=repo):
         return (False, "")
-    fam = _detect_live_parent_lead_family(repo, parent_conversation_id=parent_conversation_id)
-    if fam in {"gemini-4-carbon", "gemini-4-argon"}:
+    fam, tier = _detect_live_parent_lead_family_and_tier(repo, parent_conversation_id=parent_conversation_id)
+    if fam in {"gemini-4-carbon", "gemini-4-argon", "gemini-4-neon"}:
         return (True, fam)
+    if fam == "gemini-4-hydrogen" and tier == "medium" and is_quirk_enabled("1649", repo=repo, respect_platform=True):
+        return (True, "gemini-4-hydrogen-medium")
     return (False, fam)
 
 
@@ -473,10 +487,11 @@ def evaluate_delegation_policy(
     effective_subagent_enum = effective_scout_invoke_arg or "inherit"
     quota_guide = {
         "primary_chat_model": "Gemini 4 Carbon (Medium)",
+        "pro_frontier_chat_model": "Gemini 4 Neon (High)",
         "fast_fallback_chat_model": "Gemini 4 Hydrogen (High)",
         "midweek_rotation_chat_model": "Claude Sonnet 5.5 (Thinking) / Claude Opus 5.5 (Thinking)",
         "rotation_trigger": (
-            "All Gemini models share ONE `/usage` quota pool (Carbon/Argon at 3.00x vs Hydrogen/Flash at 1.00x); "
+            "All Gemini models share ONE `/usage` quota pool (Carbon/Argon at 3.00x, Neon at 2.00x vs Hydrogen/Flash at 1.00x); "
             "offload heavy runs via Web-Relay (external AI chat) or switch main chat to Claude 5.5 (separate pool) at ~50%."
         ),
         "orchestrator_guard": (
@@ -934,6 +949,14 @@ def validate_utility_dispatch(
                     )
             elif offload_needed:
                 if raw_model != "flash":
+                    if lead_fam_now == "gemini-4-hydrogen-medium":
+                        return (
+                            False,
+                            f"HYDROGEN_MEDIUM_WIN_TOOL_THINKING_GUARD (#1649/#201731): Active Windows Lead chat is running `{lead_fam_now}`, "
+                            f"which drops `thinking_tokens` to 0 after workspace file reads (`read_file`/`view_file`). Re-invoke `{SCOUT_AGENT}` "
+                            "immediately with `Model='flash'` (routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` at the same 1x quota).",
+                            "UTILITY_MODEL_QUOTA_GUARD",
+                        )
                     return (
                         False,
                         f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Active Lead chat is running `{lead_fam_now}`, and modelless `.agents/agents/{SCOUT_AGENT}/agent.md` (#200144) "

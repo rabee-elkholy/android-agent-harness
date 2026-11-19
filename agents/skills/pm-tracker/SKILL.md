@@ -3,6 +3,7 @@ name: pm-tracker
 description: Safe Universal PM MCP and Zoho Sprints synchronization (`pm discover`, `pm authorize`, `pm prepare-report`, `zoho start-sync`, `zoho delivery-sync`). Use before reading or updating external tickets.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # PM Tracker Integration Skill

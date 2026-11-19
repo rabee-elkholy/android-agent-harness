@@ -59,78 +59,11 @@ _SWIFT_DECL_RE = re.compile(
 
 
 def scrub_comments_and_strings(lines: list[str]) -> list[str]:
-    """Blank string literals (including triple-quoted multiline strings) and comments line-by-line."""
-    out: list[str] = []
-    in_block_comment = 0
-    in_triple_string = False
-
-    for raw in lines:
-        buf: list[str] = []
-        i = 0
-        n = len(raw)
-        while i < n:
-            if in_triple_string:
-                end_idx = raw.find('"""', i)
-                if end_idx < 0:
-                    buf.append(" " * (n - i))
-                    i = n
-                else:
-                    buf.append(" " * (end_idx - i) + '"""')
-                    i = end_idx + 3
-                    in_triple_string = False
-                continue
-
-            if in_block_comment > 0:
-                c_open = raw.find("/*", i)
-                c_close = raw.find("*/", i)
-                if c_close < 0:
-                    buf.append(" " * (n - i))
-                    i = n
-                elif c_open >= 0 and c_open < c_close:
-                    buf.append(" " * (c_open + 2 - i))
-                    in_block_comment += 1
-                    i = c_open + 2
-                else:
-                    buf.append(" " * (c_close + 2 - i))
-                    in_block_comment -= 1
-                    i = c_close + 2
-                continue
-
-            if raw.startswith("//", i):
-                buf.append(" " * (n - i))
-                break
-            if raw.startswith("/*", i):
-                buf.append("  ")
-                in_block_comment = 1
-                i += 2
-                continue
-            if raw.startswith('"""', i):
-                buf.append('"""')
-                in_triple_string = True
-                i += 3
-                continue
-            ch = raw[i]
-            if ch in ('"', "'"):
-                quote = ch
-                buf.append(quote)
-                i += 1
-                while i < n:
-                    c = raw[i]
-                    if c == "\\" and i + 1 < n:
-                        buf.append("  ")
-                        i += 2
-                        continue
-                    if c == quote:
-                        buf.append(quote)
-                        i += 1
-                        break
-                    buf.append(" ")
-                    i += 1
-                continue
-            buf.append(ch)
-            i += 1
-        out.append("".join(buf))
-    return out
+    """Blank string literals (including `${...}` nested quotes and triple-quoted strings) and comments."""
+    if not lines:
+        return []
+    from _source_text import mask_comments_and_strings
+    return mask_comments_and_strings("\n".join(lines)).split("\n")
 
 
 def code_brace_delta(lines: list[str]) -> tuple[int, int]:
@@ -197,6 +130,8 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
     parens = 0
     pending: tuple[dict[str, Any], int, str] | None = None
 
+    from _source_text import is_expr_continuation_line, scan_top_level_assignment
+
     func_kinds = {"fun", "method", "func", "init"}
     prop_kinds = {"val", "var"}
 
@@ -209,15 +144,32 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
                 kind, name = matched
                 is_prop = kind in prop_kinds
                 if (not is_prop or depth in type_depths) and (depth in type_depths or kind in func_kinds):
-                    # Include contiguous leading annotations/KDoc lines attached directly above declaration
+                    # Include contiguous leading single-line AND multi-line `@Annotation(...)` blocks
                     decl_start = idx
                     scan = idx - 2
                     while scan >= 0:
                         prev_raw = raw_lines[scan].strip()
+                        prev_code = code_lines[scan].strip()
                         if prev_raw.startswith("@"):
                             decl_start = scan + 1
                             scan -= 1
                             continue
+                        if prev_code.endswith(")"):
+                            p_bal = 0
+                            a_scan = scan
+                            matched_ann_start = -1
+                            while a_scan >= 0:
+                                c_ln = code_lines[a_scan]
+                                p_bal += c_ln.count(")") - c_ln.count("(")
+                                if p_bal <= 0:
+                                    if raw_lines[a_scan].lstrip().startswith("@"):
+                                        matched_ann_start = a_scan
+                                    break
+                                a_scan -= 1
+                            if matched_ann_start >= 0:
+                                decl_start = matched_ann_start + 1
+                                scan = matched_ann_start - 1
+                                continue
                         break
                     enclosing = ".".join(t_name for t_name, _ in type_stack)
                     qualified = f"{enclosing}.{name}" if enclosing else name
@@ -235,6 +187,7 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
         opens = line.count("{")
         closes = line.count("}")
         parens_after = max(0, parens + line.count("(") - line.count(")"))
+        has_top_eq, ends_top_eq = scan_top_level_assignment(line, parens)
         body: tuple[dict[str, Any], int] | None = None
 
         if entry is not None:
@@ -243,10 +196,13 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
                 entry["body_open_line"] = idx
                 body = (entry, depth)
             elif parens_after > 0:
-                pending = (entry, depth, "paren")
-            elif "=" in line and kind in func_kinds | prop_kinds:
-                # Single-line or multi-line expression body without braces
-                entry["end_line"] = idx
+                pending = (entry, depth, "expr_paren" if (has_top_eq and kind in func_kinds | prop_kinds) else "paren")
+            elif has_top_eq and kind in func_kinds | prop_kinds:
+                if ends_top_eq:
+                    pending = (entry, depth, "expr_next")
+                else:
+                    entry["end_line"] = idx
+                    pending = (entry, depth, "expr_cont")
             elif not stripped.endswith(("}", ";")):
                 pending = (entry, depth, "brace_next")
         elif pending is not None:
@@ -256,20 +212,53 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
                     if opens > closes:
                         held["body_open_line"] = idx
                         body, pending = (held, held_depth), None
-                    elif "=" in line:
-                        held["end_line"] = idx
-                        pending = None
+                    elif has_top_eq:
+                        if ends_top_eq:
+                            pending = (held, held_depth, "expr_next")
+                        else:
+                            held["end_line"] = idx
+                            pending = (held, held_depth, "expr_cont")
                     elif not stripped.endswith(("}", ";")):
+                        held["end_line"] = idx
                         pending = (held, held_depth, "brace_next")
                     else:
                         held["end_line"] = idx
                         pending = None
+            elif mode == "expr_paren":
+                if parens_after == 0:
+                    if opens > closes:
+                        held["body_open_line"] = idx
+                        body, pending = (held, held_depth), None
+                    else:
+                        held["end_line"] = idx
+                        pending = (held, held_depth, "expr_cont")
+            elif mode == "expr_next":
+                if stripped:
+                    if opens > closes:
+                        held["body_open_line"] = idx
+                        body, pending = (held, held_depth), None
+                    elif parens_after > 0:
+                        pending = (held, held_depth, "expr_paren")
+                    else:
+                        held["end_line"] = idx
+                        pending = (held, held_depth, "expr_cont")
+            elif mode == "expr_cont":
+                if is_expr_continuation_line(stripped):
+                    if opens > closes:
+                        held["body_open_line"] = idx
+                        body, pending = (held, held_depth), None
+                    elif parens_after > 0:
+                        pending = (held, held_depth, "expr_paren")
+                    else:
+                        held["end_line"] = idx
+                else:
+                    pending = None
             elif stripped:
                 if stripped.startswith("{") or opens > closes:
                     held["body_open_line"] = idx
                     body = (held, held_depth)
                 else:
-                    held["end_line"] = max(int(held["end_line"]), idx if "=" in line else int(held["declaration_line"]))
+                    held["end_line"] = max(int(held["end_line"]), idx if has_top_eq else int(held["declaration_line"]))
                 pending = None
 
         if body is not None:

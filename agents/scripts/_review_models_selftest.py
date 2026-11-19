@@ -1244,6 +1244,59 @@ class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
         self.assertEqual("gemini-4-carbon-medium", frozen["reviewers"]["arch-regression-reviewer-agent"]["resolved_model"])
         self.assertEqual("gemini-3.1-pro-high", frozen["reviewers"][SECURITY]["resolved_model"])
 
+        # Standalone Gemini 4 Neon full parity (low, medium, high, xhigh/extra, neon-dynamic)
+        for raw_tok, exp_tok in (
+            ("neon@dynamic", "neon-dynamic"),
+            ("neon@auto", "neon-dynamic"),
+            ("gemini-4-neon@dynamic", "neon-dynamic"),
+            ("neon@low", "gemini-4-neon-low"),
+            ("neon@medium", "gemini-4-neon-medium"),
+            ("neon@high", "gemini-4-neon-high"),
+            ("neon@xhigh", "gemini-4-neon-xhigh"),
+            ("neon@extra", "gemini-4-neon-xhigh"),
+            ("gemini-4-neon-extra", "gemini-4-neon-xhigh"),
+            ("gemini-4-neon@extra", "gemini-4-neon-xhigh"),
+        ):
+            self.assertEqual(exp_tok, models.normalize_model_token(raw_tok), raw_tok)
+        neon_pol = models.resolve_preset_policy("neon-dynamic")
+        self.assertEqual("neon-dynamic", neon_pol["default"])
+        models.set_policy(
+            self.repo,
+            {"schema_version": 1, "default": "neon-dynamic", "overrides": {SECURITY: "gemini-4-neon-xhigh"}},
+            task_id=None,
+            host="antigravity",
+            source="conversation",
+            proof_reference="Use standalone Gemini 4 Neon",
+            scope="project",
+        )
+        frozen_neon = models.freeze_models(
+            self.repo,
+            "t-neon",
+            "antigravity",
+            [ROLE, SECURITY, "arch-regression-reviewer-agent"],
+            policy_data={"reviewer_efforts": {ROLE: "DEEP", SECURITY: "DEEP", "arch-regression-reviewer-agent": "NORMAL"}},
+        )
+        self.assertEqual("gemini-4-neon-high", frozen_neon["reviewers"][ROLE]["resolved_model"])
+        self.assertEqual("gemini-4-neon-medium", frozen_neon["reviewers"]["arch-regression-reviewer-agent"]["resolved_model"])
+        self.assertEqual("gemini-4-neon-xhigh", frozen_neon["reviewers"][SECURITY]["resolved_model"])
+        self.assertEqual("xhigh", frozen_neon["reviewers"][SECURITY]["thinking_level"])
+        self.assertTrue(
+            models._matches_antigravity_native_model(
+                "gemini-4-neon-xhigh", "xhigh", "gemini-4-neon-tiered-xhigh", ["models/gemini-4-neon-extra"]
+            )
+        )
+        self.assertFalse(
+            models._matches_antigravity_native_model(
+                "gemini-4-neon-high", "high", "gemini-4-neon-low", ["gemini-4-neon-low"]
+            )
+        )
+        self.assertTrue(
+            models._matches_antigravity_native_model(
+                "gemini-4-hydrogen-high", "high", "gemini-4-neon-high", ["gemini-4-neon-high"],
+                allow_upward_parent_inheritance=True,
+            )
+        )
+
         gemini_tpl = (Path(__file__).resolve().parents[1] / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         self.assertIn('Model = "pro"', gemini_tpl)
         self.assertIn("carbon", gemini_tpl)

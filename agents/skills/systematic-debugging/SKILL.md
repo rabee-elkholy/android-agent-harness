@@ -3,6 +3,7 @@ name: systematic-debugging
 description: Use when diagnosing Android app bugs, crashes, regressions, unexpected state, or inconsistent runtime behavior.
 version: 1.2.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Systematic Debugging Skill

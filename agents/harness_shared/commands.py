@@ -62,7 +62,7 @@ def review_command(arguments: list[str]) -> tuple[str, list[str]]:
     if forwarded[:1] == ["--"]:
         forwarded = forwarded[1:]
     subcommand = forwarded[0] if forwarded else ""
-    dedicated = {"package": "review_package.py", "profile": "review_execution.py", "ingest": "record_review.py", "models": "review_models.py"}
+    dedicated = {"package": "review_package.py", "profile": "review_execution.py", "ingest": "record_review.py", "models": "review_models.py", "dynamic-workflow": "dynamic_review_workflow.py"}
     if subcommand in dedicated:
         return dedicated[subcommand], forwarded[1:]
     if subcommand in {"complete", "complete-all", "finalize", "dispatch", "dispatch-batch", "status"}:

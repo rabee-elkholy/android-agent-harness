@@ -76,13 +76,13 @@ def _burst_pacer_default_mode() -> str:
     return "enforce"
 def _model_exempt_from_hydrogen_burst_pacer(model_name: str) -> bool:
     """Antigravity hooks pass `modelName` on stdin (https://antigravity.google/docs/hooks/).
-    Slow Frontier models (Carbon, Argon, Claude 5.5, 3.1 Pro) never trigger Hydrogen's 190 tok/s burst filter,
+    Standalone Frontier models (Carbon, Neon, Argon, Claude 5.5, 3.1 Pro) never trigger Hydrogen's 190 tok/s burst filter,
     whereas Hydrogen, Orchestrator, and untagged sessions require anti-burst protection.
     """
     m = str(model_name or "").strip().lower()
     if not m or "hydrogen" in m or "orchestrator" in m or "gemini-4-flash" in m:
         return False
-    return any(tok in m for tok in ("carbon", "argon", "claude", "sonnet", "opus", "3.1-pro", "gpt-oss", "gpt-5", "gpt-6"))
+    return any(tok in m for tok in ("carbon", "argon", "neon", "claude", "sonnet", "opus", "3.1-pro", "gpt-oss", "gpt-5", "gpt-6"))
 def check_and_apply_hydrogen_burst_pacer(
     repo: Path,
     conversation_id: str,

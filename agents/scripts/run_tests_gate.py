@@ -339,6 +339,227 @@ def _asset_pack_without_test_plugin(build: str, catalog_ids: dict[str, str]) -> 
     return plugins == {"com.android.asset-pack"} and not re.search(r'\b(?:id|apply|alias|kotlin)\b', remaining)
 
 
+
+def _inspect_composite_and_convention_builds(
+    repo: Path,
+    changed_rel_paths: set[str],
+    settings_texts: list[str],
+    known_modules: set[str],
+) -> tuple[bool, list[tuple[str, str]]]:
+    """Inspect `buildSrc`, `build-logic`, and `includeBuild(...)` composite builds without blindly forcing broad runs.
+
+    Returns `(force_broad, extra_module_edges)` where `extra_module_edges` are `(consumer_mod, dependency_mod)` pairs
+    injected by static convention plugins (e.g. `implementation(project(":core:ui"))` inside `build-logic/`).
+    Falls back conservatively to `force_broad=True` whenever:
+    - Any changed file lies inside `buildSrc/` or an included composite build directory;
+    - `includeBuild(...)` uses a non-literal expression or points outside `repo`; or
+    - Convention build sources use dynamic `project(variable)` or `apply from` wiring.
+    """
+    composite_dirs: set[str] = set()
+    for name in ("buildSrc", "build-logic"):
+        if (repo / name).is_dir():
+            composite_dirs.add(name)
+
+    for st_txt in settings_texts:
+        clean_st = re.sub(
+            r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|//[^\n]*|/\*.*?\*/""",
+            lambda m: m.group(1) or " ",
+            st_txt,
+            flags=re.S,
+        )
+        for m_inc in re.finditer(r"\bincludeBuild\s*(?:\(\s*([^)]+?)\s*\)|[ \t]+([^\r\n;{]+))", clean_st):
+            raw_arg = (m_inc.group(1) or m_inc.group(2) or "").strip()
+            m_lit = re.fullmatch(r"""(?:file\s*\(\s*)?["']([^"'$]+)["']\s*\)?""", raw_arg)
+            if not m_lit:
+                return True, []
+            inc_rel = m_lit.group(1).strip().replace("\\", "/").strip("/")
+            if not inc_rel:
+                return True, []
+            try:
+                inc_abs = (repo / inc_rel).resolve()
+                inc_norm = inc_abs.relative_to(repo.resolve()).as_posix()
+            except ValueError:
+                return True, []
+            if not inc_abs.is_dir():
+                return True, []
+            composite_dirs.add(inc_norm)
+
+    if not composite_dirs:
+        return False, []
+
+    for c_rel in changed_rel_paths:
+        for comp_dir in composite_dirs:
+            if c_rel == comp_dir or c_rel.startswith(f"{comp_dir}/"):
+                return True, []
+
+    injected_targets: set[str] = set()
+    norm_known = {re.sub(r"[-_]", "", km.lower()): km for km in known_modules}
+    lit_proj_re = re.compile(r"""\bproject\s*\(\s*(?:path\s*[:=]\s*)?["'](:[a-zA-Z0-9_:\-]+)["']\s*\)""")
+    typesafe_proj_re = re.compile(r"\bprojects\.([a-zA-Z0-9_.]+)")
+
+    for comp_dir in sorted(composite_dirs):
+        comp_root = repo / comp_dir
+        for src_file in comp_root.rglob("*"):
+            if not src_file.is_file() or "build" in src_file.relative_to(comp_root).parts:
+                continue
+            if src_file.suffix.lower() not in {".kt", ".kts", ".groovy", ".gradle", ".java", ".toml", ".properties"}:
+                continue
+            try:
+                raw = src_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return True, []
+            clean = re.sub(
+                r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|//[^\n]*|/\*.*?\*/""",
+                lambda m: m.group(1) or " ",
+                raw,
+                flags=re.S,
+            )
+            if re.search(r"apply\s*(?:\(|\s).*from", clean):
+                return True, []
+            spans: list[tuple[int, int]] = []
+            for mp in lit_proj_re.finditer(clean):
+                target_m = mp.group(1).strip()
+                if target_m not in known_modules:
+                    return True, []
+                spans.append(mp.span())
+                injected_targets.add(target_m)
+            for mp in typesafe_proj_re.finditer(clean):
+                cand = ":" + mp.group(1).strip().replace(".", ":")
+                resolved_m = cand if cand in known_modules else norm_known.get(re.sub(r"[-_]", "", cand.lower()), "")
+                if not resolved_m:
+                    return True, []
+                spans.append(mp.span())
+                injected_targets.add(resolved_m)
+            for mp_any in re.finditer(r"\bproject\s*\(", clean):
+                if not any(s <= mp_any.start() < e for s, e in spans):
+                    return True, []
+
+    extra_edges: list[tuple[str, str]] = []
+    if injected_targets:
+        builtin_prefixes = (
+            "com.android.", "org.jetbrains.", "kotlin", "java", "jacoco",
+            "maven-publish", "signing", "com.google.devtools.ksp", "com.google.dagger.hilt",
+        )
+        for mod in sorted(known_modules):
+            mod_rel = mod.lstrip(":").replace(":", "/")
+            mod_dir = repo / mod_rel if mod_rel else repo
+            b_txt = ""
+            for b_name in ("build.gradle.kts", "build.gradle"):
+                bf = mod_dir / b_name
+                if bf.is_file():
+                    b_txt += bf.read_text(encoding="utf-8", errors="replace") + "\n"
+            if not b_txt:
+                continue
+            has_custom_plugin = False
+            for pid in re.findall(r"""\bid\s*(?:\(\s*)?["']([^"']+)["']""", b_txt):
+                if not pid.startswith(builtin_prefixes):
+                    has_custom_plugin = True
+                    break
+            if not has_custom_plugin and "alias(libs.plugins." in b_txt:
+                has_custom_plugin = True
+            if has_custom_plugin:
+                for inj in sorted(injected_targets):
+                    if mod != inj:
+                        extra_edges.append((mod, inj))
+
+    return False, extra_edges
+
+
+def resolve_impacted_test_patterns(repo: Path, changed_files: list[Path] | None = None) -> list[str]:
+    """Resolve graph-impacted JUnit test class patterns (`--tests`) for fast inner-loop iteration.
+
+    Follows `DEPENDS_ON` and `BINDS` (Hilt/Dagger/Koin/interface) edges up to 2 hops from changed files.
+    Returns an empty list when build configs or XML resources changed or when no specific test classes match,
+    allowing callers to fall back safely to module-level unit-test tasks without empty-filter failures.
+    """
+    from _modules import is_kmp_or_android_test_path
+    from _repo_files import changed_paths
+
+    paths = list(changed_files) if changed_files is not None else list(changed_paths(repo=repo))
+    if not paths:
+        return []
+
+    rel_paths: list[str] = []
+    for p in paths:
+        try:
+            rel = p.relative_to(repo).as_posix() if p.is_absolute() else p.as_posix()
+        except ValueError:
+            continue
+        rel_paths.append(rel)
+        if not rel.endswith((".kt", ".java", ".swift")):
+            return []
+
+    try:
+        from _graph_core import EdgeKind, EntityType, GraphEngine
+        ge = GraphEngine(repo)
+        ge.sync(trust_stat=True, persist=False)
+    except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
+        return []
+
+    binds_in: dict[str, set[str]] = {}
+    for edge in ge.graph.edges:
+        if edge.kind == EdgeKind.BINDS.value:
+            binds_in.setdefault(edge.target, set()).add(edge.source)
+
+    seed_ids: set[str] = set()
+    direct_test_fqns: set[str] = set()
+    changed_stems: set[str] = set()
+    for rel in rel_paths:
+        stem = Path(rel).stem
+        if is_kmp_or_android_test_path(rel):
+            for nid in ge.file_to_node_ids.get(rel, []):
+                n = ge.graph.nodes.get(nid)
+                if n:
+                    direct_test_fqns.add(f"{n.package}.{n.name}" if n.package else n.name)
+            if not ge.file_to_node_ids.get(rel):
+                direct_test_fqns.add(f"*{stem}")
+        else:
+            changed_stems.add(stem)
+            for nid in ge.file_to_node_ids.get(rel, []):
+                seed_ids.add(nid)
+                for contract_id in binds_in.get(nid, ()):
+                    seed_ids.add(contract_id)
+                    c_node = ge.graph.nodes.get(contract_id)
+                    if c_node and c_node.name:
+                        changed_stems.add(c_node.name)
+
+    visited = set(seed_ids)
+    frontier = set(seed_ids)
+    for _ in range(2):
+        nxt_frontier: set[str] = set()
+        for nid in frontier:
+            for src_id in ge.graph.get_sources(nid):
+                if src_id not in visited:
+                    visited.add(src_id)
+                    nxt_frontier.add(src_id)
+                    for contract_id in binds_in.get(src_id, ()):
+                        if contract_id not in visited:
+                            visited.add(contract_id)
+                            nxt_frontier.add(contract_id)
+        frontier = nxt_frontier
+        if not frontier:
+            break
+
+    matched_patterns: set[str] = set(direct_test_fqns)
+    for nid, node in ge.graph.nodes.items():
+        if not node.file_path or not is_kmp_or_android_test_path(node.file_path):
+            continue
+        t_stem = Path(node.file_path).stem
+        if nid in visited or (
+            node.type == EntityType.TEST.value
+            and any(
+                t_stem.lower() in {f"{s.lower()}test", f"{s.lower()}tests", f"{s.lower()}spec"}
+                or t_stem.lower().startswith(f"{s.lower()}test")
+                for s in changed_stems
+            )
+        ):
+            fqn = f"{node.package}.{node.name}" if node.package else node.name
+            if _SAFE_TEST_FILTER_RE.fullmatch(fqn):
+                matched_patterns.add(fqn)
+
+    return sorted(matched_patterns)[:24]
+
+
 def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
     """Unit-test tasks for this run.
 
@@ -363,8 +584,13 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
     selected = set()
     prod_selected = set()
     broad = False
+    changed_rels: set[str] = set()
     for path in changed:
         rel = path.relative_to(repo).as_posix()
+        changed_rels.add(rel)
+        if rel.startswith(("buildSrc/", "build-logic/")):
+            broad = True
+            continue
         if "/src/" in rel:
             prefix = rel.split("/src/", 1)[0]
             mapped = {name for name, node in nodes.items() if node.file_path and Path(node.file_path).parent.as_posix() == prefix}
@@ -375,18 +601,26 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
         if (path.suffix in {".gradle", ".kts", ".toml", ".properties"} and "/src/" not in rel) or path.name in {"gradlew", "gradlew.bat"}:
             broad = True
     # Dynamic/custom build logic cannot justify excluding a declared consumer,
-    # whereas root repository/resolutionStrategy-only allprojects blocks do not alter module edges.
+    # whereas root repository/resolutionStrategy-only allprojects blocks and static build-logic convention plugins are analyzed safely.
+    settings_texts: list[str] = []
     for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"):
         path = repo / name
         if path.is_file():
             root_txt = path.read_text(encoding="utf-8", errors="replace")
-            if re.search(r"projectDir|includeBuild|apply\s*(?:\(|\s).*from", root_txt):
+            if name.startswith("settings."):
+                settings_texts.append(root_txt)
+            if re.search(r"projectDir|apply\s*(?:\(|\s).*from", root_txt):
+                broad = True
+            elif not name.startswith("settings.") and re.search(r"\bincludeBuild\b", root_txt):
                 broad = True
             elif re.search(r"\b(?:subprojects|allprojects)\b", root_txt) and re.search(
                 r"\bproject\s*\(|\bprojects\.|\bdependencies\s*\{", root_txt
             ):
                 broad = True
-    broad = broad or (repo / "buildSrc").is_dir() or (repo / "build-logic").is_dir()
+    comp_broad, comp_extra_edges = _inspect_composite_and_convention_builds(
+        repo, changed_rels, settings_texts, known | declared
+    )
+    broad = broad or comp_broad
     broad = broad or any(node.metadata.get("unresolved_dependencies") for node in nodes.values())
     if known and selected - known:
         broad = True
@@ -398,6 +632,8 @@ def resolve_target_tasks(repo: Path, requested_task: str | None) -> list[str]:
         consumers: dict[str, set[str]] = {}
         for edge in edges:
             consumers.setdefault(edge.target, set()).add(edge.source)
+        for src_m, tgt_m in comp_extra_edges:
+            consumers.setdefault(tgt_m, set()).add(src_m)
         while pending:
             for consumer in consumers.get(pending.pop(), ()):
                 if consumer not in selected:
@@ -1096,6 +1332,10 @@ def main(argv=None) -> int:
         help="Fast iteration filter: run only matching test class/method pattern(s) during IMPLEMENTING (does not record full-suite delivery evidence)",
     )
     parser.add_argument(
+        "--impacted", action="store_true",
+        help="Graph-assisted fast iteration: select only JUnit test classes impacted via DEPENDS_ON / DI BINDS edges (falls back to module scope when resources/configs change)",
+    )
+    parser.add_argument(
         "--diagnose-flaky", action="store_true",
         help="Force a second --rerun-tasks --no-build-cache diagnostic retry even during IMPLEMENTING",
     )
@@ -1135,6 +1375,16 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
             _emit_human(msg, err=True)
             _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
             return 1
+    if getattr(args, "impacted", False) and (args.capture_red or args.record_start or args.record_unrelated):
+        msg = "[FAIL] --impacted cannot be combined with --capture-red, --record-start, or --record-unrelated."
+        _emit_human(msg, err=True)
+        _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
+        return 1
+    if getattr(args, "impacted", False) and not test_filters:
+        impacted_patterns = resolve_impacted_test_patterns(REPO)
+        if impacted_patterns:
+            test_filters = impacted_patterns
+            _emit_human(f"[*] Graph-impacted test filter ({len(test_filters)} class(es)): {', '.join(test_filters[:6])}")
     if test_filters and (args.capture_red or args.record_start or args.record_unrelated):
         msg = "[FAIL] --tests cannot be combined with --capture-red, --record-start, or --record-unrelated."
         _emit_human(msg, err=True)

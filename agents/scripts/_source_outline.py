@@ -44,34 +44,11 @@ def _read(path: Path) -> list[str] | None:
 
 
 def _code_lines(lines: list[str]) -> list[str]:
-    """Blank string literals and comments so braces and names in them are not counted."""
-    out: list[str] = []
-    in_block = False
-    for raw in lines:
-        line = raw
-        if in_block:
-            end = line.find("*/")
-            if end < 0:
-                out.append("")
-                continue
-            line = " " * (end + 2) + line[end + 2:]
-            in_block = False
-        line = _STRING.sub(lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', line)
-        while True:
-            start = line.find("/*")
-            if start < 0:
-                break
-            end = line.find("*/", start + 2)
-            if end < 0:
-                line = line[:start]
-                in_block = True
-                break
-            line = line[:start] + " " * (end + 2 - start) + line[end + 2:]
-        comment = line.find("//")
-        if comment >= 0:
-            line = line[:comment]
-        out.append(line)
-    return out
+    """Blank string/raw literals (including `${...}` nested quotes) and comments."""
+    if not lines:
+        return []
+    from _source_text import mask_comments_and_strings
+    return mask_comments_and_strings("\n".join(lines)).split("\n")
 
 
 def outline(path: Path) -> list[dict[str, Any]]:
@@ -91,8 +68,10 @@ def outline(path: Path) -> list[dict[str, Any]]:
     type_depths: set[int] = {0}
     depth = 0
     parens = 0  # open "(" across lines: constructor parameters and call arguments are not declarations
+    from _source_text import is_expr_continuation_line, scan_top_level_assignment
+
     # A declaration whose body brace comes on a later line: after a multi-line signature
-    # ("paren") or alone on the next line ("brace_next").
+    # ("paren"), alone on the next line ("brace_next"), or multi-line expression body.
     pending: tuple[dict[str, Any], int, str] | None = None
     for index, line in enumerate(code, start=1):
         entry = None
@@ -112,14 +91,21 @@ def outline(path: Path) -> list[dict[str, Any]]:
                     entries.append(entry)
         opens, closes = line.count("{"), line.count("}")
         parens_after = max(0, parens + line.count("(") - line.count(")"))
+        has_top_eq, ends_top_eq = scan_top_level_assignment(line, parens)
         body: tuple[dict[str, Any], int] | None = None
         if entry is not None:
             pending = None
             if opens > closes:
                 body = (entry, depth)
             elif parens_after > 0:
-                pending = (entry, depth, "paren")
-            elif "=" not in line and not stripped.endswith(("}", ";")):
+                pending = (entry, depth, "expr_paren" if has_top_eq else "paren")
+            elif has_top_eq:
+                if ends_top_eq:
+                    pending = (entry, depth, "expr_next")
+                else:
+                    entry["end_line"] = index
+                    pending = (entry, depth, "expr_cont")
+            elif not stripped.endswith(("}", ";")):
                 pending = (entry, depth, "brace_next")
         elif pending is not None:
             held, held_depth, mode = pending
@@ -127,12 +113,44 @@ def outline(path: Path) -> list[dict[str, Any]]:
                 if parens_after == 0:
                     if opens > closes:
                         body, pending = (held, held_depth), None
-                    elif "=" not in line and not stripped.endswith(("}", ";")):
+                    elif has_top_eq:
+                        if ends_top_eq:
+                            pending = (held, held_depth, "expr_next")
+                        else:
+                            held["end_line"] = index
+                            pending = (held, held_depth, "expr_cont")
+                    elif not stripped.endswith(("}", ";")):
                         pending = (held, held_depth, "brace_next")
                     else:
                         pending = None
+            elif mode == "expr_paren":
+                if parens_after == 0:
+                    if opens > closes:
+                        body, pending = (held, held_depth), None
+                    else:
+                        held["end_line"] = index
+                        pending = (held, held_depth, "expr_cont")
+            elif mode == "expr_next":
+                if stripped:
+                    if opens > closes:
+                        body, pending = (held, held_depth), None
+                    elif parens_after > 0:
+                        pending = (held, held_depth, "expr_paren")
+                    else:
+                        held["end_line"] = index
+                        pending = (held, held_depth, "expr_cont")
+            elif mode == "expr_cont":
+                if is_expr_continuation_line(stripped):
+                    if opens > closes:
+                        body, pending = (held, held_depth), None
+                    elif parens_after > 0:
+                        pending = (held, held_depth, "expr_paren")
+                    else:
+                        held["end_line"] = index
+                else:
+                    pending = None
             elif stripped:
-                if stripped.startswith("{"):
+                if stripped.startswith("{") or opens > closes:
                     body = (held, held_depth)
                 pending = None
         if body is not None:

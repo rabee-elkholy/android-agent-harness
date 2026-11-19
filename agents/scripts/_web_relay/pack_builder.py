@@ -270,6 +270,24 @@ def _extract_neighbor_signatures(repo: Path, scope_files: list[str], vault: dict
     if not imported_simple_names:
         return []
 
+    # Expand imported interfaces to their Hilt / Dagger / Koin / Clean-Architecture bound implementations
+    try:
+        from _graph_core import EdgeKind, GraphEngine
+        ge = GraphEngine(repo)
+        ge.sync(trust_stat=True, persist=False)
+        binds_map: dict[str, set[str]] = {}
+        for edge in ge.graph.edges:
+            if edge.kind == EdgeKind.BINDS.value:
+                binds_map.setdefault(edge.source, set()).add(edge.target)
+        for sym in list(imported_simple_names):
+            for nid in ge.symbol_to_node_ids.get(sym, []):
+                for impl_id in binds_map.get(nid, ()):
+                    impl_node = ge.graph.nodes.get(impl_id)
+                    if impl_node and impl_node.file_path:
+                        imported_simple_names.add(Path(impl_node.file_path).stem)
+    except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError) as _di_exc:
+        _ = _di_exc
+
     neighbors: list[dict[str, str]] = []
     try:
         tracked = _engine.subprocess.check_output(
@@ -1017,7 +1035,8 @@ def build_web_pack(
             f"- **Task ID**: `{suggested_tid}` | **Kind**: `{eff_kind}` | **New Pack ID**: `{pack_id}` | **Editable Scope (`{len(editable_meta)}`)**: {scope_short}",
             f"- **Original Goal**: {eff_prompt}",
             "- **Instructions**: Fix every compiler, lint, string-parity, or unit-test failure below against the code already in this chat. "
-            f"End your reply with **one fenced ```json block** using `\"schema\": \"{_engine.WEB_MERGE_SCHEMA}\"`, `\"pack_id\": \"{pack_id}\"`, `\"status\": \"READY\"`, "
+            f"End your reply with EITHER a zero-escaping `<<<HARNESS_WEB_PATCH_V1>>>` block (`PACK_ID: {pack_id}`, `STATUS: READY`, `<<<MODIFY path>>>` / `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` / `<<<END_FILE>>>` / `<<<END_HARNESS_WEB_PATCH_V1>>>`) "
+            f"OR **one fenced ```json block** using `\"schema\": \"{_engine.WEB_MERGE_SCHEMA}\"`, `\"pack_id\": \"{pack_id}\"`, `\"status\": \"READY\"`, "
             "and minimal `\"operations\"` (`MODIFY` with verbatim `hunks` `{\"search\": \"...\", \"replace\": \"...\"}`, `CREATE`, or `\"status\": \"NEED_FILES\"` with `\"need_files\": [...]` if you need an unseen file). "
             "Include concise English KDoc (`/** ... */`) on any newly added public/internal contract, never leave unused parameters, unused private/helper functions, or unreferenced dead classes (`fast_kt_lint` hard-blocks `UNUSED_PARAMETER`, `UNUSED_PRIVATE_FUNCTION`, and `UNUSED_PRIVATE_CLASS`), and never emit truncation comments (`// ...`).",
         ]
@@ -1045,7 +1064,32 @@ def build_web_pack(
             f"`harness-merge-{pack_id}.json`).",
             *([headless_ui_rule] if headless_ui_rule else []),
             "",
-            "### Required Output JSON Schema (`READY` / `PARTIAL` vs `NEED_FILES`)",
+            "### Supported Output Formats (Choose EITHER Zero-Escaping `HARNESS_WEB_PATCH_V1` OR `HARNESS_WEB_MERGE_V1` JSON)",
+            '- **Option A (Recommended for Kotlin `"$${...}"` templates, raw strings, XML, & multi-file `CREATE` — Zero JSON Escaping)**:',
+            "```text",
+            "<<<HARNESS_WEB_PATCH_V1>>>",
+            f"PACK_ID: {pack_id}",
+            "STATUS: READY",
+            f"TASK_ID: {suggested_tid}",
+            f"KIND: {eff_kind}",
+            f"OUTCOME: {eff_prompt[:140]}",
+            "APPROACH: Concise 1-2 sentence summary of root cause & architectural solution",
+            "RISKS: Key regression/edge-case risks",
+            "",
+            "<<<MODIFY path/to/ExistingFile.kt>>>",
+            "<<<<<<< SEARCH",
+            "exact existing lines from FILE block",
+            "=======",
+            "updated lines (raw Kotlin/XML, no escaping needed)",
+            ">>>>>>> REPLACE",
+            "<<<END_FILE>>>",
+            "",
+            "<<<CREATE path/to/NewFileOrTestOrVectorDrawable.kt>>>",
+            "full file content without truncation placeholders",
+            "<<<END_FILE>>>",
+            "<<<END_HARNESS_WEB_PATCH_V1>>>",
+            "```",
+            "- **Option B (`HARNESS_WEB_MERGE_V1` JSON Schema — `READY` / `PARTIAL` vs `NEED_FILES`)**:",
             "```json",
             _engine.json.dumps(schema_example, indent=2, ensure_ascii=False),
             "```",

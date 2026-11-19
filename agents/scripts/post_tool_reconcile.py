@@ -116,7 +116,7 @@ def main() -> int:
                     reviewer_context(repo, execution_id, bind=True)
                 except Exception:
                     continue
-            if call_name_low in {"invoke_subagent", ""}:
+            if call_name_low in {"invoke_subagent", "run_workflow", ""}:
                 try:
                     from delegation_policy import (
                         bind_utility_from_post_tool,

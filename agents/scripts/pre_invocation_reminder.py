@@ -242,11 +242,18 @@ def _compact_message() -> str:
     try:
         from antigravity_runtime import inspect_nov15_antigravity_hazards
         from platform_quirks import is_quirk_enabled
-        nov15 = inspect_nov15_antigravity_hazards(REPO) if is_quirk_enabled("200467", repo=REPO) else {}
-        if nov15.get("hydrogen_extra_leak_active"):
+        q_200467 = is_quirk_enabled("200467", repo=REPO)
+        q_1649 = is_quirk_enabled("1649", repo=REPO, respect_platform=True)
+        nov15 = inspect_nov15_antigravity_hazards(REPO) if (q_200467 or q_1649) else {}
+        if q_200467 and nov15.get("hydrogen_extra_leak_active"):
             mode_tag += (
                 f" [QUOTA-LEAK GUARD #200467: Active model `{nov15.get('active_lead_model')}` (`Hydrogen Extra` / `xhigh`) "
                 "silently drains 3x Gemini 4 Argon weekly quota — switch model selector down to `Gemini 4 Hydrogen High` (1x) or `Carbon Medium`]"
+            )
+        if q_1649 and nov15.get("hydrogen_medium_win_tool_risk"):
+            mode_tag += (
+                f" [THINKING-DROP GUARD #1649: Active model `{nov15.get('active_lead_model')}` (`Hydrogen Medium`) on Windows "
+                "can drop `thinking_tokens` to 0 after `read_file`/`view_file` (#201731) — switch selector to `Gemini 4 Hydrogen (High)` (same 1x quota) and prefer `symbol outline/read`]"
             )
     except (ImportError, OSError, ValueError, KeyError, TypeError, ValidationError):
         nov15 = {}
@@ -381,12 +388,31 @@ def main() -> None:
                     sub_rem = ""
             print("{}")
             return
+        if isinstance(payload, dict) and (
+            payload.get("isSideQuestion")
+            or payload.get("is_side_question")
+            or payload.get("sideQuestion")
+            or payload.get("side_question")
+            or str(payload.get("mode") or payload.get("surface") or "").strip().lower() in {"btw", "/btw", "side_question", "side-question"}
+        ):
+            print("{}")
+            return
         model_hazard_prefix = ""
         m_low = model_name.lower()
-        if "4.6" in m_low and "claude" in m_low:
+        if ("4.6" in m_low and "claude" in m_low) or "gpt-oss-120b" in m_low or "gpt-oss 120b" in m_low:
             model_hazard_prefix = (
-                f"[DEPRECATION NOTICE: `{model_name}` retires Nov 18, 2026] Switch mid-week rotation to `Claude Sonnet 5.5 (Thinking)` or `Claude Opus 5.5 (Thinking)`. "
+                f"[MODEL RETIRED (Nov 18, 2026): `{model_name}` was removed from Antigravity] Switch model selector to `Claude Sonnet 5.5 (Thinking)`, `Claude Opus 5.5 (Thinking)`, or `Gemini 4 Hydrogen High`. "
             )
+        elif "hydrogen" in m_low and "medium" in m_low:
+            try:
+                from platform_quirks import is_quirk_enabled as _is_q_en
+                if _is_q_en("1649", repo=REPO, respect_platform=True):
+                    model_hazard_prefix = (
+                        f"[THINKING-DROP GUARD #1649: `{model_name}` on Windows can drop `thinking_tokens` to 0 after workspace `read_file`/`view_file` calls (#201731)] "
+                        "Switch model selector to `Gemini 4 Hydrogen (High)` (same 1.00x quota) and pass `Model='flash'` on `harness-scout-agent`. "
+                    )
+            except ImportError:
+                pass
         wave_key, wave_directive = _post_subagent_directive(conversation_id)
         # Antigravity is 0-indexed (0 is first call); 1-indexed hosts start at 1.
         # Avoid dumping the full initial reminder + update check twice when invocation 0 already ran.
@@ -406,6 +432,9 @@ def main() -> None:
             tid, st = _current_task_state()
             state_key = f"{tid}:{st}:{wave_key}" if wave_key else f"{tid}:{st}"
             if _has_seen_state(conversation_id, state_key):
+                if not tid and st == "IDLE" and not wave_directive and not model_hazard_prefix and not _bridge_reminder():
+                    print("{}")
+                    return
                 msg = _unchanged_state_message(tid, st)
                 if wave_directive:
                     msg = f"{msg} {wave_directive}"

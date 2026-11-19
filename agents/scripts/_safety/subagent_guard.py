@@ -124,7 +124,7 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                 return
         if allowed_native_model and item.get("Model") != allowed_native_model:
             offload_ctx = (
-                " on an active Carbon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Argon quota)"
+                " on an active Carbon/Neon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Neon/Argon quota)"
                 if resolved_m.startswith("gemini-4-hydrogen")
                 else ""
             )
@@ -295,7 +295,95 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
         return
 
     _engine.emit("allow", "Phase reviewer roster exactly matches the approved phase review plan.", tool=tool_name, reason_code="DISPATCH_PHASE_REVIEWERS_ALLOWED")
+def _handle_run_workflow(name: str, args: dict) -> None:
+    """Fail-closed governance for Antigravity `run_workflow` tool."""
+    inline_keys = (
+        "Script", "script",
+        "code", "Code",
+        "script_content", "scriptContent",
+        "inline_script", "inlineScript",
+        "python", "Python",
+        "source", "Source",
+    )
+    for ik in inline_keys:
+        val = args.get(ik)
+        if isinstance(val, str) and val.strip():
+            _engine.emit(
+                "deny",
+                "UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED: Inline `run_workflow` Python code (`Script`) is forbidden by the harness safety boundary. "
+                "Only the checksum-verified `.agents/scripts/dynamic_review_workflow.py` script may execute via `ScriptPath` during `VERIFYING`.",
+                tool=name,
+                reason_code="UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED",
+            )
+            return
+
+    raw_cwd = args.get("Cwd") or args.get("cwd")
+    if isinstance(raw_cwd, str) and raw_cwd.strip():
+        cwd_p = Path(raw_cwd.strip()).expanduser()
+        cwd_res = cwd_p.resolve() if cwd_p.is_absolute() else (_engine.REPO / cwd_p).resolve()
+        if not cwd_res.is_relative_to(_engine.REPO.resolve()):
+            _engine.emit(
+                "deny",
+                f"UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED: `run_workflow` Cwd '{raw_cwd}' escapes repository root.",
+                tool=name,
+                reason_code="UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED",
+            )
+            return
+
+    raw_script = ""
+    for pk in ("ScriptPath", "scriptPath", "script_path", "WorkflowPath", "workflowPath", "workflow_path", "Path", "path", "File", "file"):
+        cand = args.get(pk)
+        if isinstance(cand, str) and cand.strip():
+            raw_script = cand.strip()
+            break
+    if not raw_script:
+        _engine.emit(
+            "deny",
+            "UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED: `run_workflow` must specify the governed `.agents/scripts/dynamic_review_workflow.py` via `ScriptPath`.",
+            tool=name,
+            reason_code="UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED",
+        )
+        return
+
+    cand_path = Path(raw_script).expanduser()
+    resolved = cand_path.resolve() if cand_path.is_absolute() else (_engine.REPO / cand_path).resolve()
+    allowed_paths = {
+        (_engine.REPO / ".agents" / "scripts" / "dynamic_review_workflow.py").resolve(),
+        (_engine.REPO / "agents" / "scripts" / "dynamic_review_workflow.py").resolve(),
+    }
+    if resolved not in allowed_paths or not resolved.is_file() or resolved.is_symlink():
+        _engine.emit(
+            "deny",
+            f"UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED: Untrusted workflow script '{raw_script}'. Only `.agents/scripts/dynamic_review_workflow.py` is authorized.",
+            tool=name,
+            reason_code="UNTRUSTED_DYNAMIC_WORKFLOW_BLOCKED",
+        )
+        return
+
+    try:
+        from dynamic_review_workflow import build_dynamic_review_plan
+        spec = build_dynamic_review_plan(_engine.REPO)
+    except Exception as exc:
+        _engine.emit(
+            "deny",
+            f"DYNAMIC_WORKFLOW_NOT_READY: Governed dynamic review workflow requires an active VERIFYING V2 review wave ({exc}).",
+            tool=name,
+            reason_code="DYNAMIC_WORKFLOW_NOT_READY",
+        )
+        return
+
+    _engine.emit(
+        "allow",
+        f"Verified governed V2 dynamic review workflow for task '{spec['task_id']}'.",
+        tool=name,
+        reason_code="DYNAMIC_WORKFLOW_REVIEW_ALLOWED",
+    )
+
+
 def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "") -> None:
+    if name == "run_workflow":
+        _handle_run_workflow(name, args)
+        return
     try:
         plan = _engine.active_plan(_engine.REPO)
     except _engine.ValidationError:
@@ -449,7 +537,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     from review_models import load_policy as _load_pol_pre
                     _pol_pre, _ = _load_pol_pre(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
                     _def_pre = str((_pol_pre or {}).get("default") or "").strip().lower()
-                    if _def_pre == "inherit" or _def_pre.startswith(("carbon", "argon")):
+                    if _def_pre == "inherit" or _def_pre.startswith(("carbon", "argon", "neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon")):
                         _pre_inherits = True
             except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
                 _pre_offload = False
@@ -468,7 +556,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 elif spec_m_pre and spec_m_pre.lower() != "inherit":
                     _engine.emit(
                         "deny",
-                        f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_pre}` when Lead is not Carbon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_m_pre}`).",
+                        f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_pre}` when Lead is not Carbon/Neon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_m_pre}`).",
                         tool=name,
                         reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
                     )
@@ -672,7 +760,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         from review_models import load_policy as _load_pol_spec
                         _pol_spec, _ = _load_pol_spec(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
                         _def_spec = str((_pol_spec or {}).get("default") or "").strip().lower()
-                        if _def_spec == "inherit" or _def_spec.startswith(("carbon", "argon")):
+                        if _def_spec == "inherit" or _def_spec.startswith(("carbon", "argon", "neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon")):
                             spec_policy_inherits_parent = True
                 except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
                     frontier_offload_spec = False
@@ -704,7 +792,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         elif spec_model_arg and spec_model_arg.lower() != "inherit":
                             _engine.emit(
                                 "deny",
-                                f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_t}` when Lead is not Carbon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_model_arg}`).",
+                                f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_t}` when Lead is not Carbon/Neon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_model_arg}`).",
                                 tool=name,
                                 reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
                             )
@@ -925,7 +1013,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     return
             if allowed_native_model and item.get("Model") != allowed_native_model:
                 offload_ctx = (
-                    " on an active Carbon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Argon quota)"
+                    " on an active Carbon/Neon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Neon/Argon quota)"
                     if resolved_m.startswith("gemini-4-hydrogen")
                     else ""
                 )

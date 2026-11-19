@@ -61,6 +61,14 @@ ANTIGRAVITY_MODEL_CHOICES = (
     "gemini-4-carbon-medium",
     "gemini-4-carbon-high",
     "carbon",
+    "neon-dynamic",
+    "gemini-4-neon",
+    "gemini-4-neon-low",
+    "gemini-4-neon-medium",
+    "gemini-4-neon-high",
+    "gemini-4-neon-xhigh",
+    "gemini-4-neon-extra",
+    "neon",
     "gemini-3.1-pro",
     "gemini-3.1-pro-low",
     "gemini-3.1-pro-high",
@@ -77,6 +85,7 @@ ANTIGRAVITY_META_PRESETS = (
     "flash-dynamic",
     "argon-dynamic",
     "carbon-dynamic",
+    "neon-dynamic",
     "hybrid-smart",
 )
 _COMPLEXITY_AWARE_PRESETS = (
@@ -393,6 +402,21 @@ _SHORTHAND_MAP = {
     "gemini-4-carbon@low": "gemini-4-carbon-low",
     "gemini-4-carbon@medium": "gemini-4-carbon-medium",
     "gemini-4-carbon@high": "gemini-4-carbon-high",
+    "neon@dynamic": "neon-dynamic",
+    "neon@auto": "neon-dynamic",
+    "gemini-4-neon@dynamic": "neon-dynamic",
+    "gemini-4-neon@auto": "neon-dynamic",
+    "neon@low": "gemini-4-neon-low",
+    "neon@medium": "gemini-4-neon-medium",
+    "neon@high": "gemini-4-neon-high",
+    "neon@xhigh": "gemini-4-neon-xhigh",
+    "neon@extra": "gemini-4-neon-xhigh",
+    "gemini-4-neon-extra": "gemini-4-neon-xhigh",
+    "gemini-4-neon@low": "gemini-4-neon-low",
+    "gemini-4-neon@medium": "gemini-4-neon-medium",
+    "gemini-4-neon@high": "gemini-4-neon-high",
+    "gemini-4-neon@xhigh": "gemini-4-neon-xhigh",
+    "gemini-4-neon@extra": "gemini-4-neon-xhigh",
     "pro@low": "gemini-3.1-pro-low",
     "pro@high": "gemini-3.1-pro-high",
     "gemini-3.1-pro@low": "gemini-3.1-pro-low",
@@ -444,6 +468,12 @@ def resolve_preset_policy(preset: str) -> dict:
         return {"schema_version": 1, "default": "flash-argon-hybrid", "overrides": {}}
     if norm in ("flash-dynamic", "flash"):
         return {"schema_version": 1, "default": "flash-dynamic", "overrides": {}}
+    if norm in ("argon-dynamic", "argon"):
+        return {"schema_version": 1, "default": "argon-dynamic", "overrides": {}}
+    if norm in ("carbon-dynamic", "carbon"):
+        return {"schema_version": 1, "default": "carbon-dynamic", "overrides": {}}
+    if norm in ("neon-dynamic", "neon"):
+        return {"schema_version": 1, "default": "neon-dynamic", "overrides": {}}
     if norm == "inherit":
         return default_policy()
     if norm in ("risk-hybrid", "adaptive-hybrid"):
@@ -515,6 +545,8 @@ def resolve_antigravity_model(
         return ("gemini-4-argon-high", "high") if is_deep else ("gemini-4-argon-medium", "medium")
     if req in ("carbon-dynamic", "gemini-4-carbon", "carbon"):
         return ("gemini-4-carbon-high", "high") if is_deep else ("gemini-4-carbon-medium", "medium")
+    if req in ("neon-dynamic", "gemini-4-neon", "neon"):
+        return ("gemini-4-neon-high", "high") if is_deep else ("gemini-4-neon-medium", "medium")
     if req in ("gemini-3.1-pro", "pro"):
         return "gemini-3.1-pro-high", "high"
     for suffix in ("xhigh", "fast", "low", "medium", "high"):
@@ -532,7 +564,7 @@ def validate_policy(value: object) -> dict:
     if not isinstance(default_val, str) or default_val not in MODEL_CHOICES:
         raise ValidationError(
             "review_model_policy default must be a supported model choice "
-            "(inherit, hydrogen-dynamic, safe-cache-hybrid, flash-dynamic, gemini-4-hydrogen-*, gemini-4-argon-*, gemini-4-carbon-*, gemini-3.8-flash-*)"
+            "(inherit, hydrogen-dynamic, safe-cache-hybrid, flash-dynamic, gemini-4-hydrogen-*, gemini-4-neon-*, gemini-4-argon-*, gemini-4-carbon-*, gemini-3.8-flash-*)"
         )
     overrides = value["overrides"]
     if not isinstance(overrides, dict):
@@ -1230,11 +1262,11 @@ def _split_antigravity_family_and_tier(slug: str) -> tuple[str, str | None]:
     return clean, None
 
 
-_UPWARD_GEMINI4_PARENT_FAMILIES = frozenset({"gemini-4-carbon", "gemini-4-argon"})
+_UPWARD_GEMINI4_PARENT_FAMILIES = frozenset({"gemini-4-carbon", "gemini-4-argon", "gemini-4-neon"})
 
 
 def _is_proven_upward_parent_inheritance(run: dict, identity: dict, observed: dict) -> bool:
-    """Verify whether an observed Carbon/Argon reviewer inherited its model from an active Carbon/Argon parent Lead session."""
+    """Verify whether an observed Carbon/Neon/Argon reviewer inherited its model from an active Carbon/Neon/Argon parent Lead session."""
     obs_family, obs_tier = _split_antigravity_family_and_tier(str(observed.get("host_configured_model") or ""))
     if obs_family not in _UPWARD_GEMINI4_PARENT_FAMILIES or obs_tier in ("fast", "low"):
         return False
@@ -1309,7 +1341,7 @@ def _is_proven_upward_parent_inheritance(run: dict, identity: dict, observed: di
 
 
 def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict) -> bool:
-    """Verify whether the parent Lead session is provably Carbon/Argon (justifying Model='flash' offload)."""
+    """Verify whether the parent Lead session is provably Carbon/Neon/Argon (justifying Model='flash' offload)."""
     parent_cids: list[str] = []
     tx_raw = identity.get("transcript_path")
     if tx_raw:
@@ -1347,6 +1379,21 @@ def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict
                         break
             except (OSError, RuntimeError, ValueError):
                 pass
+    win_h_med_offload = False
+    try:
+        from platform_quirks import is_quirk_enabled
+        repo_p = Path(repo_hint).resolve() if repo_hint else None
+        win_h_med_offload = is_quirk_enabled("1649", repo=repo_p, respect_platform=True)
+    except (ImportError, OSError, RuntimeError, ValueError):
+        win_h_med_offload = False
+
+    def _parent_justifies_flash(raw_model: str) -> bool:
+        norm_m = normalize_model_token(raw_model)
+        fam_m, tier_m = _split_antigravity_family_and_tier(norm_m if isinstance(norm_m, str) and norm_m else raw_model)
+        if fam_m in _UPWARD_GEMINI4_PARENT_FAMILIES:
+            return True
+        return bool(win_h_med_offload and fam_m == "gemini-4-hydrogen" and tier_m == "medium")
+
     for st_dir in cand_state_dirs:
         live_p = st_dir / "live-session-models.json"
         if live_p.is_file():
@@ -1356,8 +1403,7 @@ def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict
                     sess = ldoc.get("sessions") if isinstance(ldoc.get("sessions"), dict) else {}
                     lcid = str(ldoc.get("latest_lead_cid") or "").strip()
                     if lcid and lcid != str(observed.get("execution_id") or "") and sess.get(lcid):
-                        lf, _ = _split_antigravity_family_and_tier(str(sess[lcid]))
-                        if lf in _UPWARD_GEMINI4_PARENT_FAMILIES:
+                        if _parent_justifies_flash(str(sess[lcid])):
                             return True
             except (OSError, ValueError, ValidationError):
                 pass
@@ -1383,8 +1429,7 @@ def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict
         except Exception:
             continue
         if isinstance(p_meta, dict) and p_meta.get("host_configured_model"):
-            p_fam, _ = _split_antigravity_family_and_tier(str(p_meta["host_configured_model"]))
-            if p_fam in _UPWARD_GEMINI4_PARENT_FAMILIES:
+            if _parent_justifies_flash(str(p_meta["host_configured_model"])):
                 return True
     return False
 
@@ -1632,7 +1677,7 @@ def antigravity_dispatch_model_hint(
     parts: list[str] = []
     if flash_roles:
         offload_note = (
-            " (routes natively to Gemini 4 Hydrogen High 1x and prevents Carbon/Argon parent quota inheritance)"
+            " (routes natively to Gemini 4 Hydrogen High 1x and prevents Carbon/Neon/Argon parent quota inheritance)"
             if any(str(mapping.get(r) or "").startswith("gemini-4-hydrogen") for r in flash_roles)
             else ""
         )
@@ -1640,7 +1685,7 @@ def antigravity_dispatch_model_hint(
     if pro_roles:
         parts.append(f"pass Model='pro' for [{', '.join(pro_roles)}]")
     if omit_roles:
-        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter for hydrogen/argon/carbon or inherit)")
+        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter for hydrogen/neon/argon/carbon or inherit)")
     return (" In invoke_subagent: " + "; ".join(parts) + ".") if parts else ""
 
 
@@ -2057,7 +2102,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--task", "--task-id", dest="task")
     parser.add_argument("--host")
     parser.add_argument("--choice", "--mode", dest="choice", help="Interactive choice ID (e.g. hydrogen-argon-project, hydrogen-argon-task, hydrogen-dynamic-project, hydrogen-risk-project, flash-argon-project, inherit-task)")
-    parser.add_argument("--preset", choices=("hydrogen-argon-hybrid", "argon-hydrogen-hybrid", "hydrogen-argon", "hydrogen-hybrid", "safe-cache-hybrid", "safe-cache", "hydrogen-safe-cache", "hydrogen-dynamic", "hydrogen", "hydrogen-risk-hybrid", "hydrogen-risk", "flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "flash-dynamic", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
+    parser.add_argument("--preset", choices=("hydrogen-argon-hybrid", "argon-hydrogen-hybrid", "hydrogen-argon", "hydrogen-hybrid", "safe-cache-hybrid", "safe-cache", "hydrogen-safe-cache", "hydrogen-dynamic", "hydrogen", "hydrogen-risk-hybrid", "hydrogen-risk", "flash-argon-hybrid", "argon-flash-hybrid", "flash-argon", "flash-dynamic", "argon-dynamic", "argon", "carbon-dynamic", "carbon", "neon-dynamic", "neon", "risk-hybrid", "adaptive-hybrid", "inherit", "hybrid-smart", "flash", "hybrid"), help="Preset reviewer model profile")
     parser.add_argument("--scope", choices=("project", "task", "run"), default=None, help="Policy persistence scope (project, task, or run/once)")
     parser.add_argument("--default", default="inherit", help="Default reviewer model or model@effort")
     parser.add_argument("--reviewer", action="append", default=[], metavar="ROLE=MODEL")
@@ -2111,7 +2156,7 @@ def main(argv: list[str] | None = None) -> int:
                 result["dispatch_hint"] = (
                     "When calling invoke_subagent, pass Model='flash' ONLY for legacy 3.8-flash reviewers whose model in reviewer_models contains 'flash', "
                     "pass Model='pro' for reviewers whose model contains 'pro', "
-                    "and omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
+                    "and omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-neon-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
                 )
         else:
             policy, source = load_policy(repo, args.task)

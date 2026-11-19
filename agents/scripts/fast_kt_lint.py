@@ -1705,7 +1705,7 @@ def _has_preceding_kdoc_or_preview(lines: list[str], decl_line_idx_0: int) -> tu
             i -= 1
             continue
         # Handle multi-line annotation arguments directly above declaration (e.g. `@OptIn(\n Foo::class\n)`)
-        if s.endswith(")") or paren_depth > 0:
+        if (s.endswith(")") and s.count(")") > s.count("(")) or paren_depth > 0:
             paren_depth += s.count(")") - s.count("(")
             if "Preview" in s:
                 is_preview = True
@@ -1728,14 +1728,17 @@ def find_missing_architectural_kdoc(
     if modified_lines is not None and len(modified_lines) == 0:
         return []
 
+    from _source_text import mask_comments_and_strings
+
     raw_lines = text.splitlines()
-    clean_text = _strip_kotlin_comments_preserve_lines(text)
-    clean_lines = clean_text.splitlines()
+    clean_lines = _strip_kotlin_comments_preserve_lines(text).splitlines()
+    structural_lines = mask_comments_and_strings(text).splitlines()
     advisories: list[dict] = []
     brace_depth = 0
     paren_depth = 0
 
     for idx_0, c_line in enumerate(clean_lines):
+        s_line = structural_lines[idx_0] if idx_0 < len(structural_lines) else c_line
         ln_1 = idx_0 + 1
         in_mod = modified_lines is None or ln_1 in modified_lines
         # Only check top-level declarations (brace_depth == 0) or direct class/interface members (brace_depth == 1)
@@ -1771,10 +1774,10 @@ def find_missing_architectural_kdoc(
                                     "Add concise English KDoc documenting responsibility, @param, and @return."
                                 ),
                             })
-        brace_depth += c_line.count("{") - c_line.count("}")
+        brace_depth += s_line.count("{") - s_line.count("}")
         if brace_depth < 0:
             brace_depth = 0
-        paren_depth += c_line.count("(") - c_line.count(")")
+        paren_depth += s_line.count("(") - s_line.count(")")
         if paren_depth < 0:
             paren_depth = 0
     return advisories
@@ -1828,11 +1831,14 @@ def find_unreferenced_new_declarations(
         except OSError:
             continue
         file_texts[path] = raw_txt
+        from _source_text import mask_comments_and_strings
         raw_lines = raw_txt.splitlines()
         tmpl_lines = _strip_kotlin_comments_keep_templates(raw_txt).splitlines()
+        struct_lines = mask_comments_and_strings(raw_txt).splitlines()
         brace_depth = 0
         paren_depth = 0
         for idx_0, c_line in enumerate(tmpl_lines):
+            s_line = struct_lines[idx_0] if idx_0 < len(struct_lines) else c_line
             ln_1 = idx_0 + 1
             in_mod = mod_set is None or ln_1 in mod_set
             if in_mod and paren_depth == 0 and brace_depth in (0, 1):
@@ -1856,20 +1862,21 @@ def find_unreferenced_new_declarations(
                                 }
                             ):
                                 candidates.append({"file": path, "line": ln_1, "kind": "fun", "name": fn})
-            brace_depth += c_line.count("{") - c_line.count("}")
+            brace_depth += s_line.count("{") - s_line.count("}")
             if brace_depth < 0:
                 brace_depth = 0
-            paren_depth += c_line.count("(") - c_line.count(")")
+            paren_depth += s_line.count("(") - s_line.count(")")
             if paren_depth < 0:
                 paren_depth = 0
 
     if not candidates:
         return []
 
+    from _source_text import mask_comments_and_strings
     cand_names = {c["name"] for c in candidates}
     skip = set(SKIP_PARTS)
     all_source_files: list[Path] = []
-    for ext in ("*.kt", "*.java", "*.xml"):
+    for ext in ("*.kt", "*.java", "*.xml", "*.swift"):
         for p in repo_glob(repo, f"**/{ext}"):
             if not any(part in p.parts for part in skip) and p.is_file():
                 all_source_files.append(p)
@@ -1887,6 +1894,8 @@ def find_unreferenced_new_declarations(
             continue
         if sp.suffix == ".kt":
             stxt = _strip_kotlin_comments_keep_templates(stxt)
+        elif sp.suffix == ".swift":
+            stxt = mask_comments_and_strings(stxt)
         matched_here = cand_names & set(_IDENT_TOKEN_RE.findall(stxt))
         if sp_res in cand_files:
             cand_file_tokens[sp_res] = matched_here
@@ -1924,13 +1933,24 @@ def find_unreferenced_new_declarations(
     return findings
 
 
-def main() -> int:
+def main(argv: list[str] | None = None, *, repo_override: Path | None = None) -> int:
+    global REPO
+    _saved_repo = REPO
+    if repo_override is not None:
+        REPO = repo_override.resolve()
+    try:
+        return _main_impl(argv)
+    finally:
+        REPO = _saved_repo
+
+
+def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fast Kotlin lint for this app")
     parser.add_argument("--all", action="store_true", help="Scan all Kotlin files under app/src/main")
     parser.add_argument("--strict-kdoc", action="store_true", help="Treat missing architectural KDoc on newly added contracts as blocking lint errors")
     parser.add_argument("--strict-unused", action="store_true", help="Treat unreferenced newly added public/internal classes and functions as blocking lint errors")
     parser.add_argument("files", nargs="*", help="Optional explicit file path(s) to scan")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.files:
         cwd_root = Path.cwd().resolve()

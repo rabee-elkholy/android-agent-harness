@@ -3,6 +3,7 @@ name: test-driven-development
 description: Use when implementing testable Android business logic, ViewModels, repositories, or reproducing defects with meaningful seams.
 version: 1.1.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Test-Driven Development (TDD) Skill

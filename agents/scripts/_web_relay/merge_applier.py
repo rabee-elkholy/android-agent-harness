@@ -65,10 +65,260 @@ def _is_template_example_merge_obj(obj: dict[str, Any]) -> bool:
 def _is_outgoing_context_pack_text(raw_text: str) -> bool:
     stripped = (raw_text or "").lstrip()
     return stripped.startswith("# Android Agent Harness — Web-Relay")
-def _detect_truncated_merge_pack_id(raw_text: str, known_packs: set[str]) -> str:
-    """Detect a pasted/uploaded HARNESS_WEB_MERGE_V1 JSON snippet that was truncated mid-stream."""
+
+_PATCH_OPEN_TAG = "<<<HARNESS_WEB_PATCH_V1>>>"
+_PATCH_CLOSE_TAG = "<<<END_HARNESS_WEB_PATCH_V1>>>"
+
+
+def _is_template_example_patch_doc(obj: dict[str, Any]) -> bool:
+    if str(obj.get("pack_id") or "") == "wpack-000000000000":
+        return True
+    ops = obj.get("operations")
+    if isinstance(ops, list):
+        for op in ops:
+            if isinstance(op, dict) and str(op.get("path") or "") in {
+                "path/to/ExistingFile.kt",
+                "path/to/NewFileOrTestOrVectorDrawable.kt",
+            }:
+                return True
+    return False
+
+
+def _detect_truncated_patch_pack_id(raw_text: str, known_packs: set[str]) -> str:
     if not raw_text or _engine._is_outgoing_context_pack_text(raw_text):
         return ""
+    if _PATCH_OPEN_TAG not in raw_text:
+        return ""
+    last_open = raw_text.rfind(_PATCH_OPEN_TAG)
+    tail = raw_text[last_open:]
+    m_pid = _engine.re.search(r"^PACK_ID:\s*(wpack-[a-f0-9]{12})\s*$", tail, _engine.re.MULTILINE)
+    if not m_pid:
+        return ""
+    pid = m_pid.group(1)
+    if known_packs and pid not in known_packs:
+        return ""
+    close_idx = tail.find(_PATCH_CLOSE_TAG)
+    if close_idx == -1:
+        return pid
+    body = tail[len(_PATCH_OPEN_TAG):close_idx]
+    open_files = len(_engine.re.findall(r"^<<<(?:MODIFY|CREATE)\s+.+?>>>\s*$", body, _engine.re.MULTILINE))
+    close_files = len(_engine.re.findall(r"^<<<END_FILE>>>\s*$", body, _engine.re.MULTILINE))
+    if open_files != close_files:
+        return pid
+    return ""
+
+
+def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
+    """Parse a zero-JSON-escaping `<<<HARNESS_WEB_PATCH_V1>>>` payload into the canonical HARNESS_WEB_MERGE_V1 dict."""
+    if not raw_text or _engine._is_outgoing_context_pack_text(raw_text):
+        return None
+    if _PATCH_OPEN_TAG not in raw_text or _PATCH_CLOSE_TAG not in raw_text:
+        return None
+
+    matched_docs: list[dict[str, Any]] = []
+    search_pos = 0
+    while True:
+        open_idx = raw_text.find(_PATCH_OPEN_TAG, search_pos)
+        if open_idx == -1:
+            break
+        close_idx = raw_text.find(_PATCH_CLOSE_TAG, open_idx + len(_PATCH_OPEN_TAG))
+        if close_idx == -1:
+            break
+        block = raw_text[open_idx + len(_PATCH_OPEN_TAG) : close_idx].replace("\r\n", "\n").replace("\r", "\n")
+        search_pos = close_idx + len(_PATCH_CLOSE_TAG)
+
+        lines = block.split("\n")
+        headers: dict[str, str] = {}
+        need_files: list[str] = []
+        idx = 0
+        n = len(lines)
+        while idx < n:
+            ln = lines[idx]
+            s_ln = ln.strip()
+            if not s_ln:
+                idx += 1
+                continue
+            if s_ln.startswith("<<<"):
+                break
+            if ":" in ln:
+                k, v = ln.split(":", 1)
+                k_up = k.strip().upper()
+                val = v.strip()
+                if k_up == "NEED_FILE" and val:
+                    need_files.append(val)
+                elif k_up == "NEED_FILES" and val:
+                    for item in val.split(","):
+                        if item.strip():
+                            need_files.append(item.strip())
+                else:
+                    headers[k_up] = val
+            idx += 1
+
+        pack_id = headers.get("PACK_ID", "").strip()
+        status = headers.get("STATUS", "READY").strip().upper() or "READY"
+        if not pack_id:
+            continue
+
+        if status == "NEED_FILES":
+            doc: dict[str, Any] = {
+                "schema": _engine.WEB_MERGE_SCHEMA,
+                "source_format": _engine.WEB_PATCH_SCHEMA,
+                "pack_id": pack_id,
+                "status": "NEED_FILES",
+                "need_files": need_files,
+                "reason": headers.get("REASON", "Additional repository files requested before editing."),
+            }
+            if not _is_template_example_patch_doc(doc):
+                matched_docs.append(doc)
+            continue
+
+        operations: list[dict[str, Any]] = []
+        malformed = False
+        while idx < n:
+            s_ln = lines[idx].strip()
+            if not s_ln:
+                idx += 1
+                continue
+            m_del = _engine.re.fullmatch(r"<<<DELETE\s+(.+?)>>>", s_ln)
+            if m_del:
+                operations.append({"action": "DELETE", "path": m_del.group(1).strip()})
+                idx += 1
+                continue
+            m_ren = _engine.re.fullmatch(r"<<<RENAME\s+(.+?)\s*->\s*(.+?)>>>", s_ln)
+            if m_ren:
+                operations.append({
+                    "action": "RENAME",
+                    "old_path": m_ren.group(1).strip(),
+                    "path": m_ren.group(2).strip(),
+                })
+                idx += 1
+                continue
+            m_create = _engine.re.fullmatch(r"<<<CREATE\s+(.+?)>>>", s_ln)
+            if m_create:
+                c_path = m_create.group(1).strip()
+                idx += 1
+                body_lines: list[str] = []
+                closed = False
+                while idx < n:
+                    if lines[idx].strip() == "<<<END_FILE>>>":
+                        closed = True
+                        idx += 1
+                        break
+                    body_lines.append(lines[idx])
+                    idx += 1
+                if not closed:
+                    malformed = True
+                    break
+                operations.append({
+                    "action": "CREATE",
+                    "path": c_path,
+                    "content": "\n".join(body_lines) + ("\n" if body_lines else ""),
+                })
+                continue
+            m_mod = _engine.re.fullmatch(r"<<<MODIFY\s+(.+?)>>>", s_ln)
+            if m_mod:
+                m_path = m_mod.group(1).strip()
+                idx += 1
+                file_lines: list[str] = []
+                closed = False
+                while idx < n:
+                    if lines[idx].strip() == "<<<END_FILE>>>":
+                        closed = True
+                        idx += 1
+                        break
+                    file_lines.append(lines[idx])
+                    idx += 1
+                if not closed:
+                    malformed = True
+                    break
+                hunks: list[dict[str, Any]] = []
+                f_idx = 0
+                f_n = len(file_lines)
+                while f_idx < f_n:
+                    fl_s = file_lines[f_idx].strip()
+                    if not fl_s:
+                        f_idx += 1
+                        continue
+                    if fl_s in ("<<<<<<< SEARCH", "<<<<<<< SEARCH ALL"):
+                        rep_all = fl_s == "<<<<<<< SEARCH ALL"
+                        f_idx += 1
+                        s_buf: list[str] = []
+                        r_buf: list[str] = []
+                        seen_sep = False
+                        seen_end = False
+                        while f_idx < f_n:
+                            if not seen_sep and file_lines[f_idx].strip() == "=======":
+                                seen_sep = True
+                                f_idx += 1
+                                continue
+                            if seen_sep and file_lines[f_idx].strip() == ">>>>>>> REPLACE":
+                                seen_end = True
+                                f_idx += 1
+                                break
+                            if not seen_sep:
+                                s_buf.append(file_lines[f_idx])
+                            else:
+                                r_buf.append(file_lines[f_idx])
+                            f_idx += 1
+                        if not (seen_sep and seen_end):
+                            malformed = True
+                            break
+                        hunks.append({
+                            "search": "\n".join(s_buf),
+                            "replace": "\n".join(r_buf),
+                            "replace_all": rep_all,
+                        })
+                    else:
+                        malformed = True
+                        break
+                if malformed or not hunks:
+                    malformed = True
+                    break
+                operations.append({
+                    "action": "MODIFY",
+                    "path": m_path,
+                    "hunks": hunks,
+                })
+                continue
+            malformed = True
+            break
+
+        if malformed or not operations:
+            continue
+
+        plan_spec: dict[str, Any] = {}
+        if headers.get("TASK_ID"):
+            plan_spec["task_id"] = headers["TASK_ID"]
+        if headers.get("KIND"):
+            plan_spec["kind"] = headers["KIND"]
+        if headers.get("OUTCOME"):
+            plan_spec["outcome"] = headers["OUTCOME"]
+        if headers.get("APPROACH"):
+            plan_spec["approach"] = headers["APPROACH"]
+        if headers.get("RISKS"):
+            plan_spec["risks"] = headers["RISKS"]
+
+        doc = {
+            "schema": _engine.WEB_MERGE_SCHEMA,
+            "source_format": _engine.WEB_PATCH_SCHEMA,
+            "pack_id": pack_id,
+            "status": status,
+            "plan_spec": plan_spec,
+            "operations": operations,
+        }
+        if not _is_template_example_patch_doc(doc):
+            matched_docs.append(doc)
+
+    return matched_docs[-1] if matched_docs else None
+
+
+def _detect_truncated_merge_pack_id(raw_text: str, known_packs: set[str]) -> str:
+    """Detect a pasted/uploaded HARNESS_WEB_MERGE_V1 JSON or HARNESS_WEB_PATCH_V1 snippet that was truncated mid-stream."""
+    if not raw_text or _engine._is_outgoing_context_pack_text(raw_text):
+        return ""
+    patch_pid = _detect_truncated_patch_pack_id(raw_text, known_packs)
+    if patch_pid:
+        return patch_pid
     if f'"{_engine.WEB_MERGE_SCHEMA}"' not in raw_text:
         return ""
     m_pid = _engine.re.search(r'"pack_id"\s*:\s*"(wpack-[a-f0-9]{12})"', raw_text)
@@ -114,7 +364,7 @@ def _extract_merge_json_from_text(raw_text: str) -> dict[str, Any] | None:
             search_pos = idx + len(_engine.WEB_MERGE_SCHEMA)
         if matched_objs:
             return matched_objs[-1]
-    return None
+    return _parse_web_patch_v1_from_text(text)
 def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: bool) -> tuple[dict[str, Any], str]:
     if explicit_file:
         fp = Path(explicit_file).expanduser().resolve()
@@ -124,7 +374,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             import zipfile
             with zipfile.ZipFile(fp, "r") as zf:
                 for name in zf.namelist():
-                    if name.endswith(".json"):
+                    if name.lower().endswith((".json", ".patch", ".txt", ".md")):
                         parsed = _engine._extract_merge_json_from_text(zf.read(name).decode("utf-8", errors="replace"))
                         if parsed:
                             return parsed, f"zip:{fp}"
@@ -202,7 +452,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
                     import zipfile
                     with zipfile.ZipFile(cand, "r") as zf:
                         for zn in zf.namelist():
-                            if zn.endswith(".json"):
+                            if zn.lower().endswith((".json", ".patch", ".txt", ".md")):
                                 doc = _engine._extract_merge_json_from_text(zf.read(zn).decode("utf-8", errors="replace"))
                                 dpid = str((doc or {}).get("pack_id") or "")
                                 if doc and dpid in known_packs:

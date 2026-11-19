@@ -3,6 +3,7 @@ name: phone-e2e
 description: Live agent-driven phone E2E testing session over ADB on an installed Android build. Use when running interactive phone E2E scenarios (`e2e start`) before device sign-off.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Phone E2E Verification Skill

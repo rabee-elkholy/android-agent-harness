@@ -309,14 +309,27 @@ def _resolve_hook_cwd(raw_cwd: Any) -> Path:
     return p.resolve() if p.is_absolute() else (REPO / p).resolve()
 
 
+def _is_side_question_payload(payload: dict) -> bool:
+    """Detect Antigravity v2.32.2+ multi-turn `/btw` Side Question read-only tabs."""
+    if not isinstance(payload, dict):
+        return False
+    if bool(payload.get("isSideQuestion") or payload.get("is_side_question") or payload.get("sideQuestion") or payload.get("side_question")):
+        return True
+    for key in ("mode", "Mode", "surface", "Surface", "conversationKind", "conversation_kind", "tabKind", "tab_kind"):
+        val = str(payload.get(key) or "").strip().lower()
+        if val in {"btw", "/btw", "side_question", "side-question", "sidequestion"}:
+            return True
+    return False
+
+
 def _handle_stop() -> None:
     try:
         plan = active_plan(REPO)
         status = str(plan.get("status") or "")
     except Exception:
-        emit("allow", "No active vNext task requires a delivery stop.", tool="stop", reason_code="STOP_IDLE")
+        _self.emit("allow", "No active vNext task requires a delivery stop.", tool="stop", reason_code="STOP_IDLE")
         return
-    emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop", reason_code="STOP_ALLOWED")
+    _self.emit("allow", f"Turn completion permitted for task in status {status or 'unknown'}.", tool="stop", reason_code="STOP_ALLOWED")
 
 
 CONVERSATION_LIMIT = 50
@@ -347,7 +360,7 @@ def _main() -> None:
     try:
         raw = __import__('_vnext_common').read_utf8_stdin()
         if len(raw.encode("utf-8", errors="replace")) > MAX_STDIN_BYTES:
-            emit("deny", "Hook payload exceeds the 5 MiB safety limit.")
+            _self.emit("deny", "Hook payload exceeds the 5 MiB safety limit.")
             return
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
@@ -355,11 +368,21 @@ def _main() -> None:
         if any(key in payload for key in ("terminationReason", "termination_reason")) or payload.get("event") == "Stop" or payload.get("hook") == "Stop":
             _handle_stop()
             return
-        started = _conversation_started_at(payload)
+        started = _self._conversation_started_at(payload)
         if started is not None:
             import discovery_receipt
             discovery_receipt.RECEIPT_NOT_BEFORE = started
         name, args = _tool_name_and_args(payload)
+        is_side_question = _is_side_question_payload(payload)
+        if is_side_question:
+            if name in WRITE_TOOLS or name in SUBAGENT_TOOLS or name.startswith("schedules:") or name in ("call_mcp_tool", "mcp_tool") or name.startswith("mcp_"):
+                _self.emit(
+                    "deny",
+                    "SIDE_QUESTION_READ_ONLY_BOUNDARY: `/btw` side-question tabs are strictly read-only; ask in the main conversation to mutate files, invoke subagents, or call MCP tools.",
+                    tool=name,
+                    reason_code="SIDE_QUESTION_READ_ONLY_BOUNDARY",
+                )
+                return
         reviewer = None
         conversation = str(payload.get("conversationId") or payload.get("conversation_id") or "")
         transcript_hint = str(payload.get("transcriptPath") or payload.get("transcript_path") or "")
@@ -374,10 +397,10 @@ def _main() -> None:
                     command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
                     cwd = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                     if cwd != REPO.resolve() or not discovery_command_allowed(command):
-                        emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
+                        _self.emit("deny", "Reviewer run_command permits only bounded graph/task-context discovery.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                         return
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir"}:
-                    emit("deny", "Reviewer tools are limited to source reads and bounded discovery. Do NOT call send_message; output your final review response directly as plain assistant text and end your turn.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
+                    _self.emit("deny", "Reviewer tools are limited to source reads and bounded discovery. Do NOT call send_message; output your final review response directly as plain assistant text and end your turn.", tool=name, reason_code="REVIEWER_READ_ONLY_BOUNDARY")
                     return
                 if reviewer.get("role"):
                     from delegation_policy import check_and_record_subagent_step_budget
@@ -392,14 +415,14 @@ def _main() -> None:
                         role=str(reviewer.get("role") or ""),
                     )
                     if not ok_rb:
-                        emit("deny", reason_rb, tool=name, reason_code=code_rb)
+                        _self.emit("deny", reason_rb, tool=name, reason_code=code_rb)
                         return
                 if name in SEARCH_TOOLS:
                     from discovery_receipt import load_latest_discovery_receipt, check_discovery_freshness, is_path_in_discovery_scope
                     receipt = load_latest_discovery_receipt(REPO)
                     target = str(args.get("SearchPath") or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory") or "")
-                    if receipt and check_discovery_freshness(REPO, receipt)[0] and is_path_in_discovery_scope(REPO, target, receipt) and not _installed_engine_target(target, recursive=True):
-                        emit("allow", "Reviewer search is inside its graph discovery scope.", tool=name, reason_code="REVIEWER_DISCOVERY_SEARCH_ALLOWED")
+                    if receipt and check_discovery_freshness(REPO, receipt)[0] and is_path_in_discovery_scope(REPO, target, receipt) and not _self._installed_engine_target(target, recursive=True):
+                        _self.emit("allow", "Reviewer search is inside its graph discovery scope.", tool=name, reason_code="REVIEWER_DISCOVERY_SEARCH_ALLOWED")
                         return
         utility_ctx = None
         if not reviewer and (conversation or os.environ.get("HARNESS_UTILITY_AGENT")):
@@ -428,7 +451,7 @@ def _main() -> None:
                     cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
                     cwd_p = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                     if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
-                        emit(
+                        _self.emit(
                             "deny",
                             "Scout subagent run_command permits only standalone read-only graph, task-context, symbol outline/read, android-inspect, doctor, or git status/diff/log/grep/ls-files inspection (no pipes/chaining). Use `git grep -n \"<pattern>\"` / `git ls-files` or native `grep_search` / `find_by_name` instead of shell `findstr`/`rg`.",
                             tool=name,
@@ -437,16 +460,16 @@ def _main() -> None:
                         return
                 elif name in {"view_file", "read_file", "read"}:
                     _sc_tgt = str(args.get("AbsolutePath") or args.get("absolutePath") or _target(args) or "")
-                    if _is_raw_graph_cache_read_target(_sc_tgt):
-                        emit(
+                    if _self._is_raw_graph_cache_read_target(_sc_tgt):
+                        _self.emit(
                             "deny",
                             "RAW_GRAPH_CACHE_READ_BLOCKED: Never read raw machine cache `.agents/cache/project_graph.json` directly with `read_file`/`view_file` (causes massive token bloat). Query indexed symbols/features compactly via `python .agents/harness.py graph --find <Symbol>` or native `grep_search`.",
                             tool=name,
                             reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
                         )
                         return
-                    if _is_large_step_output_paginated_read(_sc_tgt, args):
-                        emit(
+                    if _self._is_large_step_output_paginated_read(_sc_tgt, args):
+                        _self.emit(
                             "deny",
                             "LARGE_STEP_OUTPUT_PAGINATION_BLOCKED: Never paginate large `.system_generated/steps/*/output.txt` dumps via `read_file` `ByteOffset` (causes 200K+ token bloat). Run `python .agents/harness.py pm find-item --item <id> --file \"<output.txt>\"` or `grep_search` instead.",
                             tool=name,
@@ -454,7 +477,7 @@ def _main() -> None:
                         )
                         return
                 elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir", "search_web"}:
-                    emit(
+                    _self.emit(
                         "deny",
                         f"`{SCOUT_AGENT}` is strictly read-only; mutations, subagent calls, `send_message`, and developer prompts are forbidden. Output your digest directly as plain assistant text.",
                         tool=name,
@@ -465,7 +488,7 @@ def _main() -> None:
                     REPO, u_exec, kind="SCOUT", tool_name=name, role=SCOUT_AGENT,
                 )
                 if not ok_sb:
-                    emit("deny", reason_sb, tool=name, reason_code=code_sb)
+                    _self.emit("deny", reason_sb, tool=name, reason_code=code_sb)
                     return
             elif u_type == SPECIALIST_AGENT:
                 try:
@@ -474,7 +497,7 @@ def _main() -> None:
                 except (ImportError, AttributeError):
                     pass
                 if name in SUBAGENT_TOOLS | {"ask_question"}:
-                    emit(
+                    _self.emit(
                         "deny",
                         f"Specialist subagent `{utility_ctx.get('role')}` cannot call `{name}`; output your final report directly as plain assistant text and end your turn.",
                         tool=name,
@@ -486,7 +509,7 @@ def _main() -> None:
                         cmd_str = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
                         cwd_p = _resolve_hook_cwd(args.get("Cwd") or args.get("cwd"))
                         if cwd_p != REPO.resolve() or not scout_command_allowed(cmd_str):
-                            emit(
+                            _self.emit(
                                 "deny",
                                 f"Specialist subagent `{utility_ctx.get('role')}` is read-only for repository code.",
                                 tool=name,
@@ -494,7 +517,7 @@ def _main() -> None:
                             )
                             return
                     elif name not in {"view_file", "read_file", "read", "grep_search", "find_by_name", "list_dir", "search_web"}:
-                        emit(
+                        _self.emit(
                             "deny",
                             f"Specialist subagent `{utility_ctx.get('role')}` is strictly read-only.",
                             tool=name,
@@ -505,10 +528,10 @@ def _main() -> None:
                     REPO, u_exec, kind="SPECIALIST", tool_name=name, role=str(utility_ctx.get("role") or SPECIALIST_AGENT),
                 )
                 if not ok_spb:
-                    emit("deny", reason_spb, tool=name, reason_code=code_spb)
+                    _self.emit("deny", reason_spb, tool=name, reason_code=code_spb)
                     return
 
-        if conversation and not reviewer and utility_ctx is None:
+        if conversation and not is_side_question and not reviewer and utility_ctx is None:
             try:
                 from task_bridge import record_active_conversation_turn
                 record_active_conversation_turn(REPO, conversation)
@@ -518,8 +541,8 @@ def _main() -> None:
             target = str(args.get("AbsolutePath") or args.get("absolutePath") or args.get("SearchPath")
                          or args.get("searchPath") or args.get("SearchDirectory") or args.get("searchDirectory")
                          or args.get("DirectoryPath") or args.get("directoryPath") or _target(args) or "")
-            if name in {"view_file", "read_file", "read"} and _is_background_task_log_target(target):
-                emit(
+            if name in {"view_file", "read_file", "read"} and _self._is_background_task_log_target(target):
+                _self.emit(
                     "deny",
                     "BACKGROUND_TASK_LOG_POLLING_FORBIDDEN: Never read in-progress background task logs (`.system_generated/tasks/*.log`). "
                     "Yield your turn with ZERO tool calls and wait for the host completion notification.",
@@ -527,8 +550,8 @@ def _main() -> None:
                     reason_code="BACKGROUND_TASK_LOG_POLLING_FORBIDDEN",
                 )
                 return
-            if name in {"view_file", "read_file", "read"} and _is_raw_graph_cache_read_target(target):
-                emit(
+            if name in {"view_file", "read_file", "read"} and _self._is_raw_graph_cache_read_target(target):
+                _self.emit(
                     "deny",
                     "RAW_GRAPH_CACHE_READ_BLOCKED: Never read raw machine cache `.agents/cache/project_graph.json` directly with `read_file`/`view_file` (causes massive token bloat). "
                     "Use `python .agents/harness.py graph --find <Symbol>` or native `grep_search` instead.",
@@ -536,8 +559,8 @@ def _main() -> None:
                     reason_code="RAW_GRAPH_CACHE_READ_BLOCKED",
                 )
                 return
-            if name in {"view_file", "read_file", "read"} and _is_large_step_output_paginated_read(target, args):
-                emit(
+            if name in {"view_file", "read_file", "read"} and _self._is_large_step_output_paginated_read(target, args):
+                _self.emit(
                     "deny",
                     f"LARGE_STEP_OUTPUT_PAGINATION_BLOCKED: Never paginate large tool output dumps (`.system_generated/steps/*/output.txt`) via `read_file` `ByteOffset` (causes 200K+ token cache bloat). "
                     f"Extract Zoho/Jira items in <20ms via `python .agents/harness.py pm find-item --item <I1454|id> --file \"{target}\"` or search specific keys via `grep_search`.",
@@ -545,8 +568,8 @@ def _main() -> None:
                     reason_code="LARGE_STEP_OUTPUT_PAGINATION_BLOCKED",
                 )
                 return
-            if name in {"view_file", "read_file", "read"} and _is_large_build_artifact_paginated_read(target, args):
-                emit(
+            if name in {"view_file", "read_file", "read"} and _self._is_large_build_artifact_paginated_read(target, args):
+                _self.emit(
                     "deny",
                     "BUILD_ARTIFACT_PAGINATION_BLOCKED: Never paginate large generated or bytecode dump files inside `build/**` via `ByteOffset` (causes 200K+ token context bloat). "
                     "Inspect third-party library Kotlin/Java sources (`-sources.jar`, auto-fetched even before Android Studio Sync) via "
@@ -555,8 +578,8 @@ def _main() -> None:
                     reason_code="BUILD_ARTIFACT_PAGINATION_BLOCKED",
                 )
                 return
-            if _is_native_transcript_read_target(target):
-                emit(
+            if _self._is_native_transcript_read_target(target):
+                _self.emit(
                     "deny",
                     "NATIVE_TRANSCRIPT_READ_FORBIDDEN: Never read raw Antigravity `transcript.jsonl` logs into agent context (causes severe token bloat). "
                     "Run `python .agents/harness.py status`, `python .agents/harness.py task bridge --resume`, or `git diff --stat` instead.",
@@ -564,13 +587,13 @@ def _main() -> None:
                     reason_code="NATIVE_TRANSCRIPT_READ_FORBIDDEN",
                 )
                 return
-            if _installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
-                _deny_engine_read(name)
+            if _self._installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
+                _self._deny_engine_read(name)
                 return
         if name in WRITE_TOOLS:
             targets = _extract_all_targets(args)
             if name in {"move_file", "rename_file"} and len(targets) < 2:
-                emit(
+                _self.emit(
                     "deny",
                     f"{name} must expose both source and destination paths for boundary validation.",
                     tool=name,
@@ -584,7 +607,7 @@ def _main() -> None:
             first_detail = ""
             resolved_details: list[str] = []
             for t in targets:
-                safe, detail, is_temp = _safe_target(t)
+                safe, detail, is_temp = _self._safe_target(t)
                 if not safe:
                     all_safe = False
                     first_detail = detail
@@ -593,13 +616,13 @@ def _main() -> None:
                 if not is_temp:
                     all_temp = False
             if not all_safe:
-                emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
+                _self.emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if all_temp:
                 if (utility_ctx is not None or reviewer) and any(
                     "/.agents/state/web-relay/inbox/" in ("/" + d.lstrip("/")) for d in resolved_details
                 ):
-                    emit(
+                    _self.emit(
                         "deny",
                         "WORKER_INBOX_WRITE_FORBIDDEN: `.agents/state/web-relay/inbox/` is reserved exclusively for the Lead session when staging incoming Web-Relay JSON payloads.",
                         tool=name,
@@ -607,34 +630,34 @@ def _main() -> None:
                     )
                     return
                 if name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
-                    _normalize_crlf_for_edit(REPO, targets, args)
-                emit("allow", "Temporary setup answers, IDE artifact, or external user document write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
+                    _self._normalize_crlf_for_edit(REPO, targets, args)
+                _self.emit("allow", "Temporary setup answers, IDE artifact, or external user document write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
                 return
             try:
                 pending_tid = str(active_plan(REPO).get("task_id") or "")
             except Exception:
                 pending_tid = ""
             if _pending_cancel(pending_tid):
-                emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
+                _self.emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
             allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
             if allowed and not reviewer:
-                w_ok, w_reason, w_code = _check_web_mode_direct_write_guard(
+                w_ok, w_reason, w_code = _self._check_web_mode_direct_write_guard(
                     REPO, targets, conversation=conversation, transcript_hint=transcript_hint,
                 )
                 if not w_ok:
                     allowed, reason, code = w_ok, w_reason, w_code
             if allowed and name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
-                _normalize_crlf_for_edit(REPO, targets, args)
+                _self._normalize_crlf_for_edit(REPO, targets, args)
             if allowed and conversation and not reviewer and utility_ctx is None:
                 try:
                     from delegation_policy import mark_lead_edit_or_transition
                     mark_lead_edit_or_transition(REPO, conversation)
                 except (ImportError, OSError, ValueError):
                     pass
-            emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
+            _self.emit("allow" if allowed else "deny", reason, tool=name, reason_code=code)
             return
-        lead_conv = conversation if (conversation and not reviewer and utility_ctx is None) else ""
+        lead_conv = conversation if (conversation and not is_side_question and not reviewer and utility_ctx is None) else ""
         if lead_conv and _ACTIVE_HOOK_MODEL_NAME:
             try:
                 from delegation_policy import record_live_lead_session_model
@@ -643,42 +666,43 @@ def _main() -> None:
                 pass
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-            _handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint)
+            _self._handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint)
             return
         if name in SUBAGENT_TOOLS or name.startswith("schedules:"):
-            _handle_subagent(name, args, parent_conversation_id=conversation)
+            _self._handle_subagent(name, args, parent_conversation_id=conversation)
             return
         if name in SEARCH_TOOLS:
-            _handle_search(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
+            _self._handle_search(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
             return
         if name == "list_dir":
-            _handle_list_dir(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
+            _self._handle_list_dir(name, args, conversation=lead_conv, is_utility_subagent=(utility_ctx is not None))
             return
         # Known read-only tools (checked before loading external integration registry)
         if name in ("view_file", "read_file", "read", "read_url_content", "search_web", "read_resource", "list_resources", "ask_question", "generate_image"):
-            if name == "search_web" and _enforce_search_web_parallel_cap(conversation or lead_conv):
+            if name == "search_web" and _self._enforce_search_web_parallel_cap(conversation or lead_conv):
                 return
             if name in ("view_file", "read_file", "read"):
-                if lead_conv and _enforce_lead_anti_reread(lead_conv, name, args):
+                if lead_conv and _self._enforce_lead_anti_reread(lead_conv, name, args):
                     return
-                _flag_out_of_scope_read(name, args)
-            emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
+                if not is_side_question:
+                    _self._flag_out_of_scope_read(name, args)
+            _self.emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="KNOWN_READ_TOOL")
             return
         # External integrations called directly as host tools (e.g. zoho_add_comment)
         integration = _get_registry().resolve("", name)
         if integration is not None:
             if integration.is_read_only(name, args):
-                emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
+                _self.emit("allow", f"Read-only {integration.display_name} inspection is allowed.", tool=name)
                 return
-            _handle_external_mutation(integration, name, args)
+            _self._handle_external_mutation(integration, name, args)
             return
         if name in ("call_mcp_tool", "mcp_tool"):
-            _handle_mcp_tool(name, args)
+            _self._handle_mcp_tool(name, args)
             return
 
         mcp_match = re.match(r"^mcp_([a-zA-Z0-9_-]+)_(.+)$", name)
         if mcp_match:
-            _handle_mcp_tool(name, {
+            _self._handle_mcp_tool(name, {
                 "ServerName": mcp_match.group(1),
                 "ToolName": mcp_match.group(2),
                 "Arguments": args,
@@ -696,74 +720,86 @@ def _main() -> None:
         has_mutation_args = bool(tgt and any(k in args for k in ("content", "code", "patch", "replacement", "text", "data")))
 
         if has_mutation_verb or has_mutation_args:
-            emit("deny", f"Denied unknown mutation-like tool '{name}'; not authorized by harness safety boundary.", tool=name, reason_code="UNKNOWN_MUTATION_TOOL")
+            _self.emit("deny", f"Denied unknown mutation-like tool '{name}'; not authorized by harness safety boundary.", tool=name, reason_code="UNKNOWN_MUTATION_TOOL")
             return
 
-        emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="UNKNOWN_TOOL_READ_ASSUMED")
+        _self.emit("allow", "Tool is outside the harness mutation boundary.", tool=name, reason_code="UNKNOWN_TOOL_READ_ASSUMED")
     except json.JSONDecodeError:
-        emit("deny", "Safety hook received invalid JSON.")
+        _self.emit("deny", "Safety hook received invalid JSON.")
     except Exception as exc:
-        emit("deny", f"Safety hook failed closed ({type(exc).__name__}: {exc}).")
+        _self.emit("deny", f"Safety hook failed closed ({type(exc).__name__}: {exc}).")
 
 
 
-from .audit_and_pacer import (
-    _audit_path,
-    _audit,
-    _burst_pacer_default_mode,
-    _model_exempt_from_hydrogen_burst_pacer,
-    check_and_apply_hydrogen_burst_pacer,
-    emit,
-    _enforce_search_web_parallel_cap,
-)
-from .command_policy import (
-    _split_command_tokens,
-    _lifecycle_calls,
-    _developer_authority_violation,
-    _flag,
-    _is_live_interactive_antigravity_lead,
-    _check_web_mode_direct_write_guard,
-    _extract_execution_mode_kickoff,
-    _audited_harness_command,
-    _read_only_git_branch_command,
-    _read_only_adb_command,
-    _handle_command,
-)
-from .subagent_guard import (
-    _normalize_subagent_items,
-    _handle_phase_reviewer_dispatch,
-    _handle_subagent,
-    _canonical_subagent_role,
-    _has_unfinalized_active_review_wave,
-    _validate_define_subagent,
-)
-from .mcp_guard import (
-    validate_external_write,
-    _handle_external_mutation,
-    _handle_mcp_tool,
-)
-from .path_and_read_guard import (
-    _is_ide_artifact,
-    _is_external_user_doc,
-    _safe_target,
-    _normalize_crlf_for_edit,
-    check_write_safety,
-    _is_within_repo,
-    _get_active_task_scope,
-    _is_path_in_active_scope,
-    _enforce_lead_anti_reread,
-    _handle_list_dir,
-    _handle_search,
-    _conversation_started_at,
-    _flag_out_of_scope_read,
-    _installed_engine_target,
-    _is_raw_graph_cache_read_target,
-    _is_native_transcript_read_target,
-    _is_background_task_log_target,
-    _deny_engine_read,
-    _is_large_step_output_paginated_read,
-    _is_large_build_artifact_paginated_read,
-)
+_self = sys.modules[__name__]
+
+_LAZY_SUBMODULE_EXPORTS: dict[str, str] = {
+    "_audit_path": "audit_and_pacer",
+    "_audit": "audit_and_pacer",
+    "_burst_pacer_default_mode": "audit_and_pacer",
+    "_model_exempt_from_hydrogen_burst_pacer": "audit_and_pacer",
+    "check_and_apply_hydrogen_burst_pacer": "audit_and_pacer",
+    "emit": "audit_and_pacer",
+    "_enforce_search_web_parallel_cap": "audit_and_pacer",
+    "_split_command_tokens": "command_policy",
+    "_lifecycle_calls": "command_policy",
+    "_developer_authority_violation": "command_policy",
+    "_flag": "command_policy",
+    "_is_live_interactive_antigravity_lead": "command_policy",
+    "_check_web_mode_direct_write_guard": "command_policy",
+    "_extract_execution_mode_kickoff": "command_policy",
+    "_audited_harness_command": "command_policy",
+    "_read_only_git_branch_command": "command_policy",
+    "_read_only_adb_command": "command_policy",
+    "_handle_command": "command_policy",
+    "_normalize_subagent_items": "subagent_guard",
+    "_handle_phase_reviewer_dispatch": "subagent_guard",
+    "_handle_run_workflow": "subagent_guard",
+    "_handle_subagent": "subagent_guard",
+    "_canonical_subagent_role": "subagent_guard",
+    "_has_unfinalized_active_review_wave": "subagent_guard",
+    "_validate_define_subagent": "subagent_guard",
+    "validate_external_write": "mcp_guard",
+    "_handle_external_mutation": "mcp_guard",
+    "_handle_mcp_tool": "mcp_guard",
+    "_is_ide_artifact": "path_and_read_guard",
+    "_is_external_user_doc": "path_and_read_guard",
+    "_safe_target": "path_and_read_guard",
+    "_normalize_crlf_for_edit": "path_and_read_guard",
+    "check_write_safety": "path_and_read_guard",
+    "_is_within_repo": "path_and_read_guard",
+    "_get_active_task_scope": "path_and_read_guard",
+    "_is_path_in_active_scope": "path_and_read_guard",
+    "_enforce_lead_anti_reread": "path_and_read_guard",
+    "_handle_list_dir": "path_and_read_guard",
+    "_handle_search": "path_and_read_guard",
+    "_conversation_started_at": "path_and_read_guard",
+    "_flag_out_of_scope_read": "path_and_read_guard",
+    "_installed_engine_target": "path_and_read_guard",
+    "_is_raw_graph_cache_read_target": "path_and_read_guard",
+    "_is_native_transcript_read_target": "path_and_read_guard",
+    "_is_background_task_log_target": "path_and_read_guard",
+    "_deny_engine_read": "path_and_read_guard",
+    "_is_large_step_output_paginated_read": "path_and_read_guard",
+    "_is_large_build_artifact_paginated_read": "path_and_read_guard",
+}
+
+
+def __getattr__(name: str):
+    submod_name = _LAZY_SUBMODULE_EXPORTS.get(name)
+    if submod_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    mod = importlib.import_module(f".{submod_name}", __package__ or "_safety")
+    for exp_name, owner in _LAZY_SUBMODULE_EXPORTS.items():
+        if owner == submod_name and hasattr(mod, exp_name):
+            globals().setdefault(exp_name, getattr(mod, exp_name))
+    return globals()[name]
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY_SUBMODULE_EXPORTS))
+
 
 if __name__ == "__main__":
     main()

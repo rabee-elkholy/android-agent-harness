@@ -3,6 +3,7 @@ name: android-ui-diagnostics
 description: Compose preview discovery/rendering and Device Hub inspection via the official Android CLI plugin (`android-ui` and `android-inspect`). Use for Compose UI visual loops or Studio symbol/docs checks.
 version: 1.0.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Android UI & Studio Diagnostics Skill

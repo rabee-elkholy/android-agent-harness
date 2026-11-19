@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from _repo_files import REPO, changed_paths, repo_glob
-from _source_text import mask_comments_and_strings
+from _source_text import mask_comments_and_strings, strip_kotlin_comments_preserving_strings
 
 VERSION_RE = re.compile(r"version\s*=\s*(\d+)")
 MIGRATION_RE = re.compile(r"Migration\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)")
@@ -34,6 +34,14 @@ NOT_NULL_NO_DEFAULT_RE = re.compile(
     re.I,
 )
 ADD_MIGRATIONS_RE = re.compile(r"addMigrations\s*\((.*?)\)", re.DOTALL)
+DB_BUILDER_CLASS_RE = re.compile(
+    r"databaseBuilder\s*(?:<\s*([A-Za-z0-9_]+)\s*>\s*\(|\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class))"
+)
+
+
+def _extract_builder_db_classes(text: str) -> list[str]:
+    masked = mask_comments_and_strings(text)
+    return [m.group(1) or m.group(2) for m in DB_BUILDER_CLASS_RE.finditer(masked) if (m.group(1) or m.group(2))]
 TYPE_DECL_RE = re.compile(
     r"\b(?:(?:public|internal|private|protected|open|abstract|inner|data|sealed|annotation|static|final)\s+)*"
     r"(?:class|record)\s+([A-Z][A-Za-z0-9_]*)"
@@ -91,14 +99,8 @@ def _extract_add_migrations_blocks(text: str, target_db_class: str = "") -> list
     blocks = []
     for m in re.finditer(r"\baddMigrations\s*\(", text):
         if target_db_class:
-            preceding = text[: m.start()]
-            builder_matches = list(
-                re.finditer(
-                    r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)",
-                    preceding,
-                )
-            )
-            if builder_matches and builder_matches[-1].group(1) != target_db_class:
+            preceding_builders = _extract_builder_db_classes(text[: m.start()])
+            if preceding_builders and preceding_builders[-1] != target_db_class:
                 continue
         start = m.end()
         depth = 1
@@ -312,10 +314,11 @@ def find_candidate_migration_files(db_path: Path, changed_src: list[Path], repo:
                 other_sources.append(p)
     for p in other_sources:
         try:
-            head = p.read_text(encoding="utf-8", errors="replace")[:4000]
-            if "addMigrations" in head or "Migration(" in head:
-                candidates.append(p)
-                seen.add(p)
+            if p.stat().st_size <= 1_500_000:
+                body_txt = p.read_text(encoding="utf-8", errors="replace")
+                if "addMigrations" in body_txt or "Migration(" in body_txt:
+                    candidates.append(p)
+                    seen.add(p)
         except (OSError, ValueError):
             pass
     return candidates
@@ -326,7 +329,7 @@ def registered_migration_edges(bodies: list[str], database: str, other_databases
     """Collect registered paths without assuming every database starts at version 1."""
     texts = []
     for text in bodies:
-        builders = set(re.findall(r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)", text))
+        builders = set(_extract_builder_db_classes(text))
         if builders and database not in builders:
             continue
         if any(re.search(rf"\b{re.escape(other)}\b", text) for other in other_databases) and not re.search(rf"\b{re.escape(database)}\b", text):
@@ -350,9 +353,10 @@ def iter_database_files(repo: Path | None = None) -> list[Path]:
             if f.endswith((".kt", ".java")):
                 full_p = Path(dirpath) / f
                 try:
-                    head = full_p.read_text(encoding="utf-8", errors="replace")[:4000]
-                    if "@Database" in head or "androidx.room.Database" in head:
-                        db_files.append(full_p)
+                    if full_p.stat().st_size <= 1_500_000:
+                        full_txt = full_p.read_text(encoding="utf-8", errors="replace")
+                        if "@Database" in full_txt or "androidx.room.Database" in full_txt:
+                            db_files.append(full_p)
                 except (OSError, ValueError):
                     pass
     return db_files
@@ -407,7 +411,7 @@ def check_room_working_tree(
     has_room_triggers = False
     for p in changed_src:
         try:
-            sample = p.read_text(encoding="utf-8", errors="replace")[:8000]
+            sample = p.read_text(encoding="utf-8", errors="replace")[:256_000]
             if any(token in sample for token in room_tokens):
                 has_room_triggers = True
                 break
@@ -542,7 +546,7 @@ def check_room_working_tree(
                 try:
                     c_text = c_path.read_text(encoding="utf-8", errors="replace")
                     # If this candidate file has databaseBuilder calls for other databases and not this database, skip it
-                    builder_dbs = set(re.findall(r"databaseBuilder\s*\([^,]+,\s*([A-Za-z0-9_]+)(?:::class|\.class)", c_text))
+                    builder_dbs = set(_extract_builder_db_classes(c_text))
                     if builder_dbs and new_decl.class_name not in builder_dbs:
                         continue
                     # If this candidate file references another known database and does NOT reference this database, skip it
@@ -611,8 +615,9 @@ def check_room_working_tree(
                         for a_str, b_str in MIGRATION_RE.findall(add_block):
                             all_migs.add((int(a_str), int(b_str)))
 
-                    # Check SQLite NOT NULL without DEFAULT
-                    for sql_m in NOT_NULL_NO_DEFAULT_RE.finditer(b_text):
+                    # Check SQLite NOT NULL without DEFAULT (ignoring comments while keeping SQL strings intact)
+                    uncommented_b = strip_kotlin_comments_preserving_strings(b_text)
+                    for sql_m in NOT_NULL_NO_DEFAULT_RE.finditer(uncommented_b):
                         tbl = sql_m.group(1).strip("`\"'")
                         col = sql_m.group(2).strip("`\"'")
                         failures.append(

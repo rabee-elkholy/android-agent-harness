@@ -3,6 +3,7 @@ name: compose-inspector
 description: Use when developing, reviewing, or debugging Jetpack Compose UI layouts, state, and recomposition behavior.
 version: 1.1.0
 kernel-major: 1
+disable-slash-command: true
 ---
 
 # Compose Inspector & Layout Verifier

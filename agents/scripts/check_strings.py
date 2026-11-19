@@ -101,13 +101,34 @@ SKIP_KT_LINE = re.compile(
 )
 
 
+ARABIC_REQUIRED_PLURAL_QUANTITIES = ("zero", "one", "two", "few", "many", "other")
+
+
 def _extract_placeholders(text: str) -> list[str]:
     if not text:
         return []
     placeholders = []
     for m in PLACEHOLDER_RE.finditer(text):
+        if m.group(2) in ("%", "n"):
+            continue
         placeholders.append(m.group(0))
     return sorted(placeholders)
+
+
+def _has_multiple_non_positional_specifiers(text: str) -> bool:
+    """True when >=2 unnumbered printf specifiers (e.g. `%s ... %d` without `1$`/`2$`) would fail AAPT2 compilation."""
+    if not text:
+        return False
+    unnumbered = 0
+    for m in PLACEHOLDER_RE.finditer(text):
+        pos_idx, conv, brace_tok = m.group(1), m.group(2), m.group(3)
+        if brace_tok or not conv or conv in ("%", "n"):
+            continue
+        if not pos_idx:
+            unnumbered += 1
+            if unnumbered >= 2:
+                return True
+    return False
 
 
 NON_LOCALE_QUALIFIERS = {
@@ -169,14 +190,45 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                 continue
             if tag == "string":
                 text = "".join(elem.itertext()).strip()
-                placeholders = [] if elem.get("formatted") == "false" else _extract_placeholders(text)
+                is_unformatted = elem.get("formatted") == "false"
+                placeholders = [] if is_unformatted else _extract_placeholders(text)
+                if not is_unformatted and "MultipleSubstitutions" not in tools_ignore and _has_multiple_non_positional_specifiers(text):
+                    try:
+                        rel_p = xml_file.relative_to(REPO).as_posix()
+                    except ValueError:
+                        rel_p = str(xml_file)
+                    duplicates.append(
+                        f"NON_POSITIONAL_FORMAT_SPECIFIERS: <string name=\"{name}\"> in {rel_p} uses multiple unnumbered "
+                        "format specifiers (use positional `%1$s`, `%2$d` or set `formatted=\"false\"`)"
+                    )
                 res[name] = {"tag": tag, "text": text, "placeholders": placeholders}
             elif tag == "plurals":
-                items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
+                items = []
+                quantities: dict[str, list[str]] = {}
                 placeholders = []
-                for it in items:
-                    placeholders.extend(_extract_placeholders(it))
-                res[name] = {"tag": tag, "items": items, "placeholders": sorted(set(placeholders))}
+                for it in elem.findall("item"):
+                    it_txt = "".join(it.itertext()).strip()
+                    items.append(it_txt)
+                    it_phs = _extract_placeholders(it_txt)
+                    placeholders.extend(it_phs)
+                    q_attr = (it.get("quantity") or "").strip()
+                    if q_attr:
+                        quantities[q_attr] = it_phs
+                    if "MultipleSubstitutions" not in tools_ignore and _has_multiple_non_positional_specifiers(it_txt):
+                        try:
+                            rel_p = xml_file.relative_to(REPO).as_posix()
+                        except ValueError:
+                            rel_p = str(xml_file)
+                        duplicates.append(
+                            f"NON_POSITIONAL_FORMAT_SPECIFIERS: <plurals name=\"{name}\"> item[{q_attr or '?'}] in {rel_p} "
+                            "uses multiple unnumbered format specifiers (use positional `%1$d`, `%2$s`)"
+                        )
+                res[name] = {
+                    "tag": tag,
+                    "items": items,
+                    "quantities": quantities,
+                    "placeholders": sorted(set(placeholders)),
+                }
             elif tag == "string-array":
                 items = [("".join(it.itertext()).strip()) for it in elem.findall("item")]
                 item_placeholders = [_extract_placeholders(it) for it in items]
@@ -283,59 +335,9 @@ def _cut_line_comment(line: str) -> str:
 
 
 def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False) -> dict[Path, set[int] | None]:
-    """Returns mapping from file path to set of 1-based modified line numbers (or None if untracked/new)."""
-    res: dict[Path, set[int] | None] = {}
-    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-    for f in files:
-        try:
-            rel = f.relative_to(repo).as_posix()
-        except ValueError:
-            rel = str(f)
-
-        cmd = ["git", "diff", "-U0", "--ignore-cr-at-eol"]
-        if cached:
-            cmd.append("--cached")
-        cmd.extend(["HEAD", "--", rel])
-
-        proc = subprocess.run(
-            cmd,
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
-        if proc.returncode != 0 or not proc.stdout.strip():
-            if cached:
-                proc = subprocess.run(
-                    ["git", "diff", "-U0", "--ignore-cr-at-eol", "--cached", "--", rel],
-                    cwd=repo,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
-                )
-            if proc.returncode == 0 and not proc.stdout.strip():
-                tracked = subprocess.run(["git", "ls-files", "--error-unmatch", "--", rel], cwd=repo, capture_output=True, check=False)
-                if tracked.returncode == 0:
-                    res[f] = set()
-                    continue
-            if proc.returncode != 0 or not proc.stdout.strip():
-                res[f] = None
-                continue
-
-        modified_lines: set[int] = set()
-        for line in proc.stdout.splitlines():
-            m = hunk_re.match(line)
-            if m:
-                start = int(m.group(1))
-                count = int(m.group(2)) if m.group(2) is not None else 1
-                for l_num in range(start, start + count):
-                    modified_lines.add(l_num)
-        res[f] = modified_lines
-    return res
+    """Returns mapping from file path to set of 1-based modified line numbers (or None if untracked/new) via 1 batched git diff."""
+    from fast_kt_lint import get_modified_lines_map
+    return get_modified_lines_map(repo, files, cached=cached)
 
 
 def _extract_keys_from_xml_lines(lines: list[str]) -> set[str]:
@@ -794,6 +796,42 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
                             if b_phs != l_phs:
                                 placeholder_mismatches.append(
                                     f"   - key '{key}' item[{idx}]: base has {b_phs}, {loc_rel} has {l_phs}"
+                                )
+                elif tag == "plurals":
+                    base_ph = base_info.get("placeholders", [])
+                    base_quants: dict[str, list[str]] = base_info.get("quantities") or {}
+                    loc_quants: dict[str, list[str]] = loc_info.get("quantities") or {}
+                    loc_lang = loc_file.parent.name[len("values-"):].lower()
+                    if loc_lang.startswith("b+"):
+                        loc_lang = loc_lang[2:].split("+", 1)[0].split("-", 1)[0]
+                    else:
+                        loc_lang = loc_lang.split("-", 1)[0]
+                    if "other" not in loc_quants:
+                        placeholder_mismatches.append(
+                            f"   - key '{key}': <plurals> in {loc_rel} is missing mandatory quantity=\"other\" item"
+                        )
+                    elif loc_lang == "ar":
+                        missing_q = [q for q in ARABIC_REQUIRED_PLURAL_QUANTITIES if q not in loc_quants]
+                        if missing_q:
+                            placeholder_mismatches.append(
+                                f"   - key '{key}': Arabic <plurals> in {loc_rel} is missing required CLDR quantity item(s): {', '.join(missing_q)}"
+                            )
+                    # Idiomatic Arabic `zero`/`one`/`two` (and base quantities that omit placeholders) may omit `%d`
+                    # while `other`/`few`/`many` must preserve all placeholders declared in the base plural.
+                    base_ph_set = set(base_ph)
+                    for q_name, q_phs in sorted(loc_quants.items()):
+                        q_unique = sorted(set(q_phs))
+                        if loc_lang == "ar" and q_name in {"zero", "one", "two"}:
+                            unexpected_phs = [p for p in q_unique if p not in base_ph_set]
+                            if unexpected_phs:
+                                placeholder_mismatches.append(
+                                    f"   - key '{key}' quantity=\"{q_name}\": unexpected placeholder(s) {unexpected_phs} vs base {base_ph} in {loc_rel}"
+                                )
+                        else:
+                            expected_q_phs = sorted(set(base_quants[q_name])) if q_name in base_quants else base_ph
+                            if q_unique != expected_q_phs and q_unique != base_ph:
+                                placeholder_mismatches.append(
+                                    f"   - key '{key}' quantity=\"{q_name}\": base has {expected_q_phs}, {loc_rel} has {q_unique}"
                                 )
                 else:
                     base_ph = base_info.get("placeholders", [])

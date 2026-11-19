@@ -1,6 +1,7 @@
 ---
 name: git-pr-automator
 description: Use when preparing a conventional commit message, pull request summary, or release change notes for developer review.
+disable-slash-command: true
 ---
 
 # Git notes (developer-owned)
