@@ -471,7 +471,7 @@ class ReviewerModelsTests(unittest.TestCase):
         atomic_write_json(directory / "current-run.json", run)
         profile = resolve_execution_profile(self.repo, "task", "antigravity")
         self.assertEqual({ROLE}, set(profile["reviewers"]))
-        self.assertEqual({}, profile["reviewers"][ROLE]["native_arguments"])
+        self.assertEqual({"Model": "flash"}, profile["reviewers"][ROLE]["native_arguments"])
         self.assertEqual("DEVELOPER_SELECTED_NATIVE", profile["model_policy"])
         with self.assertRaisesRegex(ValidationError, "host"):
             resolve_execution_profile(self.repo, "task", "gemini")
@@ -1108,19 +1108,19 @@ class ReviewerModelsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValidationError, "REVIEW_MODEL_MISMATCH"):
                     models.model_evidence(run_pure, SECURITY, id_bad)
 
-        # Edge Case 7: Hook enforcement on Hydrogen reviewers & utility agents (Model override forbidden + Remote Mode #198819 guard!)
+        # Edge Case 7: Hook enforcement on universal Hydrogen Model='flash' & Remote Mode #198819 guard!
         models.set_policy(
             self.repo, models.resolve_preset_policy("hydrogen-argon-hybrid"),
             task_id=None, host="antigravity", source="conversation", proof_reference="Back to Hydrogen+Argon", scope="project",
         )
         ok_u_bad, msg_u_bad, code_u_bad = dp.validate_utility_dispatch(
-            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan", "Model": "flash"}]
+            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan repo architecture"}]
         )
         self.assertFalse(ok_u_bad)
         self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_u_bad)
-        self.assertIn("omit `Model`", msg_u_bad)
+        self.assertIn("Model='flash'", msg_u_bad)
         ok_u_good, _, _ = dp.validate_utility_dispatch(
-            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan repo architecture"}]
+            self.repo, plan_c, [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Scan repo architecture", "Model": "flash"}]
         )
         self.assertTrue(ok_u_good)
         self.assertNotIn("\nmodel:", (self.repo / ".agents/agents/harness-scout-agent/agent.md").read_text(encoding="utf-8"))
@@ -1143,19 +1143,19 @@ class ReviewerModelsTests(unittest.TestCase):
         for r in p_roster:
             self.assertTrue(p_run["review_models"]["reviewers"][r]["resolved_model"].startswith("gemini-4-hydrogen-"))
         p_briefs = {r: Path(p_run["briefs"][r]).read_text(encoding="utf-8") for r in p_roster}
-        # Passing Model='flash' on Hydrogen reviewer -> REVIEWER_MODEL_OVERRIDE_FORBIDDEN
+        # Omitting Model on Hydrogen reviewer -> REVIEWER_MODEL_MISMATCH (must pass Model='flash' universally)
         _, out_ov = fixture._run_pre_tool_safety({
             "toolName": "invoke_subagent",
-            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r], "Model": "flash"} for r in p_roster]},
+            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r]} for r in p_roster]},
         })
-        self.assertIn("REVIEWER_MODEL_OVERRIDE_FORBIDDEN", json.dumps(out_ov))
-        # Remote Mode (#198819) -> REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD even when Model is omitted on Hydrogen!
+        self.assertIn("REVIEWER_MODEL_MISMATCH", json.dumps(out_ov))
+        # Remote Mode (#198819) -> REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD on Hydrogen!
         old_rem = os.environ.get("ANTIGRAVITY_REMOTE_AGENT")
         os.environ["ANTIGRAVITY_REMOTE_AGENT"] = "1"
         try:
             _, out_rem = fixture._run_pre_tool_safety({
                 "toolName": "invoke_subagent",
-                "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r]} for r in p_roster]},
+                "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r], "Model": "flash"} for r in p_roster]},
             })
             self.assertIn("REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD", json.dumps(out_rem))
         finally:
@@ -1164,10 +1164,10 @@ class ReviewerModelsTests(unittest.TestCase):
             else:
                 os.environ["ANTIGRAVITY_REMOTE_AGENT"] = old_rem
 
-        # Local Mode with omitted Model -> ALLOWED
+        # Local Mode with universal Model='flash' -> ALLOWED
         _, out_loc = fixture._run_pre_tool_safety({
             "toolName": "invoke_subagent",
-            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r]} for r in p_roster]},
+            "toolArgs": {"Subagents": [{"TypeName": r, "Role": r, "Prompt": p_briefs[r], "Model": "flash"} for r in p_roster]},
         })
         self.assertEqual("allow", out_loc.get("decision"), out_loc)
 
@@ -1299,7 +1299,7 @@ class TestCarbonCwdAndSandboxHardening(unittest.TestCase):
 
         gemini_tpl = (Path(__file__).resolve().parents[1] / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
         self.assertIn('Model = "pro"', gemini_tpl)
-        self.assertIn("carbon", gemini_tpl)
+        self.assertIn("carbon", gemini_tpl.lower())
 
     def test_native_model_metadata_readonly_wal_sandbox_fallback(self):
         import sqlite3

@@ -296,13 +296,11 @@ def is_frontier_lead_requiring_flash_offload(
     repo: Path,
     parent_conversation_id: str = "",
 ) -> tuple[bool, str]:
-    """Return `(True, lead_label)` when `invoke_subagent` must pass `Model='flash'` (`gemini-4-hydrogen-tiered-high` 1x).
+    """Return `(True, lead_label)` when `invoke_subagent` should pass `Model='flash'` (`gemini-4-hydrogen-tiered-high` 1x).
 
-    Activates when:
-    1. Active Lead session runs `Carbon`, `Neon`, or `Argon` (#200144 frontier quota shield), OR
-    2. Active Windows Lead session runs `Gemini 4 Hydrogen (Medium)` (#1649/#201731: inheriting Hydrogen Medium
-       on Windows drops `thinking_tokens` to 0 after `read_file`/`view_file`, whereas `Model='flash'` routes
-       natively to `gemini-4-hydrogen-tiered-high` at the exact same `1.00x` quota cost).
+    Universal Hydrogen Subagent Rule: when `#200144` is enabled, default subagents pass `Model='flash'`
+    regardless of the active main-chat model (shielding Carbon, Neon, Argon, Windows Hydrogen Medium `#1649`,
+    and any future main-chat model without needing per-model allowlists).
     """
     if not is_quirk_enabled("200144", repo=repo):
         return (False, "")
@@ -311,7 +309,43 @@ def is_frontier_lead_requiring_flash_offload(
         return (True, fam)
     if fam == "gemini-4-hydrogen" and tier == "medium" and is_quirk_enabled("1649", repo=repo, respect_platform=True):
         return (True, "gemini-4-hydrogen-medium")
-    return (False, fam)
+    return (True, fam or "universal-hydrogen-flash")
+
+
+def subagent_requires_universal_flash(
+    repo: Path,
+    *,
+    task_id: str | None = None,
+    plan: dict[str, Any] | None = None,
+    parent_conversation_id: str = "",
+    allow_frontier_policy_inherit: bool = False,
+) -> tuple[bool, str]:
+    """Return `(True, label)` when Antigravity subagents must pass `Model='flash'` (Gemini 4 Hydrogen High 1x).
+
+    Applies universally regardless of the main-chat model, EXCEPT when:
+    - quirk `200144` is explicitly disabled (`HARNESS_DISABLE_QUIRKS=200144`), OR
+    - the developer explicitly saved an `inherit` policy (`source != 'default'`, e.g. when Gemini quota is
+      exhausted and the session rotated to Claude), OR
+    - `allow_frontier_policy_inherit=True` (for read-only specialists) and the developer explicitly saved a
+      `carbon`/`neon`/`argon` policy.
+    """
+    if not is_quirk_enabled("200144", repo=repo):
+        return (False, "")
+    tid = str(task_id or (plan or {}).get("task_id") or "").strip() or None
+    try:
+        from review_models import load_policy
+        pol, pol_src = load_policy(repo, tid)
+        def_m = str((pol or {}).get("default") or "").strip().lower()
+        if pol_src != "default":
+            if def_m == "inherit":
+                return (False, "explicit-inherit")
+            if allow_frontier_policy_inherit and def_m.startswith(
+                ("carbon", "argon", "neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon")
+            ):
+                return (False, def_m)
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError, TypeError, ValidationError):
+        pass
+    return is_frontier_lead_requiring_flash_offload(repo, parent_conversation_id=parent_conversation_id)
 
 
 
@@ -482,7 +516,7 @@ def evaluate_delegation_policy(
     active_scout_model = resolve_utility_scout_model(repo, task_id=task_id, plan=plan)
     sync_utility_scout_model(repo, active_scout_model)
     live_lead_fam = _detect_live_parent_lead_family(repo)
-    offload_scout, _ = is_frontier_lead_requiring_flash_offload(repo)
+    offload_scout, _ = subagent_requires_universal_flash(repo, task_id=task_id, plan=plan)
     effective_scout_invoke_arg = "flash" if (offload_scout or active_scout_model.startswith("gemini-3.8-flash")) else None
     effective_subagent_enum = effective_scout_invoke_arg or "inherit"
     quota_guide = {
@@ -926,7 +960,11 @@ def validate_utility_dispatch(
 
     # Guard against silent frontier quota leak & ensure `.agents/agents/<role>/agent.md` exists!
     expected_s_model = resolve_utility_scout_model(repo, plan=plan) if scout_items else ""
-    offload_needed, lead_fam_now = is_frontier_lead_requiring_flash_offload(repo, parent_conversation_id) if scout_items else (False, "")
+    offload_needed, lead_fam_now = (
+        subagent_requires_universal_flash(repo, plan=plan, parent_conversation_id=parent_conversation_id)
+        if scout_items
+        else (False, "")
+    )
     if scout_items:
         sync_utility_scout_model(repo, expected_s_model)
         if (repo / ".agents" / "agents").is_dir() and not (repo / ".agents" / "agents" / SCOUT_AGENT / "agent.md").is_file():
@@ -937,14 +975,14 @@ def validate_utility_dispatch(
                 if offload_needed and raw_model != "flash":
                     return (
                         False,
-                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Active Lead chat is running `{lead_fam_now}`; "
-                        f"re-invoke `{SCOUT_AGENT}` immediately with `Model='flash'` so it does not inherit `{lead_fam_now}` quota.",
+                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Always pass `Model='flash'` on `{SCOUT_AGENT}` "
+                        "(routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` 1x regardless of main-chat model).",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )
                 if raw_model and raw_model not in {"flash", DEFAULT_UTILITY_FLASH_MODEL, "gemini-3.8-flash-low", "gemini-3.8-flash-high"}:
                     return (
                         False,
-                        f"Utility subagent '{SCOUT_AGENT}' is pinned to `{expected_s_model}`; remove Model='{raw_model}' (or pass Model='flash').",
+                        f"Utility subagent '{SCOUT_AGENT}' is pinned to `{expected_s_model}`; pass Model='flash'.",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )
             elif offload_needed:
@@ -959,16 +997,16 @@ def validate_utility_dispatch(
                         )
                     return (
                         False,
-                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Active Lead chat is running `{lead_fam_now}`, and modelless `.agents/agents/{SCOUT_AGENT}/agent.md` (#200144) "
-                        f"would inherit `{lead_fam_now}` quota if `Model` is omitted. Re-invoke `{SCOUT_AGENT}` immediately with `Model='flash'` "
-                        "(routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` 1x).",
+                        f"CARBON_SCOUT_QUOTA_OFFLOAD_REQUIRED: Always pass `Model='flash'` on `{SCOUT_AGENT}` "
+                        f"(routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` 1x regardless of main-chat model `{lead_fam_now}`; "
+                        "switch review policy to explicit `inherit` only if Gemini quota is exhausted).",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )
             else:
                 if raw_model:
                     return (
                         False,
-                        f"Utility subagent `{SCOUT_AGENT}` targets `{expected_s_model}` via modelless `.agents/agents/{SCOUT_AGENT}/agent.md` inheritance; "
+                        f"Utility subagent `{SCOUT_AGENT}` targets `{expected_s_model}` under explicit inherit/quirk-disabled mode; "
                         f"omit `Model` in `invoke_subagent` (do not pass Model='{raw_model}').",
                         "UTILITY_MODEL_QUOTA_GUARD",
                     )

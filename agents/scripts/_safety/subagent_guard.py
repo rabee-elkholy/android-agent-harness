@@ -124,8 +124,8 @@ def _handle_phase_reviewer_dispatch(act: dict[str, Any], plan: dict[str, Any], a
                 return
         if allowed_native_model and item.get("Model") != allowed_native_model:
             offload_ctx = (
-                " on an active Carbon/Neon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Neon/Argon quota)"
-                if resolved_m.startswith("gemini-4-hydrogen")
+                " (routes natively to Gemini 4 Hydrogen High 1x regardless of main-chat model)"
+                if resolved_m.startswith(("gemini-4-hydrogen", "gemini-3.8-flash"))
                 else ""
             )
             _engine.emit(
@@ -529,26 +529,24 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 _engine.emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
             _pre_offload, _pre_lead_fam = False, ""
-            _pre_inherits = False
             try:
-                from delegation_policy import is_frontier_lead_requiring_flash_offload as _is_frontier_pre
-                _pre_offload, _pre_lead_fam = _is_frontier_pre(_engine.REPO, parent_conversation_id=parent_conversation_id)
-                if _pre_offload:
-                    from review_models import load_policy as _load_pol_pre
-                    _pol_pre, _ = _load_pol_pre(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
-                    _def_pre = str((_pol_pre or {}).get("default") or "").strip().lower()
-                    if _def_pre == "inherit" or _def_pre.startswith(("carbon", "argon", "neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon")):
-                        _pre_inherits = True
+                from delegation_policy import subagent_requires_universal_flash as _req_flash_pre
+                _pre_offload, _pre_lead_fam = _req_flash_pre(
+                    _engine.REPO,
+                    plan=plan,
+                    parent_conversation_id=parent_conversation_id,
+                    allow_frontier_policy_inherit=True,
+                )
             except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
                 _pre_offload = False
             for s in raw_subs:
                 canon_pre = _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip())
                 spec_m_pre = str(s.get("Model") or s.get("model") or "").strip()
-                if _pre_offload and not _pre_inherits:
+                if _pre_offload:
                     if spec_m_pre != "flash":
                         _engine.emit(
                             "deny",
-                            f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Active Lead session is `{_pre_lead_fam}`, so omitting `Model` on `{canon_pre}` would inherit `{_pre_lead_fam}` and burn frontier quota. Pass `Model='flash'` (routes natively to `gemini-4-hydrogen-tiered-high` `1x`).",
+                            f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Always pass `Model='flash'` on `{canon_pre}` (routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` `1x` regardless of main-chat model `{_pre_lead_fam}`; switch policy to explicit `inherit` only when Gemini quota is exhausted).",
                             tool=name,
                             reason_code="CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED",
                         )
@@ -556,7 +554,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 elif spec_m_pre and spec_m_pre.lower() != "inherit":
                     _engine.emit(
                         "deny",
-                        f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_pre}` when Lead is not Carbon/Neon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_m_pre}`).",
+                        f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_pre}` under explicit inherit/frontier policy (`INHERIT_PARENT_BY_OMISSION`; got `{spec_m_pre}`).",
                         tool=name,
                         reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
                     )
@@ -752,16 +750,14 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     return
                 blocked_impl_clones = {"self", "harness-worker-agent"}
                 frontier_offload_spec, lead_fam_spec = False, ""
-                spec_policy_inherits_parent = False
                 try:
-                    from delegation_policy import is_frontier_lead_requiring_flash_offload as _is_frontier_spec
-                    frontier_offload_spec, lead_fam_spec = _is_frontier_spec(_engine.REPO, parent_conversation_id=parent_conversation_id)
-                    if frontier_offload_spec:
-                        from review_models import load_policy as _load_pol_spec
-                        _pol_spec, _ = _load_pol_spec(_engine.REPO, str((plan or {}).get("task_id") or "").strip() or None)
-                        _def_spec = str((_pol_spec or {}).get("default") or "").strip().lower()
-                        if _def_spec == "inherit" or _def_spec.startswith(("carbon", "argon", "neon", "gemini-4-carbon", "gemini-4-argon", "gemini-4-neon")):
-                            spec_policy_inherits_parent = True
+                    from delegation_policy import subagent_requires_universal_flash as _req_flash_spec
+                    frontier_offload_spec, lead_fam_spec = _req_flash_spec(
+                        _engine.REPO,
+                        plan=plan,
+                        parent_conversation_id=parent_conversation_id,
+                        allow_frontier_policy_inherit=True,
+                    )
                 except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
                     frontier_offload_spec = False
                 for s in norm_subs:
@@ -780,11 +776,11 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         return
                     if canon_t in _engine.ON_DEMAND_SPECIALIST_AGENTS:
                         spec_model_arg = str(s.get("Model") or s.get("model") or "").strip()
-                        if frontier_offload_spec and not spec_policy_inherits_parent:
+                        if frontier_offload_spec:
                             if spec_model_arg != "flash":
                                 _engine.emit(
                                     "deny",
-                                    f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Active Lead session is `{lead_fam_spec}`, so omitting `Model` on `{canon_t}` would inherit `{lead_fam_spec}` and burn frontier quota. Pass `Model='flash'` (routes natively to `gemini-4-hydrogen-tiered-high` `1x`).",
+                                    f"CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED: Always pass `Model='flash'` on `{canon_t}` (routes natively in Antigravity to `gemini-4-hydrogen-tiered-high` `1x` regardless of main-chat model `{lead_fam_spec}`; switch policy to explicit `inherit` only when Gemini quota is exhausted).",
                                     tool=name,
                                     reason_code="CARBON_SPECIALIST_QUOTA_OFFLOAD_REQUIRED",
                                 )
@@ -792,7 +788,7 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                         elif spec_model_arg and spec_model_arg.lower() != "inherit":
                             _engine.emit(
                                 "deny",
-                                f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_t}` when Lead is not Carbon/Neon/Argon (`INHERIT_PARENT_BY_OMISSION`; got `{spec_model_arg}`).",
+                                f"SPECIALIST_MODEL_OVERRIDE_FORBIDDEN: Omit `Model` on `{canon_t}` under explicit inherit/frontier policy (`INHERIT_PARENT_BY_OMISSION`; got `{spec_model_arg}`).",
                                 tool=name,
                                 reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
                             )
@@ -1013,8 +1009,8 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     return
             if allowed_native_model and item.get("Model") != allowed_native_model:
                 offload_ctx = (
-                    " on an active Carbon/Neon/Argon Lead session (routes natively to Gemini 4 Hydrogen High 1x instead of inheriting Carbon/Neon/Argon quota)"
-                    if resolved_m.startswith("gemini-4-hydrogen")
+                    " (routes natively to Gemini 4 Hydrogen High 1x regardless of main-chat model)"
+                    if resolved_m.startswith(("gemini-4-hydrogen", "gemini-3.8-flash"))
                     else ""
                 )
                 _engine.emit(

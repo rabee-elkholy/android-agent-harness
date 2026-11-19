@@ -1530,7 +1530,7 @@ class Option4HybridDelegationSelftest(unittest.TestCase):
         ok_scout = self._run_pre_hook({
             "conversationId": "parent-carbon-1",
             "tool": "invoke_subagent",
-            "arguments": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": scout_prompt},
+            "arguments": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": scout_prompt},
         })
         self.assertEqual("allow", ok_scout["decision"], ok_scout)
         self.assertEqual("UTILITY_SUBAGENT_ALLOWED", ok_scout.get("reason_code"))
@@ -2756,7 +2756,7 @@ class V135RealWorldAntigravityHardeningTests(unittest.TestCase):
             ok_ovr, msg_ovr, _ = dp.validate_utility_dispatch(
                 self.repo,
                 None,
-                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Inspect HomeViewModel callers and graph"}],
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Model": "flash", "Prompt": "Inspect HomeViewModel callers and graph"}],
             )
             self.assertTrue(ok_ovr, msg_ovr)
 
@@ -6658,7 +6658,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                     ok, reason, code = dp.validate_utility_dispatch(
                         repo,
                         None,
-                        [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": f"Audit unused code slice {idx} in repo"}],
+                        [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Model": "flash", "Prompt": f"Audit unused code slice {idx} in repo"}],
                         parent_conversation_id="conv-a3c4",
                     )
                     self.assertTrue(ok, f"Parallel scout #{idx+1} denied: {reason}")
@@ -6672,7 +6672,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 ok4, _, code4 = dp.validate_utility_dispatch(
                     repo,
                     None,
-                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Audit extra 4th parallel slice"}],
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Model": "flash", "Prompt": "Audit extra 4th parallel slice"}],
                     parent_conversation_id="conv-a3c4",
                 )
                 self.assertFalse(ok4)
@@ -6691,7 +6691,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 ok_w2, reason_w2, _ = dp.validate_utility_dispatch(
                     repo,
                     None,
-                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Prompt": "Audit remaining unread onboarding files"}],
+                    [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Model": "flash", "Prompt": "Audit remaining unread onboarding files"}],
                     parent_conversation_id="conv-a3c4",
                 )
                 self.assertTrue(ok_w2, reason_w2)
@@ -6978,6 +6978,7 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                             "Role": "harness-scout-agent",
                             "Prompt": prompt_s,
                             "Workspace": "inherit",
+                            "Model": "flash",
                         }],
                         parent_conversation_id=parent_cid,
                     )
@@ -8356,31 +8357,31 @@ class TestV1319ForensicIntegration(unittest.TestCase):
             with unittest.mock.patch.dict(os.environ, {"HARNESS_DISABLE_QUIRKS": "200144"}, clear=False):
                 self.assertEqual((False, ""), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-carbon"))
 
-            # B) Hydrogen High Lead session -> omits Model (INHERIT_PARENT_BY_OMISSION) and blocks unexpected Model="flash"
+            # B) Hydrogen High Lead session -> universal Hydrogen subagent rule STILL uses Model="flash" (and rejects omitted Model unless explicit inherit)
             dp.record_live_lead_session_model(repo, "cid-hydro", "gemini-4-hydrogen-high")
-            self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-hydro"))
+            self.assertEqual((True, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-hydro"))
             pol_del_h = dp.evaluate_delegation_policy(repo, task_id="t-offload", plan=plan_impl, router_action="IMPLEMENT")
-            self.assertIsNone(pol_del_h["scout_invoke_model"])
-            self.assertEqual("inherit", pol_del_h["quota_strategy"]["scout_model"])
-            self.assertEqual("inherit", pol_del_h["quota_strategy"]["subagent_workhorse_model"])
+            self.assertEqual("flash", pol_del_h["scout_invoke_model"])
+            self.assertEqual("flash", pol_del_h["quota_strategy"]["scout_model"])
+            self.assertEqual("flash", pol_del_h["quota_strategy"]["subagent_workhorse_model"])
 
-            allow_hydro_omit = _run_guard("cid-hydro", {
+            deny_hydro_omit = _run_guard("cid-hydro", {
                 "TypeName": "harness-scout-agent",
                 "Role": "harness-scout-agent",
                 "Workspace": "inherit",
                 "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
             })
-            self.assertEqual("allow", allow_hydro_omit["decision"], allow_hydro_omit)
+            self.assertEqual("deny", deny_hydro_omit["decision"], deny_hydro_omit)
+            self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", deny_hydro_omit.get("reason_code"))
 
-            deny_hydro_flash = _run_guard("cid-hydro", {
+            allow_hydro_flash = _run_guard("cid-hydro", {
                 "TypeName": "harness-scout-agent",
                 "Role": "harness-scout-agent",
                 "Workspace": "inherit",
                 "Model": "flash",
                 "Prompt": "Inspect A.kt, B.kt, C.kt, and D.kt callers.",
             })
-            self.assertEqual("deny", deny_hydro_flash["decision"], deny_hydro_flash)
-            self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", deny_hydro_flash.get("reason_code"))
+            self.assertEqual("allow", allow_hydro_flash["decision"], allow_hydro_flash)
 
             # 3) Dynamic spec-compliance-agent escalation on multi-phase ARCHITECTURAL plans + UI/Completeness briefs
             skills_root = REPO_ROOT / "agents/skills"
@@ -10024,16 +10025,16 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
 
             dp.record_live_lead_session_model(repo, "cid-h-med", "Gemini 4 Hydrogen (Medium)")
 
-            # Non-Windows host -> does NOT force Model='flash' on Hydrogen Medium
+            # Non-Windows host -> does NOT flag #1649 Windows Hydrogen Medium hazard, while universal flash remains active
             with unittest.mock.patch.dict(os.environ, {"HARNESS_SIMULATE_PLATFORM": "linux"}, clear=False):
-                self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+                self.assertEqual((True, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
                 haz_linux = agr.inspect_nov15_antigravity_hazards(
                     repo, env={"HARNESS_SIMULATE_PLATFORM": "linux", "ANTIGRAVITY_ACTIVE_MODEL": "Gemini 4 Hydrogen (Medium)"}
                 )
                 self.assertFalse(haz_linux["hydrogen_medium_win_tool_risk"])
 
-            # Windows host -> Hydrogen Medium triggers #1649 offload (`Model='flash'` -> Hydrogen Tiered High 1x), Doctor WARN, and PreInvocation guard;
-            # Hydrogen High on Windows remains INHERIT_PARENT_BY_OMISSION!
+            # Windows host -> Hydrogen Medium triggers #1649 diagnostic label, Doctor WARN, and PreInvocation guard;
+            # universal Model='flash' protects subagents on both Hydrogen Medium and Hydrogen High!
             with unittest.mock.patch.dict(
                 os.environ,
                 {"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_ACTIVE_MODEL": "Gemini 4 Hydrogen (Medium)"},
@@ -10087,13 +10088,15 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
                 self.assertEqual("WARN", nov15_chk.status)
                 self.assertIn("#1649", nov15_chk.message)
 
-                # Switching Lead to Hydrogen High on Windows clears #1649 offload immediately
+                # Switching Lead to Hydrogen High on Windows clears #1649 diagnostic label while keeping universal flash active
                 dp.record_live_lead_session_model(repo, "cid-h-high", "Gemini 4 Hydrogen (High)")
-                self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-high"))
+                self.assertEqual((True, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-high"))
 
-                # Disabling quirk 1649 suppresses Windows Hydrogen Medium offload cleanly
+                # Disabling quirk 1649 clears #1649 diagnostic label cleanly; disabling 200144 disables universal flash offload
                 with unittest.mock.patch.dict(os.environ, {"HARNESS_DISABLE_QUIRKS": "1649"}, clear=False):
-                    self.assertEqual((False, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+                    self.assertEqual((True, "gemini-4-hydrogen"), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
+                with unittest.mock.patch.dict(os.environ, {"HARNESS_DISABLE_QUIRKS": "200144"}, clear=False):
+                    self.assertEqual((False, ""), dp.is_frontier_lead_requiring_flash_offload(repo, "cid-h-med"))
 
             # Forensics: detect thinking_tokens == 0 after read_file on Hydrogen Medium in transcript_full.jsonl
             brain_root = root / "brain"
@@ -10199,6 +10202,94 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
             finally:
                 check_strings.REPO = saved_cs
             self.assertEqual(0, rc)
+
+    def test_v151_parallel_reviewer_corrupted_full_transcript_and_universal_flash_future_models(self) -> None:
+        import delegation_policy as dp
+        import review_models as rm
+        import reviewer_host as rh
+        from _vnext_common import ValidationError
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "app"
+            (repo / ".agents/state").mkdir(parents=True)
+            (repo / ".agents/agents/harness-scout-agent").mkdir(parents=True)
+            (repo / ".agents/agents/harness-scout-agent/agent.md").write_text("---\nname: harness-scout-agent\ndescription: Scout\n---\nPrompt\n", encoding="utf-8")
+
+            # 1) Corrupted NUL-byte line in parent transcript_full.jsonl MUST NOT break parallel reviewer cancellation/steps!
+            logs = root / "brain/parent-corr/.system_generated/logs"
+            logs.mkdir(parents=True)
+            compact_tx = logs / "transcript.jsonl"
+            full_tx = logs / "transcript_full.jsonl"
+            compact_tx.write_text(
+                json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "hi"}) + "\n"
+                + json.dumps({"source": "MODEL", "type": "PLANNER_RESPONSE", "content": "ok"}) + "\n",
+                encoding="utf-8",
+            )
+            full_tx.write_text(
+                json.dumps({"source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "hi"}) + "\n"
+                + ("\x00" * 64) + "\n"
+                + "{corrupted mid-file json line\n",
+                encoding="utf-8",
+            )
+            rows_fb = rh._steps(compact_tx, prefer_full=True)
+            self.assertEqual(2, len(rows_fb))
+            rows_cmp = rh._steps(compact_tx, prefer_full=False)
+            self.assertEqual(2, len(rows_cmp))
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(root)}, clear=False):
+                self.assertIsNone(rh.cancellation({"parent_execution_id": "parent-corr", "execution_id": "child-1"}))
+
+            # Genuinely tampered compact transcript.jsonl with non-JSON text STILL fails closed
+            tampered_tx = root / "brain/tampered/.system_generated/logs/transcript.jsonl"
+            tampered_tx.parent.mkdir(parents=True)
+            tampered_tx.write_text("not valid json\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValidationError, "invalid reviewer host transcript"):
+                rh._steps(tampered_tx)
+
+            # 2) Forward Model='flash' matching: gemini-4-hydrogen-tiered-high fulfills gemini-3.8-flash-high AND future gemini-5-flash-high fulfills gemini-4-hydrogen-high
+            self.assertTrue(
+                rm._matches_antigravity_native_model("gemini-3.8-flash-high", "high", "gemini-4-hydrogen-tiered-high", ["gemini-4-hydrogen-tiered-high"])
+            )
+            self.assertTrue(
+                rm._matches_antigravity_native_model("gemini-4-hydrogen-high", "high", "gemini-5-flash-high", ["gemini-5-flash-high"])
+            )
+            self.assertFalse(
+                rm._matches_antigravity_native_model("gemini-4-hydrogen-high", "high", "gemini-3.8-flash-n", ["gemini-3.8-flash-n"])
+            )
+            self.assertFalse(
+                rm._matches_antigravity_native_model("gemini-4-carbon-high", "high", "gemini-4-hydrogen-tiered-high", ["gemini-4-hydrogen-tiered-high"])
+            )
+
+            # 3) Future unknown main-chat model (e.g. Gemini 5 Xenon) automatically uses Model='flash' for scouts & hydrogen reviewers,
+            #    while explicit `inherit` project policy preserves Claude/parent escape hatch!
+            dp.record_live_lead_session_model(repo, "cid-future-xenon", "Gemini 5 Xenon (High)")
+            ok_xenon_no_m, _, code_xenon_no_m = dp.validate_utility_dispatch(
+                repo, None,
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": "Scan A.kt, B.kt, C.kt"}],
+                parent_conversation_id="cid-future-xenon",
+            )
+            self.assertFalse(ok_xenon_no_m)
+            self.assertEqual("UTILITY_MODEL_QUOTA_GUARD", code_xenon_no_m)
+            ok_xenon_flash, reason_xf, _ = dp.validate_utility_dispatch(
+                repo, None,
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": "Scan A.kt, B.kt, C.kt"}],
+                parent_conversation_id="cid-future-xenon",
+            )
+            self.assertTrue(ok_xenon_flash, reason_xf)
+            self.assertTrue(rm.reviewer_requires_flash_offload(repo, {"resolved_model": "gemini-4-hydrogen-high"}, parent_conversation_id="cid-future-xenon"))
+            self.assertFalse(rm.reviewer_requires_flash_offload(repo, {"resolved_model": "inherit"}, parent_conversation_id="cid-future-xenon"))
+
+            # Explicit `inherit` project policy -> allows omitting Model on scouts (Claude/exhausted-Gemini escape hatch)
+            rm.set_policy(
+                repo, {"schema_version": 1, "default": "inherit", "overrides": {}},
+                task_id=None, host="antigravity", source="conversation", proof_reference="Claude fallback", scope="project",
+            )
+            ok_inh, reason_inh, _ = dp.validate_utility_dispatch(
+                repo, None,
+                [{"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": "Scan A.kt, B.kt, C.kt"}],
+                parent_conversation_id="cid-future-xenon",
+            )
+            self.assertTrue(ok_inh, reason_inh)
 
 
 if __name__ == "__main__":

@@ -1576,8 +1576,8 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
                 "name": "invoke_subagent",
                 "args": {
                     "Subagents": [
-                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_a},
-                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_b},
+                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": p_scout_a},
+                        {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": p_scout_b},
                     ]
                 },
             },
@@ -1676,7 +1676,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             "conversationId": parent_cid,
             "toolCall": {
                 "name": "invoke_subagent",
-                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": p_scout_w2},
+                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": p_scout_w2},
             },
         })["decision"])
         post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})
@@ -1741,7 +1741,7 @@ class AllTaskKindsWorkflowMatrixSelftest(unittest.TestCase):
             "conversationId": parent_cid,
             "toolCall": {
                 "name": "invoke_subagent",
-                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Prompt": s1_brief},
+                "args": {"TypeName": "harness-scout-agent", "Role": "harness-scout-agent", "Workspace": "inherit", "Model": "flash", "Prompt": s1_brief},
             },
         })["decision"])
         post_reconcile({"conversationId": parent_cid, "transcriptPath": str(parent_tx), "toolCall": {"name": "invoke_subagent"}})

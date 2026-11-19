@@ -84,14 +84,18 @@ def active_reviews(repo: Path):
                 yield read_json(path), phase_ledger_file(entry, phase)
 
 
-def _head_steps(path: Path, limit: int = 8) -> list[dict]:
-    read_path = prefer_full_transcript(path) or path
+def _is_blank_or_nul_line(line: str) -> bool:
+    """Ignore empty lines and pure NUL-padded zero blocks left by NTFS crash/flush artifacts."""
+    return not line.strip("\x00\r\n\t ")
+
+
+def _read_head_steps_file(read_path: Path, limit: int = 8) -> list[dict]:
     if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
     rows: list[dict] = []
     with read_path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
-            if not line.strip():
+            if _is_blank_or_nul_line(line):
                 continue
             try:
                 row = json.loads(line)
@@ -107,16 +111,24 @@ def _head_steps(path: Path, limit: int = 8) -> list[dict]:
     return rows
 
 
-def _steps(path: Path) -> list[dict]:
-    # Transcript content is inspected only at its canonical trusted host location.
+def _head_steps(path: Path, limit: int = 8) -> list[dict]:
     read_path = prefer_full_transcript(path) or path
+    try:
+        return _read_head_steps_file(read_path, limit=limit)
+    except ValidationError as exc:
+        if read_path != path and path.is_file() and str(exc) == "invalid reviewer host transcript":
+            return _read_head_steps_file(path, limit=limit)
+        raise
+
+
+def _read_steps_file(read_path: Path) -> list[dict]:
     if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
     raw = read_path.read_text(encoding="utf-8", errors="replace")
     rows = []
     lines = raw.splitlines()
     for index, line in enumerate(lines):
-        if not line.strip():
+        if _is_blank_or_nul_line(line):
             continue
         try:
             rows.append(json.loads(line))
@@ -127,6 +139,17 @@ def _steps(path: Path) -> list[dict]:
     if any(not isinstance(row, dict) for row in rows):
         raise ValidationError("invalid reviewer host transcript")
     return rows
+
+
+def _steps(path: Path, *, prefer_full: bool = True) -> list[dict]:
+    # Transcript content is inspected only at its canonical trusted host location.
+    read_path = (prefer_full_transcript(path) or path) if prefer_full else path
+    try:
+        return _read_steps_file(read_path)
+    except ValidationError as exc:
+        if read_path != path and path.is_file() and str(exc) == "invalid reviewer host transcript":
+            return _read_steps_file(path)
+        raise
 
 
 def _load_ledger(run: dict, path: Path) -> dict:
@@ -144,19 +167,13 @@ def _load_ledger(run: dict, path: Path) -> dict:
     return ledger
 
 
-def identity_messages(path: Path):
-    """Stream native dispatch messages; callers stop at the bound identity.
-
-    No persistent identity cache: replacement/truncation is observed on every
-    call. Full result and cancellation validation still use complete transcripts.
-    """
-    read_path = prefer_full_transcript(path) or path
+def _iter_identity_messages_file(read_path: Path):
     if read_path.stat().st_size > 32 * 1024 * 1024:
         raise ValidationError("reviewer transcript exceeds bounded inspection size")
     count = 0
     with read_path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            if not line.strip():
+            if _is_blank_or_nul_line(line):
                 continue
             try:
                 row = json.loads(line)
@@ -171,6 +188,25 @@ def identity_messages(path: Path):
                 count += 1
                 if count >= 8:
                     return
+
+
+def identity_messages(path: Path):
+    """Stream native dispatch messages; callers stop at the bound identity.
+
+    No persistent identity cache: replacement/truncation is observed on every
+    call. Full result and cancellation validation still use complete transcripts.
+    """
+    read_path = prefer_full_transcript(path) or path
+    yielded = False
+    try:
+        for msg in _iter_identity_messages_file(read_path):
+            yielded = True
+            yield msg
+    except ValidationError as exc:
+        if not yielded and read_path != path and path.is_file() and str(exc) == "invalid reviewer host transcript":
+            yield from _iter_identity_messages_file(path)
+            return
+        raise
 
 
 def reviewer_context(repo: Path, execution_id: str, *, bind: bool = False) -> dict | None:
@@ -262,7 +298,7 @@ def cancellation(entry: dict, *, _parent_steps_cache: dict[str, list[dict]] | No
         parent = resolve_transcript(parent_id)
         if parent is None:
             return None
-        parent_rows = _steps(parent)
+        parent_rows = _steps(parent, prefer_full=False)
         if _parent_steps_cache is not None:
             _parent_steps_cache[parent_id] = parent_rows
     latest = None

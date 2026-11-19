@@ -1434,25 +1434,46 @@ def _is_proven_frontier_parent_session(run: dict, identity: dict, observed: dict
     return False
 
 
+_FAST_GEMINI_FAMILY_RE = re.compile(r"^gemini-(\d+(?:\.\d+)?)-(?:hydrogen|flash)$")
+
+
+def _fast_gemini_family_version(family: str) -> tuple[int, int] | None:
+    m = _FAST_GEMINI_FAMILY_RE.fullmatch(str(family or "").strip().lower())
+    if not m:
+        return None
+    parts = m.group(1).split(".")
+    return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+
+
 def reviewer_requires_flash_offload(
     repo: Path | None,
     selection: dict | None,
     *,
     parent_conversation_id: str = "",
 ) -> bool:
-    """Return True when `invoke_subagent` must pass `Model='flash'` for `selection` on Antigravity."""
+    """Return True when `invoke_subagent` must pass `Model='flash'` for `selection` on Antigravity.
+
+    Universal Hydrogen Subagent Rule: ANY `gemini-4-hydrogen*` or `*flash*` (or future `gemini-<N>-hydrogen*` /
+    `gemini-<N>-flash*`) reviewer ALWAYS passes `Model='flash'` (which Antigravity natively routes to
+    `gemini-4-hydrogen-tiered-high` 1x) regardless of the main-chat model, unless `#200144` is explicitly disabled.
+    Explicit `inherit` and explicit frontier (`carbon`/`neon`/`argon`) policies continue to omit `Model`.
+    """
     if not isinstance(selection, dict):
         return False
     resolved_m = str(selection.get("resolved_model") or selection.get("effective_model") or "").strip().lower()
+    if not resolved_m or resolved_m == "inherit":
+        return False
     if "flash" in resolved_m and not resolved_m.startswith("gemini-4-hydrogen"):
         return True
-    if resolved_m.startswith("gemini-4-hydrogen") and repo is not None:
+    fam, _ = _split_antigravity_family_and_tier(resolved_m)
+    if resolved_m.startswith("gemini-4-hydrogen") or _fast_gemini_family_version(fam) is not None:
+        if repo is None:
+            return True
         try:
-            from delegation_policy import is_frontier_lead_requiring_flash_offload
-            offload, _ = is_frontier_lead_requiring_flash_offload(repo, parent_conversation_id=parent_conversation_id)
-            return bool(offload)
+            from platform_quirks import is_quirk_enabled
+            return bool(is_quirk_enabled("200144", repo=repo))
         except ImportError:
-            return False
+            return True
     return False
 
 
@@ -1467,13 +1488,12 @@ def _matches_antigravity_native_model(
 ) -> bool:
     """Validate observed Antigravity SQLite protobuf model metadata against the frozen reviewer selection.
 
-    Antigravity Desktop inherits the parent session's model and thinking tier when `Model` is omitted
-    (`INHERIT_PARENT_BY_OMISSION`). Within `gemini-4-hydrogen` (`1.00x`), all valid Hydrogen thinking
-    tiers and `gemini-4-flash*` backend aliases are accepted. When `allow_upward_parent_inheritance` is
-    proven (the parent Lead session itself is running `Carbon` or `Argon`), upward Gemini-4 inheritance
-    fulfilling a `Hydrogen` reviewer policy is accepted without false `REVIEW_MODEL_MISMATCH`, while
-    unproven cross-family quota leaks (#198819), downward family drops (`Hydrogen` or `3.8 Flash` when
-    `Carbon`/`Argon` was required), and cross-vendor mismatches strictly fail closed.
+    Antigravity routes `Model='flash'` natively to `gemini-4-hydrogen-tiered-high` (`1.00x`, or future
+    `gemini-<N>-hydrogen*` / `gemini-<N>-flash*` successors). Within fast Hydrogen/Flash families, equal or
+    newer generation execution (e.g. `gemini-4-hydrogen-tiered-high` fulfilling `gemini-3.8-flash-high` or
+    `gemini-4-hydrogen-*`) is accepted without false `REVIEW_MODEL_MISMATCH`, while downward family drops
+    (`3.8 Flash` when `Hydrogen` was required without proven fallback, or `Hydrogen` when `Carbon`/`Argon`/`Neon`
+    was required), unproven cross-family quota leaks (`#198819`), and cross-vendor mismatches strictly fail closed.
     """
     if not expected_resolved or not isinstance(host_configured, str) or not isinstance(host_reported_models, list) or not host_reported_models:
         return False
@@ -1494,20 +1514,38 @@ def _matches_antigravity_native_model(
         and obs_family == "gemini-3.8-flash"
         and obs_tier not in ("fast", "low")
     )
-    if obs_family != exp_family and not upward_gemini4_inherited and not frontier_flash_fallback:
+    exp_fast_ver = _fast_gemini_family_version(exp_family)
+    obs_fast_ver = _fast_gemini_family_version(obs_family)
+    native_flash_upgrade = bool(
+        exp_fast_ver is not None
+        and obs_fast_ver is not None
+        and obs_fast_ver >= exp_fast_ver
+        and obs_family != exp_family
+        and obs_tier not in ("fast", "low")
+    )
+    if obs_family != exp_family and not upward_gemini4_inherited and not frontier_flash_fallback and not native_flash_upgrade:
         return False
 
     lvl_str = str(thinking_level or "").strip().lower()
     exp_tier = lvl_str if lvl_str in _THINKING_TIER_RANKS else exp_suffix_tier
 
-    if not upward_gemini4_inherited and not frontier_flash_fallback and exp_family != "gemini-4-hydrogen" and exp_tier and obs_tier:
+    if (
+        not upward_gemini4_inherited
+        and not frontier_flash_fallback
+        and not native_flash_upgrade
+        and exp_family != "gemini-4-hydrogen"
+        and exp_tier
+        and obs_tier
+    ):
         if _THINKING_TIER_RANKS[obs_tier] < _THINKING_TIER_RANKS[exp_tier]:
             return False
 
-    target_reported_family = obs_family if (upward_gemini4_inherited or frontier_flash_fallback) else exp_family
-    if target_reported_family == "gemini-4-hydrogen":
+    target_reported_family = obs_family if (upward_gemini4_inherited or frontier_flash_fallback or native_flash_upgrade) else exp_family
+    if _fast_gemini_family_version(target_reported_family) is not None and target_reported_family != "gemini-3.8-flash":
+        fam_ver = _fast_gemini_family_version(target_reported_family)
+        ver_str = f"{fam_ver[0]}.{fam_ver[1]}" if fam_ver and fam_ver[1] else (str(fam_ver[0]) if fam_ver else "4")
         reported_re = re.compile(
-            r"(?:models/)?(?:gemini-4-hydrogen|gemini-4-flash)(?:-(?:tiered-)?(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
+            r"(?:models/)?gemini-" + re.escape(ver_str) + r"-(?:hydrogen|flash)(?:-(?:tiered-)?(?:n|fast|low|medium|high|xhigh|extra|tiered|preview(?:-[a-z0-9]+)*|[0-9]{3}))?"
         )
     else:
         reported_re = re.compile(
@@ -1677,15 +1715,15 @@ def antigravity_dispatch_model_hint(
     parts: list[str] = []
     if flash_roles:
         offload_note = (
-            " (routes natively to Gemini 4 Hydrogen High 1x and prevents Carbon/Neon/Argon parent quota inheritance)"
-            if any(str(mapping.get(r) or "").startswith("gemini-4-hydrogen") for r in flash_roles)
+            " (routes natively to Gemini 4 Hydrogen High 1x regardless of main-chat model)"
+            if any(str(mapping.get(r) or "").startswith(("gemini-4-hydrogen", "gemini-3.8-flash")) for r in flash_roles)
             else ""
         )
         parts.append(f"pass Model='flash' for [{', '.join(flash_roles)}]{offload_note}")
     if pro_roles:
         parts.append(f"pass Model='pro' for [{', '.join(pro_roles)}]")
     if omit_roles:
-        parts.append(f"omit Model for [{', '.join(omit_roles)}] (bound via agent.md frontmatter for hydrogen/neon/argon/carbon or inherit)")
+        parts.append(f"omit Model for [{', '.join(omit_roles)}] (INHERIT_PARENT_BY_OMISSION)")
     return (" In invoke_subagent: " + "; ".join(parts) + ".") if parts else ""
 
 
@@ -2154,9 +2192,10 @@ def main(argv: list[str] | None = None) -> int:
                 result["reviewer_prompts"] = ref_prompts
             if str(host).strip().lower() == "antigravity":
                 result["dispatch_hint"] = (
-                    "When calling invoke_subagent, pass Model='flash' ONLY for legacy 3.8-flash reviewers whose model in reviewer_models contains 'flash', "
+                    "When calling invoke_subagent, pass Model='flash' for all gemini-4-hydrogen-* and gemini-3.8-flash-* reviewers "
+                    "(routes natively to Gemini 4 Hydrogen High 1x regardless of main-chat model), "
                     "pass Model='pro' for reviewers whose model contains 'pro', "
-                    "and omit Model (INHERIT_PARENT_BY_OMISSION / bound via .agents/agents/<role>/agent.md frontmatter) for inherit, gemini-4-hydrogen-*, gemini-4-neon-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
+                    "and omit Model (INHERIT_PARENT_BY_OMISSION) only for explicit inherit, gemini-4-neon-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
                 )
         else:
             policy, source = load_policy(repo, args.task)
