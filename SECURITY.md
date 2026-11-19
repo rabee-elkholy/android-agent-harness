@@ -4,11 +4,12 @@
 
 | Version line | Supported |
 |---|---|
+| **v1.5.x** | Yes |
 | **v1.4.x** | Yes |
 | **v1.3.x** | Yes |
 | v1.2.x | Yes |
-| v1.1.x | No, upgrade to v1.4.x |
-| v1.0.x | No, upgrade to v1.4.x |
+| v1.1.x | No, upgrade to v1.5.x |
+| v1.0.x | No, upgrade to v1.5.x |
 | < v1.0.0 | No |
 
 ## Security boundary

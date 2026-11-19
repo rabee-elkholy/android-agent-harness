@@ -68,7 +68,7 @@ WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNES
 | **Unreproduced bug fixes**: Agent guesses at a fix without proving the failure existed. | Applicable `BUG` tasks enforce `CAPTURE_RED_EVIDENCE` (`--capture-red`), requiring a recorded failing test (`red-evidence.json`) before production files unlock. |
 | **Scope drift & drive-by refactors**: Agent edits `libs.versions.toml` or rewrites legacy Java/XML unasked. | Per-module architecture resolver preserves local patterns (`MVP`, `MVVM`, `MVI`), and native `PreToolUse` hooks reject unapproved file paths in real time. |
 | **Self-approved plans & unwanted Git commits**: Agent rubber-stamps its own plan or runs `git commit` / `push`. | Plan unlocks require a developer-issued approval bound to `plan_sha256` + single-use nonce; `commit`, `branch`, `merge`, `rebase`, and `push` remain strictly human-owned. |
-| **Shared Gemini quota exhaustion**: All Gemini models share one `/usage` pool (`Carbon`/`Argon` at `3.00x` vs `Hydrogen`/`Flash` at `1.00x`), while cold subagents cost `~12.4K` startup tokens. | Shared-quota optimal `hydrogen-dynamic` executes `<4`-file slices inline on the warm Lead cache, runs `4+`-file `Worker` slices on `gemini-4-hydrogen-high` (`1.00x`) from Wave 1, caps `T5` reviews at `Hydrogen High` (zero `3x` `Argon` burn), and blocks post-wave re-reads. |
+| **Shared Gemini quota exhaustion**: All Gemini models share one `/usage` pool (`Carbon`/`Argon` at `3.00x`, `Neon` at `2.00x` vs `Hydrogen`/`Flash` at `1.00x`), while cold subagents cost `~12.4K` startup tokens. | Shared-quota optimal `hydrogen-dynamic` executes `<4`-file slices inline on the warm Lead cache, runs `4+`-file `Worker` slices on `gemini-4-hydrogen-high` (`1.00x`) from Wave 1, caps `T5` reviews at `Hydrogen High` (zero `3x` `Argon` burn), and blocks post-wave re-reads. |
 | **Context amnesia across chats**: Every new chat forgets repo conventions and repeats architectural mistakes. | `.agents/project-context/` persists `project-facts.json`, `project-notes.md`, and scoped `developer-instructions.json` across all `7/7` planning, worker, and review surfaces. |
 
 ---
@@ -80,7 +80,7 @@ WITHOUT HARNESS (Vanilla AI Session)                   WITH ANDROID AGENT HARNES
 Open your Android or KMM/KMP repository in **Google Antigravity** (or Claude Code) and paste this single pinned bootstrap prompt:
 
 ```text
-Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.4.4/docs/install-or-update-prompt.md and follow all instructions.
+Read https://raw.githubusercontent.com/rabee-elkholy/android-agent-harness/v1.5.0/docs/install-or-update-prompt.md and follow all instructions.
 ```
 
 What happens automatically and non-destructively:
@@ -106,7 +106,7 @@ android-harness doctor --repo /path/to/android-project --json
 Or initialize directly from a pinned shallow tag clone with **zero global packages**:
 
 ```bash
-git clone --depth 1 --branch v1.4.4 --single-branch \
+git clone --depth 1 --branch v1.5.0 --single-branch \
   https://github.com/rabee-elkholy/android-agent-harness.git ~/.android-harness/kit
 
 python ~/.android-harness/kit/harness_cli.py init \
@@ -260,7 +260,7 @@ Android Agent Harness is built primary-first for **Google Antigravity** with `HA
 - **Antigravity Platform, Quota & Account-Safety Guards**:
   - **Zombie Subagent & `255m` Reactive-Wakeup Guard (`#199713`)**: Strips `schedule` permissions from all `.agents/agents/*/agent.md` manifests, blocks `schedule` / `schedules:*` wakeup triggers (`ZOMBIE_SUBAGENT_SCHEDULE_WAKEUP_GUARD`), permits `manage_subagents({"Action": "kill_all"})` across all task states to reap idle subagents immediately after waves/tasks finish, and flags `>= 2h` reactive-wakeup spikes in `doctor` and `diagnose-session`.
   - **Unattended `agy -p` & UI-Injection ToS Anti-Ban Guard (`#199748` / `#199756`)**: Blocks unattended `agy -p` / `--headless` loops and programmatic UI keystroke injection (`AGY_HEADLESS_LOOP_TOS_GUARD`) to protect Google AI Ultra accounts from automated `403 PERMISSION_DENIED` suspension while preserving interactive Skill workflows.
-  - **Managed Agent `limit: 0` Zero-Quota, Hydrogen Rollout & Regional `503` Diagnostics (`#199769` / `#199770` & `#198333`)**: Classifies Free/Pro tier `HTTP 429` (`limit: 0`) errors on `gemini-4-argon` / `gemini-4-carbon` (`MANAGED_AGENT_ZERO_QUOTA_429` -> 1-command switch to `hydrogen-dynamic-project`), `Gemini 4 Hydrogen` rollout/entitlement blocks (`HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK` -> `flash-argon-project` fallback), `Orchestrator` double-planning friction (`ORCHESTRATOR_DOUBLE_PLANNING_HAZARD`), and regional `gemini-3.8-flash` `HTTP 503` backoff stalls (`FLASH_503_CAPACITY_BACKOFF`) in `diagnose-session`.
+  - **Managed Agent `limit: 0` Zero-Quota, Hydrogen Rollout & Regional `503` Diagnostics (`#199769` / `#199770` & `#198333`)**: Classifies Free/Pro tier `HTTP 429` (`limit: 0`) errors on `gemini-4-argon` / `gemini-4-carbon` / `gemini-4-neon` (`MANAGED_AGENT_ZERO_QUOTA_429` -> 1-command switch to `hydrogen-dynamic-project`), `Gemini 4 Hydrogen` rollout/entitlement blocks (`HYDROGEN_ROLLOUT_ENTITLEMENT_BLOCK` -> `flash-argon-project` fallback), `Orchestrator` double-planning friction (`ORCHESTRATOR_DOUBLE_PLANNING_HAZARD`), and regional `gemini-3.8-flash` `HTTP 503` backoff stalls (`FLASH_503_CAPACITY_BACKOFF`) in `diagnose-session`.
   - **Hydrogen `403 TOS_VIOLATION` Anti-Burst Pacer, Turn-3 Cache Shield & Win11 `v2.7.0` Guard (`#200029`, `#199971`, `#200026`, `#200037`)**: `PreToolUse` (`HYDROGEN_ANTI_BURST_PACER`) passes same-turn parallel batches (`<= 200ms`) at `0ms` delay while smoothing `>= 4`-turn sequential `Hydrogen` bursts (`0.8s–1.4s` human cadence) to prevent false-positive `403 TOS_VIOLATION` suspensions; `PreInvocation` locks Turn-0 subagent prefixes + `<= 2`-turn `Scout` mega-batches (plus optional `safe-cache-project`) against `#200026` `Turn-3 +701 / cache=0` drops; and `doctor` warns against Windows 11 `Smart App Control Error 4551` on `Antigravity IDE v2.7.0` (`#200037`).
   - **Remote Mode Quota-Leak, Model-Less Startup Loading, Nov 15 Runtime & Context Guards (`#198819`, `#198689`, `#199301`, `#200467`, `#200632`, `#200619`)**: Blocks silent fast-tier -> Frontier billing in Remote Mode (`REMOTE_MODE_FLASH_QUOTA_LEAK_GUARD` across both `Hydrogen` and `Flash`); installs model-less `.agents/agents/*/agent.md` manifests for automatic Antigravity Desktop startup loading paired with SQLite `INHERIT_PARENT_BY_OMISSION` & upward Gemini-4 verification; warns against `Hydrogen Extra / xhigh` -> `3x Argon` weekly quota leaks (`#200467`); enforces single-line standalone `run_command` syntax without pipes, `2>&1`, `;`, `&&`, or inline `python -c` (`WINDOWS_TURBO_SHELL_HYGIENE` `#200632`); audits `.vscode/settings.json` `antigravity.autoAcceptOnChat` and transient Inline Diff LSP squiggles (`#200619`); blocks raw `transcript.jsonl` reads (`NATIVE_TRANSCRIPT_READ_FORBIDDEN`, paired with `diagnose-session --export-chat-bundle`); and detects `language_server.log` `WatchVersionControlState` bloat, `files.watcherExclude` gaps, and Windows `stdio` MCP pipe collisions.
 
