@@ -614,6 +614,65 @@ def _scoped_finding_validation_lines(
     return lines
 
 
+def _prior_owner_blocking_finding_lines(
+    repo: Path,
+    policy: dict,
+    reviewer: str,
+) -> list[str]:
+    """Return compact prior-round blocking findings owned strictly by ``reviewer``.
+
+    Preserves Goldfish epistemic independence:
+      - Never includes prior PASS verdicts, praise, or other reviewers' reports.
+      - Emits nothing for non-owner reviewers (zero anchoring bias).
+      - Explicitly instructs the finding owner to audit the follow-up delta fresh for
+        fix-induced regressions rather than assuming untouched code remains defect-free.
+    """
+    if int(policy.get("review_round") or 1) <= 1:
+        return []
+    basis = policy.get("later_round_source") or {}
+    source_snapshot = str(basis.get("snapshot") or "").strip()
+    source_run_id = str(basis.get("run_id") or "").strip()
+    if not source_snapshot or not source_run_id:
+        return []
+    try:
+        from evidence_store import EvidenceStore
+        source_reviews = EvidenceStore(state_root(repo)).read(source_snapshot, source_run_id, "reviews")
+    except (OSError, ValueError, KeyError, ValidationError):
+        return []
+    evidence = source_reviews.get("evidence") if isinstance(source_reviews, dict) else None
+    if not isinstance(evidence, dict):
+        return []
+    owned: list[dict] = [
+        item for item in (evidence.get("blocking_findings") or [])
+        if isinstance(item, dict) and str(item.get("reviewer") or "").strip() == reviewer
+    ]
+    if not owned:
+        return []
+    lines = [
+        "- **Prior-Round Blocking Findings You Raised (Verify Resolution & Audit Fresh for Fix-Induced Regressions)**:",
+        "  * *(Anti-anchoring boundary: no prior PASS verdicts are carried into your prompt; confirm each defect below is fully resolved in the follow-up delta AND audit the delta with fresh eyes for any newly introduced regressions.)*",
+    ]
+    for item in owned[:8]:
+        sev = str(item.get("severity") or "HIGH").strip().upper()
+        fid = redact_text(str(item.get("id") or "unspecified").strip())[:64]
+        fpath = redact_text(str(item.get("file") or "").strip())
+        l_start = item.get("line_start")
+        l_end = item.get("line_end")
+        loc = fpath
+        if fpath and isinstance(l_start, int):
+            loc = f"{fpath}:{l_start}-{l_end}" if isinstance(l_end, int) and l_end != l_start else f"{fpath}:{l_start}"
+        title_clean = " ".join(redact_text(str(item.get("title") or "")).split())
+        title = (title_clean[:139].rstrip() + "…") if len(title_clean) > 140 else title_clean
+        detail_clean = " ".join(redact_text(str(item.get("recommended_fix") or item.get("message") or "")).split())
+        detail = (detail_clean[:219].rstrip() + "…") if len(detail_clean) > 220 else detail_clean
+        loc_part = f" `{loc}`" if loc else ""
+        detail_part = f" — {detail}" if detail else ""
+        lines.append(f"  * `[{sev}]`{loc_part} (`{fid}`): {title}{detail_part}")
+    if len(owned) > 8:
+        lines.append(f"  * *(+{len(owned) - 8} additional prior blocking finding(s) omitted for brevity)*")
+    return lines
+
+
 def generate_task_brief(
     repo: Path,
     task_id: str,
@@ -712,6 +771,7 @@ def generate_task_brief(
         brief_lines.append(
             "  * *(Follow-up review round: evaluate the delta diff in the package and any unresolved finding validations below without re-reading unchanged task files unless required to verify an unresolved finding.)*"
         )
+    brief_lines.extend(_prior_owner_blocking_finding_lines(repo, policy, reviewer))
     brief_lines.append("- **Target Changed Paths (Use Full Absolute Path in `read_file`/`view_file`)**:")
     focus_paths = reading_guide["focus_files"] if reading_guide else changed_paths
     for p in focus_paths[:20]:

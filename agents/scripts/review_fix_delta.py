@@ -190,6 +190,105 @@ def _entries(manifest: dict) -> dict[str, tuple]:
     }
 
 
+def _non_comment_code_flags(lines: list[str], *, rel_path: str) -> list[bool]:
+    """Return per-line booleans indicating whether each line carries non-blank, non-comment code."""
+    low = rel_path.replace("\\", "/").lower()
+    is_xml = low.endswith(".xml")
+    is_c_style = low.endswith((".kt", ".kts", ".java", ".swift", ".gradle", ".groovy", ".js", ".ts", ".c", ".cc", ".cpp", ".h"))
+    flags: list[bool] = []
+    if is_xml:
+        in_xml_comment = False
+        for raw in lines:
+            s = raw
+            code_chars: list[str] = []
+            i = 0
+            n = len(s)
+            while i < n:
+                if in_xml_comment:
+                    end = s.find("-->", i)
+                    if end == -1:
+                        break
+                    in_xml_comment = False
+                    i = end + 3
+                else:
+                    start = s.find("<!--", i)
+                    if start == -1:
+                        code_chars.append(s[i:])
+                        break
+                    code_chars.append(s[i:start])
+                    in_xml_comment = True
+                    i = start + 4
+            flags.append(bool("".join(code_chars).strip()))
+        return flags
+
+    if is_c_style:
+        block_depth = 0
+        supports_nested = low.endswith((".kt", ".kts", ".swift"))
+        for raw in lines:
+            s = raw
+            code_chars = []
+            i = 0
+            n = len(s)
+            in_str: str | None = None
+            while i < n:
+                ch = s[i]
+                nxt = s[i + 1] if i + 1 < n else ""
+                if block_depth > 0:
+                    if supports_nested and ch == "/" and nxt == "*":
+                        block_depth += 1
+                        i += 2
+                        continue
+                    if ch == "*" and nxt == "/":
+                        block_depth -= 1
+                        i += 2
+                        continue
+                    i += 1
+                    continue
+                if in_str is not None:
+                    code_chars.append(ch)
+                    if ch == "\\" and i + 1 < n:
+                        code_chars.append(nxt)
+                        i += 2
+                        continue
+                    if ch == in_str:
+                        in_str = None
+                    i += 1
+                    continue
+                if ch == "/" and nxt == "/":
+                    break
+                if ch == "/" and nxt == "*":
+                    block_depth += 1
+                    i += 2
+                    continue
+                if ch in ('"', "'"):
+                    in_str = ch
+                code_chars.append(ch)
+                i += 1
+            flags.append(bool("".join(code_chars).strip()))
+        return flags
+
+    for raw in lines:
+        st = raw.strip()
+        flags.append(bool(st) and not st.startswith("#"))
+    return flags
+
+
+def _count_production_changed_lines(rel_path: str, old_lines: list[str], new_lines: list[str]) -> int:
+    """Count changed non-blank, non-comment code lines in production (non-test, non-doc) files."""
+    from _modules import is_kmp_or_android_test_path
+    from change_classifier import is_documentation_path
+
+    if is_kmp_or_android_test_path(rel_path) or is_documentation_path(rel_path):
+        return 0
+    old_flags = _non_comment_code_flags(old_lines, rel_path=rel_path)
+    new_flags = _non_comment_code_flags(new_lines, rel_path=rel_path)
+    count = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines).get_opcodes():
+        if tag != "equal":
+            count += sum(1 for f in old_flags[i1:i2] if f) + sum(1 for f in new_flags[j1:j2] if f)
+    return count
+
+
 def compute_fix_delta(
     repo: Path,
     task_directory: Path,
@@ -223,6 +322,7 @@ def compute_fix_delta(
             return {"files": [], "reviewers": [], **decision_basis}
         comparison = _comparison_texts(repo, previous, current_manifest, plan, previous_run_id, files)
         real_changed_lines = 0
+        production_changed_lines = 0
         all_previously_reviewed = all(path in before and path in after for path in files)
         if comparison is not None:
             norm_comp: dict[str, tuple[str, str]] = {}
@@ -234,6 +334,7 @@ def compute_fix_delta(
                 for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, o_lns, n_lns).get_opcodes():
                     if tag != "equal":
                         real_changed_lines += (i2 - i1) + (j2 - j1)
+                production_changed_lines += _count_production_changed_lines(rel_k, o_lns, n_lns)
             comparison = norm_comp
             if real_changed_lines == 0:
                 return {
@@ -242,6 +343,7 @@ def compute_fix_delta(
                     **decision_basis,
                     "comparison": "REVIEWED_TEXT",
                     "changed_lines": 0,
+                    "production_changed_lines": 0,
                     "all_previously_reviewed": all_previously_reviewed,
                 }
         if _is_diagnostic_log_only_comparison(comparison):
@@ -251,6 +353,7 @@ def compute_fix_delta(
                 **decision_basis,
                 "comparison": "REVIEWED_TEXT",
                 "changed_lines": real_changed_lines,
+                "production_changed_lines": production_changed_lines,
                 "all_previously_reviewed": all_previously_reviewed,
             }
         present = [{"path": path} for path in files if path in after or comparison is not None]
@@ -268,7 +371,11 @@ def compute_fix_delta(
         if any(path not in after for path in files):
             reviewers.add("arch-regression-reviewer-agent")
         extra_meta = (
-            {"changed_lines": real_changed_lines, "all_previously_reviewed": all_previously_reviewed}
+            {
+                "changed_lines": real_changed_lines,
+                "production_changed_lines": production_changed_lines,
+                "all_previously_reviewed": all_previously_reviewed,
+            }
             if comparison is not None
             else {}
         )

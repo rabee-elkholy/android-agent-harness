@@ -620,18 +620,26 @@ def decide_later_round(
             carried = []
             rerun = set(current_required)
         else:
+            has_prod_count = isinstance(fix_delta.get("production_changed_lines"), int)
+            within_surgical_budget = (
+                isinstance(fix_delta.get("changed_lines"), int)
+                and (
+                    (int(fix_delta["production_changed_lines"]) <= 40 and int(fix_delta["changed_lines"]) <= 120)
+                    if has_prod_count
+                    else int(fix_delta["changed_lines"]) <= 40
+                )
+            )
             surgical_owner_only = (
                 bool(owners)
                 and not promoted
                 and fix_delta.get("comparison") == "REVIEWED_TEXT"
                 and fix_delta.get("all_previously_reviewed") is True
-                and isinstance(fix_delta.get("changed_lines"), int)
-                and int(fix_delta["changed_lines"]) <= 40
+                and within_surgical_budget
             )
             if surgical_owner_only:
-                # Bounded surgical fix (<=40 LF-normalized changed lines inside already-reviewed files
-                # with zero new surfaces): re-run ONLY the finding owner(s) and carry every other
-                # reviewer that already passed in an earlier round.
+                # Bounded surgical fix (<=40 non-comment production code lines and <=120 total lines
+                # including companion unit tests/KDoc inside already-reviewed files with zero new
+                # surfaces): re-run ONLY the finding owner(s) and carry every other passed reviewer.
                 rerun = set(owners) & current_required
                 carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
                 rerun |= current_required - set(carried) - (still_carried - rerun)
@@ -648,6 +656,7 @@ def decide_later_round(
                 "reviewers": sorted(str(item) for item in fix_delta.get("reviewers") or []),
                 **({"comparison": fix_delta["comparison"]} if fix_delta.get("comparison") else {}),
                 **({"changed_lines": int(fix_delta["changed_lines"])} if "changed_lines" in fix_delta else {}),
+                **({"production_changed_lines": int(fix_delta["production_changed_lines"])} if has_prod_count else {}),
                 **({"all_previously_reviewed": bool(fix_delta["all_previously_reviewed"])} if "all_previously_reviewed" in fix_delta else {}),
                 **({"surgical_owner_only": True} if surgical_owner_only else {}),
                 **({"developer_accepted_files": sorted(fix_delta["developer_accepted_files"])}

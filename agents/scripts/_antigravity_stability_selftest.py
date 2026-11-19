@@ -10503,5 +10503,188 @@ class TestFlexibleCliAndTwoKeySensitiveInference(unittest.TestCase):
             self.assertIn("SENSITIVE_PLANNED_FILES=BILLING", out_expl)
 
 
+class TestSurgicalProductionBudgetAndPriorFindingsBrief(unittest.TestCase):
+    """Covers production-code-weighted surgical_owner_only carry, legacy verifier compat, and owner-scoped prior findings."""
+
+    def test_production_changed_lines_ignores_kdoc_comments_and_tests(self) -> None:
+        import review_fix_delta
+        import review_policy
+
+        old_kt = [
+            "package com.demo",
+            "class Paywall {",
+            "    fun handle(a: Int) = a",
+            "}",
+        ]
+        new_kt = [
+            "package com.demo",
+            "class Paywall {",
+            "    /**",
+            "     * Multi-line KDoc block that should NOT penalize surgical carry.",
+            "     * /* nested kotlin comment */",
+            "     * @param a value",
+            "     */",
+            "    // single-line comment",
+            "    fun handle(a: Int): Int {",
+            "        val doubled = a",
+            "            * 2",
+            "        return doubled",
+            "    }",
+            "}",
+        ]
+        # Changed non-comment code lines: old `fun handle(a: Int) = a` (1) + new 5 code lines (including `* 2`!) = 6
+        prod_kt = review_fix_delta._count_production_changed_lines(
+            "app/src/main/kotlin/com/demo/Paywall.kt", old_kt, new_kt
+        )
+        self.assertEqual(6, prod_kt)
+
+        # Unit test file additions contribute 0 to production_changed_lines
+        prod_test = review_fix_delta._count_production_changed_lines(
+            "app/src/test/kotlin/com/demo/PaywallTest.kt",
+            ["class PaywallTest {}"],
+            ["class PaywallTest {", *[f"    fun t{i}() = Unit" for i in range(30)], "}"],
+        )
+        self.assertEqual(0, prod_test)
+
+        # XML comments ignored, real XML elements counted
+        prod_xml = review_fix_delta._count_production_changed_lines(
+            "app/src/main/res/navigation/nav_pay.xml",
+            ["<navigation/>"],
+            ["<!-- comment line 1", "     comment line 2 -->", "<navigation>", "    <fragment android:id=\"@+id/a\"/>", "</navigation>"],
+        )
+        self.assertEqual(4, prod_xml)
+
+        # Policy routing: 20 prod lines + 28 test/KDoc lines (= 48 total) triggers surgical_owner_only!
+        skills_root = REPO_ROOT / "agents/skills"
+        cls_t5 = {
+            "surfaces": ["BILLING", "BUSINESS_LOGIC", "COMPOSE_UI", "TEST_ONLY"],
+            "severity": "CRITICAL",
+            "changed_files": 5,
+            "changed_lines": 180,
+        }
+        r1_policy = {
+            "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            "surfaces": ["BILLING", "BUSINESS_LOGIC", "COMPOSE_UI", "TEST_ONLY"],
+        }
+        base_delta = {
+            "files": [
+                "app/src/main/kotlin/com/demo/Paywall.kt",
+                "app/src/test/kotlin/com/demo/PaywallTest.kt",
+            ],
+            "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            "comparison": "REVIEWED_TEXT",
+            "all_previously_reviewed": True,
+        }
+        r2_surgical = review_policy.decide_later_round(
+            cls_t5, skills_root,
+            previous_policy=r1_policy,
+            finding_owners=["arch-regression-reviewer-agent"],
+            passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta={**base_delta, "changed_lines": 48, "production_changed_lines": 20},
+        )
+        self.assertEqual(["arch-regression-reviewer-agent"], r2_surgical["reviewers"])
+        self.assertTrue(r2_surgical["fix_delta"].get("surgical_owner_only"))
+        self.assertEqual(20, r2_surgical["fix_delta"].get("production_changed_lines"))
+        self.assertEqual(
+            {"bug-test-reviewer-agent", "security-perf-reviewer-agent"},
+            {c["reviewer"] for c in r2_surgical["carried_reviews"]},
+        )
+
+        # >40 production code lines escalates to full delta reviewers
+        r2_big_prod = review_policy.decide_later_round(
+            cls_t5, skills_root,
+            previous_policy=r1_policy,
+            finding_owners=["arch-regression-reviewer-agent"],
+            passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta={**base_delta, "changed_lines": 55, "production_changed_lines": 45},
+        )
+        self.assertEqual(3, len(r2_big_prod["reviewers"]))
+        self.assertFalse(r2_big_prod["fix_delta"].get("surgical_owner_only", False))
+
+        # Huge >120 total lines (even with <=40 prod lines) still escalates so massive test rewrites are audited
+        r2_huge_test = review_policy.decide_later_round(
+            cls_t5, skills_root,
+            previous_policy=r1_policy,
+            finding_owners=["arch-regression-reviewer-agent"],
+            passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta={**base_delta, "changed_lines": 140, "production_changed_lines": 10},
+        )
+        self.assertEqual(3, len(r2_huge_test["reviewers"]))
+
+        # Legacy fix_delta without production_changed_lines keeps conservative <=40 raw threshold
+        r2_legacy = review_policy.decide_later_round(
+            cls_t5, skills_root,
+            previous_policy=r1_policy,
+            finding_owners=["arch-regression-reviewer-agent"],
+            passed_reviewers=["bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta={**base_delta, "changed_lines": 48},
+        )
+        self.assertEqual(3, len(r2_legacy["reviewers"]))
+        self.assertNotIn("production_changed_lines", r2_legacy["fix_delta"])
+
+    def test_prior_owner_blocking_findings_scoped_with_goldfish_isolation(self) -> None:
+        import review_package
+        from evidence_store import EvidenceStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            state_dir = repo / ".agents" / "state"
+            state_dir.mkdir(parents=True)
+            store = EvidenceStore(state_dir)
+            snap = "a1" * 32
+            run_id = "run-r1"
+            store.write(
+                snapshot=snap,
+                run_id=run_id,
+                name="reviews",
+                producer="review_orchestrator",
+                harness_version="1.5.4",
+                change_set="b2" * 32,
+                status="FAIL",
+                evidence={
+                    "reviewers": ["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
+                    "reports": [
+                        {"reviewer": "arch-regression-reviewer-agent", "verdict": "FINDINGS"},
+                        {"reviewer": "security-perf-reviewer-agent", "verdict": "PASS"},
+                    ],
+                    "blocking_findings": [
+                        {
+                            "reviewer": "arch-regression-reviewer-agent",
+                            "id": "arch-001",
+                            "severity": "MEDIUM",
+                            "file": "app/src/main/kotlin/com/demo/Paywall.kt",
+                            "line_start": 40,
+                            "line_end": 52,
+                            "title": "Missing home refresh on local purchase",
+                            "recommended_fix": "Pass isNewPurchase=true after paywall presentation.",
+                        }
+                    ],
+                },
+            )
+            r1_pol = {"review_round": 1}
+            self.assertEqual([], review_package._prior_owner_blocking_finding_lines(repo, r1_pol, "arch-regression-reviewer-agent"))
+
+            r2_pol = {"review_round": 2, "later_round_source": {"snapshot": snap, "run_id": run_id}}
+            owner_lines = review_package._prior_owner_blocking_finding_lines(repo, r2_pol, "arch-regression-reviewer-agent")
+            joined = "\n".join(owner_lines)
+            self.assertIn("Prior-Round Blocking Findings You Raised", joined)
+            self.assertIn("Anti-anchoring boundary", joined)
+            self.assertIn("arch-001", joined)
+            self.assertIn("Paywall.kt:40-52", joined)
+            self.assertIn("Missing home refresh on local purchase", joined)
+            self.assertNotIn("security-perf-reviewer-agent", joined)
+
+            # Non-owner gets ZERO prior lines (strict Goldfish isolation!)
+            self.assertEqual([], review_package._prior_owner_blocking_finding_lines(repo, r2_pol, "security-perf-reviewer-agent"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

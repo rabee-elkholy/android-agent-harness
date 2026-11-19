@@ -473,6 +473,16 @@ def expected_policy_for(
                     repo, policy_path.parent, source_run_id, read_json(current_manifest_path), plan,
                     agents_root / "skills", configured_kind,
                 )
+                # Backward compatibility for in-flight pre-v1.5.4 policies saved before
+                # `production_changed_lines` existed: the legacy rule (`changed_lines <= 40`) is
+                # strictly more conservative (runs a superset of reviewers), never weaker.
+                if (
+                    isinstance(fix_delta, dict)
+                    and "production_changed_lines" in fix_delta
+                    and isinstance(policy.get("fix_delta"), dict)
+                    and "production_changed_lines" not in policy["fix_delta"]
+                ):
+                    fix_delta = {k: v for k, v in fix_delta.items() if k != "production_changed_lines"}
             expected_policy = decide_later_round(
                 current_classification,
                 agents_root / "skills",
