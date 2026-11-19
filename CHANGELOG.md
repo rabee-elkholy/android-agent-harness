@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.4] - 2026-11-19
+
+### Production-Code-Weighted Surgical Review Carry & Owner-Scoped Prior Blocking Findings
+
+- **Production-Code-Weighted `surgical_owner_only` Carry (`review_fix_delta.py`, `review_policy.py`, `final_verifier.py`)**: Added `_count_production_changed_lines()` to exclude blank lines, comments/KDoc (with Kotlin nested `/* ... */` and XML `<!-- ... -->` comment tracking), docs, and unit-test additions from penalizing bounded surgical fix rounds. Follow-up rounds with `<= 40` non-comment production code lines and `<= 120` total changed lines inside already-reviewed files (zero new surfaces) now re-run ONLY the finding owner(s) and preserve `carried_reviews` `PASS` coverage for passed specialists, while keeping full backward compatibility for in-flight pre-`v1.5.4` policies in `final_verifier.py`.
+- **Owner-Scoped Prior-Round Blocking Findings with Anti-Anchoring Boundary (`review_package.py`)**: Added `_prior_owner_blocking_finding_lines()` in follow-up briefs (`review_round > 1`) so each finding owner receives a compact redacted summary of ONLY the blocking defect(s) it raised in the prior round—with an explicit anti-anchoring directive to verify resolution AND audit fresh for fix-induced regressions—while non-owner reviewers receive zero prior-round text (preserving strict Goldfish epistemic independence).
+
 ## [1.5.3] - 2026-11-19
 
 ### Resilient `HARNESS_WEB_PATCH_V1` Parsing, Gemini Web HTML-Entity Repair, `.txt` Downloads & Foreign Clipboard Isolation
