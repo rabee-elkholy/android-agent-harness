@@ -556,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
     p_apply = sub.add_parser("apply", help="Apply a `HARNESS_WEB_MERGE_V1` payload from Clipboard, Downloads, or `--file` safely.")
     p_apply.add_argument("--repo", default=None, help="Android/KMP project root.")
     p_apply.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task ID hint.")
-    p_apply.add_argument("--file", default="", help="Explicit path to `harness-merge-*.patch` / `.json` / `.md` / `.zip`.")
+    p_apply.add_argument("--file", default="", help="Explicit path to `harness-merge-*.txt` / `.patch` / `.json` / `.md` / `.zip`.")
     p_apply.add_argument("--stdin", action="store_true", help="Read merge payload from stdin.")
     p_apply.add_argument("--source", default="", choices=("", "conversation", "developer_terminal", "host_native"), help="Approval authority source (optional when `--dry-run` is passed).")
     p_apply.add_argument("--dry-run", action="store_true", help="Validate hunks, braces, 3-way merges, and line stats in memory without modifying files or consuming `pack_id`.")
@@ -609,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"[WEB-PACK READY] pack_id={res['pack_id']} | files={len(res['editable_files'])} | "
                     f"neighbors={res['neighbor_signatures_count']} | size={res['bundle_bytes']:,} B | clipboard={clip_mode}\n"
                     f"  Bundle file: {res['bundle_file']}\n"
-                    f"  Next: {chat_step}, attach or paste (`Ctrl+V`), download its `harness-merge-{res['pack_id']}.patch` (or `.json`) file into `Downloads` (or attach it here), and run `web-apply`."
+                    f"  Next: {chat_step}, attach or paste (`Ctrl+V`), download its `harness-merge-{res['pack_id']}.txt` (or `.patch`/`.json`) file into `Downloads` (or attach it here), and run `web-apply`."
                     f"{compact_line}"
                 )
             return 0

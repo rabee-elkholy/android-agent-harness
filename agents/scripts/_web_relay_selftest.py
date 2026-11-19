@@ -2214,8 +2214,9 @@ class WebRelaySelftest(unittest.TestCase):
         pid1 = doc1["pack_id"]
         bundle1 = Path(doc1["bundle_file"]).read_text(encoding="utf-8")
         self.assertIn("DO NOT Print Final Code in Chat", bundle1)
-        self.assertIn(f"harness-merge-{pid1}.patch", bundle1)
-        self.assertIn(f"harness-merge-{pid1}.json", bundle1)
+        self.assertIn(f"harness-merge-{pid1}.txt", bundle1)
+        self.assertIn(".patch", bundle1)
+        self.assertIn(".json", bundle1)
 
         # Place a `.patch` file (`HARNESS_WEB_PATCH_V1`) in Downloads -> auto-discovered without `--file`!
         patch1_text = (
@@ -2286,6 +2287,80 @@ class WebRelaySelftest(unittest.TestCase):
                 resolved_doc, origin = web_relay._resolve_incoming_merge_payload(self.repo, "", False)
         self.assertEqual(pid2, resolved_doc.get("pack_id"))
         self.assertTrue(origin.startswith("downloads:") and origin.endswith(f"harness-merge-{pid2}.patch"))
+
+    def test_20_patch_delete_end_file_html_entity_repair_and_foreign_clipboard_isolation(self) -> None:
+        """`HARNESS_WEB_PATCH_V1` accepts optional `<<<END_FILE>>>` after `DELETE`/`RENAME`, repairs Gemini Web HTML-escaped markers/generics/non-strings XML without corrupting `strings.xml`, and prevents foreign clipboard packs from shadowing local truncated downloads."""
+        from unittest import mock
+        import web_relay
+
+        # 1) DELETE + RENAME with optional <<<END_FILE>>> + HTML-escaped protocol markers, Kotlin generics, nav XML, and preserved strings.xml entities
+        raw_patch = (
+            "<<<HARNESS_WEB_PATCH_V1>>>\n"
+            "PACK_ID: wpack-a1b2c3d4e5f6\n"
+            "STATUS: READY\n"
+            "TASK_ID: patch-resilience-20\n"
+            "KIND: REFACTOR\n"
+            "OUTCOME: Test parser resilience\n\n"
+            "<<<MODIFY app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt>>>\n"
+            "<<<<<<< SEARCH\n"
+            "    fun load(): Result&lt;String&gt;\n"
+            "=======\n"
+            "    fun load(): Result&lt;List&lt;String&gt;&gt;\n"
+            "&gt;&gt;&gt;&gt;&gt;&gt;&gt; REPLACE\n"
+            "&lt;&lt;&lt;END_FILE&gt;&gt;&gt;\n\n"
+            "<<<CREATE app/src/main/res/navigation/nav_demo.xml>>>\n"
+            "&lt;navigation xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;&gt;\n"
+            "    &lt;fragment android:id=&quot;@+id/home&quot; /&gt;\n"
+            "&lt;/navigation&gt;\n"
+            "&lt;&lt;&lt;END_FILE&gt;&gt;&gt;\n\n"
+            "<<<CREATE app/src/main/res/values/strings.xml>>>\n"
+            "<resources>\n"
+            "    <string name=\"bold_msg\">&lt;b&gt;Save &amp; Go&lt;/b&gt;</string>\n"
+            "</resources>\n"
+            "<<<END_FILE>>>\n\n"
+            "<<<DELETE app/src/main/kotlin/com/demo/app/Obsolete.kt>>>\n"
+            "<<<END_FILE>>>\n\n"
+            "<<<RENAME app/src/main/kotlin/com/demo/app/Old.kt -> app/src/main/kotlin/com/demo/app/New.kt>>>\n"
+            "<<<END_FILE>>>\n"
+            "<<<END_HARNESS_WEB_PATCH_V1>>>\n"
+        )
+        doc = web_relay._extract_merge_json_from_text(raw_patch)
+        self.assertIsNotNone(doc)
+        ops = doc["operations"]
+        self.assertEqual(5, len(ops))
+        self.assertEqual("    fun load(): Result<String>", ops[0]["hunks"][0]["search"])
+        self.assertEqual("    fun load(): Result<List<String>>", ops[0]["hunks"][0]["replace"])
+        self.assertIn('<fragment android:id="@+id/home" />', ops[1]["content"])
+        self.assertNotIn("&lt;", ops[1]["content"])
+        # strings.xml entities MUST remain intact!
+        self.assertIn("&lt;b&gt;Save &amp; Go&lt;/b&gt;", ops[2]["content"])
+        self.assertEqual({"action": "DELETE", "path": "app/src/main/kotlin/com/demo/app/Obsolete.kt"}, ops[3])
+        self.assertEqual(
+            {"action": "RENAME", "old_path": "app/src/main/kotlin/com/demo/app/Old.kt", "path": "app/src/main/kotlin/com/demo/app/New.kt"},
+            ops[4],
+        )
+
+        # 2) Foreign clipboard pack must NOT hijack a truncated local pack in Downloads
+        calc_rel = "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt"
+        r_pk = self._run_harness("web-pack", "--file", calc_rel, "--prompt", "Local test pack", "--no-clipboard", "--json")
+        self.assertEqual(0, r_pk.returncode, r_pk.stderr)
+        local_pid = json.loads(r_pk.stdout)["pack_id"]
+        (self.downloads / f"harness-merge-{local_pid}.txt").write_text(
+            f"<<<HARNESS_WEB_PATCH_V1>>>\nPACK_ID: {local_pid}\nSTATUS: READY\n<<<MODIFY {calc_rel}>>>\n<<<<<<< SEARCH\nfoo\n",
+            encoding="utf-8",
+        )
+        foreign_clip = json.dumps({
+            "schema": "HARNESS_WEB_MERGE_V1",
+            "pack_id": "wpack-deadbeef0000",
+            "status": "READY",
+            "operations": [{"action": "DELETE", "path": "x.kt"}],
+        })
+        with mock.patch.object(web_relay, "_read_clipboard_text", return_value=foreign_clip):
+            with mock.patch.dict(os.environ, {"HARNESS_WEB_RELAY_DOWNLOADS": str(self.downloads)}):
+                with self.assertRaises(web_relay.ValidationError) as ctx:
+                    web_relay._resolve_incoming_merge_payload(self.repo, "", False)
+        self.assertIn("WEB_MERGE_JSON_TRUNCATED", str(ctx.exception))
+        self.assertIn(local_pid, str(ctx.exception))
 
 
 if __name__ == "__main__":

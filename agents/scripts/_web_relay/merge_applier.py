@@ -84,13 +84,76 @@ def _is_template_example_patch_doc(obj: dict[str, Any]) -> bool:
     return False
 
 
+_PATCH_MARKER_ENTITY_RE = _engine.re.compile(
+    r"^([ \t]*)(&lt;&lt;&lt;(?:HARNESS_WEB_PATCH_V1|END_HARNESS_WEB_PATCH_V1|END_FILE|(?:MODIFY|CREATE|DELETE|RENAME)\s+.+?)&gt;&gt;&gt;|&lt;&lt;&lt;&lt;&lt;&lt;&lt;\s*SEARCH(?:\s+ALL)?|&gt;&gt;&gt;&gt;&gt;&gt;&gt;\s*REPLACE)([ \t]*)$",
+    _engine.re.MULTILINE,
+)
+
+
+def _unescape_patch_protocol_markers(raw_text: str) -> str:
+    """Repair HTML-entity-escaped HARNESS_WEB_PATCH_V1 protocol marker lines emitted by web UIs (e.g. Gemini Web)."""
+    if not raw_text or ("&lt;" not in raw_text and "&gt;" not in raw_text):
+        return raw_text
+
+    def _fix(m: _engine.re.Match[str]) -> str:
+        body = m.group(2).replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&")
+        return f"{m.group(1)}{body}{m.group(3)}"
+
+    return _PATCH_MARKER_ENTITY_RE.sub(_fix, raw_text)
+
+
+def _repair_web_ui_html_entities_for_file(path: str, lines: list[str]) -> list[str]:
+    """Safely unescape web-UI HTML-entity corruption in code/manifest/nav XML lines without touching strings.xml or HTML assets."""
+    p_low = str(path or "").replace("\\", "/").lower()
+    if p_low.endswith((".html", ".htm", ".xhtml")) or (
+        ("/res/values" in p_low or "/composeresources/values" in p_low) and p_low.endswith(".xml")
+    ):
+        return lines
+
+    is_xml = p_low.endswith(".xml")
+    is_code = p_low.endswith((".kt", ".kts", ".java", ".swift", ".gradle", ".groovy"))
+    if not (is_xml or is_code):
+        return lines
+
+    out: list[str] = []
+    for ln in lines:
+        if "&lt;" not in ln and "&gt;" not in ln and "&quot;" not in ln:
+            out.append(ln)
+            continue
+        if is_xml:
+            stripped = ln.strip()
+            if (
+                stripped.startswith("&lt;")
+                or stripped.endswith(("/&gt;", "&gt;"))
+                or _engine.re.search(r"\b(?:android|app|tools|xmlns):[A-Za-z0-9_]+=&quot;", ln)
+                or _engine.re.search(r"&lt;/[A-Za-z0-9_.:-]+&gt;", ln)
+            ):
+                out.append(ln.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&"))
+                continue
+        elif is_code:
+            fixed = ln
+            # Unescape Kotlin/Java/Swift generic type arguments like `Result&lt;List&lt;String&gt;&gt;` from innermost out
+            for _ in range(6):
+                nxt = _engine.re.sub(r"(?<=[A-Za-z0-9_?.\)])&lt;((?:(?!&lt;|&gt;)[^\n\"'])+?)&gt;", r"<\1>", fixed)
+                if nxt == fixed:
+                    break
+                fixed = nxt
+            if fixed != ln:
+                fixed = fixed.replace(" -&gt; ", " -> ").replace(" &amp;&amp; ", " && ")
+                out.append(fixed)
+                continue
+        out.append(ln)
+    return out
+
+
 def _detect_truncated_patch_pack_id(raw_text: str, known_packs: set[str]) -> str:
     if not raw_text or _engine._is_outgoing_context_pack_text(raw_text):
         return ""
-    if _PATCH_OPEN_TAG not in raw_text:
+    norm_text = _unescape_patch_protocol_markers(raw_text)
+    if _PATCH_OPEN_TAG not in norm_text:
         return ""
-    last_open = raw_text.rfind(_PATCH_OPEN_TAG)
-    tail = raw_text[last_open:]
+    last_open = norm_text.rfind(_PATCH_OPEN_TAG)
+    tail = norm_text[last_open:]
     m_pid = _engine.re.search(r"^PACK_ID:\s*(wpack-[a-f0-9]{12})\s*$", tail, _engine.re.MULTILINE)
     if not m_pid:
         return ""
@@ -103,28 +166,29 @@ def _detect_truncated_patch_pack_id(raw_text: str, known_packs: set[str]) -> str
     body = tail[len(_PATCH_OPEN_TAG):close_idx]
     open_files = len(_engine.re.findall(r"^<<<(?:MODIFY|CREATE)\s+.+?>>>\s*$", body, _engine.re.MULTILINE))
     close_files = len(_engine.re.findall(r"^<<<END_FILE>>>\s*$", body, _engine.re.MULTILINE))
-    if open_files != close_files:
+    if close_files < open_files:
         return pid
-    return ""
+    return pid if _parse_web_patch_v1_from_text(norm_text) is None else ""
 
 
 def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
     """Parse a zero-JSON-escaping `<<<HARNESS_WEB_PATCH_V1>>>` payload into the canonical HARNESS_WEB_MERGE_V1 dict."""
     if not raw_text or _engine._is_outgoing_context_pack_text(raw_text):
         return None
-    if _PATCH_OPEN_TAG not in raw_text or _PATCH_CLOSE_TAG not in raw_text:
+    norm_text = _unescape_patch_protocol_markers(raw_text)
+    if _PATCH_OPEN_TAG not in norm_text or _PATCH_CLOSE_TAG not in norm_text:
         return None
 
     matched_docs: list[dict[str, Any]] = []
     search_pos = 0
     while True:
-        open_idx = raw_text.find(_PATCH_OPEN_TAG, search_pos)
+        open_idx = norm_text.find(_PATCH_OPEN_TAG, search_pos)
         if open_idx == -1:
             break
-        close_idx = raw_text.find(_PATCH_CLOSE_TAG, open_idx + len(_PATCH_OPEN_TAG))
+        close_idx = norm_text.find(_PATCH_CLOSE_TAG, open_idx + len(_PATCH_OPEN_TAG))
         if close_idx == -1:
             break
-        block = raw_text[open_idx + len(_PATCH_OPEN_TAG) : close_idx].replace("\r\n", "\n").replace("\r", "\n")
+        block = norm_text[open_idx + len(_PATCH_OPEN_TAG) : close_idx].replace("\r\n", "\n").replace("\r", "\n")
         search_pos = close_idx + len(_PATCH_CLOSE_TAG)
 
         lines = block.split("\n")
@@ -183,6 +247,12 @@ def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
             if m_del:
                 operations.append({"action": "DELETE", "path": m_del.group(1).strip()})
                 idx += 1
+                # Accept an optional trailing <<<END_FILE>>> emitted by external LLMs after DELETE.
+                peek = idx
+                while peek < n and not lines[peek].strip():
+                    peek += 1
+                if peek < n and lines[peek].strip() == "<<<END_FILE>>>":
+                    idx = peek + 1
                 continue
             m_ren = _engine.re.fullmatch(r"<<<RENAME\s+(.+?)\s*->\s*(.+?)>>>", s_ln)
             if m_ren:
@@ -192,6 +262,11 @@ def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
                     "path": m_ren.group(2).strip(),
                 })
                 idx += 1
+                peek = idx
+                while peek < n and not lines[peek].strip():
+                    peek += 1
+                if peek < n and lines[peek].strip() == "<<<END_FILE>>>":
+                    idx = peek + 1
                 continue
             m_create = _engine.re.fullmatch(r"<<<CREATE\s+(.+?)>>>", s_ln)
             if m_create:
@@ -209,6 +284,7 @@ def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
                 if not closed:
                     malformed = True
                     break
+                body_lines = _repair_web_ui_html_entities_for_file(c_path, body_lines)
                 operations.append({
                     "action": "CREATE",
                     "path": c_path,
@@ -263,6 +339,8 @@ def _parse_web_patch_v1_from_text(raw_text: str) -> dict[str, Any] | None:
                         if not (seen_sep and seen_end):
                             malformed = True
                             break
+                        s_buf = _repair_web_ui_html_entities_for_file(m_path, s_buf)
+                        r_buf = _repair_web_ui_html_entities_for_file(m_path, r_buf)
                         hunks.append({
                             "search": "\n".join(s_buf),
                             "replace": "\n".join(r_buf),
@@ -476,21 +554,26 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         _, _, best_doc, best_path = candidates[0]
         return best_doc, f"downloads:{best_path}"
 
-    if clip_fallback is not None:
+    # Prefer reporting a truncated/malformed payload for THIS repo over an unrelated foreign clipboard pack!
+    clip_is_known = clip_fallback is not None and str(clip_fallback.get("pack_id") or "") in known_packs
+    if clip_is_known and not any(pid in unapplied_packs for _, pid, _ in truncated_sources):
         return clip_fallback, "clipboard"
 
     if truncated_sources:
-        truncated_sources.sort(key=lambda item: item[0], reverse=True)
+        truncated_sources.sort(key=lambda item: (1 if item[1] in unapplied_packs else 0, item[0]), reverse=True)
         _, t_pid, t_src = truncated_sources[0]
         raise _engine.ValidationError(
-            f"WEB_MERGE_JSON_TRUNCATED: Detected `{_engine.WEB_MERGE_SCHEMA}` for pack `{t_pid}` in `{t_src}`, "
-            "but the payload text was truncated mid-stream (likely chat input length cap or copying before generation finished). "
-            f"Download `harness-merge-{t_pid}.patch` or `harness-merge-{t_pid}.json` into `Downloads` (or attach it in chat) and re-run `web-apply`."
+            f"WEB_MERGE_JSON_TRUNCATED: Detected `{_engine.WEB_MERGE_SCHEMA}` / `HARNESS_WEB_PATCH_V1` for pack `{t_pid}` in `{t_src}`, "
+            "but the payload was truncated or contained malformed patch markers before completion. "
+            f"Download `harness-merge-{t_pid}.txt` (or `.patch` / `.json`) into `Downloads` and re-run `web-apply`."
         )
+
+    if clip_fallback is not None:
+        return clip_fallback, "clipboard"
 
     raise _engine.ValidationError(
         f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{_engine.WEB_MERGE_SCHEMA}` or `HARNESS_WEB_PATCH_V1` payload found in Downloads, `.user_uploaded`, or Clipboard. "
-        "Download `harness-merge-*.patch` / `harness-merge-*.json` into `Downloads` (or attach it in chat) and re-run `web-apply`."
+        "Download `harness-merge-*.txt` / `.patch` / `.json` into `Downloads` (or attach it in chat) and re-run `web-apply`."
     )
 def _count_structural_braces(text: str, *, nested_comments: bool = True) -> tuple[int, int]:
     """Count structural `{` and `}` across Kotlin/Java/Swift while respecting raw `\"\"\"...\"\"\"` strings,
