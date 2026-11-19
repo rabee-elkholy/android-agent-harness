@@ -33,7 +33,7 @@ Follow `AGENTS.md` and `.agents/rules/harness-rules.md`; the kernel wins.
 | :--- | :--- |
 | **Discovery** | `{{PY}} .agents/harness.py task-context --file <path> --json` \| `graph --feature <name> --json` \| `dep-inspect <coord> --query <sym>` |
 | **Exec Mode** | `{{PY}} .agents/harness.py execution-mode set --choice <normal-task\|web-task\|normal-project\|web-project\|ask-every-task> --source conversation --proof-reference "<phrase>"` |
-| **Draft Plan** | `{{PY}} .agents/harness.py task draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR\|CONFLICT> --expected-files <paths> --with-context` (`--adopt-dirty` for uncommitted WIP) |
+| **Draft Plan** | `{{PY}} .agents/harness.py task draft --repo . --task-id <id> --outcome "<outcome>" --kind <AUTO\|BUG\|FEATURE\|REFACTOR\|CONFLICT> --expected-files <paths> [--expected-surfaces <csv>] [--phases "p1:...,p2:..." if >8 files or 2+ modules] --with-context` (`--adopt-dirty` for uncommitted WIP) |
 | **Approve Task** | `{{PY}} .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED --plan-hash <hash from PLAN_HASH> --with-delegation` |
 | **Verify Gates** | `{{PY}} .agents/harness.py test --impacted` (fast inner-loop) \| `{{PY}} .agents/harness.py verify-steps --task-id <id> --host antigravity` |
 | **Reviews V2** | `{{PY}} .agents/harness.py review complete-all --task <id>` |

@@ -142,22 +142,27 @@ def _surfaces_from_paths(files: list[str]) -> list[str]:
     return sorted(inferred_surfaces)
 
 
-def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
-    if not raw_files:
+def _flatten_multi_arg(raw: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Flatten CLI/programmatic multi-value flags accepting CSV, space-separated, mixed, or repeated values."""
+    if not raw:
         return []
-    items: list[str]
-    if isinstance(raw_files, list):
-        items = raw_files
-    elif isinstance(raw_files, str):
-        items = [f.strip() for f in raw_files.split(",") if f.strip()]
-    else:
+    chunks = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, (list, tuple)) else []
+    items: list[str] = []
+    for chunk in chunks:
+        for part in str(chunk or "").split(","):
+            cleaned = part.strip()
+            if cleaned:
+                items.append(cleaned)
+    return items
+
+
+def normalize_expected_files(repo: Path, raw_files: str | list[str] | None) -> list[str]:
+    items = _flatten_multi_arg(raw_files)
+    if not items:
         return []
     normalized = set()
     for item in items:
-        clean = item.strip()
-        if not clean:
-            continue
-        posix_str = validate_repo_path_containment(repo, clean)
+        posix_str = validate_repo_path_containment(repo, item)
         if posix_str.startswith((".git/", ".agents/", ".harness-setup/", ".harness-backup/")):
             raise ValidationError(f"protected harness path cannot be an expected application file: {item}")
         normalized.add(posix_str)
@@ -453,17 +458,17 @@ def draft(args: argparse.Namespace) -> dict:
             req_kind = normalize_task_kind(
                 getattr(args, "kind", "AUTO"),
                 repo=repo,
-                text_to_scan=f"{req_outcome} {getattr(args, 'expected_surfaces', None) or ''}",
+                text_to_scan=f"{req_outcome} {' '.join(_flatten_multi_arg(getattr(args, 'expected_surfaces', None)))}",
             )
             exist_depth = str(existing_plan.get("planning_depth") or "BOUNDED").upper()
             req_depth = str(getattr(args, "planning_depth", "BOUNDED") or "BOUNDED").upper()
             norm_expected_files = normalize_expected_files(repo, getattr(args, "expected_files", None))
-            raw_expected = [item.strip() for item in (args.expected_surfaces or "").split(",") if item.strip()]
+            raw_expected = _flatten_multi_arg(getattr(args, "expected_surfaces", None))
             expected_surfs = normalize_expected_surfaces(raw_expected)
             exist_surfs = sorted(existing_plan.get("expected_surfaces") or [])
             exist_files = sorted(existing_plan.get("expected_files") or [])
             exist_modules = sorted(existing_plan.get("expected_modules") or [])
-            req_modules = sorted(module_id(item) for item in (args.expected_modules or "").split(",") if item.strip())
+            req_modules = sorted(module_id(item) for item in _flatten_multi_arg(getattr(args, "expected_modules", None)))
             is_identical = (
                 req_outcome == exist_outcome
                 and req_kind == exist_kind
@@ -610,12 +615,13 @@ def quick_start(args: argparse.Namespace) -> dict:
     raw_outcome = str(getattr(args, "outcome", "") or "").strip()
     if not raw_outcome:
         raise ValidationError("`task quick-start` requires `--outcome \"<requested change>\"`.")
-    raw_files = str(getattr(args, "expected_files", "") or "").strip()
-    if not raw_files:
+    raw_files_list = _flatten_multi_arg(getattr(args, "expected_files", None))
+    if not raw_files_list:
         raise ValidationError("`task quick-start` requires `--files <1-2 target files>` (or `--expected-files`).")
-    norm_files = normalize_expected_files(repo, raw_files)
+    norm_files = normalize_expected_files(repo, raw_files_list)
     if not norm_files:
         raise ValidationError("`task quick-start` requires at least one valid repository-relative target file.")
+    raw_files = ",".join(norm_files)
 
     raw_tid = str(getattr(args, "task_id", "") or "").strip()
     task_id = validate_id(raw_tid, "task id") if raw_tid else _auto_quick_start_task_id(repo, raw_outcome, raw_files)
@@ -997,7 +1003,11 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
 
     def given(name: str) -> bool:
         value = getattr(args, name, None)
-        return bool(value.strip()) if isinstance(value, str) else bool(value)
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple)):
+            return any(str(item or "").strip() for item in value)
+        return bool(value)
 
     def joined(values: Any) -> str:
         return ",".join(str(item) for item in values or [] if str(item).strip())
@@ -1069,7 +1079,7 @@ def revise(args: argparse.Namespace) -> dict:
         raise ValidationError(f"cannot revise task '{task_id}': plan.json does not exist at {plan_p}")
     old_plan = read_json(plan_p)
     proposed = dict(old_plan)
-    if getattr(args, "expected_files", None):
+    if _flatten_multi_arg(getattr(args, "expected_files", None)):
         proposed["expected_files"] = normalize_expected_files(repo, args.expected_files)
     assert_disjoint_task_scope(repo, task_id, proposed)
     old_status = str(old_plan.get("status") or "")
@@ -2579,8 +2589,20 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
         default=None if is_revision else "BOUNDED",
         help="Planning depth scope: BOUNDED (default) or ARCHITECTURAL; revise keeps the plan's depth when omitted",
     )
-    command.add_argument("--expected-surfaces")
-    command.add_argument("--expected-modules")
+    command.add_argument(
+        "--expected-surfaces",
+        nargs="+",
+        action="extend",
+        default=None,
+        help="Expected surfaces (comma- or space-separated, or repeatable)",
+    )
+    command.add_argument(
+        "--expected-modules",
+        nargs="+",
+        action="extend",
+        default=None,
+        help="Expected modules (comma- or space-separated, or repeatable)",
+    )
     command.add_argument("--test-strategy")
     command.add_argument(
         "--approach",
@@ -2605,7 +2627,15 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
     )
     command.add_argument("--architecture-target-scope", default="", help="Target component or screen path for architecture resolution")
     command.add_argument("--architecture-target-family", default=None, help="Target architecture family ID")
-    command.add_argument("--expected-files", "--files", dest="expected_files", help="Comma-separated expected target files")
+    command.add_argument(
+        "--expected-files",
+        "--files",
+        dest="expected_files",
+        nargs="+",
+        action="extend",
+        default=None,
+        help="Expected target files (comma- or space-separated, or repeatable)",
+    )
     command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
     command.add_argument("--verification-contract", help="Repository-relative JSON file or inline JSON with optional approved criteria and journeys")
     command.add_argument("--task-context-id", default=None, help="Explicit Task Context ID for collision-safe scope binding")
@@ -2953,7 +2983,15 @@ def build_parser() -> argparse.ArgumentParser:
     bridge_cmd.add_argument("--mode", choices=("auto", "follow-up", "mid-task", "FOLLOW_UP_TASK", "MID_TASK_HANDOFF"), default="auto", help="Bridge mode: auto (default), follow-up, or mid-task")
     bridge_cmd.add_argument("--next-outcome", default="", help="Follow-up task outcome or request to carry into the new conversation")
     bridge_cmd.add_argument("--summary", default="", help="Concise summary of architectural decisions and task context")
-    bridge_cmd.add_argument("--expected-files", default="", help="Comma-separated target files to seed into the bridged Discovery Receipt")
+    bridge_cmd.add_argument(
+        "--expected-files",
+        "--files",
+        dest="expected_files",
+        nargs="+",
+        action="extend",
+        default=None,
+        help="Target files (comma- or space-separated, or repeatable) to seed into the bridged Discovery Receipt",
+    )
     bridge_cmd.add_argument("--host", default=None, help="Host environment (antigravity or generic)")
     bridge_cmd.set_defaults(handler=cmd_task_bridge)
     parser.add_argument("--json", action="store_true")
@@ -3425,6 +3463,7 @@ from .delivery_ops import (
     revision_changes,
     changed_since_verification,
     _fix_delta,
+    _outcome_confirmed_sensitive_surfaces,
     _with_planned_file_surfaces,
     _planned_file_surfaces,
     sensitive_planned_files_line,

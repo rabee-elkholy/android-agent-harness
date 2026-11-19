@@ -10292,5 +10292,216 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
             self.assertTrue(ok_inh, reason_inh)
 
 
+class TestFlexibleCliAndTwoKeySensitiveInference(unittest.TestCase):
+    """Covers space/comma/repeated multi-value CLI parsing, Draft Plan hint, and two-key sensitive surface inference."""
+
+    def _init_git_repo(self, root: Path) -> Path:
+        repo = root / "app_repo"
+        repo.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Dev"], cwd=repo, check=True)
+        (repo / "settings.gradle.kts").write_text(
+            'rootProject.name = "Demo"\ninclude(":app")\ninclude(":core")\n',
+            encoding="utf-8",
+        )
+        (repo / "app/build.gradle.kts").parent.mkdir(parents=True, exist_ok=True)
+        (repo / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+        (repo / "core/build.gradle.kts").parent.mkdir(parents=True, exist_ok=True)
+        (repo / "core/build.gradle.kts").write_text('plugins { id("com.android.library") }\n', encoding="utf-8")
+        for rel, body in [
+            ("app/src/main/kotlin/com/demo/A.kt", "package com.demo\nclass A { fun run() = 1 }\n"),
+            ("app/src/main/kotlin/com/demo/B.kt", "package com.demo\nclass B { fun run() = 2 }\n"),
+            ("app/src/main/kotlin/com/demo/C.kt", "package com.demo\nclass C { fun run() = 3 }\n"),
+            ("core/src/main/kotlin/com/demo/CoreUtil.kt", "package com.demo\nobject CoreUtil { fun v() = 1 }\n"),
+            (
+                "app/src/main/kotlin/com/demo/PaymentActivity.kt",
+                "package com.demo\nimport com.android.billingclient.api.BillingClient\n"
+                "class PaymentActivity { fun buy(c: BillingClient) {} }\n",
+            ),
+            (
+                "app/src/main/kotlin/com/demo/AuthRepo.kt",
+                "package com.demo\nclass AuthRepo { fun login(token: String) {} fun signIn(password: String) {} }\n",
+            ),
+            (
+                "app/src/main/kotlin/com/demo/HomeScreen.kt",
+                "package com.demo\nimport androidx.compose.runtime.Composable\n@Composable fun HomeScreen() {}\n",
+            ),
+        ]:
+            fp = repo / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(body, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+        return repo
+
+    def test_flexible_multi_value_cli_parsing_across_workflow_web_relay_and_execution_mode(self) -> None:
+        import argparse
+        import contextlib
+        import io
+        import workflow
+        import web_relay
+        import execution_mode
+        from _safety import command_policy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._init_git_repo(Path(tmp))
+            f_a = "app/src/main/kotlin/com/demo/A.kt"
+            f_b = "app/src/main/kotlin/com/demo/B.kt"
+            f_c = "app/src/main/kotlin/com/demo/C.kt"
+
+            # 1) Space-separated + mixed + repeated flags in `workflow draft`
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = workflow.main([
+                    "draft", "--repo", str(repo), "--task-id", "multi-cli",
+                    "--outcome", "Update A, B, and C helpers",
+                    "--kind", "FEATURE",
+                    "--expected-files", f_a, f"{f_b},{f_c}",
+                    "--expected-surfaces", "BUSINESS_LOGIC", "COMPOSE_UI",
+                    "--expected-modules", ":app",
+                    "--force",
+                ])
+            self.assertEqual(0, rc)
+            plan = json.loads((workflow.task_dir(repo, "multi-cli") / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted([f_a, f_b, f_c]), sorted(plan["expected_files"]))
+            self.assertIn("BUSINESS_LOGIC", plan["expected_surfaces"])
+            self.assertIn("COMPOSE_UI", plan["expected_surfaces"])
+            self.assertEqual([":app"], plan["expected_modules"])
+
+            # 2) `workflow revise` omitting --expected-files preserves existing files; space-separated updates them
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc_rev1 = workflow.main([
+                    "revise", "--repo", str(repo), "--task-id", "multi-cli",
+                    "--outcome", "Update A, B, and C helpers cleanly",
+                ])
+            self.assertEqual(0, rc_rev1)
+            plan_rev1 = json.loads((workflow.task_dir(repo, "multi-cli") / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted([f_a, f_b, f_c]), sorted(plan_rev1["expected_files"]))
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc_rev2 = workflow.main([
+                    "revise", "--repo", str(repo), "--task-id", "multi-cli",
+                    "--expected-files", f_a, f_b,
+                ])
+            self.assertEqual(0, rc_rev2)
+            plan_rev2 = json.loads((workflow.task_dir(repo, "multi-cli") / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted([f_a, f_b]), sorted(plan_rev2["expected_files"]))
+
+            # Cancel before quick-start
+            workflow.cancel(argparse.Namespace(repo=str(repo), task_id="multi-cli"))
+
+            # 3) `workflow quick-start` with space-separated --files
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc_qs = workflow.main([
+                    "quick-start", "--repo", str(repo), "--task-id", "qs-space",
+                    "--outcome", "Adjust A and B constants",
+                    "--files", f_a, f_b,
+                    "--source", "conversation",
+                    "--proof-reference", "please update A and B constants",
+                ])
+            self.assertEqual(0, rc_qs)
+            plan_qs = json.loads((workflow.task_dir(repo, "qs-space") / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(sorted([f_a, f_b]), sorted(plan_qs["expected_files"]))
+            workflow.cancel(argparse.Namespace(repo=str(repo), task_id="qs-space"))
+
+            # 4) `web_relay.py pack` space-separated `--files` and `--add-files`
+            wr_out = io.StringIO()
+            with contextlib.redirect_stdout(wr_out):
+                rc_wr = web_relay.main([
+                    "pack", "--repo", str(repo),
+                    "--prompt", "Update A and B",
+                    "--files", f_a, f_b,
+                    "--no-clipboard", "--json",
+                ])
+            self.assertEqual(0, rc_wr)
+            wr_data = json.loads(wr_out.getvalue())
+            self.assertIn(f_a, wr_data["editable_files"])
+            self.assertIn(f_b, wr_data["editable_files"])
+
+            # 5) `execution_mode.py show` space-separated `--files`, `--modules`, `--surfaces`
+            em_out = io.StringIO()
+            with contextlib.redirect_stdout(em_out):
+                rc_em = execution_mode.main([
+                    "show", "--repo", str(repo),
+                    "--files", f_a, f_b, f_c,
+                    "--modules", ":app", ":core",
+                    "--surfaces", "BUSINESS_LOGIC", "BILLING",
+                    "--json",
+                ])
+            self.assertEqual(0, rc_em)
+            self.assertIn("choice", json.loads(em_out.getvalue()))
+
+            # 6) `_safety/command_policy.py` accurately counts space-separated `--expected-files`
+            det = command_policy._extract_execution_mode_kickoff_details(
+                f"python .agents/harness.py task draft --task-id t1 --expected-files {f_a} {f_b} {f_c} --kind FEATURE",
+                repo=repo,
+            )
+            self.assertEqual([f_a, f_b, f_c], det["files"])
+
+    def test_two_key_outcome_confirmed_sensitive_surfaces_and_gemini_draft_hint(self) -> None:
+        import argparse
+        import contextlib
+        import io
+        import workflow
+
+        # Verify GEMINI.md.template Draft Plan row carries concise --expected-surfaces and --phases hints
+        gemini_tpl = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        draft_row = next(line for line in gemini_tpl.splitlines() if "**Draft Plan**" in line)
+        self.assertIn("--expected-files <paths>", draft_row)
+        self.assertIn("--expected-surfaces", draft_row)
+        self.assertIn("--phases", draft_row)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._init_git_repo(Path(tmp))
+            pay = "app/src/main/kotlin/com/demo/PaymentActivity.kt"
+            auth = "app/src/main/kotlin/com/demo/AuthRepo.kt"
+            home = "app/src/main/kotlin/com/demo/HomeScreen.kt"
+
+            def run_draft(task_id: str, outcome: str, files: list[str], surfaces: list[str] | None = None) -> tuple[set[str], str]:
+                argv = [
+                    "draft", "--repo", str(repo), "--task-id", task_id,
+                    "--outcome", outcome, "--kind", "FEATURE",
+                    "--expected-files", *files, "--force",
+                ]
+                if surfaces is not None:
+                    argv.extend(["--expected-surfaces", *surfaces])
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = workflow.main(argv)
+                self.assertEqual(0, rc)
+                plan = json.loads((workflow.task_dir(repo, task_id) / "plan.json").read_text(encoding="utf-8"))
+                workflow.cancel(argparse.Namespace(repo=str(repo), task_id=task_id))
+                return set(plan["expected_surfaces"]), out.getvalue()
+
+            # A) Omitted --expected-surfaces + billing outcome + BillingClient file -> auto-includes BILLING with no warning
+            s_bill, out_bill = run_draft("auto-bill", "Migrate RevenueCat paywall billing checkpoints", [pay])
+            self.assertIn("BILLING", s_bill)
+            self.assertNotIn("SENSITIVE_PLANNED_FILES=BILLING", out_bill)
+
+            # B) Omitted --expected-surfaces + auth outcome + login/signIn file -> auto-includes AUTH
+            s_auth, out_auth = run_draft("auto-auth", "Fix OAuth login refresh token handling", [auth])
+            self.assertIn("AUTH", s_auth)
+            self.assertNotIn("SENSITIVE_PLANNED_FILES=AUTH", out_auth)
+
+            # C) Unrelated outcome touching tracked payment file -> BILLING stays out (N2/P3b preserved!)
+            s_unrel, out_unrel = run_draft("unrel-pay", "Fix button spacing typo", [pay])
+            self.assertNotIn("BILLING", s_unrel)
+            self.assertIn("SENSITIVE_PLANNED_FILES=BILLING", out_unrel)
+
+            # D) False-positive guard: "workout session" / "color token" touching AuthRepo does NOT trigger AUTH
+            s_fp, _ = run_draft("fp-session", "Update workout session color token", [auth])
+            self.assertNotIn("AUTH", s_fp)
+
+            # E) Billing outcome touching plain HomeScreen (no BillingClient) -> BILLING NOT falsely added (Key 2 fails)
+            s_nobill, _ = run_draft("no-bill-code", "Add paywall promo banner text", [home])
+            self.assertNotIn("BILLING", s_nobill)
+
+            # F) Explicit --expected-surfaces BUSINESS_LOGIC respected -> BILLING NOT silently injected, warning kept
+            s_expl, out_expl = run_draft("explicit-surf", "Paywall after onboarding", [pay], surfaces=["BUSINESS_LOGIC"])
+            self.assertNotIn("BILLING", s_expl)
+            self.assertIn("SENSITIVE_PLANNED_FILES=BILLING", out_expl)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

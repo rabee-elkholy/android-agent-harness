@@ -789,10 +789,12 @@ def save_task_bridge(args: argparse.Namespace) -> dict[str, Any]:
     raw_mode = str(getattr(args, "mode", "auto") or "auto").strip().lower()
     next_outcome = str(getattr(args, "next_outcome", "") or "").strip()
     custom_summary = str(getattr(args, "summary", "") or "").strip()
-    raw_extra_files = str(getattr(args, "expected_files", "") or "").strip()
+    raw_extra_val = getattr(args, "expected_files", None)
+    raw_extra_chunks = [raw_extra_val] if isinstance(raw_extra_val, str) else list(raw_extra_val or [])
     extra_files = [
         str(f).replace("\\", "/").strip("/")
-        for f in raw_extra_files.split(",")
+        for chunk in raw_extra_chunks
+        for f in str(chunk or "").split(",")
         if str(f).replace("\\", "/").strip("/")
     ]
 

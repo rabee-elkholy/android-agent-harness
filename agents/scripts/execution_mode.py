@@ -1478,9 +1478,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = sub.add_parser("show", help="Resolve and show the effective execution mode (read-only).")
     p_show.add_argument("--repo", default=".", help="Repository root.")
     p_show.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task identifier.")
-    p_show.add_argument("--files", default="", help="Optional comma-separated candidate files for pre-draft evaluation.")
-    p_show.add_argument("--modules", default="", help="Optional comma-separated candidate modules.")
-    p_show.add_argument("--surfaces", default="", help="Optional comma-separated candidate surfaces.")
+    p_show.add_argument("--files", nargs="+", action="extend", default=None, help="Optional candidate files (comma- or space-separated, or repeatable) for pre-draft evaluation.")
+    p_show.add_argument("--modules", nargs="+", action="extend", default=None, help="Optional candidate modules (comma- or space-separated, or repeatable).")
+    p_show.add_argument("--surfaces", nargs="+", action="extend", default=None, help="Optional candidate surfaces (comma- or space-separated, or repeatable).")
     p_show.add_argument("--phases", type=int, default=0, help="Optional candidate phase count.")
     p_show.add_argument("--json", action="store_true", help="Emit JSON output.")
 
@@ -1515,9 +1515,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if subcmd in ("", "show"):
-            raw_files = [f.strip() for f in str(getattr(args, "files", "") or "").split(",") if f.strip()]
-            raw_mods = [m.strip() for m in str(getattr(args, "modules", "") or "").split(",") if m.strip()]
-            raw_surfs = [s.strip() for s in str(getattr(args, "surfaces", "") or "").split(",") if s.strip()]
+            def _flat(val: Any) -> list[str]:
+                chunks = [val] if isinstance(val, str) else list(val or [])
+                return [p.strip() for c in chunks for p in str(c or "").split(",") if p.strip()]
+            raw_files = _flat(getattr(args, "files", None))
+            raw_mods = _flat(getattr(args, "modules", None))
+            raw_surfs = _flat(getattr(args, "surfaces", None))
             raw_phases = int(getattr(args, "phases", 0) or 0)
             result = resolve_effective_execution_mode(
                 repo,

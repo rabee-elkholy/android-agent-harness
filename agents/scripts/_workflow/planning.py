@@ -302,11 +302,11 @@ def _build_and_save_plan(
     resolved_kind = _engine.normalize_task_kind(
         getattr(args, "kind", None),
         repo=repo,
-        text_to_scan=f"{getattr(args, 'outcome', None) or ''} {getattr(args, 'expected_surfaces', None) or ''}",
+        text_to_scan=f"{getattr(args, 'outcome', None) or ''} {' '.join(_engine._flatten_multi_arg(getattr(args, 'expected_surfaces', None)))}",
     )
     active_unmerged = _engine.unmerged_paths(repo)
 
-    raw_expected_files = getattr(args, "expected_files", None)
+    raw_expected_files: Any = _engine._flatten_multi_arg(getattr(args, "expected_files", None))
     files_named_by_plan = bool(raw_expected_files) or any((phase.get("expected_files") or []) for phase in (parsed_phases or []))
     if not raw_expected_files and parsed_phases:
         # The phases name the files; the task context's single target file is not the scope (N2).
@@ -344,7 +344,7 @@ def _build_and_save_plan(
         raw_expected_files = cached_ctx["target_file"]
 
     norm_expected_files = _engine.normalize_expected_files(repo, raw_expected_files)
-    raw_expected = [item.strip() for item in (getattr(args, "expected_surfaces", None) or "").split(",") if item.strip()]
+    raw_expected = _engine._flatten_multi_arg(getattr(args, "expected_surfaces", None))
     expected = _engine.normalize_expected_surfaces(raw_expected)
     unknown_surfaces = sorted(set(expected) - _engine.KNOWN_SURFACES)
     if unknown_surfaces:
@@ -358,9 +358,16 @@ def _build_and_save_plan(
         elif norm_expected_files and files_named_by_plan:
             # The planned files, not the context file, set the surfaces (N2 residual). Each file is read
             # the way the write guard reads it: a tracked file's existing sign-in or purchase text does
-            # not make the plan sensitive; its diff is judged at verification.
+            # not make the plan sensitive unless the task outcome itself explicitly names that domain;
+            # otherwise its diff is judged at verification.
             planned_surfaces, unread = _engine._planned_file_surfaces(repo, norm_expected_files)
-            expected = sorted(planned_surfaces | set(_engine._surfaces_from_paths(unread)))
+            outcome_sensitive = _engine._outcome_confirmed_sensitive_surfaces(
+                repo,
+                norm_expected_files,
+                getattr(args, "outcome", None) or "",
+                planned_surfaces,
+            )
+            expected = sorted(planned_surfaces | outcome_sensitive | set(_engine._surfaces_from_paths(unread)))
         elif norm_expected_files:
             file_class = _engine.classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
             expected = list(file_class.get("surfaces") or [])
@@ -390,7 +397,7 @@ def _build_and_save_plan(
         if _engine.Path(f).suffix.lower() not in DOC_RESOURCE_SUFFIXES and not _is_test_path(f)
     ]
 
-    surfaces_for_layer_check = set(raw_expected)
+    surfaces_for_layer_check = set(expected) if raw_expected else set()
     if not surfaces_for_layer_check and norm_expected_files:
         ef_class = _engine.classify(repo, task_changes=[{"path": p} for p in norm_expected_files])
         surfaces_for_layer_check = set(ef_class.get("surfaces") or [])
@@ -490,9 +497,9 @@ def _build_and_save_plan(
             found_mods.add(matched or ":")
         return found_mods
 
-    raw_exp_mods = getattr(args, "expected_modules", None)
+    raw_exp_mods = _engine._flatten_multi_arg(getattr(args, "expected_modules", None))
     if raw_exp_mods:
-        declared_mods = {_engine.module_id(item) for item in str(raw_exp_mods).split(",") if item.strip()}
+        declared_mods = {_engine.module_id(item) for item in raw_exp_mods}
         # Planned files in another module are part of the plan; naming them avoids a later drift approval.
         resolved_expected_modules = sorted(declared_mods | (_modules_of_expected_files() if norm_expected_files else set()))
     elif cached_ctx and cached_ctx.get("module") and not files_named_by_plan:
@@ -860,8 +867,8 @@ def _resolve_plan_architecture(repo, args, is_revision, norm_expected_files, par
                     all_files[0]
                 )
                 inferred_target_scope = primary
-        elif getattr(args, "expected_modules", None):
-            exp_mods = [m.strip() for m in str(args.expected_modules).split(",") if m.strip()]
+        elif _engine._flatten_multi_arg(getattr(args, "expected_modules", None)):
+            exp_mods = _engine._flatten_multi_arg(getattr(args, "expected_modules", None))
             if len(exp_mods) == 1:
                 inferred_target_scope = exp_mods[0]
 

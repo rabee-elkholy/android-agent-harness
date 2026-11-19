@@ -385,7 +385,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             if _engine._detect_truncated_merge_pack_id(raw_fp, set()):
                 raise _engine.ValidationError(
                     f"WEB_MERGE_JSON_TRUNCATED: File '{fp}' begins a `{_engine.WEB_MERGE_SCHEMA}` payload but is cut off before the closing JSON brace. "
-                    "Download the complete `harness-merge-*.json` file from the external AI chat (or copy after generation finishes) and re-run `web-apply`."
+                    "Download the complete `harness-merge-*.patch` or `harness-merge-*.json` file from the external AI chat and re-run `web-apply`."
                 )
             raise _engine.ValidationError(f"File '{fp}' does not contain a valid `{_engine.WEB_MERGE_SCHEMA}` JSON payload.")
         return parsed, f"file:{fp}"
@@ -422,7 +422,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         parsed = _engine._extract_merge_json_from_text(clip_txt)
         if parsed:
             cpid = str(parsed.get("pack_id") or "")
-            if not known_packs or cpid in known_packs:
+            if not known_packs or cpid in unapplied_packs:
                 return parsed, "clipboard"
             clip_fallback = parsed
         else:
@@ -437,7 +437,7 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         for cand in dl_dir.iterdir():
             if not cand.is_file():
                 continue
-            if cand.suffix.lower() not in {".json", ".md", ".txt", ".zip"}:
+            if cand.suffix.lower() not in {".json", ".patch", ".md", ".txt", ".zip"}:
                 continue
             if _engine.re.search(r"-wpack-[a-f0-9]{12}\.md$", cand.name, _engine.re.I):
                 continue
@@ -484,13 +484,13 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
         _, t_pid, t_src = truncated_sources[0]
         raise _engine.ValidationError(
             f"WEB_MERGE_JSON_TRUNCATED: Detected `{_engine.WEB_MERGE_SCHEMA}` for pack `{t_pid}` in `{t_src}`, "
-            "but the JSON text was truncated mid-stream (likely chat input length cap or copying before generation finished). "
-            f"Download `harness-merge-{t_pid}.json` into `Downloads` (or copy the full JSON block once generation completes) and re-run `web-apply`."
+            "but the payload text was truncated mid-stream (likely chat input length cap or copying before generation finished). "
+            f"Download `harness-merge-{t_pid}.patch` or `harness-merge-{t_pid}.json` into `Downloads` (or attach it in chat) and re-run `web-apply`."
         )
 
     raise _engine.ValidationError(
-        f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{_engine.WEB_MERGE_SCHEMA}` JSON found in Clipboard, `.user_uploaded`, or Downloads. "
-        "Copy the JSON block from the external AI chat (or download `harness-merge-*.json`) and re-run `web-apply`."
+        f"WEB_MERGE_PAYLOAD_NOT_FOUND: No `{_engine.WEB_MERGE_SCHEMA}` or `HARNESS_WEB_PATCH_V1` payload found in Downloads, `.user_uploaded`, or Clipboard. "
+        "Download `harness-merge-*.patch` / `harness-merge-*.json` into `Downloads` (or attach it in chat) and re-run `web-apply`."
     )
 def _count_structural_braces(text: str, *, nested_comments: bool = True) -> tuple[int, int]:
     """Count structural `{` and `}` across Kotlin/Java/Swift while respecting raw `\"\"\"...\"\"\"` strings,

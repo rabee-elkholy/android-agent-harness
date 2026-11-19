@@ -536,10 +536,10 @@ def main(argv: list[str] | None = None) -> int:
     p_pack.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional active task ID.")
     p_pack.add_argument("--prompt", default="", help="Task goal or bug description.")
     p_pack.add_argument("--kind", default="", choices=("", "FEATURE", "BUG", "REFACTOR", "CONFLICT"), help="Optional task kind override.")
-    p_pack.add_argument("--file", "--files", dest="file", action="append", default=[], help="Explicit scope file(s); repeatable or comma-separated.")
+    p_pack.add_argument("--file", "--files", dest="file", nargs="+", action="extend", default=[], help="Explicit scope file(s); space-separated, comma-separated, or repeatable.")
     p_pack.add_argument("--dirty", "--from-git-dirty", dest="dirty", action="store_true", help="Include modified, staged, and untracked source/resource files from Git working tree.")
     p_pack.add_argument("--allow-conflict-pack", action="store_true", help="Allow packing files containing Git conflict markers.")
-    p_pack.add_argument("--add-files", action="append", default=[], help="Expand most recent pack with additional requested file(s).")
+    p_pack.add_argument("--add-files", nargs="+", action="extend", default=[], help="Expand most recent pack with additional requested file(s); space-separated, comma-separated, or repeatable.")
     p_pack.add_argument("--feature", default="", help="Feature query for AST scope discovery.")
     p_pack.add_argument("--symbol", default="", help="Symbol query for AST scope discovery.")
     p_pack.add_argument("--retry", action="store_true", help="Emit compact retry delta with local gate/JUnit diagnostics.")
@@ -556,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
     p_apply = sub.add_parser("apply", help="Apply a `HARNESS_WEB_MERGE_V1` payload from Clipboard, Downloads, or `--file` safely.")
     p_apply.add_argument("--repo", default=None, help="Android/KMP project root.")
     p_apply.add_argument("--task-id", "--task", dest="task_id", default="", help="Optional task ID hint.")
-    p_apply.add_argument("--file", default="", help="Explicit path to `harness-merge-*.json` / `.md` / `.zip`.")
+    p_apply.add_argument("--file", default="", help="Explicit path to `harness-merge-*.patch` / `.json` / `.md` / `.zip`.")
     p_apply.add_argument("--stdin", action="store_true", help="Read merge payload from stdin.")
     p_apply.add_argument("--source", default="", choices=("", "conversation", "developer_terminal", "host_native"), help="Approval authority source (optional when `--dry-run` is passed).")
     p_apply.add_argument("--dry-run", action="store_true", help="Validate hunks, braces, 3-way merges, and line stats in memory without modifying files or consuming `pack_id`.")
@@ -609,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"[WEB-PACK READY] pack_id={res['pack_id']} | files={len(res['editable_files'])} | "
                     f"neighbors={res['neighbor_signatures_count']} | size={res['bundle_bytes']:,} B | clipboard={clip_mode}\n"
                     f"  Bundle file: {res['bundle_file']}\n"
-                    f"  Next: {chat_step}, attach or paste (`Ctrl+V`), then copy/download its `HARNESS_WEB_MERGE_V1` reply and run `web-apply`."
+                    f"  Next: {chat_step}, attach or paste (`Ctrl+V`), download its `harness-merge-{res['pack_id']}.patch` (or `.json`) file into `Downloads` (or attach it here), and run `web-apply`."
                     f"{compact_line}"
                 )
             return 0

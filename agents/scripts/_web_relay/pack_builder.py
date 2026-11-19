@@ -1034,11 +1034,12 @@ def build_web_pack(
             "## 1. Repair Contract (Same External AI Chat — Zero Full-File Re-Upload)",
             f"- **Task ID**: `{suggested_tid}` | **Kind**: `{eff_kind}` | **New Pack ID**: `{pack_id}` | **Editable Scope (`{len(editable_meta)}`)**: {scope_short}",
             f"- **Original Goal**: {eff_prompt}",
-            "- **Instructions**: Fix every compiler, lint, string-parity, or unit-test failure below against the code already in this chat. "
-            f"End your reply with EITHER a zero-escaping `<<<HARNESS_WEB_PATCH_V1>>>` block (`PACK_ID: {pack_id}`, `STATUS: READY`, `<<<MODIFY path>>>` / `<<<<<<< SEARCH` / `=======` / `>>>>>>> REPLACE` / `<<<END_FILE>>>` / `<<<END_HARNESS_WEB_PATCH_V1>>>`) "
-            f"OR **one fenced ```json block** using `\"schema\": \"{_engine.WEB_MERGE_SCHEMA}\"`, `\"pack_id\": \"{pack_id}\"`, `\"status\": \"READY\"`, "
-            "and minimal `\"operations\"` (`MODIFY` with verbatim `hunks` `{\"search\": \"...\", \"replace\": \"...\"}`, `CREATE`, or `\"status\": \"NEED_FILES\"` with `\"need_files\": [...]` if you need an unseen file). "
-            "Include concise English KDoc (`/** ... */`) on any newly added public/internal contract, never leave unused parameters, unused private/helper functions, or unreferenced dead classes (`fast_kt_lint` hard-blocks `UNUSED_PARAMETER`, `UNUSED_PRIVATE_FUNCTION`, and `UNUSED_PRIVATE_CLASS`), and never emit truncation comments (`// ...`).",
+            "- **Delivery Rule (Downloadable File ONLY — Do NOT Print Code in Chat)**: Fix every failure below against the code already in this chat. "
+            f"**NEVER** print code/patch blocks inline in your chat message; write the complete payload to a **single downloadable file** named `harness-merge-{pack_id}.patch` "
+            f"(Option A `<<<HARNESS_WEB_PATCH_V1>>>` with `PACK_ID: {pack_id}`, `STATUS: READY`, `<<<MODIFY path>>>`/`<<<<<<< SEARCH`/`=======`/`>>>>>>> REPLACE`/`<<<END_FILE>>>`/`<<<END_HARNESS_WEB_PATCH_V1>>>`) "
+            f"or `harness-merge-{pack_id}.json` (Option B `\"schema\": \"{_engine.WEB_MERGE_SCHEMA}\"`, `\"pack_id\": \"{pack_id}\"`, `\"status\": \"READY\"`, minimal `\"operations\"`, or `\"status\": \"NEED_FILES\"`), "
+            "and reply in chat with ONLY a 2-line summary + the download link (use an inline fenced block ONLY if this chat UI cannot create downloadable files). "
+            "Keep concise English KDoc (`/** ... */`) on new public/internal contracts, zero unused parameters/functions/classes (`fast_kt_lint`), and zero truncation comments (`// ...`).",
         ]
         if diagnostics:
             md_sections.extend(["", "## 2. Active Local Build / Test / Gate Failures", diagnostics])
@@ -1060,11 +1061,11 @@ def build_web_pack(
             "  3. **Full Freedom to Create, Rename, Delete & Patch Neighbors**: You may freely `CREATE` new classes, unit tests, or Android `<vector>` XML drawables (`res/drawable/ic_*.xml`), `DELETE` or `RENAME` (`old_path` -> `path`) scoped files, and apply surgical `hunks` to `READ_ONLY_NEIGHBOR_SIGNATURES` when updating shared interfaces/imports. Never blindly overwrite an unseen file with full `content` — emit `NEED_FILES` if you need a missing file's full body first.",
             "  4. **UI Screenshots & Drawables**: If the developer attached a UI design image/screenshot in chat alongside this pack, match its layout hierarchy, spacing, colors, typography, and RTL support faithfully, reusing existing `R.drawable.*` / `R.font.*` IDs listed in Section 2 (or `CREATE` new `<vector>` XML drawables as needed).",
             "  5. **Large Multi-File Replies (`PARTIAL` Continuation Supported)**: If your JSON output for a very large pack approaches message length limits, do NOT truncate code — emit valid JSON for the first subset with `\"status\": \"PARTIAL\"` so the developer can apply it and ask `Continue remaining files` in this same chat using the same `pack_id`.",
-            "  6. Preserve any `__HARNESS_REDACTED_SECRET_N__` token verbatim (real values are restored locally). End your response with **one fenced ```json block** (or a downloadable file named "
-            f"`harness-merge-{pack_id}.json`).",
+            "  6. **STRICT DELIVERY RULE — Downloadable File ONLY (DO NOT Print Final Code in Chat)**: Preserve any `__HARNESS_REDACTED_SECRET_N__` token verbatim (real values are restored locally). **NEVER** print code snippets, diffs, file contents, `HARNESS_WEB_PATCH_V1`, or `HARNESS_WEB_MERGE_V1` JSON inline in your chat message. Instead, ALWAYS write the complete payload into a **single downloadable file** named "
+            f"`harness-merge-{pack_id}.patch` (for Option A `HARNESS_WEB_PATCH_V1`, recommended) or `harness-merge-{pack_id}.json` (for Option B `HARNESS_WEB_MERGE_V1`) using your file-creation / code-execution / downloadable-artifact tool, and reply in chat with **ONLY** a short 2–4 bullet summary + the clickable download link/button for that file. *(Fallback ONLY if this chat environment has no file-download or artifact creation capability at all: state that in 1 line and emit a single fenced code block containing the payload.)*",
             *([headless_ui_rule] if headless_ui_rule else []),
             "",
-            "### Supported Output Formats (Choose EITHER Zero-Escaping `HARNESS_WEB_PATCH_V1` OR `HARNESS_WEB_MERGE_V1` JSON)",
+            f"### File Payload Formats (Write to Downloadable File `harness-merge-{pack_id}.patch` or `.json` — DO NOT Paste Inline in Chat)",
             '- **Option A (Recommended for Kotlin `"$${...}"` templates, raw strings, XML, & multi-file `CREATE` — Zero JSON Escaping)**:',
             "```text",
             "<<<HARNESS_WEB_PATCH_V1>>>",
@@ -1220,9 +1221,9 @@ def build_web_pack(
         or had_prior_task_pack
     )
     web_chat_instruction = (
-        "Open a NEW external AI chat, attach or paste the Context Pack (Ctrl+V), and send."
+        f"Open a NEW external AI chat, attach or paste the Context Pack (Ctrl+V), send, then download its `harness-merge-{pack_id}.patch` (or `.json`) file into Downloads (or attach it here)."
         if new_chat_recommended
-        else "Stay in the SAME external AI chat, attach or paste the pack (Ctrl+V), and send (open a NEW chat only for a new task)."
+        else f"Stay in the SAME external AI chat, attach or paste the pack (Ctrl+V), send, then download its `harness-merge-{pack_id}.patch` (or `.json`) file (open a NEW chat only for a new task)."
     )
     context_bloat = _check_session_context_bloat(repo, eff_tid)
     out_payload: dict[str, Any] = {

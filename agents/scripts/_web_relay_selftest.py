@@ -2199,5 +2199,94 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertEqual("python .agents/harness.py web-pack --task-id retry-fail-18 --retry-failure", vs_doc.get("web_retry_command"))
         self.assertIn("--retry-failure", vs_doc.get("reason", ""))
 
+    def test_19_downloadable_file_first_directive_and_patch_download_autodiscovery(self) -> None:
+        """Context packs require a single downloadable file (no inline code wall in chat), `web-apply` auto-discovers `.patch` downloads, and stale clipboard payloads never shadow fresh unapplied downloads."""
+        calc_rel = "app/src/main/kotlin/com/demo/app/CheckoutCalculator.kt"
+        r_pack1 = self._run_harness(
+            "web-pack",
+            "--file", calc_rel,
+            "--prompt", "Add downloadable patch test helper",
+            "--no-clipboard",
+            "--json",
+        )
+        self.assertEqual(0, r_pack1.returncode, r_pack1.stderr)
+        doc1 = json.loads(r_pack1.stdout)
+        pid1 = doc1["pack_id"]
+        bundle1 = Path(doc1["bundle_file"]).read_text(encoding="utf-8")
+        self.assertIn("DO NOT Print Final Code in Chat", bundle1)
+        self.assertIn(f"harness-merge-{pid1}.patch", bundle1)
+        self.assertIn(f"harness-merge-{pid1}.json", bundle1)
+
+        # Place a `.patch` file (`HARNESS_WEB_PATCH_V1`) in Downloads -> auto-discovered without `--file`!
+        patch1_text = (
+            "<<<HARNESS_WEB_PATCH_V1>>>\n"
+            f"PACK_ID: {pid1}\n"
+            "STATUS: READY\n"
+            "TASK_ID: patch-dl-19\n"
+            "KIND: FEATURE\n"
+            "OUTCOME: Add downloadable patch test helper\n"
+            "APPROACH: Add helper method to CheckoutCalculator.\n"
+            "RISKS: None.\n\n"
+            f"<<<MODIFY {calc_rel}>>>\n"
+            "<<<<<<< SEARCH\n"
+            "    fun helperRule71(v: Long): Long = v + 71L\n"
+            "=======\n"
+            "    fun helperRule71(v: Long): Long = v + 72L\n"
+            ">>>>>>> REPLACE\n"
+            "<<<END_FILE>>>\n"
+            "<<<END_HARNESS_WEB_PATCH_V1>>>\n"
+        )
+        (self.downloads / f"harness-merge-{pid1}.patch").write_text(patch1_text, encoding="utf-8")
+        r_app1 = self._run_harness(
+            "web-apply",
+            "--source", "conversation",
+            "--proof-reference", "apply downloaded patch file",
+            "--json",
+        )
+        self.assertEqual(0, r_app1.returncode, r_app1.stderr + "\n" + r_app1.stdout)
+        app1 = json.loads(r_app1.stdout)
+        self.assertTrue(str(app1["origin"]).startswith("downloads:"))
+        self.assertTrue(str(app1["origin"]).endswith(f"harness-merge-{pid1}.patch"))
+        self.assertIn("fun helperRule71(v: Long): Long = v + 72L", (self.repo / calc_rel).read_text(encoding="utf-8"))
+
+        # Second pack: simulate stale already-applied `patch1_text` still sitting in Clipboard while fresh `pid2.patch` is in Downloads!
+        r_pack2 = self._run_harness(
+            "web-pack",
+            "--task-id", "patch-dl-19",
+            "--file", calc_rel,
+            "--prompt", "Update helper rule to 73L",
+            "--no-clipboard",
+            "--json",
+        )
+        self.assertEqual(0, r_pack2.returncode, r_pack2.stderr)
+        pid2 = json.loads(r_pack2.stdout)["pack_id"]
+        patch2_text = (
+            "<<<HARNESS_WEB_PATCH_V1>>>\n"
+            f"PACK_ID: {pid2}\n"
+            "STATUS: READY\n"
+            "TASK_ID: patch-dl-19\n"
+            "KIND: FEATURE\n"
+            "OUTCOME: Update helper rule to 73L\n"
+            "APPROACH: Update helperRule71.\n"
+            "RISKS: None.\n\n"
+            f"<<<MODIFY {calc_rel}>>>\n"
+            "<<<<<<< SEARCH\n"
+            "    fun helperRule71(v: Long): Long = v + 72L\n"
+            "=======\n"
+            "    fun helperRule71(v: Long): Long = v + 73L\n"
+            ">>>>>>> REPLACE\n"
+            "<<<END_FILE>>>\n"
+            "<<<END_HARNESS_WEB_PATCH_V1>>>\n"
+        )
+        (self.downloads / f"harness-merge-{pid2}.patch").write_text(patch2_text, encoding="utf-8")
+        from unittest import mock
+        import web_relay
+        with mock.patch.object(web_relay, "_read_clipboard_text", return_value=patch1_text):
+            with mock.patch.dict(os.environ, {"HARNESS_WEB_RELAY_DOWNLOADS": str(self.downloads)}):
+                resolved_doc, origin = web_relay._resolve_incoming_merge_payload(self.repo, "", False)
+        self.assertEqual(pid2, resolved_doc.get("pack_id"))
+        self.assertTrue(origin.startswith("downloads:") and origin.endswith(f"harness-merge-{pid2}.patch"))
+
+
 if __name__ == "__main__":
     unittest.main()

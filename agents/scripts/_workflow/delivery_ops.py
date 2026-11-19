@@ -856,6 +856,65 @@ def _fix_delta(repo: Path, task_id: str, previous_run_id: str, manifest: dict, p
     from review_fix_delta import compute_fix_delta
 
     return compute_fix_delta(repo, _engine.task_dir(repo, task_id), previous_run_id, manifest, plan, _engine.skills_root(repo), _engine.project_kind(repo))
+_OUTCOME_SENSITIVE_PATTERNS: dict[str, str] = {
+    "BILLING": (
+        r"\b(billing|payment|payments|subscription|subscriptions|purchase|purchases|"
+        r"revenuecat|in-app purchase|iap|paywall|paywalls|checkout|entitlement|entitlements|"
+        r"offering|offerings)\b"
+    ),
+    "AUTH": (
+        r"\b(auth|authentication|authorization|login|log-?in|sign-?in|sign-?up|sign-?out|"
+        r"logout|oauth|oidc|jwt|passkey|password|credential|credentials|biometric|"
+        r"auth[- ]?token|access[- ]?token|refresh[- ]?token|id[- ]?token|session[- ]?token|"
+        r"auth[- ]?session|login[- ]?session)\b"
+    ),
+    "SENSITIVE_DATA": r"\b(location|gps|geofence|biometric|healthconnect)\b",
+}
+
+
+def _outcome_confirmed_sensitive_surfaces(
+    repo: Path,
+    files: list[str],
+    outcome: str,
+    existing_surfaces: set[str] | list[str] | None = None,
+    *,
+    surfaces_to_check: tuple[str, ...] = ("BILLING", "AUTH", "SENSITIVE_DATA"),
+    include_file_tokens_for_sensitive_data: bool = False,
+) -> set[str]:
+    """Two-key auto-promotion for sensitive surfaces when `--expected-surfaces` is omitted.
+
+    A tracked file's pre-existing sign-in or purchase code does NOT make an unrelated plan
+    sensitive (N2/P3b). A sensitive surface is promoted automatically ONLY when BOTH:
+      1. The task `outcome` itself explicitly names that sensitive domain (word-boundary match), AND
+      2. `classify()` confirms that surface is actually present in at least one planned file.
+    """
+    already = set(existing_surfaces or ())
+    outcome_text = str(outcome or "")
+    candidates: set[str] = set()
+    for surf in surfaces_to_check:
+        if surf in already:
+            continue
+        pat = _OUTCOME_SENSITIVE_PATTERNS.get(surf)
+        if not pat:
+            continue
+        haystack = f"{outcome_text} {' '.join(files)}" if (surf == "SENSITIVE_DATA" and include_file_tokens_for_sensitive_data) else outcome_text
+        if haystack and _engine.re.search(pat, haystack, _engine.re.I):
+            candidates.add(surf)
+    if not candidates or not files:
+        return set()
+    confirmed: set[str] = set()
+    for rel in files:
+        remaining = candidates - confirmed
+        if not remaining:
+            break
+        try:
+            raw_s = set(_engine.classify(repo, task_changes=[{"path": rel}], candidate_paths=[rel], progress=False).get("surfaces") or [])
+        except (OSError, ValueError, KeyError, _engine.ValidationError):
+            raw_s = set()
+        confirmed |= (raw_s & remaining)
+    return confirmed
+
+
 def _with_planned_file_surfaces(
     repo: Path, expected: list[str], files: list[str], classification: dict, task_kind: str, outcome: str,
 ) -> list[str]:
@@ -866,7 +925,8 @@ def _with_planned_file_surfaces(
     the files already have is added when leaving it out would stop the task: as surface drift, or
     through a mandatory skill it brings (COMPOSE_UI adds compose-inspector). One that would not stop
     anything (the generic BUSINESS_LOGIC of a Kotlin file) is left out, so it routes no extra reviewer.
-    Sign-in and purchase code already in a tracked file stays out: SENSITIVE_PLANNED_FILES names it.
+    Sign-in and purchase code already in a tracked file stays out when surfaces were explicitly named:
+    SENSITIVE_PLANNED_FILES names it.
     """
     from final_verifier import unplanned_mandatory_skills
     from plan_authority import check_material_drift
@@ -877,19 +937,16 @@ def _with_planned_file_surfaces(
     if any(is_kmp_or_android_test_path(path) for path in files):
         expected = sorted(set(expected) | {"TEST_ONLY"})
     from_content, _unread = _engine._planned_file_surfaces(repo, files)
-    if "SENSITIVE_DATA" not in expected and _engine.re.search(
-        r"\b(location|gps|geofence|biometric|healthconnect)\b",
-        f"{outcome} {' '.join(files)}",
-        _engine.re.I,
-    ):
-        for _rel in files:
-            try:
-                _raw_s = set(_engine.classify(repo, task_changes=[{"path": _rel}], candidate_paths=[_rel], progress=False).get("surfaces") or [])
-            except (OSError, ValueError, KeyError, _engine.ValidationError):
-                _raw_s = set()
-            if "SENSITIVE_DATA" in _raw_s:
-                from_content = set(from_content) | {"SENSITIVE_DATA"}
-                break
+    confirmed_sensitive_data = _outcome_confirmed_sensitive_surfaces(
+        repo,
+        files,
+        outcome,
+        expected,
+        surfaces_to_check=("SENSITIVE_DATA",),
+        include_file_tokens_for_sensitive_data=True,
+    )
+    if confirmed_sensitive_data:
+        from_content = set(from_content) | confirmed_sensitive_data
     extra = sorted(from_content - set(expected))
     if not extra:
         return expected
