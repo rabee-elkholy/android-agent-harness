@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.2] - 2026-11-19
+
+### Flexible Multi-Value CLI Parsing, Two-Key Sensitive Surface Auto-Inference & Downloadable-File-First Web-Relay
+
+- **Flexible Multi-Value CLI Parsing Across Workflow, Web-Relay & Execution Mode (`_workflow/engine.py`, `_workflow/planning.py`, `_web_relay/engine.py`, `execution_mode.py`, `task_bridge.py`)**: Upgraded `--expected-files`/`--files`, `--expected-surfaces`, `--expected-modules`, `--file`/`--files`, and `--add-files` to `nargs="+"`, `action="extend"` with `_flatten_multi_arg(...)`, seamlessly accepting space-separated, comma-separated, mixed, or repeated CLI arguments without breaking `revise` omission semantics (`default=None`) or programmatic `str`/`list[str]` callers.
+- **Concise `Draft Plan` Hint in `GEMINI.md.template`**: Added `[--expected-surfaces <csv>] [--phases "p1:...,p2:..." if >8 files or 2+ modules]` to the canonical `Draft Plan` row so multi-phase and sensitive plans succeed on the first `task draft` invocation without extra roundtrips.
+- **Safe Two-Key Sensitive Surface Auto-Inference (`_workflow/delivery_ops.py`, `_workflow/planning.py`)**: Added `_outcome_confirmed_sensitive_surfaces()` when `--expected-surfaces` is omitted, promoting `BILLING`, `AUTH`, or `SENSITIVE_DATA` automatically only when both the task `--outcome` explicitly names that domain (word-boundary regex with false-positive guards for `workout session` / `color token`) and `classify()` confirms the surface in the planned files — while preserving `N2`/`P3b` (`SENSITIVE_PLANNED_FILES`) when touching tracked files for unrelated outcomes or when `--expected-surfaces` is passed explicitly.
+- **Downloadable-File-First Web-Relay Delivery & `.patch` Auto-Discovery (`_web_relay/pack_builder.py`, `_web_relay/merge_applier.py`, `_web_relay/engine.py`)**: Instructed external AI web chats (both full packs and `--retry-failure` surgical deltas) never to print final code or patch walls inline in chat and instead deliver a single downloadable file (`harness-merge-<pack_id>.patch` or `.json`) with only a short summary + download link, added `.patch` to `Downloads`/`.user_uploaded` auto-discovery in `web-apply`, and prevented already-applied stale clipboard payloads from shadowing freshly downloaded unapplied files.
+
 ## [1.5.1] - 2026-11-19
 
 ### Universal Hydrogen (`Model="flash"`) Subagent Routing, Parallel Reviewer Corrupt-Transcript Resilience & Native `Model="flash"` Model Matching
