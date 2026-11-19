@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.1] - 2026-11-19
+
+### Universal Hydrogen (`Model="flash"`) Subagent Routing, Parallel Reviewer Corrupt-Transcript Resilience & Native `Model="flash"` Model Matching
+
+- **Universal `Model="flash"` (Gemini 4 Hydrogen High `1x`) Subagent Architecture (`_delegation/engine.py`, `review_models.py`, `review_execution.py`, `_safety/subagent_guard.py`, `PROJECT_CONSTITUTION.md §3.7`, `GEMINI.md.template`, `android-harness-global.md.template`, `efficient-context/SKILL.md`, `docs/reviewer-models.md`)**: Replaced fragile main-chat model allowlists (`Carbon`/`Neon`/`Argon`/`Hydrogen Medium`) with universal `Model="flash"` routing for all default `harness-scout-agent`, read-only specialist, and `hydrogen-*`/`flash-*` reviewer invocations regardless of the active main-chat model — shielding any current or future frontier main-chat model without requiring per-model harness releases while preserving explicit `inherit` (`INHERIT_PARENT_BY_OMISSION`) as an escape hatch when Gemini quota is exhausted and `Model="pro"` for explicit `pro` profiles.
+- **Parallel Reviewer Hook Crash Fix on Corrupted `transcript_full.jsonl` (`reviewer_host.py`)**: Fixed `PreToolUse` `Safety hook failed closed (ValidationError: invalid reviewer host transcript)` blocking parallel Reviewers #2 and #3 whenever an NTFS crash/flush left a NUL-padded (`\x00`) or corrupted line in the parent conversation's `transcript_full.jsonl`. `cancellation()` now reads compact `transcript.jsonl` directly, pure NUL-byte zero blocks are skipped safely, and `_steps()` / `_head_steps()` / `identity_messages()` fall back cleanly from corrupted `transcript_full.jsonl` to intact `transcript.jsonl` while still failing closed on tampered JSON.
+- **Future-Proof Native `Model="flash"` Verification (`review_models.py`)**: Fixed false `REVIEW_MODEL_MISMATCH` loops when Antigravity natively executes `Model="flash"` on `gemini-4-hydrogen-tiered-high` for `gemini-3.8-flash-*` policies (and accepted forward `gemini-<N>-hydrogen*` / `gemini-<N>-flash*` upgrades while keeping downward family drops, unproven frontier leaks, and cross-vendor mismatches strictly blocked).
+
 ## [1.5.0] - 2026-11-19
 
 ### DI-Aware Graph Intelligence, Smart `build-logic` & `--impacted` Testing, Kotlin `${...}` Lexer, Full Android Error Parser, `HARNESS_WEB_PATCH_V1`, `Gemini 4 Neon` & Antigravity Hardening
