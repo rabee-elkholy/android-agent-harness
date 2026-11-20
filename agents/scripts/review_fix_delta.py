@@ -222,50 +222,11 @@ def _non_comment_code_flags(lines: list[str], *, rel_path: str) -> list[bool]:
         return flags
 
     if is_c_style:
-        block_depth = 0
-        supports_nested = low.endswith((".kt", ".kts", ".swift"))
-        for raw in lines:
-            s = raw
-            code_chars = []
-            i = 0
-            n = len(s)
-            in_str: str | None = None
-            while i < n:
-                ch = s[i]
-                nxt = s[i + 1] if i + 1 < n else ""
-                if block_depth > 0:
-                    if supports_nested and ch == "/" and nxt == "*":
-                        block_depth += 1
-                        i += 2
-                        continue
-                    if ch == "*" and nxt == "/":
-                        block_depth -= 1
-                        i += 2
-                        continue
-                    i += 1
-                    continue
-                if in_str is not None:
-                    code_chars.append(ch)
-                    if ch == "\\" and i + 1 < n:
-                        code_chars.append(nxt)
-                        i += 2
-                        continue
-                    if ch == in_str:
-                        in_str = None
-                    i += 1
-                    continue
-                if ch == "/" and nxt == "/":
-                    break
-                if ch == "/" and nxt == "*":
-                    block_depth += 1
-                    i += 2
-                    continue
-                if ch in ('"', "'"):
-                    in_str = ch
-                code_chars.append(ch)
-                i += 1
-            flags.append(bool("".join(code_chars).strip()))
-        return flags
+        if not lines:
+            return []
+        from _source_text import strip_comments_for_path
+        stripped = strip_comments_for_path("\n".join(lines), rel_path=rel_path)
+        return [bool(ln.strip()) for ln in stripped.split("\n")]
 
     for raw in lines:
         st = raw.strip()
@@ -314,10 +275,30 @@ def compute_fix_delta(
         files = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
         if not files:
             return {"files": [], "reviewers": []}
+        from _modules import is_kmp_or_android_test_path
+        from change_classifier import is_documentation_path
         from change_decision import accepted_files
         accepted = accepted_files(plan, previous_run_id, previous, current_manifest) & set(files)
         files = sorted(set(files) - accepted)
         decision_basis = {"developer_accepted_files": sorted(accepted)} if accepted else {}
+        rev_ev = reviewed.get("evidence") if isinstance(reviewed.get("evidence"), dict) else reviewed
+        flagged_files = {
+            re.sub(r"^(?:\./)+", "", str(item.get("file") or "").strip().replace("\\", "/")).lstrip("/")
+            for item in ((rev_ev or {}).get("blocking_findings") or [])
+            if isinstance(item, dict) and str(item.get("file") or "").strip()
+        }
+        unflagged_prod = (
+            sorted(
+                f for f in files
+                if not is_kmp_or_android_test_path(f)
+                and not is_documentation_path(f)
+                and f not in flagged_files
+            )
+            if flagged_files
+            else []
+        )
+        if unflagged_prod:
+            decision_basis["unflagged_production_files"] = unflagged_prod
         if not files:
             return {"files": [], "reviewers": [], **decision_basis}
         comparison = _comparison_texts(repo, previous, current_manifest, plan, previous_run_id, files)
@@ -370,6 +351,10 @@ def compute_fix_delta(
         reviewers = set(routed.get("reviewers") or [])
         if any(path not in after for path in files):
             reviewers.add("arch-regression-reviewer-agent")
+        hard_sec = sorted(
+            set(delta_class.get("surfaces") or [])
+            & {"AUTH", "CRYPTO", "SECURITY", "SENSITIVE_DATA", "MANIFEST_PERMISSION", "HARNESS_CONFIG"}
+        )
         extra_meta = (
             {
                 "changed_lines": real_changed_lines,
@@ -379,6 +364,8 @@ def compute_fix_delta(
             if comparison is not None
             else {}
         )
+        if hard_sec:
+            extra_meta["security_surfaces"] = hard_sec
         return {"files": files, "reviewers": sorted(reviewers),
                 **decision_basis,
                 **extra_meta,

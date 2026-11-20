@@ -453,20 +453,62 @@ def mark_resume_failed(repo: Path, execution: str, error: str) -> None:
                     return
 
 
-def discovery_command_allowed(command: str) -> bool:
-    """The reviewer shell capability is restricted to two public discovery parsers."""
+_PYTHON_EXE_STEM_RE = re.compile(r"^python(?:3(?:\.\d+)?)?$")
+_PY_LAUNCHER_VER_RE = re.compile(r"^-3(?:\.\d+)?$")
+
+
+def _split_discovery_tokens(command: str) -> list[str] | None:
+    """Split a discovery command preserving Windows backslashes while rejecting shell metacharacters."""
     import shlex
+    raw = str(command or "").strip()
+    if not raw or re.search(r"[;&|`$\r\n<>]", raw):
+        return None
     try:
-        tokens = shlex.split(command)
+        raw_tokens = shlex.split(raw, posix=False)
     except ValueError:
+        return None
+    cleaned: list[str] = []
+    for tok in raw_tokens:
+        if len(tok) >= 2 and ((tok[0] == '"' and tok[-1] == '"') or (tok[0] == "'" and tok[-1] == "'")):
+            inner = tok[1:-1]
+            if tok[0] in inner:
+                return None
+            cleaned.append(inner)
+        elif '"' in tok or "'" in tok:
+            return None
+        else:
+            cleaned.append(tok)
+    return cleaned
+
+
+def _single_discovery_command_allowed(command: str) -> bool:
+    """Validate one standalone reviewer discovery parser invocation (`graph` or `task-context`)."""
+    tokens = _split_discovery_tokens(command)
+    if not tokens or len(tokens) < 5:
         return False
-    if len(tokens) < 5 or tokens[:2] not in (["python", ".agents/harness.py"], ["py", ".agents/harness.py"]):
+    exe_norm = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if exe_norm.endswith(".exe"):
+        exe_norm = exe_norm[:-4]
+    cmd_offset = 1
+    if exe_norm == "py":
+        if len(tokens) > 2 and _PY_LAUNCHER_VER_RE.fullmatch(tokens[1]):
+            cmd_offset = 2
+    elif not _PYTHON_EXE_STEM_RE.fullmatch(exe_norm):
         return False
-    action = tokens[2]
+
+    if len(tokens) < cmd_offset + 4:
+        return False
+    harness_tok = tokens[cmd_offset].replace("\\", "/")
+    if harness_tok.startswith("./"):
+        harness_tok = harness_tok[2:]
+    if harness_tok not in (".agents/harness.py", "agents/harness.py"):
+        return False
+
+    action = tokens[cmd_offset + 1]
     valid = {"graph": {"--find", "--feature"}, "task-context": {"--file", "--symbol"}}.get(action)
     if valid is None:
         return False
-    index, count = 3, 0
+    index, count = cmd_offset + 2, 0
     while index < len(tokens):
         token = tokens[index]
         if action == "task-context" and token == "--full":
@@ -479,12 +521,27 @@ def discovery_command_allowed(command: str) -> bool:
             index += 1
         elif token in valid and index + 1 < len(tokens):
             value = tokens[index + 1]
-            if not value or value.startswith("-") or re.search(r"[;&|`$\r\n]", value):
+            if not value or value.startswith("-") or re.search(r"[;&|`$\r\n<>]", value):
                 return False
-            if token == "--file" and (Path(value).is_absolute() or ".." in Path(value).parts):
-                return False
+            if token == "--file":
+                val_posix = value.replace("\\", "/")
+                if (
+                    val_posix.startswith("/")
+                    or bool(re.match(r"^[A-Za-z]:", val_posix))
+                    or ".." in [seg for seg in val_posix.split("/") if seg]
+                ):
+                    return False
             count += 1
             index += 2
         else:
             return False
     return 0 < count <= (8 if action == "task-context" else 1)
+
+
+def discovery_command_allowed(command: str) -> bool:
+    """The reviewer shell capability permits standalone or `&&`-chained `graph` / `task-context` calls."""
+    from mutation_guard import _split_safe_and_chain
+    segments = _split_safe_and_chain(command or "", max_segments=6)
+    if not segments:
+        return False
+    return all(_single_discovery_command_allowed(seg) for seg in segments)

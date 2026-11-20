@@ -297,7 +297,20 @@ def index_string_resources(repo: Path) -> dict[str, dict[str, str]]:
             if folder_name == "values":
                 loc_key = "default"
             elif folder_name.startswith("values-"):
-                loc_key = folder_name.replace("values-", "").split("-")[0]
+                first_qual = folder_name[len("values-"):].split("-")[0]
+                if first_qual.startswith("b+"):
+                    subtags = [s for s in first_qual[2:].split("+") if s]
+                    if subtags and 2 <= len(subtags[0]) <= 3 and subtags[0].isalpha():
+                        loc_key = subtags[0]
+                    else:
+                        continue
+                elif (
+                    (len(first_qual) == 2 and first_qual.isalpha())
+                    or (len(first_qual) == 3 and first_qual.isalpha() and first_qual not in {"car", "any", "non", "key", "nav", "low"})
+                ):
+                    loc_key = first_qual
+                else:
+                    continue
             else:
                 continue
             str_file = res_dir / "strings.xml"

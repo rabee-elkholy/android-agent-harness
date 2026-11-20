@@ -26,6 +26,10 @@ WRITE_ACTIONS = frozenset({
     "create", "update", "edit", "write", "set", "add",
     "comment", "rename", "copy", "upload",
     "patch", "post", "put", "assign",
+    "replace", "insert", "upsert", "append", "merge",
+    "import", "sync", "push", "commit", "execute",
+    "run", "invoke", "trigger", "archive", "close",
+    "reopen", "approve", "save", "modify", "restore",
 })
 
 # Sending, sharing, trashing and moving are one-way doors or widen access (a Drive move strips the
@@ -33,7 +37,7 @@ WRITE_ACTIONS = frozenset({
 HIGH_IMPACT_ACTIONS = frozenset({
     "delete", "remove", "drop", "destroy",
     "deploy", "publish", "revoke", "disable",
-    "rotate", "truncate", "purge",
+    "rotate", "truncate", "purge", "reset", "clear", "wipe",
     "send", "share", "unshare", "trash", "move", "transfer",
 })
 
@@ -63,12 +67,14 @@ def classify_generic_mcp_tool(tool_name: str) -> str:
     4. normal write action -> WRITE
     5. otherwise -> UNKNOWN (fail closed)
     """
-    t_lower = str(tool_name or "").lower().strip()
+    raw_name = str(tool_name or "").strip()
+    t_lower = raw_name.lower()
     if not t_lower:
         return UNKNOWN
 
-    tokens = [t for t in re.split(r"[_\-.:]+", t_lower) if t]
-    token_set = set(tokens)
+    snake_tokens = [t for t in re.split(r"[_\-.:]+", t_lower) if t]
+    camel_tokens = [t.lower() for t in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)", raw_name) if t]
+    token_set = set(snake_tokens) | set(camel_tokens)
 
     # 1. destructive/deploy/publish action token -> HIGH_IMPACT
     if bool(token_set & HIGH_IMPACT_ACTIONS):

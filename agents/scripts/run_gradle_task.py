@@ -321,7 +321,7 @@ def validate_reviewer_precondition_before_assemble(
     tid = ""
     if active_p.is_file():
         try:
-            active_task_data = json.loads(active_p.read_text(encoding="utf-8"))
+            active_task_data = json.loads(active_p.read_text(encoding="utf-8-sig"))
             tid = str(active_task_data.get("task_id") or "").strip()
         except (OSError, ValueError, _ExpectedArtifactError):
             pass
@@ -343,7 +343,7 @@ def validate_reviewer_precondition_before_assemble(
             return False, f"Task {tid} plan.json missing"
 
         try:
-            plan_data = json.loads(plan_p.read_text(encoding="utf-8"))
+            plan_data = json.loads(plan_p.read_text(encoding="utf-8-sig"))
         except Exception as exc:
             return False, f"Task {tid} plan.json is unreadable or malformed: {exc}"
 
@@ -358,7 +358,7 @@ def validate_reviewer_precondition_before_assemble(
         return False, f"Task {tid} is VERIFYING but current-run.json is missing"
 
     try:
-        current_run = json.loads(current_run_p.read_text(encoding="utf-8"))
+        current_run = json.loads(current_run_p.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         return False, f"Task {tid} current-run.json is unreadable or malformed: {exc}"
 
@@ -377,7 +377,7 @@ def validate_reviewer_precondition_before_assemble(
         return False, f"Policy file not found: {policy_p}"
 
     try:
-        pol_data = json.loads(policy_p.read_text(encoding="utf-8"))
+        pol_data = json.loads(policy_p.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         return False, f"Policy file is unreadable or malformed: {exc}"
 

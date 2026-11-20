@@ -176,11 +176,27 @@ PROTECTED_REL_PREFIXES = (
     ".agents/",
     "agents/scripts/",
     "agents/state/",
+    "agents/project-context/",
     ".harness-setup/",
     ".git/",
+    ".github/workflows/",
     ".gradle/",
+    "gradle/wrapper/",
     ".idea/",
 )
+
+IMMUTABLE_ROOT_AND_WRAPPER_NAMES = frozenset({
+    "gradlew",
+    "gradlew.bat",
+    "agents.md",
+    "gemini.md",
+    "claude.md",
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
+    "copilot-instructions.md",
+    "hooks.json",
+})
 
 INLINE_SECRET_PATTERNS = (
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
@@ -213,7 +229,7 @@ def _norm_rel(repo: Path, raw_path: str) -> str:
         except ValueError as exc:
             raise ValidationError(f"Path '{raw_path}' is outside repository root.") from exc
     else:
-        rel = cleaned.lstrip("./")
+        rel = re.sub(r"^(?:\./)+", "", cleaned).lstrip("/")
         resolved = (repo / rel).resolve()
         try:
             rel = resolved.relative_to(repo.resolve()).as_posix()
@@ -221,16 +237,42 @@ def _norm_rel(repo: Path, raw_path: str) -> str:
             raise ValidationError(f"Path traversal blocked for '{raw_path}'.") from exc
     if not rel or rel == ".":
         raise ValidationError("Empty repository-relative file path.")
+    # Reject symlinks along any existing path segment inside repository root (both relative and absolute inputs)
+    repo_resolved = repo.resolve()
+    raw_rel_parts: list[str] = []
+    if p.is_absolute():
+        if p.is_symlink():
+            raise ValidationError(f"Symlink target blocked for web-relay path '{raw_path}'.")
+        for base_cand in (repo, repo_resolved):
+            try:
+                raw_rel_parts = [pt for pt in p.relative_to(base_cand).parts if pt and pt != "."]
+                break
+            except ValueError:
+                continue
+    else:
+        raw_rel_parts = [pt for pt in re.sub(r"^(?:\./)+", "", cleaned).lstrip("/").split("/") if pt and pt != "."]
+    for part_seq in (raw_rel_parts, [pt for pt in rel.split("/") if pt and pt != "."]):
+        probe = repo_resolved
+        for seg in part_seq:
+            if seg == "..":
+                raise ValidationError(f"Path traversal blocked for '{raw_path}'.")
+            probe = probe / seg
+            if probe.is_symlink():
+                raise ValidationError(f"Symlink target blocked for web-relay path '{raw_path}'.")
     return rel
 
 
 def _is_protected_or_secret_path(rel_path: str) -> tuple[bool, str]:
-    low = rel_path.lower().strip("/")
+    low = rel_path.lower().replace("\\", "/").strip("/")
     for pref in PROTECTED_REL_PREFIXES:
         p_clean = pref.strip("/")
         if low == p_clean or low.startswith(p_clean + "/"):
-            return True, f"Protected harness/VCS path '{rel_path}' cannot be exported or modified via web-relay."
+            return True, f"Protected harness/CI/build-wrapper path '{rel_path}' cannot be exported or modified via web-relay."
     name_low = Path(low).name
+    if name_low in IMMUTABLE_ROOT_AND_WRAPPER_NAMES:
+        return True, f"Immutable build wrapper or agent adapter '{rel_path}' cannot be exported or modified via web-relay."
+    if "/build/generated/" in ("/" + low + "/"):
+        return True, f"Generated build output '{rel_path}' cannot be exported or modified via web-relay."
     if name_low == ".env" or name_low.startswith(".env."):
         return True, f"Secret environment file '{rel_path}' is excluded by Zero-Secret Gate."
     for marker in SECRET_FILE_MARKERS:

@@ -944,7 +944,7 @@ def main(argv: list[str] | None = None) -> int:
         active_p = repo / ".agents" / "state" / "active-task.json"
         if active_p.is_file():
             try:
-                active_data = json.loads(active_p.read_text(encoding="utf-8"))
+                active_data = json.loads(active_p.read_text(encoding="utf-8-sig"))
                 task_id = active_data.get("task_id")
             except (OSError, ValueError, ValidationError):
                 pass

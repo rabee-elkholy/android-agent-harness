@@ -85,9 +85,30 @@ def load_definition(repo: Path, relative: str) -> dict:
                 "--verification-contract <path-to-file.json>"
             ) from exc
     candidate = Path(value).expanduser()
-    if candidate.is_absolute() and not candidate.resolve().is_relative_to(repo.resolve()):
-        # A file outside the repository is only read; it never becomes project configuration.
-        path = candidate.resolve()
+    if candidate.is_symlink():
+        raise ValidationError("definition must be a bounded regular JSON file")
+    repo_resolved = repo.resolve()
+    if candidate.is_absolute():
+        for base_cand in (repo, repo_resolved):
+            try:
+                rel_parts = candidate.relative_to(base_cand).parts
+                probe = repo_resolved
+                for part in rel_parts:
+                    probe = probe / part
+                    if probe.is_symlink():
+                        raise ValidationError("definition must be a bounded regular JSON file")
+                break
+            except ValueError:
+                continue
+        if not candidate.resolve().is_relative_to(repo_resolved):
+            # A file outside the repository is only read; it never becomes project configuration.
+            # Note: on macOS `/tmp` -> `private/tmp` is a standard OS directory symlink; direct
+            # file symlinks (`candidate.is_symlink()`) and repo-internal symlink escapes above
+            # are still strictly rejected.
+            path = candidate.resolve()
+        else:
+            rel_in_repo = candidate.resolve().relative_to(repo_resolved).as_posix()
+            path = bounded_path(repo, rel_in_repo)
     else:
         path = bounded_path(repo, value)
     if path.is_symlink() or not path.is_file() or path.suffix.lower() != ".json" or path.stat().st_size > MAX_CONTRACT_BYTES:

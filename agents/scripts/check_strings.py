@@ -132,9 +132,13 @@ def _has_multiple_non_positional_specifiers(text: str) -> bool:
 
 
 NON_LOCALE_QUALIFIERS = {
-    "night", "notnight", "land", "port", "square", "round", "long", "notlong",
-    "ldr", "ldrtl", "ldltr", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
+    "night", "notnight", "land", "port", "square", "round", "notround", "long", "notlong",
+    "ldr", "ldrtl", "ldltr", "ldpi", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
     "tvdpi", "anydpi", "small", "normal", "large", "xlarge",
+    "car", "watch", "desk", "television", "appliance", "vrheadset",
+    "widecg", "nowidecg", "highdr", "lowdr",
+    "finger", "notouch", "stylus", "keysexposed", "keyshidden", "keyssoft",
+    "nokeys", "qwerty", "12key", "navexposed", "navhidden", "nonav", "dpad", "trackball", "wheel",
 }
 NON_LOCALE_PATTERNS = [
     re.compile(r"^v\d+$"),
@@ -156,11 +160,38 @@ def _is_language_locale_tag(tag: str) -> bool:
     return bool(re.fullmatch(r"(?:b\+[a-z0-9]+(?:\+[a-z0-9]+)*|[a-z]{2,3}(?:-r[a-z]{2})?)", tag_lower))
 
 
-def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
-    """Parse resources, returning (resource_dict, duplicate/parse errors)."""
+class ResourceMap(dict):
+    """Dict keyed by `(tag, name)` that also supports `name in res` and `res[name]` lookup for callers."""
+
+    def __contains__(self, key: object) -> bool:
+        if super().__contains__(key):
+            return True
+        if isinstance(key, str):
+            return any(isinstance(k, tuple) and len(k) == 2 and k[1] == key for k in super().keys())
+        return False
+
+    def __getitem__(self, key: object) -> dict:
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        if isinstance(key, str):
+            for k, val in super().items():
+                if isinstance(k, tuple) and len(k) == 2 and k[1] == key:
+                    return val
+        raise KeyError(key)
+
+
+def _format_res_key(key: tuple[str, str] | str) -> str:
+    if isinstance(key, tuple) and len(key) == 2:
+        tag, name = key
+        return name if tag == "string" else f"{name} (<{tag}>)"
+    return str(key)
+
+
+def _parse_resources(xml_file: Path) -> tuple[ResourceMap, list[str]]:
+    """Parse resources keyed by `(tag, name)`, returning (resource_map, duplicate/parse errors)."""
     if not xml_file.is_file():
-        return {}, []
-    res: dict[str, dict] = {}
+        return ResourceMap(), []
+    res = ResourceMap()
     duplicates: list[str] = []
     # Android keeps separate namespaces per resource type (R.string.x vs R.plurals.x).
     seen_names: set[tuple[str, str]] = set()
@@ -168,7 +199,7 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
     try:
         root = ET.parse(xml_file).getroot()
     except Exception as exc:
-        return {}, [f"XML_PARSE_ERROR: {xml_file}: {exc}"]
+        return ResourceMap(), [f"XML_PARSE_ERROR: {xml_file}: {exc}"]
 
     for tag in ("string", "plurals", "string-array"):
         for elem in root.findall(tag):
@@ -201,7 +232,7 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                         f"NON_POSITIONAL_FORMAT_SPECIFIERS: <string name=\"{name}\"> in {rel_p} uses multiple unnumbered "
                         "format specifiers (use positional `%1$s`, `%2$d` or set `formatted=\"false\"`)"
                     )
-                res[name] = {"tag": tag, "text": text, "placeholders": placeholders}
+                res[(tag, name)] = {"tag": tag, "name": name, "text": text, "placeholders": placeholders}
             elif tag == "plurals":
                 items = []
                 quantities: dict[str, list[str]] = {}
@@ -223,8 +254,9 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                             f"NON_POSITIONAL_FORMAT_SPECIFIERS: <plurals name=\"{name}\"> item[{q_attr or '?'}] in {rel_p} "
                             "uses multiple unnumbered format specifiers (use positional `%1$d`, `%2$s`)"
                         )
-                res[name] = {
+                res[(tag, name)] = {
                     "tag": tag,
+                    "name": name,
                     "items": items,
                     "quantities": quantities,
                     "placeholders": sorted(set(placeholders)),
@@ -235,8 +267,9 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
                 all_placeholders = []
                 for phs in item_placeholders:
                     all_placeholders.extend(phs)
-                res[name] = {
+                res[(tag, name)] = {
                     "tag": tag,
+                    "name": name,
                     "items": items,
                     "placeholders": sorted(set(all_placeholders)),
                     "item_placeholders": item_placeholders,
@@ -246,20 +279,30 @@ def _parse_resources(xml_file: Path) -> tuple[dict[str, dict], list[str]]:
 
 def _resource_names(xml_text: str) -> set[str]:
     """Every string/plurals/string-array name in the XML, exempt or not."""
+    return {name for _tag, name in _resource_keys(xml_text)}
+
+
+def _resource_keys(xml_text: str) -> set[tuple[str, str]]:
+    """Every `(tag, name)` pair in the XML, exempt or not."""
     try:
         root = ET.fromstring(xml_text)
     except Exception:
         return set()
-    return {elem.get("name") for tag in ("string", "plurals", "string-array") for elem in root.findall(tag) if elem.get("name")}
+    return {
+        (tag, str(elem.get("name")))
+        for tag in ("string", "plurals", "string-array")
+        for elem in root.findall(tag)
+        if elem.get("name")
+    }
 
 
-def _head_resource_names(repo: Path, rel: str) -> set[str] | None:
-    """Resource names in the committed version of a file; None when it has none (new or not in Git)."""
+def _head_resource_names(repo: Path, rel: str) -> set[tuple[str, str]] | None:
+    """Resource `(tag, name)` keys in the committed version of a file; None when not in Git."""
     proc = subprocess.run(
         ["git", "show", f"HEAD:{rel}"], cwd=str(repo), capture_output=True,
         text=True, encoding="utf-8", errors="replace", check=False,
     )
-    return _resource_names(proc.stdout) if proc.returncode == 0 else None
+    return _resource_keys(proc.stdout) if proc.returncode == 0 else None
 
 
 def discover_locale_pairs(res_dirs: list[Path] | None = None, repo: Path | None = None) -> list[tuple[Path, Path, str]]:
@@ -340,16 +383,16 @@ def _get_modified_lines_map(files: list[Path], repo: Path, cached: bool = False)
     return get_modified_lines_map(repo, files, cached=cached)
 
 
-def _extract_keys_from_xml_lines(lines: list[str]) -> set[str]:
-    keys = set()
+def _extract_keys_from_xml_lines(lines: list[str]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
     text = "\n".join(lines)
-    for m in re.finditer(r'<(?:string|plurals|string-array)\b[^>]*?\bname\s*=\s*["\']([^"\']+)["\']', text, re.DOTALL):
-        keys.add(m.group(1))
+    for m in re.finditer(r'<(string|plurals|string-array)\b[^>]*?\bname\s*=\s*["\']([^"\']+)["\']', text, re.DOTALL):
+        keys.add((m.group(1), m.group(2)))
     return keys
 
 
-def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> set[str]:
-    keys = set()
+def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
     if not content or not modified_lines:
         return keys
 
@@ -369,6 +412,7 @@ def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> se
         return bisect.bisect_right(line_starts, char_idx)
 
     for m in elem_re.finditer(content):
+        tag_name = m.group(1)
         attrs = m.group(2)
         nm = name_re.search(attrs)
         if not nm:
@@ -377,7 +421,7 @@ def _extract_touched_keys_from_xml(content: str, modified_lines: set[int]) -> se
         start_line = char_to_line(m.start())
         end_line = char_to_line(m.end())
         if any(start_line <= l_num <= end_line for l_num in modified_lines):
-            keys.add(key_name)
+            keys.add((tag_name, key_name))
 
     return keys
 
@@ -745,7 +789,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
 
             # A base key exempt from translation (translatable="false", MissingTranslation, l10n-todo)
             # is not "missing in base" because a locale still translates it (N5).
-            base_exempt = _resource_names(base_file.read_text(encoding="utf-8", errors="replace")) - base_keys if base_file.is_file() else set()
+            base_exempt = _resource_keys(base_file.read_text(encoding="utf-8", errors="replace")) - base_keys if base_file.is_file() else set()
             missing_in_loc = [k for k in keys_to_check if k in base_keys and k not in loc_keys]
             missing_in_base = [k for k in keys_to_check if k in loc_keys and k not in base_keys and k not in base_exempt]
             if not args.all and missing_in_loc:
@@ -761,7 +805,7 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
                 print(f"\n[!] Missing in {loc_rel}{not_found_note} ({len(missing_in_loc)} modified key(s) vs {base_rel}):")
 
                 for key in sorted(missing_in_loc):
-                    print(f"   - {key}")
+                    print(f"   - {_format_res_key(key)}")
                 print(
                     "   Add the translation. A string that must not be translated takes translatable=\"false\" or "
                     "tools:ignore=\"MissingTranslation\"; one an external translation service will fill takes l10n-todo=\"true\"."
@@ -774,15 +818,16 @@ def main(argv: list[str] | None = None, repo: Path | None = None) -> int:
             if missing_in_base:
                 print(f"\n[!] Missing in {base_rel} ({len(missing_in_base)} modified key(s) from {loc_rel}):")
                 for key in sorted(missing_in_base):
-                    print(f"   - {key}")
+                    print(f"   - {_format_res_key(key)}")
                 errors += len(missing_in_base)
 
             # Placeholder matching for relevant keys
             placeholder_mismatches = []
             common_keys = (base_keys & loc_keys) if args.all else (touched_keys & base_keys & loc_keys)
-            for key in sorted(common_keys):
-                base_info = base_data[key]
-                loc_info = loc_data[key]
+            for key_tup in sorted(common_keys):
+                base_info = base_data[key_tup]
+                loc_info = loc_data[key_tup]
+                key = _format_res_key(key_tup)
                 tag = base_info.get("tag")
                 if tag == "string-array":
                     base_item_phs = base_info.get("item_placeholders", [])

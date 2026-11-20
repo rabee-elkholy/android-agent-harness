@@ -537,6 +537,110 @@ def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None
     }
 
 
+def should_normalize_crlf_for_edit(repo: Path | None = None, env: dict[str, str] | None = None) -> bool:
+    """Return True only on legacy (<1.5.1) or unknown Antigravity CLI versions when `#crlf-edit` is not disabled."""
+    from platform_quirks import is_quirk_enabled
+    return is_quirk_enabled(
+        "AGY_WIN_CRLF_EDIT_NORMALIZATION",
+        repo=repo,
+        env=env,
+        respect_upstream=True,
+    )
+
+
+def inspect_legacy_cli_quote_bom_and_crlf_guards(repo: Path, env: dict[str, str] | None = None) -> dict[str, object]:
+    """Inspect hooks.json / plugin.json quote & UTF-8 BOM compatibility gated to Antigravity CLI <1.5.8 / <1.5.11."""
+    import json as _json
+    from platform_quirks import is_quirk_enabled
+
+    environ = env if env is not None else os.environ
+    vers = detect_antigravity_versions(dict(environ))
+    cli_v = _parse_semver_prefix(vers["cli_version"])
+    app_v = _parse_semver_prefix(vers["app_version"])
+    ide_v = _parse_semver_prefix(vers["ide_version"])
+
+    is_win = (
+        os.name == "nt"
+        or str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower().startswith("win")
+        or str(environ.get("HARNESS_SIMULATE_WINDOWS_MCP") or "").strip().lower() in {"1", "true", "yes"}
+    )
+
+    crlf_mitigated = bool(
+        (cli_v is not None and cli_v >= (1, 5, 1))
+        or (app_v is not None and app_v >= (2, 33, 0))
+        or (ide_v is not None and ide_v >= (2, 7, 1))
+    )
+    hooks_158_mitigated = bool(
+        (cli_v is not None and cli_v >= (1, 5, 8))
+        or (app_v is not None and app_v >= (2, 33, 0))
+    )
+    plugin_1511_mitigated = bool(
+        (cli_v is not None and cli_v >= (1, 5, 11))
+        or (app_v is not None and app_v >= (2, 33, 0))
+    )
+
+    hooks_file = (repo / ".agents" / "hooks.json") if (repo / ".agents" / "hooks.json").is_file() else (repo / "agents" / "hooks.json")
+    plugin_file = repo / ".antigravity-plugin" / "plugin.json"
+
+    hooks_has_bom = False
+    quoted_commands: list[str] = []
+    if hooks_file.is_file():
+        try:
+            raw_h = hooks_file.read_bytes()
+            hooks_has_bom = raw_h.startswith(b"\xef\xbb\xbf")
+            h_doc = _json.loads(raw_h.decode("utf-8-sig", errors="replace"))
+            if isinstance(h_doc, dict):
+                for grp in h_doc.values():
+                    if not isinstance(grp, dict):
+                        continue
+                    for hook_list in grp.values():
+                        if not isinstance(hook_list, list):
+                            continue
+                        for entry in hook_list:
+                            if not isinstance(entry, dict):
+                                continue
+                            sub = entry.get("hooks") if isinstance(entry.get("hooks"), list) else [entry]
+                            for sh in sub:
+                                if isinstance(sh, dict):
+                                    cmd = str(sh.get("command") or "").strip()
+                                    if '"' in cmd and cmd not in quoted_commands:
+                                        quoted_commands.append(cmd)
+        except (OSError, ValueError):
+            pass
+
+    plugin_has_bom = False
+    if plugin_file.is_file():
+        try:
+            plugin_has_bom = plugin_file.read_bytes().startswith(b"\xef\xbb\xbf")
+        except OSError:
+            plugin_has_bom = False
+
+    quote_bom_quirk_on = is_quirk_enabled("AGY_WIN_HOOK_QUOTE_AND_BOM", repo=repo, env=environ)
+    crlf_active = should_normalize_crlf_for_edit(repo=repo, env=dict(environ))
+
+    hooks_quote_risk = bool(quote_bom_quirk_on and is_win and quoted_commands and not hooks_158_mitigated)
+    hooks_bom_risk = bool(quote_bom_quirk_on and hooks_has_bom and not hooks_158_mitigated)
+    plugin_bom_risk = bool(quote_bom_quirk_on and plugin_has_bom and not plugin_1511_mitigated)
+    at_risk = hooks_quote_risk or hooks_bom_risk or plugin_bom_risk
+
+    return {
+        "at_risk": at_risk,
+        "cli_version": vers["cli_version"],
+        "app_version": vers["app_version"],
+        "crlf_normalization_active": crlf_active,
+        "crlf_mitigated_upstream": crlf_mitigated,
+        "hooks_158_mitigated_upstream": hooks_158_mitigated,
+        "plugin_1511_mitigated_upstream": plugin_1511_mitigated,
+        "mitigated_upstream": bool(crlf_mitigated and hooks_158_mitigated),
+        "hooks_has_bom": hooks_has_bom,
+        "plugin_has_bom": plugin_has_bom,
+        "quoted_hook_commands": quoted_commands,
+        "hooks_quote_risk": hooks_quote_risk,
+        "hooks_bom_risk": hooks_bom_risk,
+        "plugin_bom_risk": plugin_bom_risk,
+    }
+
+
 ZOMBIE_WAKEUP_GAP_SECONDS = 7200  # 2h+ gap inside a subagent transcript flags #199713 255.3m reactive wakeup
 
 

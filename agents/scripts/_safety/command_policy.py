@@ -26,12 +26,16 @@ def _lifecycle_calls(command: str) -> list[tuple[str, list[str]]]:
         name = token.strip(";&|").replace("\\", "/").rsplit("/", 1)[-1].lower()
         if name in _engine.WORKFLOW_ENTRYPOINTS:
             rest = tokens[index + 1:]
-        elif name in _engine.TASK_ENTRYPOINTS and index + 1 < len(tokens) and tokens[index + 1].lower() == "task":
-            rest = tokens[index + 2:]
+        elif name in _engine.TASK_ENTRYPOINTS:
+            after_entry = _strip_leading_cli_flags(tokens[index + 1:])
+            if not after_entry or after_entry[0].strip(";&|").lower() != "task":
+                continue
+            rest = after_entry[1:]
         else:
             continue
+        trimmed_rest = _strip_leading_cli_flags(rest)
         subcommand, skip_value = "", False
-        for part in rest:
+        for part in trimmed_rest:
             if skip_value:
                 skip_value = False
                 continue
@@ -70,8 +74,8 @@ def _developer_authority_violation(command: str) -> str:
     """
     for subcommand, rest in _engine._lifecycle_calls(command):
         if subcommand == "change-decision" and "--apply" in rest:
-            support = _engine._flag(rest, "--mode") == "extend-scope" and _engine._flag(rest, "--source") == "approved-plan"
-            if not support and (_engine._flag(rest, "--source") != "conversation" or not _engine._flag(rest, "--proof-reference")):
+            support = _engine._flag(rest, "--mode").lower() == "extend-scope" and _engine._flag(rest, "--source").lower() == "approved-plan"
+            if not support and (_engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference")):
                 return "change-decision"
         if subcommand == "merge" and "--apply" in rest:
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
@@ -94,7 +98,7 @@ def _developer_authority_violation(command: str) -> str:
         if is_models:
             sub_rest = _strip_leading_cli_flags(rest[2:] if name in _engine.TASK_ENTRYPOINTS else rest)
             if sub_rest[:1] == ["set"] and not any(flag in rest for flag in ("-h", "--help")):
-                if _engine._flag(rest, "--source") != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                     return "review-models"
         is_exec_mode = (
             name == "execution_mode.py"
@@ -295,50 +299,71 @@ def _extract_execution_mode_kickoff_details(command: str, repo: Path | None = No
         "phases_count": 0,
     }
     cmd = str(command or "").strip()
-    if not cmd or any(h in cmd for h in (" --help", " -h")):
+    if not cmd:
         return empty
-    tokens = _engine._split_command_tokens(cmd)
+    try:
+        from mutation_guard import _split_segments
+        segments = _split_segments(cmd) or [cmd]
+    except Exception:
+        segments = [cmd]
     eff_repo = repo or _engine.REPO
-    for pos, tok in enumerate(tokens):
-        base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        rest = _strip_leading_cli_flags(tokens[pos + 1:])
-        wf_subs = (["draft"], ["revise"], ["quick-start"])
-        if (base == "workflow.py" and rest[:1] in wf_subs) or (
-            base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["task"] and _strip_leading_cli_flags(rest[1:])[:1] in wf_subs
-        ):
-            sub_k = rest[0] if base == "workflow.py" else _strip_leading_cli_flags(rest[1:])[0]
-            tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
-            tkind = _engine._flag(rest, "--kind").upper()
-            files = _collect_csv_or_multi_flag(rest, ("--expected-files", "--files", "--file"))
-            modules = _collect_csv_or_multi_flag(rest, ("--expected-modules", "--modules", "--module"))
-            surfaces = [s.upper() for s in _collect_csv_or_multi_flag(rest, ("--expected-surfaces", "--surfaces", "--surface"))]
-            phases_count = _estimate_cli_phases_count(eff_repo, _engine._flag(rest, "--phases"))
-            return {
-                "kind": sub_k,
-                "task_id": tid,
-                "task_kind": tkind,
-                "files": files,
-                "modules": modules,
-                "surfaces": surfaces,
-                "phases_count": phases_count,
-            }
-        if (base == "web_relay.py" and rest[:1] == ["pack"]) or (
-            base in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-pack"] or rest[:2] == ["web-relay", "pack"])
-        ):
-            if any(a in {"--retry", "--retry-failure", "--add-files"} or a.startswith("--add-files=") for a in rest):
-                return empty
-            tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
-            tkind = _engine._flag(rest, "--kind").upper()
-            files = _collect_csv_or_multi_flag(rest, ("--files", "--file", "--expected-files"))
-            return {
-                "kind": "web-pack",
-                "task_id": tid,
-                "task_kind": tkind,
-                "files": files,
-                "modules": [],
-                "surfaces": [],
-                "phases_count": 0,
-            }
+    inline_mode_choice = ""
+    for seg in segments:
+        if any(h in f" {seg} " for h in (" --help ", " -h ")):
+            continue
+        tokens = _engine._split_command_tokens(seg)
+        for pos, tok in enumerate(tokens):
+            base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            rest = _strip_leading_cli_flags(tokens[pos + 1:])
+            if (
+                (base == "execution_mode.py" and rest[:1] == ["set"])
+                or (base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["execution-mode"] and _strip_leading_cli_flags(rest[1:])[:1] == ["set"])
+            ):
+                em_src = (_engine._flag(rest, "--source") or "").strip().lower()
+                em_prf = (_engine._flag(rest, "--proof-reference") or "").strip()
+                em_ch = (_engine._flag(rest, "--choice") or "").strip().lower()
+                if em_src == "conversation" and em_prf and em_ch:
+                    inline_mode_choice = em_ch
+                break
+            wf_subs = (["draft"], ["revise"], ["quick-start"])
+            if (base == "workflow.py" and rest[:1] in wf_subs) or (
+                base in _engine.TASK_ENTRYPOINTS and rest[:1] == ["task"] and _strip_leading_cli_flags(rest[1:])[:1] in wf_subs
+            ):
+                sub_k = rest[0] if base == "workflow.py" else _strip_leading_cli_flags(rest[1:])[0]
+                tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
+                tkind = _engine._flag(rest, "--kind").upper()
+                files = _collect_csv_or_multi_flag(rest, ("--expected-files", "--files", "--file"))
+                modules = _collect_csv_or_multi_flag(rest, ("--expected-modules", "--modules", "--module"))
+                surfaces = [s.upper() for s in _collect_csv_or_multi_flag(rest, ("--expected-surfaces", "--surfaces", "--surface"))]
+                phases_count = _estimate_cli_phases_count(eff_repo, _engine._flag(rest, "--phases"))
+                return {
+                    "kind": sub_k,
+                    "task_id": tid,
+                    "task_kind": tkind,
+                    "files": files,
+                    "modules": modules,
+                    "surfaces": surfaces,
+                    "phases_count": phases_count,
+                    "inline_mode_choice": inline_mode_choice,
+                }
+            if (base == "web_relay.py" and rest[:1] == ["pack"]) or (
+                base in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-pack"] or rest[:2] == ["web-relay", "pack"])
+            ):
+                if any(a in {"--retry", "--retry-failure", "--add-files"} or a.startswith("--add-files=") for a in rest):
+                    continue
+                tid = _engine._flag(rest, "--task-id") or _engine._flag(rest, "--task")
+                tkind = _engine._flag(rest, "--kind").upper()
+                files = _collect_csv_or_multi_flag(rest, ("--files", "--file", "--expected-files"))
+                return {
+                    "kind": "web-pack",
+                    "task_id": tid,
+                    "task_kind": tkind,
+                    "files": files,
+                    "modules": [],
+                    "surfaces": [],
+                    "phases_count": 0,
+                    "inline_mode_choice": inline_mode_choice,
+                }
     return empty
 
 
@@ -350,24 +375,31 @@ def _extract_execution_mode_kickoff(command: str) -> tuple[str, str, str]:
         str(details.get("task_id") or ""),
         str(details.get("task_kind") or ""),
     )
-def _audited_harness_command(command: str) -> bool:
-    """One harness entry-point call and nothing chained to it.
-
-    `tracker_write` stops tracker writes through raw shell (curl, ad-hoc scripts). Real app: it also
-    refused the harness's own audited `zoho authorize --proof-reference "... update zoho ..."` (the
-    words that grant the write) and a `draft` whose outcome said "Update Zoho". The harness commands
-    enforce Zoho authority themselves; a chained command is never exempt.
-    """
-    if not _engine.AUDITED_HARNESS_ENTRY.match(command or ""):
+def _single_audited_harness_segment(segment: str) -> bool:
+    if not _engine.AUDITED_HARNESS_ENTRY.match(segment or ""):
         return False
-    try:
-        from mutation_guard import SHELL_LAUNDERING, _operator_text_any_shell
-    except Exception:
-        return False
-    outside_quotes = _operator_text_any_shell(command)
+    from mutation_guard import SHELL_LAUNDERING, _operator_text_any_shell
+    outside_quotes = _operator_text_any_shell(segment)
     if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes):
         return False
     return not _engine.re.search(r";|&&|\|\||\n", outside_quotes)
+
+
+def _audited_harness_command(command: str) -> bool:
+    """One or more `&&`-chained audited harness entry-point calls, with zero external commands or pipes.
+
+    Supports Antigravity CLI v1.5.13 related-command `&&` chaining when EVERY segment is an audited
+    harness entrypoint, while rejecting any mixed external command, `;`, `||`, `|`, `
+`, or redirection.
+    """
+    try:
+        from mutation_guard import _split_safe_and_chain
+    except Exception:
+        return False
+    segments = _split_safe_and_chain(command or "", max_segments=8)
+    if not segments:
+        return False
+    return all(_single_audited_harness_segment(seg) for seg in segments)
 def _read_only_git_branch_command(command: str) -> bool:
     """True when every `git_mutation` match in `command` is a read-only `git branch` segment."""
     try:
@@ -448,6 +480,23 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             if any(_engine._installed_engine_target(token, recursive=True) for token in tokens[1:]):
                 _engine._deny_engine_read("run_command", command)
                 return
+            for token in tokens[1:]:
+                if token.startswith("-") or not token.strip():
+                    continue
+                t_clean = token.strip().strip("\"'").replace("\\", "/")
+                t_low = t_clean.lower()
+                if any(
+                    seg in t_low
+                    for seg in ("/etc/passwd", "/etc/shadow", "/.ssh/", "/.aws/", "/.gnupg/", "/.kube/", "/.netrc")
+                ) or t_low.endswith(("/.ssh", "/.aws", "/.gnupg", "/.netrc")):
+                    _engine.emit(
+                        "deny",
+                        f"Target path '{token}' is outside the repository boundary.",
+                        tool="run_command",
+                        command=command,
+                        reason_code="OUT_OF_REPO_READ_BLOCKED",
+                    )
+                    return
         elif cmd0 == "git" and len(tokens) >= 3:
             g_idx = 1
             while g_idx < len(tokens):
@@ -503,9 +552,17 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         _engine.emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
     required_host_message = "Antigravity verification must be prepared with --host antigravity\nso trusted Review Protocol V2 can be used."
+    is_prepare_verif = any(sub == "prepare-verification" for sub, _ in _engine._lifecycle_calls(command)) or bool(
+        _engine.re.search(
+            r"(?:workflow(?:\.py)?\s+(?:--\S+\s+)*prepare-verification|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*task\s+(?:--\S+\s+)*prepare-verification)\b",
+            command,
+            _engine.re.I,
+        )
+    )
     if (
-        _engine.re.search(r"(?:workflow(?:\.py)?\s+prepare-verification|harness(?:\.py)?\s+task\s+prepare-verification)\b", command, _engine.re.I)
-        and not _engine.re.search(r"--host\s+antigravity(?![\w-])", command, _engine.re.I)
+        is_prepare_verif
+        and not _engine.re.search(r"(?:^|\s)(?:-h|--help)(?:\s|$)", command)
+        and not _engine.re.search(r"--host(?:\s+|=)[\x22\x27]?antigravity(?![\w-])", command, _engine.re.I)
     ):
         _engine.emit(
             "deny",
@@ -517,9 +574,9 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         )
         return
     if not _engine.re.search(r"(?:^|\s)(?:-h|--help)(?:\s|$)", command) and _engine.re.search(
-        r"(?:harness(?:\.py)?\s+(?:verify-steps|test|compile|assemble|review\s+package|task\s+(?:prepare-verification|checkpoint-phase))|"
+        r"(?:harness(?:\.py)?\s+(?:--\S+\s+)*(?:verify-steps|test|compile|assemble|review\s+package|task\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase))|"
         r"(?:verification_steps|run_tests_gate|run_gradle_task|review_package)\.py|"
-        r"workflow\.py\s+(?:prepare-verification|checkpoint-phase))\b",
+        r"workflow(?:\.py)?\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase))\b",
         command,
         _engine.re.I,
     ):
@@ -599,7 +656,19 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 candidate_phases_count=ko_phases,
                 kickoff_kind=kickoff_kind,
             )
-            if em_state.get("selection_required"):
+            inline_ch = str(ko_details.get("inline_mode_choice") or "")
+            if inline_ch in {"normal-task", "normal-project", "web-task", "web-project", "ask-every-task"}:
+                if kickoff_kind == "web-pack" and inline_ch in {"normal-task", "normal-project"}:
+                    _engine.emit(
+                        "deny",
+                        f"LOCAL_EXECUTION_MODE_ACTIVE: Local execution (`{inline_ch}`) is active.",
+                        tool="run_command",
+                        command=command,
+                        reason_code="LOCAL_EXECUTION_MODE_ACTIVE",
+                        task_id=kickoff_tid or active_tid,
+                    )
+                    return
+            elif em_state.get("selection_required"):
                 prompt_c = em_state.get("prompt_contract") or build_execution_mode_prompt(
                     _engine.REPO,
                     task_id=kickoff_tid or active_tid,

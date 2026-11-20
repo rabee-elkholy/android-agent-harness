@@ -125,13 +125,22 @@ def cmd_prepare_report(args: argparse.Namespace) -> int:
 
     # Security validation (Section 48): no secrets, no absolute paths, no raw diff
     combined_text = " ".join([objective, changes] + impact_list + tests_list)
-    secret_patterns = (r"(?:ghp|gho|pat|sec)_[A-Za-z0-9_]{16,}", r"(?:Bearer|token)\s+[A-Za-z0-9_.-]{16,}")
+    secret_patterns = (
+        r"(?:ghp|gho|ghu|ghs|ghr|pat|sec)_[A-Za-z0-9_]{16,}",
+        r"(?:Bearer|token)\s+[A-Za-z0-9_.-]{16,}",
+        r"\bAIza[0-9A-Za-z_-]{20,}\b",
+        r"\bsk-[A-Za-z0-9_-]{20,}\b",
+        r"\bAKIA[0-9A-Z]{16}\b",
+    )
     for pat in secret_patterns:
         if re.search(pat, combined_text, re.IGNORECASE):
             sys.stderr.write("ERROR: delivery report contains suspected secrets or bearer tokens\n")
             return 1
 
-    if re.search(r"^[A-Za-z]:[\\/]", combined_text) or re.search(r"\s+[A-Za-z]:[\\/]", combined_text) or "/Users/" in combined_text or "/home/" in combined_text:
+    if (
+        re.search(r"(?:^|[\s\"`'(\[{])[A-Za-z]:[\\/]", combined_text)
+        or re.search(r"(?:^|[\s\"`'(\[{])/(?:Users|home|root|tmp|var|opt|etc|mnt|Volumes|private)(?:/|\b)", combined_text)
+    ):
         sys.stderr.write("ERROR: delivery report must not contain absolute filesystem paths\n")
         return 1
 

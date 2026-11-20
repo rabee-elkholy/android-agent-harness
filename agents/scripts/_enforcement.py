@@ -108,7 +108,7 @@ def detect(repo: Path, tools: list[str] | None = None) -> dict:
         answers_file = root / ".harness-setup" / "answers.json"
         if answers_file.is_file():
             try:
-                data = json.loads(answers_file.read_text(encoding="utf-8"))
+                data = json.loads(answers_file.read_text(encoding="utf-8-sig"))
                 tools = data.get("tools")
             except (OSError, ValueError):
                 pass

@@ -104,8 +104,17 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
     if (
         rel_lower.startswith(".agents/state/web-relay/inbox/")
         and len(Path(relative).parts) == 5
-        and resolved.suffix.lower() in {".json", ".md", ".txt"}
+        and resolved.suffix.lower() in {".json", ".md", ".txt", ".patch"}
         and not resolved.is_symlink()
+        and not resolved.parent.is_symlink()
+    ):
+        return True, str(resolved), True
+    if (
+        rel_lower.startswith(".agents/cache/")
+        and len(Path(relative).parts) == 3
+        and _engine.re.fullmatch(r"tmp-[a-z0-9_.-]+\.json", Path(relative).name.lower())
+        and not resolved.is_symlink()
+        and not resolved.parent.is_symlink()
     ):
         return True, str(resolved), True
     if any(rel_lower == r.lower() or rel_lower.startswith(r.lower() + "/") for r in _engine.PROTECTED_ROOTS):
@@ -123,12 +132,12 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
     if _engine.EPHEMERAL_GENERATED_RE.search(relative):
         return False, f"Cannot mutate generated build output '{relative}'. Generated code is diagnostic evidence only; edit the source entity/DAO/contract or generator configuration instead.", False
     return True, relative, False
-def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict) -> None:
-    """Normalize CRLF to LF on authorized edit targets before host edit tools run.
+def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict, *, env: dict[str, str] | None = None) -> None:
+    """Normalize CRLF to LF on authorized edit targets for legacy (<1.5.1) Antigravity CLI hosts.
 
-    Host edit_file tools match multi-line Target strings byte-for-byte, while LLM tool
-    payloads emit LF (`\\n`). Normalizing CRLF (`\\r\\n`) to LF (`\\n`) on disk right before
-    an authorized edit prevents `target content not found` failures on Windows checkouts.
+    Antigravity CLI 1.5.1+ (and 1.5.10+ for append) natively handles CRLF targets without
+    requiring PreToolUse disk normalization. When CLI >= 1.5.1 (or App >= 2.33.0 / IDE >= 2.7.1)
+    is declared—or `AGY_WIN_CRLF_EDIT_NORMALIZATION` is disabled—files stay untouched on disk.
     """
     target_chunks: list[str] = []
     for key in ("Target", "target", "TargetContent", "targetContent", "old_string", "OldString", "old_str", "OldStr"):
@@ -150,6 +159,9 @@ def _normalize_crlf_for_edit(repo: Path, targets: list[str], args: dict) -> None
         if "\n" in chunk and "\r\n" not in chunk
     ]
     if not multiline_lf_targets:
+        return
+    from antigravity_runtime import should_normalize_crlf_for_edit
+    if not should_normalize_crlf_for_edit(repo=repo, env=env):
         return
     from _vnext_common import atomic_write_bytes
     for t in targets:
@@ -347,9 +359,9 @@ def _handle_list_dir(name: str, args: dict, *, conversation: str = "", is_utilit
         if p.is_absolute():
             rel = p.resolve().relative_to(_engine.REPO.resolve()).as_posix().lower()
         else:
-            rel = rel.lstrip("./").lower()
+            rel = _engine.re.sub(r"^(?:\./)+", "", rel).lstrip("/").lower()
     except Exception:
-        rel = rel.lstrip("./").lower()
+        rel = _engine.re.sub(r"^(?:\./)+", "", rel).lstrip("/").lower()
 
     parts = [part for part in rel.split("/") if part]
 
@@ -518,7 +530,11 @@ def _flag_out_of_scope_read(name: str, args: dict) -> None:
         if not target.lower().endswith(_engine.CODE_READ_SUFFIXES):
             return
         path = Path(target)
-        rel = path.resolve().relative_to(_engine.REPO.resolve()).as_posix() if path.is_absolute() else target.lstrip("./")
+        rel = (
+            path.resolve().relative_to(_engine.REPO.resolve()).as_posix()
+            if path.is_absolute()
+            else _engine.re.sub(r"^(?:\./)+", "", target).lstrip("/")
+        )
         if rel.startswith(".agents/"):
             return
         try:

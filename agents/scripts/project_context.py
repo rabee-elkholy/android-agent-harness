@@ -1901,7 +1901,7 @@ def check_living_context_drift(repo: Path) -> dict[str, Any]:
     inst_file = context_dir / "developer-instructions.json"
     if inst_file.is_file():
         try:
-            inst_data = json.loads(inst_file.read_text(encoding="utf-8"))
+            inst_data = json.loads(inst_file.read_text(encoding="utf-8-sig"))
             for inst in inst_data.get("instructions") or []:
                 if not isinstance(inst, dict) or inst.get("status", "ACTIVE") != "ACTIVE":
                     continue

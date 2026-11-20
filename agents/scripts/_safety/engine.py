@@ -137,20 +137,20 @@ DANGEROUS = (
     ("adb_destructive", re.compile(r"\badb(?:\.exe)?\b.*\b(?:root|remount|backup|restore|disable-verity|enable-verity|uninstall|clear)\b", re.I | re.S)),
     ("package_destructive", re.compile(r"\badb(?:\.exe)?\b.*\b(?:pm|cmd\s+package)\s+(?:clear|uninstall|disable|suspend|install-existing)\b", re.I | re.S)),
     ("raw_adb", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*adb(?:\.exe)?\b", re.I)),
-    ("harness_device_emergency", re.compile(r"run_device\.py\b(?:(?=.*\s--force\b)|(?=.*\s--grant-runtime-permissions\b)|\s+uninstall\b)", re.I)),
+    ("harness_device_emergency", re.compile(r"(?:run_device(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*device\b)(?:(?=.*\s--force(?:=|\b))|(?=.*\s--grant-runtime-permissions(?:=|\b))|(?:\s+--\S+)*\s+uninstall\b)", re.I)),
     ("tracker_write", re.compile(r"(?:\b(?:zoho|jira|linear)\b.*\b(?:create|update|delete|close|transition|done|solved)\b|\b(?:create|update|delete|close|transition|done|solved)[_\s-]*(?:zoho|jira|linear)\b)", re.I | re.S)),
-    ("draft_force", re.compile(r"(?:workflow\.py\b.*\bdraft\b.*--force\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdraft\b.*--force\b)", re.I)),
-    ("review_override_provenance", re.compile(r"record_review\.py\b.*--override-reviews\b.*--source\s+developer_terminal\b", re.I)),
-    ("lead_verdict_bypass", re.compile(r"record_review(?:\.py)?\b.*--allow-lead-verdict\b", re.I)),
-    ("exported_component_acceptance", re.compile(r"exported_component_guard\.py\b.*--accept\b", re.I)),
-    ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|harness(?:\.py)?\s+review)\b.*\bcomplete\b.*--text\b", re.I)),
-    ("signoff_authority", re.compile(r"run_device(?:\.py)?\b.*\bsignoff\b", re.I)),
-    ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)\b)", re.I)),
+    ("draft_force", re.compile(r"(?:workflow(?:\.py)?\b.*\bdraft\b.*--force(?:=|\b)|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*task\b.*\bdraft\b.*--force(?:=|\b))", re.I)),
+    ("review_override_provenance", re.compile(r"(?:record_review(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*review\b)(?=.*--override-reviews\b)(?=.*--source(?:\s+|=)[\x22\x27]?developer_terminal\b)", re.I)),
+    ("lead_verdict_bypass", re.compile(r"(?:record_review(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*review\b).*--allow-lead-verdict(?:=|\b)", re.I)),
+    ("exported_component_acceptance", re.compile(r"exported_component_guard(?:\.py)?\b.*--accept(?:=|\b)", re.I)),
+    ("review_complete_text_bypass", re.compile(r"(?:review_orchestrator(?:\.py)?|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*review)\b.*\bcomplete\b.*--text(?:=|\b)", re.I)),
+    ("signoff_authority", re.compile(r"(?:run_device(?:\.py)?\b|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*device\b).*\bsignoff\b", re.I)),
+    ("dirty_tree_delivery_override", re.compile(r"(?:workflow(?:\.py)?\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)(?:=|\b)|(?:android-harness|harness_cli(?:\.py)?|harness(?:\.py)?)\s+(?:--\S+\s+)*task\b.*\bdeliver\b.*--(?:allow-dirty-tree|developer-allow-dirty-tree)(?:=|\b))", re.I)),
     ("agy_headless_loop_tos_guard", re.compile(r"(?:^|[;&|\n]\s*|\b(?:do|then|else|xargs|env|command|exec|start|call)\s+)(?:&\s*)?(?:\"[^\"]*[/\\]|'[^']*[/\\]|[^\s\"';&|]*[/\\])?(?:agy(?:\.exe|\.cmd|\.bat|\.ps1)?|antigravity(?:\.exe|\.cmd|\.bat)?)(?=\s|$|[\"';&|])|(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*(?:agy|antigravity)(?:\.exe|\.cmd)?\s+(?:-[a-z]*p\b|--prompt\b|--headless\b)|(?:\b(?:xdotool|pyautogui|sendkeys|wscript\.shell)\b.*\b(?:antigravity|agy)\b)", re.I)),
 )
 WORKFLOW_ENTRYPOINTS = {"workflow.py", "workflow"}
 TASK_ENTRYPOINTS = {"harness.py", "harness", "harness_cli.py", "harness_cli", "android-harness"}
-WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id"}
+WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id", "--task", "--kit"}
 
 
 AUDITED_HARNESS_ENTRY = re.compile(
@@ -206,7 +206,7 @@ def _pending_cancel(task_id: str) -> bool:
         return False
     marker = state_root(REPO) / CANCEL_REQUEST_FILE
     try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
+        data = json.loads(marker.read_text(encoding="utf-8-sig"))
     except Exception:
         return False
     fresh = time.time() - float(data.get("requested_at") or 0) < CANCEL_REQUEST_TTL_SECONDS
@@ -245,8 +245,10 @@ BURST_MAX_DELAY_SEC = 1.40
 
 
 def _tool_name_and_args(payload: dict) -> tuple[str, dict]:
-    call = payload.get("toolCall") or payload.get("tool_call") or {}
-    name = str(call.get("name") or payload.get("toolName") or payload.get("tool_name") or "").lower()
+    raw_tc = payload.get("toolCall")
+    raw_tc_snake = payload.get("tool_call")
+    call = raw_tc if isinstance(raw_tc, dict) else (raw_tc_snake if isinstance(raw_tc_snake, dict) else {})
+    name = str(call.get("name") or call.get("toolName") or payload.get("toolName") or payload.get("tool_name") or payload.get("tool") or "").lower()
     args = call.get("args") or payload.get("toolArgs") or payload.get("tool_input") or {}
     if isinstance(args, str):
         try:
@@ -365,7 +367,12 @@ def _main() -> None:
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             raise ValueError("hook payload must be an object")
-        if any(key in payload for key in ("terminationReason", "termination_reason")) or payload.get("event") == "Stop" or payload.get("hook") == "Stop":
+        if (
+            any(key in payload for key in ("terminationReason", "termination_reason", "continuation_active", "continuationActive"))
+            or payload.get("event") == "Stop"
+            or payload.get("hook") == "Stop"
+            or payload.get("hookEventName") == "Stop"
+        ):
             _handle_stop()
             return
         started = _self._conversation_started_at(payload)
@@ -582,7 +589,7 @@ def _main() -> None:
                 _self.emit(
                     "deny",
                     "NATIVE_TRANSCRIPT_READ_FORBIDDEN: Never read raw Antigravity `transcript.jsonl` logs into agent context (causes severe token bloat). "
-                    "Run `python .agents/harness.py status`, `python .agents/harness.py task bridge --resume`, or `git diff --stat` instead.",
+                    "Run `python .agents/harness.py task status`, `python .agents/harness.py task bridge`, or `git diff --stat` instead.",
                     tool=name,
                     reason_code="NATIVE_TRANSCRIPT_READ_FORBIDDEN",
                 )
@@ -619,12 +626,22 @@ def _main() -> None:
                 _self.emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if all_temp:
+                if reviewer and any(
+                    "/.agents/cache/" in ("/" + d.lstrip("/")) for d in resolved_details
+                ):
+                    _self.emit(
+                        "deny",
+                        "Reviewer agents are strictly read-only and may not write temporary contract files under `.agents/cache/`.",
+                        tool=name,
+                        reason_code="REVIEWER_MUTATION_FORBIDDEN",
+                    )
+                    return
                 if (utility_ctx is not None or reviewer) and any(
                     "/.agents/state/web-relay/inbox/" in ("/" + d.lstrip("/")) for d in resolved_details
                 ):
                     _self.emit(
                         "deny",
-                        "WORKER_INBOX_WRITE_FORBIDDEN: `.agents/state/web-relay/inbox/` is reserved exclusively for the Lead session when staging incoming Web-Relay JSON payloads.",
+                        "WORKER_INBOX_WRITE_FORBIDDEN: `.agents/state/web-relay/inbox/` is reserved exclusively for the Lead session when staging incoming Web-Relay payloads.",
                         tool=name,
                         reason_code="WORKER_INBOX_WRITE_FORBIDDEN",
                     )
@@ -700,7 +717,25 @@ def _main() -> None:
             _self._handle_mcp_tool(name, args)
             return
 
-        mcp_match = re.match(r"^mcp_([a-zA-Z0-9_-]+)_(.+)$", name)
+        mcp_match = (
+            re.match(r"^mcp__([a-zA-Z0-9_-]+?)__(.+)$", name)
+            or re.match(
+                r"^mcp_(zoho_sprints|zoho_projects|github_projects|google_workspace|android_studio|play_console|firebase_crashlytics)_(.+)$",
+                name,
+                re.I,
+            )
+            or re.match(
+                r"^mcp_([a-zA-Z0-9_-]+?)_((?:get|list|read|view|fetch|find|search|query|inspect|describe|show|lookup|retrieve|answer|"
+                r"create|update|edit|write|set|add|comment|rename|copy|upload|patch|post|put|assign|replace|insert|upsert|append|merge|"
+                r"import|sync|push|commit|execute|run|invoke|trigger|archive|close|reopen|approve|save|modify|restore|"
+                r"delete|remove|drop|destroy|deploy|publish|revoke|disable|rotate|truncate|purge|reset|clear|wipe|"
+                r"send|share|unshare|trash|move|transfer)(?:_[a-zA-Z0-9_-]+)?)$",
+                name,
+                re.I,
+            )
+            or re.match(r"^mcp_([a-zA-Z0-9-]+)_(.+)$", name)
+            or re.match(r"^mcp_([a-zA-Z0-9_-]+?)_([a-zA-Z0-9-]+)$", name)
+        )
         if mcp_match:
             _self._handle_mcp_tool(name, {
                 "ServerName": mcp_match.group(1),
@@ -710,13 +745,48 @@ def _main() -> None:
             return
 
         # Capability-based safety for unknown host tools
+        from integrations.external_write_policy import sensitive_values as _unknown_tool_secrets
+        if _unknown_tool_secrets([args]):
+            _self.emit("deny", f"Denied unknown tool '{name}' carrying credential or signing file path.", tool=name, reason_code="SENSITIVE_EXTERNAL_UPLOAD")
+            return
         tgt = _target(args)
-        mutation_verbs = (
+        hard_mutation_verbs = frozenset({
             "write", "edit", "delete", "remove", "move", "rename", "create",
-            "apply", "patch", "execute", "run", "send", "publish", "post",
+            "apply", "patch", "execute", "send", "publish", "post",
             "put", "mutate", "destroy", "drop", "grant", "modify",
+            "upload", "replace", "insert", "upsert", "append",
+            "copy", "sync", "archive", "reset", "clear", "truncate", "purge",
+            "share", "unshare", "revoke", "trash", "undelete", "reply", "forward",
+            "actuate", "merge", "close", "reopen", "assign", "transition",
+            "approve", "reject", "cancel", "invite", "transfer", "deploy",
+            "rotate", "wipe", "disable", "label", "unlabel", "unsubscribe",
+            "comment", "restore",
+        })
+        contextual_mutation_verbs = frozenset({"run", "update", "save"})
+        read_lead_verbs = frozenset({
+            "get", "list", "read", "view", "fetch", "find", "search",
+            "check", "inspect", "describe", "status", "show", "query",
+        })
+        _tc_raw = payload.get("toolCall") if isinstance(payload.get("toolCall"), dict) else {}
+        raw_tool_name = str(
+            _tc_raw.get("name") or _tc_raw.get("toolName")
+            or payload.get("toolName") or payload.get("tool_name") or payload.get("tool") or name
+        ).strip()
+        snake_parts = [t for t in re.split(r"[_\-.:/]+", name.lower()) if t]
+        camel_parts = [t.lower() for t in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)", raw_tool_name) if t]
+        name_tokens = set(snake_parts) | set(camel_parts)
+        lead_token = camel_parts[0] if len(camel_parts) > 1 else (snake_parts[0] if snake_parts else (camel_parts[0] if camel_parts else ""))
+        concat_prefix_mut = (
+            len(snake_parts) == 1
+            and len(camel_parts) <= 1
+            and not any(name.startswith(rv) for rv in read_lead_verbs)
+            and any(name.startswith(mv) for mv in (hard_mutation_verbs | contextual_mutation_verbs))
         )
-        has_mutation_verb = any(v in name for v in mutation_verbs)
+        has_mutation_verb = (
+            bool(name_tokens & hard_mutation_verbs)
+            or (bool(name_tokens & contextual_mutation_verbs) and lead_token not in read_lead_verbs)
+            or concat_prefix_mut
+        )
         has_mutation_args = bool(tgt and any(k in args for k in ("content", "code", "patch", "replacement", "text", "data")))
 
         if has_mutation_verb or has_mutation_args:

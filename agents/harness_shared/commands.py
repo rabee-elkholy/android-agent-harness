@@ -26,9 +26,13 @@ def configured_python_command(command: str | None) -> str:
     value = (command or "").strip()
     if not value:
         return quote_executable(sys.executable)
-    # Setup may receive an unquoted absolute executable path with spaces.
+    # Setup may receive an unquoted or stray-quoted absolute executable path with spaces.
+    unquoted = value.strip("\"'").strip()
     if Path(value).is_file() or (PureWindowsPath(value).is_absolute() and value.lower().endswith('.exe')):
         return quote_executable(value)
+    if unquoted and (" " not in unquoted or Path(unquoted).is_file() or (PureWindowsPath(unquoted).is_absolute() and unquoted.lower().endswith('.exe'))):
+        if Path(unquoted).is_file() or (PureWindowsPath(unquoted).is_absolute() and unquoted.lower().endswith('.exe')):
+            return quote_executable(unquoted)
     parts = split_command(value)
     if not parts:
         raise ValueError("Python command is empty")

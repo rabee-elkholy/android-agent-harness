@@ -544,7 +544,7 @@ def _reorder_with_previous_answers(qs: list[dict], repo: Path | None, lang: str,
     prev: dict = {}
     if ans_file.is_file():
         try:
-            loaded = json.loads(ans_file.read_text(encoding="utf-8"))
+            loaded = json.loads(ans_file.read_text(encoding="utf-8-sig"))
             if isinstance(loaded, dict):
                 if loaded.get("schema") not in (None, SCHEMA):
                     raise SystemExit(
@@ -1084,7 +1084,7 @@ def existing_defaults(repo: Path) -> dict[str, object]:
     if not path.is_file():
         return {}
     try:
-        answers = json.loads(path.read_text(encoding="utf-8"))
+        answers = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
     if not isinstance(answers, dict) or not answers.get("i0"):

@@ -102,46 +102,105 @@ def _unescape_patch_protocol_markers(raw_text: str) -> str:
     return _PATCH_MARKER_ENTITY_RE.sub(_fix, raw_text)
 
 
+_DOUBLE_ESCAPED_XML_AMP_RE = _engine.re.compile(r"&amp;(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);")
+
+
+def _unescape_code_chunk_outside_literals(chunk: str) -> str:
+    if "&" not in chunk:
+        return chunk
+    fixed = chunk
+    for _ in range(6):
+        nxt = _engine.re.sub(r"(?<=[A-Za-z0-9_?.\)])&lt;((?:(?!&lt;|&gt;)[^\n])+?)&gt;", r"<\1>", fixed)
+        if nxt == fixed:
+            break
+        fixed = nxt
+    fixed = (
+        fixed.replace("-&gt;", "->")
+        .replace(" &amp;&amp; ", " && ")
+        .replace("(&amp;&amp;", "(&&")
+        .replace("&amp;&amp;)", "&&)")
+        .replace(" &lt;= ", " <= ")
+        .replace(" &gt;= ", " >= ")
+        .replace(" &lt; ", " < ")
+        .replace(" &gt; ", " > ")
+    )
+    return fixed
+
+
+def _repair_code_preserving_literals_and_comments(full_text: str, *, is_java: bool = False) -> str:
+    """Repair HTML-escaped generics and operators strictly on code spans outside strings/raw-strings/comments."""
+    from _source_text import _scan_source
+    mask = _scan_source(
+        full_text,
+        mask_strings=True,
+        nested_comments=not is_java,
+        allow_raw_strings=True,
+        allow_dollar_interp=not is_java,
+    )
+    # Any index where `full_text[i]` is non-whitespace AND `mask[i] == ' '` belongs to a string/char/raw literal or comment!
+    n = len(full_text)
+    out_parts: list[str] = []
+    idx = 0
+    while idx < n:
+        is_masked = (full_text[idx] not in " \t\r\n") and (mask[idx] == " ")
+        start = idx
+        idx += 1
+        while idx < n:
+            cur_masked = (full_text[idx] not in " \t\r\n") and (mask[idx] == " ")
+            # Keep whitespace inside literals/comments attached to the literal span so `"a &lt; b"` stays one literal span
+            if full_text[idx] in " \t" and is_masked:
+                # Peek ahead on same line: if next non-space char is also masked, stay in literal/comment span
+                peek = idx + 1
+                while peek < n and full_text[peek] in " \t":
+                    peek += 1
+                if peek < n and full_text[peek] not in "\r\n" and mask[peek] == " ":
+                    idx = peek
+                    continue
+            if cur_masked != is_masked:
+                break
+            idx += 1
+        segment = full_text[start:idx]
+        out_parts.append(segment if is_masked else _unescape_code_chunk_outside_literals(segment))
+    return "".join(out_parts)
+
+
 def _repair_web_ui_html_entities_for_file(path: str, lines: list[str]) -> list[str]:
-    """Safely unescape web-UI HTML-entity corruption in code/manifest/nav XML lines without touching strings.xml or HTML assets."""
+    """Safely unescape web-UI HTML-entity corruption in code/manifest/nav XML lines without touching strings.xml or literals."""
     p_low = str(path or "").replace("\\", "/").lower()
+    norm_slash = "/" + p_low.lstrip("/")
     if p_low.endswith((".html", ".htm", ".xhtml")) or (
-        ("/res/values" in p_low or "/composeresources/values" in p_low) and p_low.endswith(".xml")
+        ("/res/values" in norm_slash or "/composeresources/values" in norm_slash) and p_low.endswith(".xml")
     ):
         return lines
 
     is_xml = p_low.endswith(".xml")
     is_code = p_low.endswith((".kt", ".kts", ".java", ".swift", ".gradle", ".groovy"))
-    if not (is_xml or is_code):
+    if not (is_xml or is_code) or not lines:
         return lines
+
+    if is_code:
+        joined = "\n".join(lines)
+        if "&lt;" not in joined and "&gt;" not in joined and "&amp;" not in joined:
+            return lines
+        repaired = _repair_code_preserving_literals_and_comments(joined, is_java=p_low.endswith(".java"))
+        return repaired.split("\n")
 
     out: list[str] = []
     for ln in lines:
         if "&lt;" not in ln and "&gt;" not in ln and "&quot;" not in ln:
             out.append(ln)
             continue
-        if is_xml:
-            stripped = ln.strip()
-            if (
-                stripped.startswith("&lt;")
-                or stripped.endswith(("/&gt;", "&gt;"))
-                or _engine.re.search(r"\b(?:android|app|tools|xmlns):[A-Za-z0-9_]+=&quot;", ln)
-                or _engine.re.search(r"&lt;/[A-Za-z0-9_.:-]+&gt;", ln)
-            ):
-                out.append(ln.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&"))
-                continue
-        elif is_code:
-            fixed = ln
-            # Unescape Kotlin/Java/Swift generic type arguments like `Result&lt;List&lt;String&gt;&gt;` from innermost out
-            for _ in range(6):
-                nxt = _engine.re.sub(r"(?<=[A-Za-z0-9_?.\)])&lt;((?:(?!&lt;|&gt;)[^\n\"'])+?)&gt;", r"<\1>", fixed)
-                if nxt == fixed:
-                    break
-                fixed = nxt
-            if fixed != ln:
-                fixed = fixed.replace(" -&gt; ", " -> ").replace(" &amp;&amp; ", " && ")
-                out.append(fixed)
-                continue
+        stripped = ln.strip()
+        if (
+            stripped.startswith("&lt;")
+            or stripped.endswith(("/&gt;", "&gt;"))
+            or _engine.re.search(r"\b(?:android|app|tools|xmlns):[A-Za-z0-9_]+=&quot;", ln)
+            or _engine.re.search(r"&lt;/[A-Za-z0-9_.:-]+&gt;", ln)
+        ):
+            un_ln = ln.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+            un_ln = _DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", un_ln)
+            out.append(un_ln)
+            continue
         out.append(ln)
     return out
 
@@ -450,12 +509,24 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             raise _engine.ValidationError(f"Merge payload file not found: {fp}")
         if fp.suffix.lower() == ".zip":
             import zipfile
+            max_entry = 16 * 1024 * 1024
             with zipfile.ZipFile(fp, "r") as zf:
-                for name in zf.namelist():
-                    if name.lower().endswith((".json", ".patch", ".txt", ".md")):
-                        parsed = _engine._extract_merge_json_from_text(zf.read(name).decode("utf-8", errors="replace"))
-                        if parsed:
-                            return parsed, f"zip:{fp}"
+                for info in zf.infolist():
+                    if info.is_dir() or not info.filename.lower().endswith((".json", ".patch", ".txt", ".md")):
+                        continue
+                    if info.file_size > max_entry:
+                        raise _engine.ValidationError(
+                            f"ZIP_ENTRY_TOO_LARGE: Entry '{info.filename}' ({info.file_size} bytes) exceeds 16 MiB safety cap."
+                        )
+                    with zf.open(info, "r") as zfh:
+                        raw_b = zfh.read(max_entry + 1)
+                    if len(raw_b) > max_entry:
+                        raise _engine.ValidationError(
+                            f"ZIP_ENTRY_TOO_LARGE: Entry '{info.filename}' stream exceeded 16 MiB safety cap."
+                        )
+                    parsed = _engine._extract_merge_json_from_text(raw_b.decode("utf-8", errors="replace"))
+                    if parsed:
+                        return parsed, f"zip:{fp}"
             raise _engine.ValidationError(f"ZIP file '{fp}' does not contain a valid {_engine.WEB_MERGE_SCHEMA} JSON document.")
         raw_fp = fp.read_text(encoding="utf-8", errors="replace")
         parsed = _engine._extract_merge_json_from_text(raw_fp)
@@ -528,13 +599,23 @@ def _resolve_incoming_merge_payload(repo: Path, explicit_file: str, use_stdin: b
             try:
                 if cand.suffix.lower() == ".zip":
                     import zipfile
+                    max_entry = 16 * 1024 * 1024
+                    rem_zip_budget = 32 * 1024 * 1024
                     with zipfile.ZipFile(cand, "r") as zf:
-                        for zn in zf.namelist():
-                            if zn.lower().endswith((".json", ".patch", ".txt", ".md")):
-                                doc = _engine._extract_merge_json_from_text(zf.read(zn).decode("utf-8", errors="replace"))
-                                dpid = str((doc or {}).get("pack_id") or "")
-                                if doc and dpid in known_packs:
-                                    candidates.append((1 if dpid in unapplied_packs else 0, st.st_mtime, doc, cand))
+                        for zinfo in zf.infolist():
+                            if zinfo.is_dir() or not zinfo.filename.lower().endswith((".json", ".patch", ".txt", ".md")):
+                                continue
+                            if zinfo.file_size > max_entry or zinfo.file_size > rem_zip_budget:
+                                continue
+                            with zf.open(zinfo, "r") as zfh:
+                                zb = zfh.read(max_entry + 1)
+                            if len(zb) > max_entry:
+                                continue
+                            rem_zip_budget -= len(zb)
+                            doc = _engine._extract_merge_json_from_text(zb.decode("utf-8", errors="replace"))
+                            dpid = str((doc or {}).get("pack_id") or "")
+                            if doc and dpid in known_packs:
+                                candidates.append((1 if dpid in unapplied_packs else 0, st.st_mtime, doc, cand))
                 else:
                     raw_cand = cand.read_text(encoding="utf-8", errors="replace")
                     if _engine._is_outgoing_context_pack_text(raw_cand):
@@ -816,15 +897,32 @@ def apply_web_merge(
         if not staged_f.is_file():
             raise _engine.ValidationError(f"No staged web-relay operations found for phase '{pid}'.")
         staged_doc = _engine.read_json(staged_f)
-        if isinstance(staged_doc, dict) and staged_doc.get("staged_sha256"):
-            expected_st_sha = _engine.canonical_sha256({
-                "task_id": str(staged_doc.get("task_id") or tid),
-                "phase_id": str(staged_doc.get("phase_id") or pid),
-                "writes": list(staged_doc.get("writes") or []),
-                "deletes": list(staged_doc.get("deletes") or []),
-            })
-            if staged_doc.get("staged_sha256") != expected_st_sha:
-                raise _engine.ValidationError(f"STAGED_PHASE_TAMPERED: Staged Web-Relay payload for phase '{pid}' failed SHA-256 verification.")
+        if not isinstance(staged_doc, dict) or not str(staged_doc.get("staged_sha256") or "").strip():
+            raise _engine.ValidationError(f"STAGED_PHASE_TAMPERED: Staged Web-Relay payload for phase '{pid}' is missing staged_sha256.")
+        expected_st_sha = _engine.canonical_sha256({
+            "task_id": str(staged_doc.get("task_id") or tid),
+            "phase_id": str(staged_doc.get("phase_id") or pid),
+            "writes": list(staged_doc.get("writes") or []),
+            "deletes": list(staged_doc.get("deletes") or []),
+        })
+        if staged_doc.get("staged_sha256") != expected_st_sha:
+            raise _engine.ValidationError(f"STAGED_PHASE_TAMPERED: Staged Web-Relay payload for phase '{pid}' failed SHA-256 verification.")
+        validated_st_writes: list[dict[str, Any]] = []
+        for wr in staged_doc.get("writes") or []:
+            if not isinstance(wr, dict):
+                raise _engine.ValidationError(f"STAGED_PHASE_TAMPERED: Invalid write entry in phase '{pid}'.")
+            st_rel = _engine._norm_rel(repo, str(wr.get("path") or ""))
+            st_blocked, st_bmsg = _engine._is_protected_or_secret_path(st_rel)
+            if st_blocked:
+                raise _engine.ValidationError(st_bmsg)
+            validated_st_writes.append({**wr, "path": st_rel})
+        validated_st_deletes: list[str] = []
+        for dl in staged_doc.get("deletes") or []:
+            dl_rel = _engine._norm_rel(repo, str(dl or ""))
+            dl_blocked, dl_bmsg = _engine._is_protected_or_secret_path(dl_rel)
+            if dl_blocked:
+                raise _engine.ValidationError(dl_bmsg)
+            validated_st_deletes.append(dl_rel)
         if dry_run:
             return {
                 "status": "DRY_RUN_STAGED_PHASE",
@@ -832,15 +930,15 @@ def apply_web_merge(
                 "disk_modified": False,
                 "task_id": tid,
                 "phase_id": pid,
-                "files_to_write": [w["path"] for w in staged_doc.get("writes") or []],
-                "files_to_delete": list(staged_doc.get("deletes") or []),
+                "files_to_write": [w["path"] for w in validated_st_writes],
+                "files_to_delete": list(validated_st_deletes),
             }
-        for wr in staged_doc.get("writes") or []:
+        for dl_rel in validated_st_deletes:
+            (repo / dl_rel).unlink(missing_ok=True)
+        for wr in validated_st_writes:
             dst = repo / wr["path"]
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(_engine._apply_eol(wr["content"], wr.get("eol") or "lf"))
-        for dl in staged_doc.get("deletes") or []:
-            (repo / dl).unlink(missing_ok=True)
+            dst.write_bytes(_engine._apply_eol(str(wr.get("content") or ""), str(wr.get("eol") or "lf")))
         staged_f.unlink(missing_ok=True)
         gate_env = {**_engine.os.environ, "HARNESS_REPO": str(repo), "PYTHONIOENCODING": "utf-8"}
         lint_script = (repo / ".agents" / "scripts" / "fast_kt_lint.py") if (repo / ".agents" / "scripts" / "fast_kt_lint.py").is_file() else (_engine.SCRIPTS_DIR / "fast_kt_lint.py")
@@ -1047,7 +1145,7 @@ def apply_web_merge(
             continue
 
         disk_f = repo / rel_path
-        if action == "CREATE" and not disk_f.exists():
+        if action == "CREATE" and (not disk_f.exists() or rel_path in planned_deletes):
             if "content" not in op:
                 raise _engine.ValidationError(f"CREATE operation on '{rel_path}' requires 'content'.")
             restored = _engine._restore_inline_secrets(str(op["content"]), vault)
@@ -1063,6 +1161,14 @@ def apply_web_merge(
                 raise _engine.ValidationError(
                     f"UNSCOPED_EXISTING_FILE_OVERWRITE_BLOCKED: Existing file '{rel_path}' was NOT included in `EDITABLE_FILES` of pack `{pack_id}`. "
                     "Use surgical `hunks` (`search`/`replace`) or return `NEED_FILES` to load its full source before replacing whole-file `content`."
+                )
+            rel_low = rel_path.lower()
+            if (
+                rel_low.endswith((".gradle", ".gradle.kts", ".toml", ".properties", ".sh", ".bat", ".cmd", ".ps1", ".py", ".yml", ".yaml"))
+                or Path(rel_low).name == "androidmanifest.xml"
+            ):
+                raise _engine.ValidationError(
+                    f"UNSCOPED_SENSITIVE_NEIGHBOR_BLOCKED: Build, script, or manifest file '{rel_path}' was NOT included in `EDITABLE_FILES` of pack `{pack_id}`."
                 )
             # Safe surgical `hunks` on an existing non-secret repo file (e.g. neighbor interface/caller): verify directly against live disk!
             live_b = disk_f.read_bytes()
@@ -1585,6 +1691,7 @@ def apply_web_merge(
     prod_writes = [w for w in active_writes if not w.get("is_test")]
     auto_red_result: dict[str, Any] | None = None
 
+    remaining_deletes = list(active_deletes)
     if (
         auto_red_green
         and t_kind_upper == "BUG"
@@ -1592,6 +1699,11 @@ def apply_web_merge(
         and test_writes
         and (prod_writes or active_deletes)
     ):
+        test_deletes = [d for d in remaining_deletes if _engine.is_kmp_or_android_test_path(d)]
+        for td_path in test_deletes:
+            (repo / td_path).unlink(missing_ok=True)
+        test_del_set = set(test_deletes)
+        remaining_deletes = [d for d in remaining_deletes if d not in test_del_set]
         for tw in test_writes:
             dst = repo / tw["path"]
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -1614,13 +1726,13 @@ def apply_web_merge(
             "exit_code": proc_red.returncode,
         }
 
-    # Write all active phase files & deletes onto disk
+    # Execute deletes BEFORE writes so RENAME+CREATE and case-only renames on NTFS/APFS never delete new files
+    for d_path in remaining_deletes:
+        (repo / d_path).unlink(missing_ok=True)
     for w in active_writes:
         dst = repo / w["path"]
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(_engine._apply_eol(w["content"], w["eol"]))
-    for d_path in active_deletes:
-        (repo / d_path).unlink(missing_ok=True)
 
     # Mark pack consumed (`Safeguard #7`) — or keep open for continuation when `status == "PARTIAL"`!
     is_partial_reply = str(payload.get("status") or "").strip().upper() in {"PARTIAL", "PARTIAL_BATCH", "CONTINUE"}

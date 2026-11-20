@@ -24,7 +24,7 @@ def rule_errors(agents_root: Path) -> list[str]:
     for name, expected in MANAGED_RULES.items():
         path = agents_root / "rules" / name
         try:
-            content = path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError):
             errors.append(f"{name}: missing or unreadable managed rule; repair/update the kit.")
             continue

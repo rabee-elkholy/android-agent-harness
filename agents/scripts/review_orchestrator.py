@@ -608,15 +608,15 @@ def _package_sha256_matches_or_single_repeat_typo(got_sha: str, expected_sha: st
         return len(g) == 64 and g == e
     if len(g) == 64 and g == e:
         return True
-    if len(g) not in (63, 65) or not re.fullmatch(r"[0-9a-f]+", g) or g[:24] != e[:24]:
+    if len(g) not in (63, 65) or not re.fullmatch(r"[0-9a-f]+", g):
         return False
     if len(g) == 63:
-        for idx in range(24, 64):
-            if idx > 0 and e[idx] == e[idx - 1] and (e[:idx] + e[idx + 1 :]) == g:
+        for idx in range(1, 64):
+            if e[idx] == e[idx - 1] and (e[:idx] + e[idx + 1 :]) == g:
                 return True
     elif len(g) == 65:
-        for idx in range(24, 65):
-            if idx > 0 and g[idx] == g[idx - 1] and (g[:idx] + g[idx + 1 :]) == e:
+        for idx in range(1, 65):
+            if g[idx] == g[idx - 1] and (g[:idx] + g[idx + 1 :]) == e:
                 return True
     return False
 

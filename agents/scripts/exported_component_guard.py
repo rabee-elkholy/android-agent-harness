@@ -30,8 +30,31 @@ PERMISSION_ATTRS = ("permission", "readPermission", "writePermission")
 ACCEPTANCE_FILE = "exported-components-accepted.json"
 
 
+def partially_protected_providers(text: str) -> list[str]:
+    """Return exported `<provider>` names that guard only one direction (`readPermission` XOR `writePermission`)."""
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return []
+    partial: list[str] = []
+    for element in root.iter("provider"):
+        name = element.get(f"{ANDROID}name") or ""
+        raw_exported = (element.get(f"{ANDROID}exported") or "").strip().lower()
+        has_intent_filter = element.find("intent-filter") is not None
+        exported = (raw_exported == "true") or (raw_exported == "" and has_intent_filter)
+        if not exported:
+            continue
+        full_perm = bool((element.get(f"{ANDROID}permission") or "").strip())
+        read_perm = bool((element.get(f"{ANDROID}readPermission") or "").strip())
+        write_perm = bool((element.get(f"{ANDROID}writePermission") or "").strip())
+        if not full_perm and (read_perm != write_perm):
+            missing_attr = "android:writePermission" if read_perm else "android:readPermission"
+            partial.append(f"{name} (missing {missing_attr})")
+    return partial
+
+
 def open_components(text: str) -> dict[tuple[str, str], bool]:
-    """(tag, name) -> True when the component is exported without any permission."""
+    """(tag, name) -> True when the component is exported (explicitly or implicitly via intent-filter) without any non-blank permission."""
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
@@ -40,8 +63,13 @@ def open_components(text: str) -> dict[tuple[str, str], bool]:
     for tag in COMPONENT_TAGS:
         for element in root.iter(tag):
             name = element.get(f"{ANDROID}name") or ""
-            exported = (element.get(f"{ANDROID}exported") or "").strip().lower() == "true"
-            permitted = any(element.get(f"{ANDROID}{attr}") for attr in PERMISSION_ATTRS)
+            raw_exported = (element.get(f"{ANDROID}exported") or "").strip().lower()
+            has_intent_filter = element.find("intent-filter") is not None
+            exported = (raw_exported == "true") or (raw_exported == "" and has_intent_filter)
+            if tag == "provider":
+                permitted = any(bool((element.get(f"{ANDROID}{attr}") or "").strip()) for attr in PERMISSION_ATTRS)
+            else:
+                permitted = bool((element.get(f"{ANDROID}permission") or "").strip())
             result[(tag, name)] = exported and not permitted
     return result
 
@@ -112,6 +140,18 @@ def check(repo: Path, paths: list[str], accepted: set[str] | None = None) -> tup
         accepted = accepted_names(directory) if directory else set()
     findings = newly_open_components(repo, paths, accepted)
     if not findings:
+        advisories: list[str] = []
+        for rel in sorted(p for p in paths if p.endswith("AndroidManifest.xml")):
+            mf = repo / rel
+            if mf.is_file():
+                for item in partially_protected_providers(mf.read_text(encoding="utf-8", errors="replace")):
+                    advisories.append(f"{rel}: <provider {item}>")
+        if advisories:
+            return True, (
+                "no newly exported component without a permission "
+                "(ADVISORY — one-sided ContentProvider permission on " + "; ".join(advisories)
+                + ": verify unguarded read/write entry points throw SecurityException/UnsupportedOperationException or add full permission)"
+            )
         return True, "no newly exported component without a permission"
     receiver_note = ""
     if any("<receiver " in item for item in findings):

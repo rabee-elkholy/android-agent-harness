@@ -175,6 +175,20 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "default_enabled": True,
         "summary": "Caps parallel search_web bursts at <=2 per turn and diagnoses >300s unexpected EOF stalls.",
     },
+    "AGY_WIN_CRLF_EDIT_NORMALIZATION": {
+        "issues": ("#crlf-edit",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "fixed_upstream_in": {"agy_cli": "1.5.1", "antigravity_app": "2.33.0", "antigravity_ide": "2.7.1"},
+        "summary": "Pre-1.5.1 PreToolUse CRLF->LF target normalization for host edit_file (fixed upstream in agy CLI 1.5.1 / 1.5.10 and App 2.33.0; bypassed automatically on >=1.5.1).",
+    },
+    "AGY_WIN_HOOK_QUOTE_AND_BOM": {
+        "issues": ("#hook-quote-bom",),
+        "platforms": ("win32",),
+        "default_enabled": True,
+        "fixed_upstream_in": {"agy_cli": "1.5.8", "antigravity_app": "2.33.0"},
+        "summary": "Pre-1.5.8 Windows hooks.json double-quote command parsing and UTF-8 BOM hazard check (fixed upstream in agy CLI 1.5.8 and plugin.json BOM in 1.5.11).",
+    },
 }
 
 
@@ -196,7 +210,7 @@ def _disabled_tokens(repo: Path | None = None, env: Mapping[str, str] | None = N
             cfg_path = repo / rel
             if cfg_path.is_file():
                 try:
-                    data = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+                    data = json.loads(cfg_path.read_text(encoding="utf-8-sig", errors="replace"))
                     if isinstance(data, dict):
                         for item in data.get("disabled") or []:
                             tok = _normalize_token(str(item))
@@ -227,12 +241,55 @@ def resolve_quirk_id(quirk_id_or_issue: str) -> str | None:
     return hits[0] if hits else None
 
 
+def _parse_semver_tuple(raw: str) -> tuple[int, int, int] | None:
+    m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(raw or ""))
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def is_quirk_mitigated_upstream(
+    quirk_id_or_issue: str,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    """Return True when declared Antigravity CLI/App/IDE version meets or exceeds the quirk's `fixed_upstream_in` floor."""
+    environ = env if env is not None else os.environ
+    hits = _matching_quirk_ids(quirk_id_or_issue)
+    if not hits:
+        return False
+    cli_v = _parse_semver_tuple(str(environ.get("ANTIGRAVITY_CLI_VERSION") or environ.get("AGY_CLI_VERSION") or ""))
+    app_v = _parse_semver_tuple(str(environ.get("ANTIGRAVITY_APP_VERSION") or environ.get("AGY_APP_VERSION") or ""))
+    ide_v = _parse_semver_tuple(str(environ.get("ANTIGRAVITY_IDE_VERSION") or environ.get("AGY_IDE_VERSION") or ""))
+    for qid in hits:
+        fixed_in = PLATFORM_QUIRKS[qid].get("fixed_upstream_in")
+        if not isinstance(fixed_in, dict) or not fixed_in:
+            return False
+        mitigated = False
+        if cli_v is not None and fixed_in.get("agy_cli"):
+            req_cli = _parse_semver_tuple(str(fixed_in["agy_cli"]))
+            if req_cli is not None and cli_v >= req_cli:
+                mitigated = True
+        if app_v is not None and fixed_in.get("antigravity_app"):
+            req_app = _parse_semver_tuple(str(fixed_in["antigravity_app"]))
+            if req_app is not None and app_v >= req_app:
+                mitigated = True
+        if ide_v is not None and fixed_in.get("antigravity_ide"):
+            req_ide = _parse_semver_tuple(str(fixed_in["antigravity_ide"]))
+            if req_ide is not None and ide_v >= req_ide:
+                mitigated = True
+        if not mitigated:
+            return False
+    return True
+
+
 def is_quirk_enabled(
     quirk_id_or_issue: str,
     *,
     repo: Path | None = None,
     env: Mapping[str, str] | None = None,
     respect_platform: bool = False,
+    respect_upstream: bool = False,
 ) -> bool:
     environ = env if env is not None else os.environ
     disabled = _disabled_tokens(repo=repo, env=environ)
@@ -247,6 +304,8 @@ def is_quirk_enabled(
         spec = PLATFORM_QUIRKS[qid]
         if qid in disabled or any(_normalize_token(iss) in disabled for iss in (spec.get("issues") or ())):
             return False
+        if respect_upstream and is_quirk_mitigated_upstream(qid, env=environ):
+            continue
         if respect_platform:
             plats = tuple(str(p).lower() for p in (spec.get("platforms") or ("all",)))
             if "all" not in plats and not any(active_plat.startswith(p) for p in plats):
@@ -262,11 +321,15 @@ def list_platform_quirks(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for qid, spec in PLATFORM_QUIRKS.items():
+        fixed_map = dict(spec.get("fixed_upstream_in") or {})
+        mitigated = is_quirk_mitigated_upstream(qid, env=env)
         rows.append({
             "id": qid,
             "issues": list(spec.get("issues") or ()),
             "platforms": list(spec.get("platforms") or ("all",)),
             "enabled": is_quirk_enabled(qid, repo=repo, env=env),
+            "mitigated_upstream": mitigated,
+            **({"fixed_upstream_in": fixed_map} if fixed_map else {}),
             "summary": str(spec.get("summary") or ""),
         })
     return rows

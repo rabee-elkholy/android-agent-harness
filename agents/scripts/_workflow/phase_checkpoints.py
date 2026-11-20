@@ -52,7 +52,7 @@ def resolve_module_gradle_task(repo: Path, module: str, task_type: str = "compil
     answers_file = repo / ".harness-setup" / "answers.json"
     if answers_file.is_file():
         try:
-            ans = _engine.json.loads(answers_file.read_text(encoding="utf-8"))
+            ans = _engine.json.loads(answers_file.read_text(encoding="utf-8-sig"))
             if ans.get("build_variant"):
                 variant = str(ans["build_variant"])
             elif ans.get("flavor"):

@@ -214,7 +214,7 @@ def record_pm_grant(
 def active_grant(repo: Path) -> dict | None:
     """The unexpired Zoho grant, or None."""
     try:
-        data = json.loads((_state(repo) / GRANT_FILE).read_text(encoding="utf-8"))
+        data = json.loads((_state(repo) / GRANT_FILE).read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     try:

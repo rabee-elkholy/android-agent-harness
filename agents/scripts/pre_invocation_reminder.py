@@ -108,7 +108,7 @@ def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
     util_f = st_dir / "utility-subagents.json"
     if util_f.is_file():
         try:
-            udoc = json.loads(util_f.read_text(encoding="utf-8"))
+            udoc = json.loads(util_f.read_text(encoding="utf-8-sig"))
             for ent in (udoc.get("entries") or []) if isinstance(udoc, dict) else []:
                 if not isinstance(ent, dict):
                     continue
@@ -131,7 +131,7 @@ def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
         lf_p = st_dir / lead_file
         if lf_p.is_file():
             try:
-                ldoc = json.loads(lf_p.read_text(encoding="utf-8"))
+                ldoc = json.loads(lf_p.read_text(encoding="utf-8-sig"))
                 if isinstance(ldoc, dict) and ldoc.get(lead_key):
                     lead_cids.add(str(ldoc[lead_key]).strip())
             except (OSError, ValueError):
@@ -140,23 +140,23 @@ def _has_fresh_unbound_subagent_spawn(repo: Path, conversation_id: str) -> bool:
         act_f = st_dir / "active-task.json"
         if act_f.is_file():
             try:
-                tid = str(json.loads(act_f.read_text(encoding="utf-8")).get("task_id") or "").strip()
+                tid = str(json.loads(act_f.read_text(encoding="utf-8-sig")).get("task_id") or "").strip()
                 if tid:
                     tdir = st_dir / "tasks" / tid
                     crun_f = tdir / "current-run.json"
                     if crun_f.is_file():
-                        rid = str(json.loads(crun_f.read_text(encoding="utf-8")).get("run_id") or "").strip()
+                        rid = str(json.loads(crun_f.read_text(encoding="utf-8-sig")).get("run_id") or "").strip()
                         led_f = tdir / "review-execution" / rid / "ledger.json" if rid else None
                         if led_f and led_f.is_file():
-                            revs = (json.loads(led_f.read_text(encoding="utf-8")).get("reviewers") or {})
+                            revs = (json.loads(led_f.read_text(encoding="utf-8-sig")).get("reviewers") or {})
                             if any(isinstance(v, dict) and v.get("state") == "DISPATCHED" and not v.get("execution_id") for v in revs.values()):
                                 return True
                     ps_f = tdir / "phase-state.json"
                     if ps_f.is_file():
-                        cur_pid = str(json.loads(ps_f.read_text(encoding="utf-8")).get("current_phase_id") or "").strip()
+                        cur_pid = str(json.loads(ps_f.read_text(encoding="utf-8-sig")).get("current_phase_id") or "").strip()
                         pled_f = tdir / "phases" / cur_pid / "review" / "ledger.json" if cur_pid else None
                         if pled_f and pled_f.is_file():
-                            prevs = (json.loads(pled_f.read_text(encoding="utf-8")).get("reviewers") or {})
+                            prevs = (json.loads(pled_f.read_text(encoding="utf-8-sig")).get("reviewers") or {})
                             if any(isinstance(v, dict) and v.get("state") == "DISPATCHED" and not v.get("execution_id") for v in prevs.values()):
                                 return True
             except (OSError, ValueError, TypeError):
@@ -200,7 +200,7 @@ def _is_reviewer_conversation(repo: Path, conversation_id: str, payload: dict | 
             lead_cid = ""
             if lead_f.is_file():
                 try:
-                    lead_cid = str(json.loads(lead_f.read_text(encoding="utf-8")).get("latest_lead_cid") or "").strip()
+                    lead_cid = str(json.loads(lead_f.read_text(encoding="utf-8-sig")).get("latest_lead_cid") or "").strip()
                 except (OSError, ValueError):
                     lead_cid = ""
             if lead_cid and conversation_id != lead_cid:
@@ -310,7 +310,7 @@ def _has_any_seen_state(conversation_id: str) -> bool:
     cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
     try:
         if cache_path.is_file():
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            data = json.loads(cache_path.read_text(encoding="utf-8-sig"))
             return isinstance(data, dict) and conversation_id in data
     except (OSError, ValueError):
         return False
@@ -323,7 +323,7 @@ def _has_seen_state(conversation_id: str, state_key: str) -> bool:
     cache_path = REPO / ".agents" / "cache" / "reminder-state.json"
     try:
         if cache_path.is_file():
-            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            data = json.loads(cache_path.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict) and data.get(conversation_id) == state_key:
                 return True
     except (OSError, ValueError):
@@ -342,7 +342,7 @@ def _record_seen_state(conversation_id: str, state_key: str) -> None:
             data: dict[str, str] = {}
             if cache_path.is_file():
                 try:
-                    raw = json.loads(cache_path.read_text(encoding="utf-8"))
+                    raw = json.loads(cache_path.read_text(encoding="utf-8-sig"))
                     if isinstance(raw, dict):
                         data = {str(k): str(v) for k, v in list(raw.items())[-49:]}
                 except (OSError, ValueError):

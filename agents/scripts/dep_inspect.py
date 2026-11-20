@@ -248,6 +248,42 @@ def _parse_repo_catalog_and_boms(
     return versioned, versionless, boms
 
 
+_MAVEN_COORD_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-+]*$")
+_VALID_JVM_FQCN_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$.]*$")
+MAX_ZIP_ENTRY_BYTES = 16 * 1024 * 1024
+MAX_AAR_CLASSES_JAR_BYTES = 64 * 1024 * 1024
+
+
+def _validate_maven_segment(value: str, field: str) -> str:
+    val = str(value or "").strip()
+    if not val or ".." in val or "/" in val or "\\" in val or not _MAVEN_COORD_SEGMENT_RE.fullmatch(val):
+        raise ValidationError(f"INVALID_DEPENDENCY_COORDINATE: Unsafe or malformed Maven {field} '{value}'.")
+    return val
+
+
+def _validate_coordinate_triplet(group: str, artifact: str, version: str) -> tuple[str, str, str]:
+    return (
+        _validate_maven_segment(group, "group"),
+        _validate_maven_segment(artifact, "artifact"),
+        _validate_maven_segment(version, "version"),
+    )
+
+
+def _safe_zip_read_bytes(zf: zipfile.ZipFile, entry_name: str, *, max_bytes: int = MAX_ZIP_ENTRY_BYTES) -> bytes:
+    info = zf.getinfo(entry_name)
+    if info.file_size > max_bytes:
+        raise ValidationError(
+            f"ZIP_ENTRY_TOO_LARGE: Entry '{entry_name}' uncompressed size ({info.file_size} bytes) exceeds {max_bytes}-byte safety cap."
+        )
+    with zf.open(info, "r") as fh:
+        data = fh.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValidationError(
+            f"ZIP_ENTRY_TOO_LARGE: Entry '{entry_name}' stream exceeded {max_bytes}-byte safety cap."
+        )
+    return data
+
+
 def _load_or_fetch_bom_pom(
     repo: Path,
     bom_group: str,
@@ -259,6 +295,7 @@ def _load_or_fetch_bom_pom(
     maven_repos: list[str] | None = None,
 ) -> str:
     """Locate `<bom>-<version>.pom` in local caches or fetch from Maven repos."""
+    bom_group, bom_artifact, bom_version = _validate_coordinate_triplet(bom_group, bom_artifact, bom_version)
     local_cache = _dep_sources_cache_dir(repo)
     safe_pom = f"{bom_group}__{bom_artifact}__{bom_version}.pom".replace(":", "_")
     cached_pom = local_cache / safe_pom
@@ -521,9 +558,18 @@ def resolve_dependency_coordinate(
     if not cleaned:
         raise ValidationError("MISSING_DEPENDENCY_TARGET: Pass `<group:artifact[:version]>` or `<artifact>`.")
 
+    if ":" in cleaned and any(not p.strip() for p in cleaned.split(":")):
+        raise ValidationError(f"INVALID_DEPENDENCY_COORDINATE: Malformed Maven coordinate '{raw_target}'.")
     parts = [p.strip() for p in cleaned.split(":") if p.strip()]
-    if len(parts) >= 3:
-        return parts[0], parts[1], parts[2]
+    if len(parts) > 3:
+        raise ValidationError(f"INVALID_DEPENDENCY_COORDINATE: Unexpected extra segments in '{raw_target}'.")
+    if len(parts) == 3:
+        return _validate_coordinate_triplet(parts[0], parts[1], parts[2])
+    if len(parts) == 2:
+        _validate_maven_segment(parts[0], "group")
+        _validate_maven_segment(parts[1], "artifact")
+    elif len(parts) == 1:
+        _validate_maven_segment(parts[0], "artifact")
 
     declared, versionless, declared_boms = _parse_repo_catalog_and_boms(repo)
     cache_roots = _discover_gradle_files21_roots(repo, extra_cache_dirs=extra_cache_dirs)
@@ -714,6 +760,7 @@ def _download_maven_artifact(
                             continue
                 except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
                     continue
+                _validate_coordinate_triplet(group, var_art, version)
                 safe_local = f"{group}__{var_art}__{version}{sfx}".replace(":", "_")
                 out_path = dest_dir / safe_local
                 tmp_path = dest_dir / f".tmp-{os.getpid()}-{safe_local}"
@@ -809,7 +856,7 @@ def inspect_sources_jar(
             for entry in matched_files[:5]:
                 if rem <= 120:
                     break
-                raw = zf.read(entry).decode("utf-8", errors="replace")
+                raw = _safe_zip_read_bytes(zf, entry).decode("utf-8", errors="replace")
                 comp = _compact_source_text(raw, keep_imports=keep_imports)
                 piece = _extract_focused_excerpt(comp, q_tokens, min(rem, budget))
                 excerpts.append({
@@ -846,8 +893,8 @@ def inspect_sources_jar(
             entry_low = entry.lower()
             stem_low = Path(entry).stem.lower()
             try:
-                raw = zf.read(entry).decode("utf-8", errors="replace")
-            except (OSError, KeyError):
+                raw = _safe_zip_read_bytes(zf, entry).decode("utf-8", errors="replace")
+            except (OSError, KeyError, ValidationError):
                 continue
             raw_low = raw.lower()
             if not any(qt in entry_low or qt in raw_low for qt in q_tokens):
@@ -934,7 +981,7 @@ def inspect_binary_archive(
                 if "classes.jar" not in aar_zf.namelist():
                     return {"mode": "binary_classes", "matched_count": 0, "classes": [], "signatures": ""}
                 classes_jar = tmp_dir / "classes.jar"
-                classes_jar.write_bytes(aar_zf.read("classes.jar"))
+                classes_jar.write_bytes(_safe_zip_read_bytes(aar_zf, "classes.jar", max_bytes=MAX_AAR_CLASSES_JAR_BYTES))
 
         with zipfile.ZipFile(classes_jar, "r") as czf:
             class_entries = [
@@ -953,6 +1000,7 @@ def inspect_binary_archive(
         else:
             matched = [c for c in fqcns if "$" not in c]
 
+        matched = [c for c in matched if _VALID_JVM_FQCN_RE.fullmatch(c)]
         matched.sort(key=lambda c: ("$" in c, len(c), c))
         top_classes = matched[:12]
         signatures = ""

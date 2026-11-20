@@ -431,7 +431,7 @@ def sync_utility_agent_models(
 
 
 def is_test_file(raw_path: str) -> bool:
-    norm = str(raw_path or "").replace("\\", "/").strip().lstrip("./")
+    norm = re.sub(r"^(?:\./)+", "", str(raw_path or "").replace("\\", "/").strip()).lstrip("/")
     if not norm:
         return False
     lower = norm.lower()
@@ -1114,7 +1114,7 @@ def _normalize_repo_rel(repo: Path, raw_target: str) -> str:
                 return cand_posix[len(root_posix) + 1 :].lstrip("/")
     except OSError:
         pass
-    return cleaned.replace("\\", "/").lstrip("./")
+    return re.sub(r"^(?:\./)+", "", cleaned.replace("\\", "/")).lstrip("/")
 
 
 _SCOUT_SAFE_COMMAND_RE = re.compile(
@@ -1132,11 +1132,15 @@ _SCOUT_SAFE_JAR_RE = re.compile(
     r"^\s*(?:(?:\"[^\"\n]*[/\\]|[^\s\"\n]*[/\\]))?(?:(?i:jar(?:\.exe)?)\s+(?:-?t(?:vf|fv|f)|--list(?:\s+(?:-f|--file))?)\s+\S+|(?i:javap(?:\.exe)?)\s+(?![\"\x27]?-J)(?!.*\s[\"\x27]?-J)\S.*)$"
 )
 _SCOUT_UNSAFE_GIT_FLAG_RE = re.compile(
-    r"(?:^|\s)(?:(?i:--open-files-in-pager\b|--open\w*|--ext-diff\b|--textconv\b|--output(?:=|\s)|--exec(?:=|\s))|-(?!-)[A-Za-z0-9]*O\S*)"
+    r"(?:^|\s)(?:(?i:--open-files-in-pager\b|--open\w*|--no-index\b|--ext-diff\b|--textconv\b|--output(?:=|\s)|--exec(?:=|\s))|-(?!-)[A-Za-z0-9]*O\S*)"
+)
+_SCOUT_GIT_GREP_FILE_FLAG_RE = re.compile(
+    r"^\s*git(?:\.exe)?\s+grep\b.*(?:\s--file(?:=|\s)|\s-(?!-)[A-Za-z0-9]*f(?:\s|$|\S))",
+    re.IGNORECASE,
 )
 
 
-def scout_command_allowed(command: str) -> bool:
+def _single_scout_command_allowed(command: str) -> bool:
     cmd = str(command or "").strip()
     if not cmd:
         return False
@@ -1146,9 +1150,15 @@ def scout_command_allowed(command: str) -> bool:
         return False
     if any(tok in op_txt for tok in ("&&", "||", ";", "|", ">", "<", "`", "$", "&", "\n")):
         return False
-    if "--inspect-file" in cmd or "--repair" in cmd or "--fix" in cmd:
+    if (
+        "--inspect-file" in cmd
+        or "--repair" in cmd
+        or "--fix" in cmd
+        or "--rebuild" in cmd
+        or bool(re.search(r"(?:^|\s)--out(?:put)?(?:=|\s|$)", cmd, re.IGNORECASE))
+    ):
         return False
-    if _SCOUT_UNSAFE_GIT_FLAG_RE.search(cmd):
+    if _SCOUT_UNSAFE_GIT_FLAG_RE.search(cmd) or _SCOUT_GIT_GREP_FILE_FLAG_RE.search(cmd):
         return False
     # Reject cmd.exe mid-word caret obfuscation (`g^it`, `^&`, `^--flag`) while permitting standard git revision carets (`^HEAD`, `abc123^..HEAD`)
     if "^" in op_txt:
@@ -1163,24 +1173,37 @@ def scout_command_allowed(command: str) -> bool:
     return bool(_SCOUT_SAFE_COMMAND_RE.search(cmd) or _SCOUT_SAFE_GIT_RE.search(cmd) or _SCOUT_SAFE_JAR_RE.search(cmd))
 
 
-def extract_symbol_write_targets(command: str) -> tuple[bool, list[str]]:
-    """Return `(is_symbol_write, file_targets)` for `symbol replace-body/insert-after` CLI calls.
+def scout_command_allowed(command: str) -> bool:
+    """Allow standalone or `&&`-chained read-only Scout commands (CLI v1.5.13+), rejecting pipes/redirections."""
+    from mutation_guard import _split_safe_and_chain
+    segments = _split_safe_and_chain(command or "", max_segments=6)
+    if not segments:
+        return False
+    return all(_single_scout_command_allowed(seg) for seg in segments)
 
-    If `is_symbol_write` is True and `file_targets` is empty, the command is malformed or chained
-    and callers must fail closed.
-    """
-    cmd = str(command or "").strip()
+
+_SYMBOL_WRITE_ACTIONS = frozenset({"replace-body", "insert-after"})
+_SYMBOL_OPTION_TAKES_VALUE = frozenset({
+    "--repo", "--file", "--symbol", "--occurrence", "--expected-sha256",
+    "--replacement-file", "--body", "--code", "--replacement", "--kit",
+})
+
+
+def _extract_single_symbol_write_target(segment: str) -> tuple[bool, list[str]]:
+    cmd = str(segment or "").strip()
     if not cmd:
         return False, []
-    if not re.search(
-        r"(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness)\s+symbol\s+(?:replace-body|insert-after)\b"
-        r"|symbol_edit\.py\"?\s+(?:replace-body|insert-after)\b",
-        cmd,
-        re.IGNORECASE,
-    ):
+    low_cmd = cmd.lower()
+    if not ("replace-body" in low_cmd or "insert-after" in low_cmd):
         return False, []
-    if any(op in cmd for op in ("&&", "||", ";", "|", "`", "$(")):
-        return True, []
+    mentions_symbol_cli = bool(
+        re.search(
+            r"(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness|symbol_edit(?:\.py)?)\b",
+            low_cmd,
+        )
+    )
+    if not mentions_symbol_cli:
+        return False, []
     import shlex
     try:
         tokens = shlex.split(cmd, posix=False)
@@ -1190,22 +1213,101 @@ def extract_symbol_write_targets(command: str) -> tuple[bool, list[str]]:
         t[1:-1] if len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'" else t
         for t in tokens
     ]
+    if not cleaned:
+        return False, []
+
+    entry_idx = -1
+    entry_kind = ""
+    for i, tok in enumerate(cleaned):
+        base = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base in {"symbol_edit.py", "symbol_edit"}:
+            entry_idx, entry_kind = i, "symbol_edit"
+            break
+        if base in {"harness.py", "harness", "harness_cli.py", "harness_cli", "android-harness", "android-harness.exe"}:
+            entry_idx, entry_kind = i, "harness"
+            break
+    if entry_idx < 0:
+        return False, []
+
+    rest = cleaned[entry_idx + 1 :]
+    positionals: list[str] = []
     targets: list[str] = []
+    malformed_file_flag = False
     idx = 0
-    while idx < len(cleaned):
-        tok = cleaned[idx]
-        if tok == "--file" and idx + 1 < len(cleaned):
-            val = cleaned[idx + 1].strip()
-            if val and not val.startswith("-"):
-                targets.append(val)
+    while idx < len(rest):
+        tok = rest[idx]
+        low_tok = tok.lower()
+        if low_tok == "--file":
+            if idx + 1 >= len(rest) or rest[idx + 1].startswith("-") or not rest[idx + 1].strip():
+                malformed_file_flag = True
+                idx += 1
+                continue
+            targets.append(rest[idx + 1].strip().strip("\"'"))
             idx += 2
             continue
-        if tok.startswith("--file="):
-            val = tok.split("=", 1)[1].strip()
-            if val:
+        if low_tok.startswith("--file="):
+            val = tok.split("=", 1)[1].strip().strip("\"'")
+            if not val or val.startswith("-"):
+                malformed_file_flag = True
+            else:
                 targets.append(val)
+            idx += 1
+            continue
+        if tok.startswith("-"):
+            if "=" not in tok and low_tok in _SYMBOL_OPTION_TAKES_VALUE and idx + 1 < len(rest):
+                idx += 2
+            else:
+                idx += 1
+            continue
+        positionals.append(low_tok)
         idx += 1
+
+    is_sym_write = False
+    if entry_kind == "symbol_edit":
+        is_sym_write = any(p in _SYMBOL_WRITE_ACTIONS for p in positionals[:2])
+    elif entry_kind == "harness":
+        if positionals[:1] == ["symbol"] and any(p in _SYMBOL_WRITE_ACTIONS for p in positionals[1:3]):
+            is_sym_write = True
+    if not is_sym_write:
+        return False, []
+    if malformed_file_flag or len(targets) != 1:
+        return True, []
     return True, targets
+
+
+def extract_symbol_write_targets(command: str) -> tuple[bool, list[str]]:
+    """Return `(is_symbol_write, file_targets)` for standalone or `&&`-chained `symbol` write calls.
+
+    Handles quoted script paths (`".agents/harness.py"`), Windows backslashes, leading flags, and
+    Antigravity CLI v1.5.13 `&&` chains. If any operator outside `&&` is used or any `symbol` write
+    segment is malformed, returns `(True, [])` so callers fail closed.
+    """
+    cmd = str(command or "").strip()
+    if not cmd:
+        return False, []
+    low_cmd = cmd.lower()
+    if not ("replace-body" in low_cmd or "insert-after" in low_cmd):
+        return False, []
+    if not re.search(r"(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness|symbol_edit(?:\.py)?)\b", low_cmd):
+        return False, []
+    from mutation_guard import _split_safe_and_chain
+    segments = _split_safe_and_chain(cmd, max_segments=8)
+    if not segments:
+        return True, []
+    any_sym_write = False
+    all_targets: list[str] = []
+    for seg in segments:
+        seg_write, seg_targets = _extract_single_symbol_write_target(seg)
+        if seg_write:
+            if not seg_targets:
+                return True, []
+            any_sym_write = True
+            for t in seg_targets:
+                if t not in all_targets:
+                    all_targets.append(t)
+    if not any_sym_write:
+        return False, []
+    return True, all_targets
 
 
 def _resolve_cli_repo(explicit_repo: str | None) -> Path:

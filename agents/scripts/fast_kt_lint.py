@@ -71,17 +71,9 @@ GENERIC_CATCH_DECL_RE = re.compile(
 
 
 def _strip_kotlin_comments_preserve_lines(text: str) -> str:
-    """Replace comments and string contents while preserving exact newline positions and braces outside strings/comments."""
-    pattern = r'("""[\s\S]*?"""|"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\'|//[^\r\n]*|/\*[\s\S]*?\*/)' 
-    return re.sub(
-        pattern.strip(),
-        lambda m: (
-            '""' + ("\n" * m.group(0).count("\n"))
-            if m.group(0).startswith(('"', "'"))
-            else ("\n" * m.group(0).count("\n"))
-        ),
-        text,
-    )
+    """Mask comments and string/raw-string literals (including `${...}` nested quotes and nested `/* */`) preserving exact newlines."""
+    from _source_text import mask_comments_and_strings
+    return mask_comments_and_strings(text)
 
 
 def _extract_balanced_brace_body(clean_text: str, open_brace_index: int) -> tuple[str, int] | None:

@@ -105,15 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     diagnostic = "--diagnostic" in args_list
     json_output = "--json" in args_list
     repo_target = REPO
+    explicit_repo = False
     task_id_arg = ""
     for idx, arg in enumerate(args_list):
         if arg == "--repo" and idx + 1 < len(args_list):
             repo_target = Path(args_list[idx + 1]).resolve()
+            explicit_repo = True
             os.environ["HARNESS_REPO"] = str(repo_target)
             import _repo_files
             _repo_files.REPO = repo_target
         elif arg.startswith("--repo="):
             repo_target = Path(arg.split("=", 1)[1]).resolve()
+            explicit_repo = True
             os.environ["HARNESS_REPO"] = str(repo_target)
             import _repo_files
             _repo_files.REPO = repo_target
@@ -121,6 +124,13 @@ def main(argv: list[str] | None = None) -> int:
             task_id_arg = args_list[idx + 1]
         elif arg.startswith("--task-id=") or arg.startswith("--task="):
             task_id_arg = arg.split("=", 1)[1]
+    _env_results = os.environ.get("HARNESS_RESULTS_DIR", "").strip()
+    if _env_results and not explicit_repo:
+        _gr_dir = Path(_env_results)
+    elif (repo_target / ".agents").is_dir():
+        _gr_dir = repo_target / ".agents" / "state" / "results"
+    else:
+        _gr_dir = repo_target / "agents" / "state" / "results"
     if json_output:
         import contextlib
         import io
@@ -129,7 +139,6 @@ def main(argv: list[str] | None = None) -> int:
         with contextlib.redirect_stdout(_buf), contextlib.redirect_stderr(_buf):
             _rc = main([a for a in args_list if a != "--json"])
         from _gate_results import read_gate_result
-        _gr_dir = repo_target / ".agents" / "state" / "results"
         _payload = read_gate_result("preflight", results_dir_override=_gr_dir) or {"status": "PASS" if _rc == 0 else "FAIL", "exit_code": _rc}
         _payload = dict(_payload, exit_code=_rc)
         if _rc != 0:
@@ -415,17 +424,17 @@ def main(argv: list[str] | None = None) -> int:
         "detail": "" if overall_pass else "failed: " + ", ".join(failed_checks),
     }
     if not diagnostic and not evidence_blocked:
-        write_gate_result("preflight", common)
+        write_gate_result("preflight", common, results_dir_override=_gr_dir)
         if "localization" in selected_gates:
             write_gate_result("localization", {
                 **common, "producer": "check_strings", "status": "PASS" if str_code == 0 else "FAIL",
                 "exit_code": str_code, "detail": "string parity and localization gate",
-            })
+            }, results_dir_override=_gr_dir)
         if "room" in selected_gates:
             write_gate_result("room", {
                 **common, "producer": "room_guard", "status": "PASS" if db_ok else "FAIL",
                 "exit_code": 0 if db_ok else 1, "detail": db_msg,
-            })
+            }, results_dir_override=_gr_dir)
     if overall_pass:
         live_print(f"[SUCCESS] PREFLIGHT PASSED: ready for review packaging ({len(checks)} checks).")
         return 0

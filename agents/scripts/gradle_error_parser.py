@@ -17,15 +17,18 @@ if hasattr(sys.stdout, "reconfigure"):
     except (OSError, ValueError):
         pass
 
+_FILE_URI_PREFIX = r"(?:file:///(?=[a-zA-Z]:)|file://)?"
+
 # 1. KSP / Room processor diagnostics (evaluated before generic kotlinc so SQL continuation lines fold cleanly)
 KSP_ERROR_RE = re.compile(
-    r"^(?:e:\s*)?\[ksp\]\s*(?:file:///?)?(.+?\.(?:kt|java)):\s*(\d+)(?::(\d+))?:\s*(.+)$",
+    r"^(?:e:\s*)?\[ksp\]\s*" + _FILE_URI_PREFIX + r"(.+?\.(?:kt|java)):\s*(\d+)(?::(\d+))?(?:\s*:\s*|\s+)(.+)$",
     re.MULTILINE,
 )
 
-# 2. Kotlin compiler (`kotlinc` / Compose compiler) diagnostics
+# 2. Kotlin compiler (`kotlinc` / Compose compiler) diagnostics (Kotlin 1.x `:line:col: msg`, `(line, col): msg`, and K2 `file:///...:line:col msg`)
 KOTLIN_ERROR_RE = re.compile(
-    r"^e:\s+(?!\[ksp\])(?:\[[a-zA-Z0-9_-]+\]\s+)?(?:file:///?)?(.+?\.(?:kt|kts)):\s*(?:\()?\s*(\d+)(?:[,\s:]+(\d+)\)?)?\s*:\s*(.+)$",
+    r"^e:\s+(?!\[ksp\])(?:\[[a-zA-Z0-9_-]+\]\s+)?" + _FILE_URI_PREFIX
+    + r"(.+?\.(?:kt|kts)):\s*(?:\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*:\s*|(\d+)(?::(\d+))?(?:\s*:\s*|\s+))(.+)$",
     re.MULTILINE,
 )
 
@@ -44,7 +47,7 @@ DAGGER_HILT_RE = re.compile(
 
 # 5. AAPT2 XML resource linking & compilation errors
 AAPT2_PREFIXED_RE = re.compile(
-    r"^(?:ERROR:\s*|e:\s*)?(?:file:///?)?([a-zA-Z]:[\\/][^\r\n:]+?\.xml|[^\r\n:*]+?\.xml):(\d+)(?::(\d+))?:\s*AAPT:\s*error:\s*(.+)$",
+    r"^(?:ERROR:\s*|e:\s*)?" + _FILE_URI_PREFIX + r"([a-zA-Z]:[\\/][^\r\n:]+?\.xml|[^\r\n:*]+?\.xml):(\d+)(?::(\d+))?:\s*AAPT:\s*error:\s*(.+)$",
     re.MULTILINE,
 )
 AAPT2_PLAIN_XML_RE = re.compile(
@@ -54,7 +57,7 @@ AAPT2_PLAIN_XML_RE = re.compile(
 
 # 6. AndroidManifest Merger conflicts
 MANIFEST_FILE_ERROR_RE = re.compile(
-    r"^(?:file:///?)?([a-zA-Z]:[\\/][^\r\n:]*AndroidManifest\.xml|[^\r\n:*]*AndroidManifest\.xml):(\d+)(?::(\d+)(?:-\d+)?)?\s+Error:\s*$",
+    r"^" + _FILE_URI_PREFIX + r"([a-zA-Z]:[\\/][^\r\n:]*AndroidManifest\.xml|[^\r\n:*]*AndroidManifest\.xml):(\d+)(?::(\d+)(?:-\d+)?)?\s+Error:\s*$",
     re.MULTILINE,
 )
 MANIFEST_INLINE_RE = re.compile(
@@ -152,7 +155,9 @@ def parse_compiler_errors(raw_log: str) -> list[dict]:
 
     # 2. Kotlin
     for match in KOTLIN_ERROR_RE.finditer(normalized):
-        filepath, line_s, col_s, msg = match.groups()
+        filepath, p_line, p_col, c_line, c_col, msg = match.groups()
+        line_s = p_line or c_line
+        col_s = p_col or c_col
         _add("Kotlin", filepath, int(line_s), int(col_s) if col_s else None, msg)
 
     # 3. Dagger / Hilt

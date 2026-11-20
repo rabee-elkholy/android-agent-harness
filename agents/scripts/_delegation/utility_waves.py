@@ -1358,7 +1358,7 @@ def _is_exempt_lead_target(repo: Path, raw_target: str) -> bool:
             return True
         rel = cand.relative_to(root).as_posix()
     except OSError:
-        rel = cleaned.replace("\\", "/").lstrip("./")
+        rel = _engine.re.sub(r"^(?:\./)+", "", cleaned.replace("\\", "/")).lstrip("/")
     rel_low = rel.lower()
     if rel_low.startswith(_engine._EXEMPT_REPO_READ_PREFIXES):
         return True

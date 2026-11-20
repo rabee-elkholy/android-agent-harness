@@ -944,6 +944,21 @@ def _diff_content(repo: Path, changed: ChangedFile, base_ref: str = "HEAD") -> t
 
 
 
+def _expand_numstat_paths(path_in_diff: str) -> tuple[str, ...]:
+    if "=>" not in path_in_diff:
+        return (path_in_diff,)
+    m = re.match(r"^(.*?)\{(.*?) => (.*?)\}(.*)$", path_in_diff)
+    if m:
+        pref, old_mid, new_mid, suf = m.groups()
+        old_p = re.sub(r"/+", "/", f"{pref}{old_mid}{suf}").strip("/")
+        new_p = re.sub(r"/+", "/", f"{pref}{new_mid}{suf}").strip("/")
+        return tuple(p for p in (old_p, new_p) if p)
+    if " => " in path_in_diff:
+        old_p, new_p = path_in_diff.split(" => ", 1)
+        return tuple(p.strip() for p in (old_p, new_p) if p.strip())
+    return (path_in_diff,)
+
+
 def _changed_line_count(repo: Path, changes: list, base_ref: str = "HEAD") -> int:
     """Return a conservative diff-size bound without trusting file mtimes."""
     total = 0
@@ -958,9 +973,10 @@ def _changed_line_count(repo: Path, changes: list, base_ref: str = "HEAD") -> in
             if len(fields) < 3:
                 continue
             path_in_diff = fields[2]
-            if "=>" not in path_in_diff and not is_delivery_relevant(path_in_diff):
+            cand_paths = _expand_numstat_paths(path_in_diff)
+            if not any(is_delivery_relevant(p) for p in cand_paths):
                 continue
-            if path_in_diff not in relevant_paths:
+            if not any(p in relevant_paths for p in cand_paths):
                 continue
             if fields[0] == "-" or fields[1] == "-":
                 total += 100_000

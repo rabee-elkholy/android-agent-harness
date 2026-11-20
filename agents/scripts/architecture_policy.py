@@ -106,7 +106,7 @@ def read_architecture_policy(repo: Path) -> dict[str, Any] | None:
     if not policy_path.is_file():
         return None
     try:
-        return json.loads(policy_path.read_text(encoding="utf-8"))
+        return json.loads(policy_path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         return {"_parse_error": str(exc), "schema_version": -1}
 

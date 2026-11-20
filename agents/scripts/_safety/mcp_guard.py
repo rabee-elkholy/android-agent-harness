@@ -10,8 +10,19 @@ from . import engine as _engine
 def validate_external_write(integration, tool_name: str, args: dict, plan: dict, *, grant=None) -> tuple[bool, str]:
     from integrations.base import validate_external_write as _vew
     return _vew(integration, tool_name, args, plan, grant=grant)
-def _handle_external_mutation(integration, tool_name: str, args: dict, server: str = "") -> None:
+def _handle_external_mutation(integration, tool_name: str, args: dict, server: str = "", raw_args: Any = None) -> None:
     try:
+        from integrations.external_write_policy import sensitive_values
+        secrets = sensitive_values([args, raw_args])
+        if secrets:
+            _engine.emit(
+                "deny",
+                f"External operation '{tool_name}' would send a credential or signing file "
+                f"({', '.join(sorted(set(secrets)))}).",
+                tool=tool_name,
+                reason_code="SENSITIVE_EXTERNAL_UPLOAD",
+            )
+            return
         try:
             plan = _engine.active_plan(_engine.REPO) or {}
         except (OSError, ValueError, _engine.ValidationError):
@@ -25,17 +36,6 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
 
         if integration.name == "universal_pm":
             from zoho_grant import active_pm_grant, pm_authorize_command
-            from integrations.external_write_policy import sensitive_values
-            secrets = sensitive_values([args])
-            if secrets:
-                _engine.emit(
-                    "deny",
-                    f"External PM operation '{tool_name}' would send a credential or signing file "
-                    f"({', '.join(sorted(set(secrets)))}).",
-                    tool=tool_name,
-                    reason_code="SENSITIVE_EXTERNAL_UPLOAD",
-                )
-                return
             provider_id = integration.resolve_provider_id(server, tool_name)
             display = integration.resolve_display_name(server, tool_name)
             grant = active_pm_grant(_engine.REPO, provider=provider_id)
@@ -109,7 +109,7 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
             disp = integration.resolve_display_name(server, tool_name) if hasattr(integration, "resolve_display_name") else integration.display_name
             _engine.emit("allow", f"Read-only {disp} inspection is allowed.", tool=name, reason_code="READ_ALLOWED")
             return
-        _engine._handle_external_mutation(integration, tool_name, tool_args, server=server)
+        _engine._handle_external_mutation(integration, tool_name, tool_args, server=server, raw_args=raw_tool_args)
         return
 
     # 2. Generic MCP classification and authorization (Sections 57-63)

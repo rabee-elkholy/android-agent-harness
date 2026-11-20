@@ -250,11 +250,52 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
         print("NEXT_ACTION_INPUTS=" + json.dumps(compact_inputs, ensure_ascii=False), flush=True)
 
 
+def _normalize_leading_global_flags(raw_args: list[str]) -> list[str]:
+    """Move leading `--repo <p>` / `--repo=<p>` and `--json` flags after the subcommand."""
+    idx = 0
+    leading: list[str] = []
+    while idx < len(raw_args):
+        tok = raw_args[idx]
+        if tok == "--json":
+            leading.append(tok)
+            idx += 1
+        elif tok == "--repo" and idx + 1 < len(raw_args):
+            # Installed harness.py binds REPO_ROOT to AGENTS_ROOT.parent; drop redundant self-repo or forward explicit --repo
+            repo_val = raw_args[idx + 1]
+            try:
+                resolved_arg = (Path.cwd() / repo_val).resolve() if not Path(repo_val).is_absolute() else Path(repo_val).resolve()
+            except OSError:
+                resolved_arg = None
+            if resolved_arg is not None and resolved_arg != REPO_ROOT.resolve():
+                leading.extend(["--repo", repo_val])
+            idx += 2
+        elif tok.startswith("--repo="):
+            repo_val = tok.split("=", 1)[1]
+            try:
+                resolved_arg = (Path.cwd() / repo_val).resolve() if not Path(repo_val).is_absolute() else Path(repo_val).resolve()
+            except OSError:
+                resolved_arg = None
+            if resolved_arg is not None and resolved_arg != REPO_ROOT.resolve():
+                leading.append(tok)
+            idx += 1
+        else:
+            break
+    rest = raw_args[idx:]
+    if not rest or not leading:
+        return raw_args
+    # For compound commands (`task status`, `symbol outline`, `review package`, `context status`, `pm status`, `web-relay status`),
+    # place `--json` / `--repo` at the end (before `--` if present) so subcommand positional parsers stay aligned.
+    if "--" in rest:
+        sep = rest.index("--")
+        return [*rest[:sep], *leading, *rest[sep:]]
+    return [*rest, *leading]
+
+
 def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(SCRIPTS))
     from _vnext_common import configure_utf8_output
     configure_utf8_output()
-    args = list(argv if argv is not None else sys.argv[1:])
+    args = _normalize_leading_global_flags(list(argv if argv is not None else sys.argv[1:]))
     import os
     import time
     started = time.time()

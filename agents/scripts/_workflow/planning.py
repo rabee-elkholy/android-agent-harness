@@ -413,7 +413,7 @@ def _build_and_save_plan(
 
     impl_modules = set()
     for f in impl_files:
-        parts = f.replace("\\", "/").strip().lstrip("./").split("/")
+        parts = _engine.re.sub(r"^(?:\./)+", "", f.replace("\\", "/").strip()).lstrip("/").split("/")
         if len(parts) > 1 and "src" in parts:
             idx = parts.index("src")
             impl_modules.add("/".join(parts[:idx]))
@@ -763,7 +763,7 @@ def _parse_plan_phases(repo, raw_phases):
                 if not p_file.is_file():
                     raise _engine.ValidationError(f"phases file not found: {s}")
                 try:
-                    loaded = _engine.json.loads(p_file.read_text(encoding="utf-8"))
+                    loaded = _engine.json.loads(p_file.read_text(encoding="utf-8-sig"))
                 except Exception as exc:
                     raise _engine.ValidationError(f"invalid --phases file: {exc}")
             else:
@@ -879,7 +879,7 @@ def _resolve_plan_architecture(repo, args, is_revision, norm_expected_files, par
                 last_ctx_file = repo / ".agents" / "cache" / "last-task-context.json"
                 if last_ctx_file.is_file():
                     try:
-                        ctx_data = _engine.json.loads(last_ctx_file.read_text(encoding="utf-8"))
+                        ctx_data = _engine.json.loads(last_ctx_file.read_text(encoding="utf-8-sig"))
                         if _engine.time.time() - float(ctx_data.get("timestamp", 0)) < 1800:
                             cand = str(ctx_data.get("file") or "").strip()
                             if cand and (repo / cand).is_file():

@@ -241,10 +241,10 @@ def _active_contract(repo: Path, target_path: str) -> dict[str, Any] | None:
     if not active_path.is_file():
         return None
     try:
-        active = json.loads(active_path.read_text(encoding="utf-8"))
+        active = json.loads(active_path.read_text(encoding="utf-8-sig"))
         task_id = str(active.get("task_id") or "")
         plan_path = repo / ".agents" / "state" / "tasks" / task_id / "plan.json"
-        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan = json.loads(plan_path.read_text(encoding="utf-8-sig"))
         if plan.get("status") not in {"IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"} or not plan.get("approval"):
             return None
         contract = plan.get("architecture_contract")

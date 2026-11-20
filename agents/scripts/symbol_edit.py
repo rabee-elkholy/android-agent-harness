@@ -28,7 +28,9 @@ from _vnext_common import ValidationError, atomic_write_bytes, sha256_bytes  # n
 SUPPORTED_SUFFIXES = frozenset({".kt", ".java", ".swift"})
 MAX_SYMBOL_FILE_BYTES = 2_500_000
 
-_ANNOTATIONS = r"(?:@[\w.]+(?:\([^()]*\))?\s+)*"
+_NESTED_PARENS = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+_NESTED_ANGLES = r"<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>"
+_ANNOTATIONS = r"(?:@[\w.:]+(?:" + _NESTED_PARENS + r")?\s+)*"
 _KT_MODS = (
     r"(?:(?:public|private|internal|protected|override|open|abstract|final|sealed|data|enum|inner|"
     r"annotation|value|inline|noinline|crossinline|suspend|operator|infix|tailrec|external|const|"
@@ -37,7 +39,7 @@ _KT_MODS = (
 _KT_DECL_RE = re.compile(
     r"^\s*" + _ANNOTATIONS + _KT_MODS
     + r"(?P<kind>companion\s+object|class|interface|object|fun|val|var|typealias)\b"
-    + r"\s*(?:<[^>]*>\s*)?(?:[\w.<>?, *]+?\.)?(?P<name>`[^`]+`|\w+)?"
+    + r"\s*(?:" + _NESTED_ANGLES + r"\s*)?(?:[\w.<>?, *]+?\.)?(?P<name>`[^`]+`|\w+)?"
 )
 _JAVA_MODS = r"(?:(?:public|private|protected|static|final|abstract|synchronized|native|default|strictfp)\s+)*"
 _JAVA_TYPE_RE = re.compile(
@@ -45,7 +47,7 @@ _JAVA_TYPE_RE = re.compile(
 )
 _JAVA_METHOD_RE = re.compile(
     r"^\s*" + _ANNOTATIONS + r"(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)+"
-    r"(?:<[^>]*>\s*)?[\w.<>\[\]?, ]+?\s+(?P<name>\w+)\s*\("
+    r"(?:" + _NESTED_ANGLES + r"\s*)?[\w.<>\[\]?, ]+?\s+(?P<name>\w+)\s*\("
 )
 _SWIFT_MODS = (
     r"(?:(?:public|private|fileprivate|internal|open|final|override|static|class|mutating|nonmutating|"
@@ -58,12 +60,12 @@ _SWIFT_DECL_RE = re.compile(
 )
 
 
-def scrub_comments_and_strings(lines: list[str]) -> list[str]:
-    """Blank string literals (including `${...}` nested quotes and triple-quoted strings) and comments."""
+def scrub_comments_and_strings(lines: list[str], *, rel_path: str = "") -> list[str]:
+    """Blank string literals (including `${...}` nested quotes and triple-quoted strings) and language-accurate comments."""
     if not lines:
         return []
     from _source_text import mask_comments_and_strings
-    return mask_comments_and_strings("\n".join(lines)).split("\n")
+    return mask_comments_and_strings("\n".join(lines), rel_path=rel_path).split("\n")
 
 
 def code_brace_delta(lines: list[str]) -> tuple[int, int]:
@@ -118,9 +120,15 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
     if size > MAX_SYMBOL_FILE_BYTES:
         raise ValidationError(f"Source file exceeds {MAX_SYMBOL_FILE_BYTES} byte safety cap: {path}")
 
+    from _source_text import (
+        is_expr_continuation_line,
+        mask_comments_and_strings_with_state,
+        scan_top_level_assignment,
+    )
+
     raw_text = path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     raw_lines = raw_text.splitlines()
-    code_lines = scrub_comments_and_strings(raw_lines)
+    code_lines, raw_open_after = mask_comments_and_strings_with_state("\n".join(raw_lines), rel_path=path.name)
 
     entries: list[dict[str, Any]] = []
     open_blocks: list[tuple[dict[str, Any], int]] = []
@@ -128,9 +136,8 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
     type_depths: set[int] = {0}
     depth = 0
     parens = 0
+    raw_open_prev = False
     pending: tuple[dict[str, Any], int, str] | None = None
-
-    from _source_text import is_expr_continuation_line, scan_top_level_assignment
 
     func_kinds = {"fun", "method", "func", "init"}
     prop_kinds = {"val", "var"}
@@ -138,7 +145,8 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
     for idx, line in enumerate(code_lines, start=1):
         entry: dict[str, Any] | None = None
         stripped = line.strip()
-        if stripped and parens == 0:
+        raw_open_now = raw_open_after[idx - 1] if idx - 1 < len(raw_open_after) else False
+        if stripped and parens == 0 and not raw_open_prev:
             matched = _match_declaration(line, suffix)
             if matched:
                 kind, name = matched
@@ -192,11 +200,14 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
 
         if entry is not None:
             pending = None
-            if opens > closes:
-                entry["body_open_line"] = idx
-                body = (entry, depth)
+            if raw_open_now and has_top_eq and kind in func_kinds | prop_kinds:
+                entry["end_line"] = idx
+                pending = (entry, depth, "expr_raw")
             elif parens_after > 0:
                 pending = (entry, depth, "expr_paren" if (has_top_eq and kind in func_kinds | prop_kinds) else "paren")
+            elif opens > closes:
+                entry["body_open_line"] = idx
+                body = (entry, depth)
             elif has_top_eq and kind in func_kinds | prop_kinds:
                 if ends_top_eq:
                     pending = (entry, depth, "expr_next")
@@ -207,9 +218,16 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
                 pending = (entry, depth, "brace_next")
         elif pending is not None:
             held, held_depth, mode = pending
-            if mode == "paren":
+            if mode == "expr_raw":
+                held["end_line"] = idx
+                if not raw_open_now:
+                    pending = (held, held_depth, "expr_paren" if parens_after > 0 else "expr_cont")
+            elif mode == "paren":
                 if parens_after == 0:
-                    if opens > closes:
+                    if raw_open_now and has_top_eq:
+                        held["end_line"] = idx
+                        pending = (held, held_depth, "expr_raw")
+                    elif opens > closes:
                         held["body_open_line"] = idx
                         body, pending = (held, held_depth), None
                     elif has_top_eq:
@@ -226,14 +244,20 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
                         pending = None
             elif mode == "expr_paren":
                 if parens_after == 0:
-                    if opens > closes:
+                    if raw_open_now:
+                        held["end_line"] = idx
+                        pending = (held, held_depth, "expr_raw")
+                    elif opens > closes:
                         held["body_open_line"] = idx
                         body, pending = (held, held_depth), None
                     else:
                         held["end_line"] = idx
                         pending = (held, held_depth, "expr_cont")
             elif mode == "expr_next":
-                if stripped:
+                if raw_open_now:
+                    held["end_line"] = idx
+                    pending = (held, held_depth, "expr_raw")
+                elif stripped:
                     if opens > closes:
                         held["body_open_line"] = idx
                         body, pending = (held, held_depth), None
@@ -270,6 +294,7 @@ def parse_symbols(path: Path) -> list[dict[str, Any]]:
 
         depth = max(0, depth + opens - closes)
         parens = parens_after
+        raw_open_prev = raw_open_now
 
         while open_blocks and depth <= open_blocks[-1][1]:
             done, start_depth = open_blocks.pop()

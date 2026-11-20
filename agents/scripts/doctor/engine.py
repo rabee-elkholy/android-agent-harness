@@ -903,7 +903,7 @@ class HarnessDoctor:
         inst_file = context_dir / "developer-instructions.json"
         if inst_file.is_file():
             try:
-                inst_data = json.loads(inst_file.read_text(encoding="utf-8"))
+                inst_data = json.loads(inst_file.read_text(encoding="utf-8-sig"))
                 if not isinstance(inst_data, dict) or "instructions" not in inst_data or not isinstance(inst_data["instructions"], list):
                     self.log(category, "Developer Instructions", "FAIL", "developer-instructions.json must contain a root dictionary with 'instructions' list.")
                 else:
@@ -1021,7 +1021,7 @@ class HarnessDoctor:
         if policy_file.is_file():
             try:
                 from architecture_policy import validate_architecture_policy
-                pol_data = json.loads(policy_file.read_text(encoding="utf-8"))
+                pol_data = json.loads(policy_file.read_text(encoding="utf-8-sig"))
                 p_valid, p_msg = validate_architecture_policy(pol_data, facts=data)
                 if p_valid:
                     self.log(category, "Developer Evolution Policy", "PASS", f"Valid architecture policy (preferred family: {pol_data.get('preferred_new_code_family') or 'none'}).")
@@ -1186,7 +1186,7 @@ class HarnessDoctor:
         mcp_config = self.agents_dir / "mcp_config.json"
         if mcp_config.is_file():
             try:
-                data = json.loads(mcp_config.read_text(encoding="utf-8"))
+                data = json.loads(mcp_config.read_text(encoding="utf-8-sig"))
                 zoho_server = data.get("mcpServers", {}).get("zoho-sprints")
                 if zoho_server:
                     self.log(category, "MCP Configuration", "PASS", "Zoho Sprints MCP registered in mcp_config.json.")
@@ -1322,7 +1322,7 @@ class HarnessDoctor:
                 self.log(cat, "Antigravity Hooks", "WARN", "hooks.json missing at .agents/hooks.json.")
         else:
             try:
-                hooks_data = json.loads(hooks_file.read_text(encoding="utf-8"))
+                hooks_data = json.loads(hooks_file.read_text(encoding="utf-8-sig"))
                 pre_matchers = set()
                 post_matchers = set()
                 for group in hooks_data.values():
@@ -1985,16 +1985,57 @@ class HarnessDoctor:
             from platform_quirks import list_platform_quirks
             q_rows = list_platform_quirks(repo=self.repo)
             q_active = sum(1 for r in q_rows if r["enabled"])
+            q_mit = sum(1 for r in q_rows if r.get("mitigated_upstream"))
             q_off = [r["id"] for r in q_rows if not r["enabled"]]
             off_note = f" (disabled: {', '.join(q_off[:5])})" if q_off else ""
+            mit_note = f", {q_mit} upstream-retired on current CLI/App" if q_mit else ""
             self.log(
                 category,
                 "Platform Quirks Registry",
                 "PASS",
-                f"{q_active}/{len(q_rows)} isolated Antigravity/Windows quirks active{off_note} (toggle via HARNESS_DISABLE_QUIRKS=<id>).",
+                f"{q_active}/{len(q_rows)} isolated Antigravity/Windows quirks active{mit_note}{off_note} (toggle via HARNESS_DISABLE_QUIRKS=<id>).",
             )
         except Exception as exc:
             self.log(category, "Platform Quirks Registry", "WARN", f"Could not load platform_quirks registry: {exc}")
+
+        # 9j. Version-Gated Legacy CLI Workarounds (<1.5.1 CRLF Edit & <1.5.8 Hook Quote/BOM)
+        try:
+            from antigravity_runtime import inspect_legacy_cli_quote_bom_and_crlf_guards
+            lg_rep = inspect_legacy_cli_quote_bom_and_crlf_guards(self.repo)
+            if lg_rep.get("at_risk"):
+                lg_reasons: list[str] = []
+                lg_rems: list[str] = []
+                if lg_rep.get("hooks_quote_risk"):
+                    lg_reasons.append(
+                        f".agents/hooks.json contains {len(lg_rep.get('quoted_hook_commands') or [])} double-quoted command(s) on Windows with legacy/unverified Antigravity CLI (<1.5.8)."
+                    )
+                    lg_rems.append("Upgrade to Antigravity CLI 1.5.8+ (which fixed Windows quoted hook commands) or use unquoted launcher paths on legacy <1.5.8 setups.")
+                if lg_rep.get("hooks_bom_risk"):
+                    lg_reasons.append(".agents/hooks.json begins with a UTF-8 BOM on legacy/unverified Antigravity CLI (<1.5.8).")
+                    lg_rems.append("Upgrade to Antigravity CLI 1.5.8+ or rewrite .agents/hooks.json as UTF-8 without BOM for <1.5.8 compatibility.")
+                if lg_rep.get("plugin_bom_risk"):
+                    lg_reasons.append(".antigravity-plugin/plugin.json begins with a UTF-8 BOM on legacy/unverified Antigravity CLI (<1.5.11).")
+                    lg_rems.append("Upgrade to Antigravity CLI 1.5.11+ or save plugin.json without UTF-8 BOM.")
+                self.log(category, "CLI Version-Gated Workarounds", "WARN", " ".join(lg_reasons), lg_rems)
+            else:
+                crlf_state = (
+                    "bypassed natively (CLI >=1.5.1 / App >=2.33.0)"
+                    if lg_rep.get("crlf_mitigated_upstream") or not lg_rep.get("crlf_normalization_active")
+                    else "armed for <1.5.1 fallback"
+                )
+                hook_state = (
+                    "native quote/BOM support verified (CLI >=1.5.8)"
+                    if lg_rep.get("hooks_158_mitigated_upstream")
+                    else "clean UTF-8 & quote-safe (<1.5.8 compatible)"
+                )
+                self.log(
+                    category,
+                    "CLI Version-Gated Workarounds",
+                    "PASS",
+                    f"PreToolUse CRLF edit normalization {crlf_state}; hooks.json {hook_state}.",
+                )
+        except Exception as exc:
+            self.log(category, "CLI Version-Gated Workarounds", "WARN", f"Could not inspect CLI version-gated workarounds: {exc}")
 
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""

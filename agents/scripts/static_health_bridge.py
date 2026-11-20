@@ -81,7 +81,7 @@ def _normalize_sarif_uri(repo: Path, uri: str, uri_base_map: dict[str, str] | No
             return fs_path.resolve().relative_to(repo.resolve()).as_posix()
         except (OSError, ValueError):
             return fs_path.as_posix()
-    clean = unquote(raw).replace("\\", "/").lstrip("./")
+    clean = re.sub(r"^(?:\./)+", "", unquote(raw).replace("\\", "/")).lstrip("/")
     cand = (repo / clean)
     if cand.exists():
         try:
@@ -101,7 +101,7 @@ def _normalize_sarif_uri(repo: Path, uri: str, uri_base_map: dict[str, str] | No
 
 
 def inspect_sarif_for_paths(repo: Path, changed_paths: list[str] | set[str]) -> dict[str, Any]:
-    wanted = {p.replace("\\", "/").lstrip("./") for p in changed_paths if p}
+    wanted = {re.sub(r"^(?:\./)+", "", p.replace("\\", "/")).lstrip("/") for p in changed_paths if p}
     sarif_paths = [p for p in sorted(repo_glob(repo, "**/build/reports/**/*.sarif")) if p.is_file()]
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
@@ -166,7 +166,7 @@ def inspect_sarif_for_paths(repo: Path, changed_paths: list[str] | set[str]) -> 
 
 
 def inspect_build_health_for_paths(repo: Path, changed_paths: list[str] | set[str]) -> dict[str, Any]:
-    norm_paths = [p.replace("\\", "/").lstrip("./") for p in changed_paths if p]
+    norm_paths = [re.sub(r"^(?:\./)+", "", p.replace("\\", "/")).lstrip("/") for p in changed_paths if p]
     gradle_touched = [
         p for p in norm_paths
         if p.endswith(("build.gradle", "build.gradle.kts", "libs.versions.toml", "settings.gradle", "settings.gradle.kts"))

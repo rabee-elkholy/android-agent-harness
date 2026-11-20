@@ -22,16 +22,22 @@ def _resolve_hook_repo(payload: dict) -> Path:
     env_repo = os.environ.get("HARNESS_REPO", "").strip()
     if env_repo:
         return Path(env_repo).resolve()
-    workspaces = payload.get("workspacePaths") or payload.get("workspace_paths") or []
-    if isinstance(workspaces, list):
-        for raw_ws in workspaces:
-            if isinstance(raw_ws, str) and raw_ws.strip():
-                try:
-                    ws = Path(raw_ws.strip()).expanduser().resolve()
-                    if (ws / ".agents").is_dir() or (ws / "agents" / "VERSION").is_file():
-                        return ws
-                except (OSError, RuntimeError, ValueError):
-                    continue
+    raw_ws_val = payload.get("workspacePaths") or payload.get("workspace_paths") or []
+    workspaces = [raw_ws_val] if isinstance(raw_ws_val, str) else (list(raw_ws_val) if isinstance(raw_ws_val, (list, tuple, set)) else [])
+    raw_cwd = payload.get("cwd")
+    if isinstance(raw_cwd, str) and raw_cwd.strip():
+        workspaces.append(raw_cwd)
+    for raw_ws in workspaces:
+        if isinstance(raw_ws, str) and raw_ws.strip():
+            try:
+                ws = Path(raw_ws.strip()).expanduser().resolve()
+                for cand in (ws, *ws.parents):
+                    if cand.name in {".agents", "agents"}:
+                        continue
+                    if (cand / ".agents").is_dir() or (cand / "agents" / "VERSION").is_file():
+                        return cand
+            except (OSError, RuntimeError, ValueError):
+                continue
     if _SCRIPTS_DIR.parent.name in {".agents", "agents"}:
         return _SCRIPTS_DIR.parent.parent.resolve()
     return Path.cwd().resolve()
@@ -89,8 +95,17 @@ def main() -> int:
             return 0
 
         repo = _resolve_hook_repo(payload)
-        call = payload.get("toolCall") or payload.get("tool_call") or {}
-        call_name = str(call.get("name") or payload.get("toolName") or "").strip()
+        raw_tc = payload.get("toolCall")
+        raw_tc_snake = payload.get("tool_call")
+        call = raw_tc if isinstance(raw_tc, dict) else (raw_tc_snake if isinstance(raw_tc_snake, dict) else {})
+        call_name = str(
+            call.get("name")
+            or call.get("toolName")
+            or payload.get("toolName")
+            or payload.get("tool_name")
+            or payload.get("tool")
+            or ""
+        ).strip()
         call_name_low = call_name.lower()
         err = payload.get("error")
         if not err:
@@ -140,6 +155,8 @@ def main() -> int:
                 args = json.loads(args)
             except Exception:
                 args = {}
+        if not isinstance(args, dict):
+            args = {}
 
         if call_name_low == "send_message":
             from reviewer_host import mark_resume_failed

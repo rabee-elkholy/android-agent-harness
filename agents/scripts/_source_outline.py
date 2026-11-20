@@ -20,16 +20,18 @@ _MODIFIERS = (
     r"value|inline|noinline|suspend|operator|infix|tailrec|external|const|lateinit|expect|actual|static|"
     r"synchronized|default|native|transient|volatile|strictfp)\s+)*"
 )
-_ANNOTATIONS = r"(?:@[\w.]+(?:\([^()]*\))?\s+)*"
+_NESTED_PARENS = r"\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)"
+_NESTED_ANGLES = r"<(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*>"
+_ANNOTATIONS = r"(?:@[\w.:]+(?:" + _NESTED_PARENS + r")?\s+)*"
 _KOTLIN_DECL = re.compile(
     r"^\s*" + _ANNOTATIONS + _MODIFIERS
     + r"(?P<kind>companion\s+object|class|interface|object|fun|val|var|typealias)\b"
-    + r"\s*(?:<[^>]*>\s*)?(?:[\w.<>?, ]+?\.)?(?P<name>`[^`]+`|\w+)?"
+    + r"\s*(?:" + _NESTED_ANGLES + r"\s*)?(?:[\w.<>?, *]+?\.)?(?P<name>`[^`]+`|\w+)?"
 )
 _JAVA_TYPE = re.compile(r"^\s*" + _ANNOTATIONS + _MODIFIERS + r"(?P<kind>class|interface|enum|record|@interface)\s+(?P<name>\w+)")
 _JAVA_METHOD = re.compile(
     r"^\s*" + _ANNOTATIONS + r"(?:(?:public|private|protected|static|final|abstract|synchronized|native|default)\s+)+"
-    r"(?:<[^>]*>\s*)?[\w.<>\[\]?, ]+?\s+(?P<name>\w+)\s*\("
+    r"(?:" + _NESTED_ANGLES + r"\s*)?[\w.<>\[\]?, ]+?\s+(?P<name>\w+)\s*\("
 )
 _STRING = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 

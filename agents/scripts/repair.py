@@ -108,7 +108,7 @@ def _is_corrupted(path: Path) -> bool:
     suffix = path.suffix.lower()
     if suffix == ".json":
         try:
-            json.loads(path.read_text(encoding="utf-8"))
+            json.loads(path.read_text(encoding="utf-8-sig"))
         except Exception:
             return True
     elif suffix == ".py":
@@ -168,7 +168,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
     answers = read_json(answers_path) if answers_path.is_file() else {}
     try:
         python_command = configured_python_command(str(answers.get("py") or sys.executable))
-        hooks = json.loads((kit_root / "agents/hooks.json").read_text(encoding="utf-8"))
+        hooks = json.loads((kit_root / "agents/hooks.json").read_text(encoding="utf-8-sig"))
         changed = rewrite_python_hooks(hooks, python_command)
         hook_bytes = ((json.dumps(hooks, indent=2) + "\n").encode("utf-8") if changed
                       else (kit_root / "agents/hooks.json").read_bytes())
@@ -312,7 +312,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 elif role in ON_DEMAND_SPECIALIST_AGENTS:
                     src_json = root / ".agents" / "subagents" / f"{role}.json"
                     if src_json.is_file():
-                        sp_data = json.loads(src_json.read_text(encoding="utf-8"))
+                        sp_data = json.loads(src_json.read_text(encoding="utf-8-sig"))
                         sp_name = json.dumps(role, ensure_ascii=False)
                         sp_desc = json.dumps(str(sp_data.get("description") or role).strip(), ensure_ascii=False)
                         sp_tools = "\n".join(f"  - {t}" for t in ANTIGRAVITY_SCOUT_TOOLS)
@@ -341,7 +341,7 @@ def repair_repository(repo: Path, kit: Path, *, force: bool = False) -> dict:
                 else:
                     src_json = root / ".agents" / "subagents" / f"{role}.json"
                     if src_json.is_file():
-                        data = json.loads(src_json.read_text(encoding="utf-8"))
+                        data = json.loads(src_json.read_text(encoding="utf-8-sig"))
                         fm_model = _antigravity_frontmatter_model(root, role)
                         rendered = with_managed_marker(antigravity_agent_markdown(data, model=fm_model)).encode("utf-8")
                 if rendered is not None and agent_md.read_bytes() != rendered:

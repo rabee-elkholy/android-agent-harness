@@ -10686,5 +10686,649 @@ class TestSurgicalProductionBudgetAndPriorFindingsBrief(unittest.TestCase):
             self.assertEqual([], review_package._prior_owner_blocking_finding_lines(repo, r2_pol, "security-perf-reviewer-agent"))
 
 
+
+
+class TestV155SecurityAndGovernanceFixes(unittest.TestCase):
+    """Comprehensive regression tests for F-01 through F-06 security, review-carry, lexer, Web-Relay, and V2 workflow fixes."""
+    _KIT = Path(__file__).resolve().parents[2]
+
+    def test_f01_web_relay_blocks_build_wrappers_ci_adapters_tampered_staged_and_unscoped_scripts(self) -> None:
+        import web_relay
+        from _vnext_common import ValidationError
+
+        # 1) Direct path protection checks
+        for forbidden in (
+            "gradlew",
+            "gradlew.bat",
+            "gradle/wrapper/gradle-wrapper.properties",
+            ".github/workflows/ci.yml",
+            "AGENTS.md",
+            "GEMINI.md",
+            "CLAUDE.md",
+            "agents/project-context/quirks.json",
+            "app/build/generated/source/kapt/debug/Foo.java",
+        ):
+            blocked, msg = web_relay._is_protected_or_secret_path(forbidden)
+            self.assertTrue(blocked, f"Expected {forbidden} to be blocked by Web-Relay")
+            self.assertTrue(bool(msg))
+
+        # 2) End-to-end apply_web_merge blocks gradlew & unscoped build.gradle.kts hunks + tampered staged-phase
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            (repo / ".agents" / "state").mkdir(parents=True)
+            app_kt = repo / "app/src/main/java/com/demo/Old.kt"
+            app_kt.parent.mkdir(parents=True)
+            app_kt.write_text("package com.demo\nclass Old { fun v() = 1 }\n", encoding="utf-8")
+            gw = repo / "gradlew"
+            gw.write_text("#!/bin/sh\necho safe\n", encoding="utf-8")
+            bg = repo / "app/build.gradle.kts"
+            bg.write_text("plugins { id(\"com.android.application\") }\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            pack = web_relay.build_web_pack(
+                repo, prompt="Update Old", kind="FEATURE", files=["app/src/main/java/com/demo/Old.kt"], no_clipboard=True,
+            )
+            for bad_target, expected_substr in (
+                ("gradlew", "Immutable build wrapper"),
+                ("app/build.gradle.kts", "UNSCOPED_SENSITIVE_NEIGHBOR_BLOCKED"),
+            ):
+                p_bad = repo / "bad_merge.json"
+                search_tok = "echo safe" if bad_target == "gradlew" else "com.android.application"
+                p_bad.write_text(json.dumps({
+                    "schema": "HARNESS_WEB_MERGE_V1",
+                    "pack_id": pack["pack_id"],
+                    "repo_fingerprint": pack["repo_fingerprint"],
+                    "task_id": pack["suggested_task_id"],
+                    "summary": "bad hunk",
+                    "operations": [
+                        {"action": "MODIFY", "path": bad_target, "hunks": [{"search": search_tok, "replace": "PWNED"}]},
+                    ],
+                }), encoding="utf-8")
+                with self.assertRaises(ValidationError) as ctx:
+                    web_relay.apply_web_merge(repo, merge_file=str(p_bad), source="developer_terminal", auto_red_green=False)
+                self.assertIn(expected_substr, str(ctx.exception))
+            self.assertEqual("#!/bin/sh\necho safe\n", gw.read_text(encoding="utf-8"))
+
+            # 3) --staged-phase fails closed when staged_sha256 is stripped/empty
+            tid = pack["suggested_task_id"]
+            tdir = repo / ".agents" / "state" / "tasks" / tid
+            (tdir / "staged-web-phases").mkdir(parents=True, exist_ok=True)
+            (tdir / "plan.json").write_text(json.dumps({
+                "task_id": tid,
+                "status": "EXECUTING",
+                "active_phase_index": 0,
+                "phases": [{"id": "p2", "title": "Phase 2"}],
+            }), encoding="utf-8")
+            (tdir / "staged-web-phases" / "p2.json").write_text(json.dumps({
+                "task_id": tid,
+                "phase_id": "p2",
+                "writes": [{"path": "app/src/main/java/com/demo/Old.kt", "content": "tampered"}],
+                "deletes": [],
+            }), encoding="utf-8")
+            with self.assertRaises(ValidationError) as st_ctx:
+                web_relay.apply_web_merge(repo, task_id=tid, staged_phase=True, source="developer_terminal")
+            self.assertIn("STAGED_PHASE_TAMPERED", str(st_ctx.exception))
+
+    def test_f02_and_f03_surgical_carry_blocks_unowned_auth_and_raw_string_comment_bleed(self) -> None:
+        import review_fix_delta
+        import review_policy
+
+        # F-03: Kotlin raw string containing `/*` followed by real production lines MUST count real code lines!
+        old_auth = [
+            "package com.demo.auth",
+            "class AuthRepository {",
+            "    val header = \"\"\"",
+            "        Accept: */*",
+            "        glob: app/src/*",
+            "    \"\"\".trimIndent()",
+            "    fun verify(): Boolean = true",
+            "}",
+        ]
+        new_auth = [
+            "package com.demo.auth",
+            "class AuthRepository {",
+            "    val header = \"\"\"",
+            "        Accept: */*",
+            "        glob: app/src/*",
+            "    \"\"\".trimIndent()",
+            "    fun verify(): Boolean {",
+            "        bypassTokenCheck()",
+            "        return true",
+            "    }",
+            "}",
+        ]
+        counted = review_fix_delta._count_production_changed_lines(
+            "app/src/main/kotlin/com/demo/auth/AuthRepository.kt", old_auth, new_auth
+        )
+        self.assertEqual(5, counted)
+
+        # Java non-nested block comment `/** Scans app/src/* */` does NOT swallow rest of file
+        java_old = ["/** Scans app/src/* */", "class Helper { int a() { return 1; } }"]
+        java_new = ["/** Scans app/src/* */", "class Helper { int a() { return 2; } }"]
+        self.assertEqual(
+            2,
+            review_fix_delta._count_production_changed_lines("app/src/main/java/com/demo/Helper.java", java_old, java_new),
+        )
+
+        # F-02a: Round 2 edit touching AuthRepository.kt when only bug-test failed in Round 1 MUST rerun security-perf!
+        skills_root = self._KIT / "agents/skills"
+        cls_auth = {
+            "surfaces": ["AUTH", "BUSINESS_LOGIC"],
+            "severity": "CRITICAL",
+            "changed_files": 2,
+            "changed_lines": 80,
+        }
+        r1_pol = {
+            "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            "surfaces": ["AUTH", "BUSINESS_LOGIC"],
+        }
+        auth_delta = {
+            "files": ["app/src/main/kotlin/com/demo/auth/AuthRepository.kt"],
+            "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            "comparison": "REVIEWED_TEXT",
+            "changed_lines": 10,
+            "production_changed_lines": 5,
+            "all_previously_reviewed": True,
+            "security_surfaces": ["AUTH"],
+        }
+        r2_auth = review_policy.decide_later_round(
+            cls_auth, skills_root,
+            previous_policy=r1_pol,
+            finding_owners=["bug-test-reviewer-agent"],
+            passed_reviewers=["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta=auth_delta,
+        )
+        self.assertFalse(r2_auth["fix_delta"].get("surgical_owner_only", False))
+        self.assertIn("security-perf-reviewer-agent", r2_auth["reviewers"])
+
+        # F-02b: Unflagged production file edited in Round 2 (ProfileViewModel flagged, BillingRepo snuck in) -> escalates!
+        unflagged_delta = {
+            "files": ["app/src/main/kotlin/com/demo/paywall/PaywallRepo.kt"],
+            "reviewers": ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+            "comparison": "REVIEWED_TEXT",
+            "changed_lines": 8,
+            "production_changed_lines": 8,
+            "all_previously_reviewed": True,
+            "unflagged_production_files": ["app/src/main/kotlin/com/demo/paywall/PaywallRepo.kt"],
+        }
+        r2_unflagged = review_policy.decide_later_round(
+            {"surfaces": ["BILLING", "BUSINESS_LOGIC"], "severity": "CRITICAL", "changed_files": 2, "changed_lines": 60},
+            skills_root,
+            previous_policy={"reviewers": r1_pol["reviewers"], "surfaces": ["BILLING", "BUSINESS_LOGIC"]},
+            finding_owners=["bug-test-reviewer-agent"],
+            passed_reviewers=["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
+            source_snapshot="s1" * 32, source_change_set="c1" * 32, current_change_set="c2" * 32,
+            source_run_id="run-1", round_number=2,
+            fix_delta=unflagged_delta,
+        )
+        self.assertFalse(r2_unflagged["fix_delta"].get("surgical_owner_only", False))
+        self.assertIn("security-perf-reviewer-agent", r2_unflagged["reviewers"])
+
+    def test_f04_web_relay_rename_plus_create_preserves_new_file(self) -> None:
+        import web_relay
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            (repo / ".agents" / "state").mkdir(parents=True)
+            old_f = repo / "app/src/main/java/com/demo/Old.kt"
+            old_f.parent.mkdir(parents=True)
+            old_f.write_text("package com.demo\nclass Old\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            pack = web_relay.build_web_pack(
+                repo, prompt="Split Old into LegacyOld and new Old", kind="FEATURE",
+                files=["app/src/main/java/com/demo/Old.kt"], no_clipboard=True,
+            )
+            merge_f = repo / "rename_create.json"
+            merge_f.write_text(json.dumps({
+                "schema": "HARNESS_WEB_MERGE_V1",
+                "pack_id": pack["pack_id"],
+                "repo_fingerprint": pack["repo_fingerprint"],
+                "task_id": pack["suggested_task_id"],
+                "summary": "Rename Old to LegacyOld and create replacement Old",
+                "operations": [
+                    {
+                        "action": "RENAME",
+                        "old_path": "app/src/main/java/com/demo/Old.kt",
+                        "path": "app/src/main/java/com/demo/LegacyOld.kt",
+                        "content": "package com.demo\nclass LegacyOld\n",
+                    },
+                    {
+                        "action": "CREATE",
+                        "path": "app/src/main/java/com/demo/Old.kt",
+                        "content": "package com.demo\nclass Old { fun fresh() = 42 }\n",
+                    },
+                ],
+            }), encoding="utf-8")
+            res = web_relay.apply_web_merge(repo, merge_file=str(merge_f), source="developer_terminal", auto_red_green=False)
+            self.assertEqual("APPLIED", res.get("status"))
+            self.assertTrue((repo / "app/src/main/java/com/demo/LegacyOld.kt").is_file())
+            self.assertTrue((repo / "app/src/main/java/com/demo/Old.kt").is_file())
+            self.assertIn("fresh() = 42", (repo / "app/src/main/java/com/demo/Old.kt").read_text(encoding="utf-8"))
+
+    def test_f05_dynamic_review_workflow_passes_subagent_guard_and_hybrid_models(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            (repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+            auth_kt = repo / "app/src/main/kotlin/com/demo/auth/AuthManager.kt"
+            auth_kt.parent.mkdir(parents=True)
+            auth_kt.write_text("package com.demo.auth\nclass AuthManager { fun login() = 1 }\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            wf_py = str(repo / ".agents/scripts/workflow.py")
+            subprocess.run(
+                [
+                    sys.executable, wf_py, "draft", "--repo", str(repo), "--task-id", "t-hyb",
+                    "--kind", "FEATURE", "--outcome", "Update Auth login",
+                    "--expected-files", "app/src/main/kotlin/com/demo/auth/AuthManager.kt",
+                    "--expected-surfaces", "AUTH,BUSINESS_LOGIC",
+                ],
+                capture_output=True, text=True, check=True,
+            )
+            plan_sha = json.loads((repo / ".agents/state/tasks/t-hyb/plan.json").read_text(encoding="utf-8"))["plan_sha256"]
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "task", "approve", "--task-id", "t-hyb",
+                    "--plan-hash", plan_sha, "--source", "conversation", "--proof-reference", "Approve", "--enforcement-tier", "RULE_ENFORCED",
+                ],
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+            subprocess.run([sys.executable, wf_py, "begin", "--repo", str(repo), "--task-id", "t-hyb"], capture_output=True, text=True, check=True)
+            auth_kt.write_text("package com.demo.auth\nclass AuthManager { fun login() = 2 }\n", encoding="utf-8")
+            # Configure hybrid policy where arch-regression uses Hydrogen (Model='flash') and security-perf/bug-test inherit (omit Model)!
+            subprocess.run(
+                [
+                    sys.executable, str(repo / ".agents/harness.py"), "review", "models", "set",
+                    "--host", "antigravity", "--scope", "project", "--default", "inherit",
+                    "--reviewer", "arch-regression-reviewer-agent=gemini-4-hydrogen-high",
+                    "--source", "conversation", "--proof-reference", "Hybrid",
+                ],
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+            subprocess.run(
+                [sys.executable, wf_py, "prepare-verification", "--repo", str(repo), "--task-id", "t-hyb", "--host", "antigravity"],
+                capture_output=True, text=True, check=True,
+            )
+            subprocess.run(
+                [sys.executable, str(repo / ".agents/scripts/review_package.py"), "--repo", str(repo), "--task-id", "t-hyb"],
+                capture_output=True, text=True, check=True,
+            )
+            p_plan = subprocess.run(
+                [sys.executable, str(repo / ".agents/harness.py"), "review", "dynamic-workflow", "--task", "t-hyb", "--plan-json"],
+                cwd=repo, capture_output=True, text=True, check=True,
+            )
+            spec = json.loads(p_plan.stdout)
+            invocations = spec["subagent_invocations"]
+            by_role = {it["TypeName"]: it for it in invocations}
+            for role, inv in by_role.items():
+                self.assertEqual(role, inv["Role"])
+            # Critical hybrid reviewers inherit parent (no Model="flash" downgrade!), arch-regression uses Model="flash"
+            self.assertNotIn("Model", by_role["security-perf-reviewer-agent"])
+            self.assertNotIn("Model", by_role["bug-test-reviewer-agent"])
+            self.assertEqual("flash", by_role["arch-regression-reviewer-agent"].get("Model"))
+
+            # Verify PreToolUse invoke_subagent ALLOWS the generated invocations end-to-end!
+            p_guard = subprocess.run(
+                [sys.executable, str(repo / ".agents/scripts/pre_tool_safety.py")],
+                input=json.dumps({"toolName": "invoke_subagent", "toolArgs": {"Subagents": invocations}}),
+                capture_output=True, text=True, env={**os.environ, "HARNESS_REPO": str(repo)}, check=True,
+            )
+            d_guard = json.loads(p_guard.stdout)
+            self.assertEqual("allow", d_guard["decision"], d_guard)
+
+    def test_f06_pre_tool_safety_allows_tmp_contract_and_patch_inbox_for_lead_only(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            hook_py = str(repo / ".agents/scripts/pre_tool_safety.py")
+            env = {**os.environ, "HARNESS_REPO": str(repo)}
+
+            for allowed_rel in (
+                ".agents/cache/tmp-contract.json",
+                ".agents/state/web-relay/inbox/harness-merge-wpack-123456789abc.patch",
+            ):
+                proc = subprocess.run(
+                    [sys.executable, hook_py],
+                    input=json.dumps({"toolName": "write_to_file", "toolArgs": {"TargetFile": allowed_rel}}),
+                    capture_output=True, text=True, env=env, check=True,
+                )
+                out = json.loads(proc.stdout)
+                self.assertEqual("allow", out["decision"], (allowed_rel, out))
+
+            # Non-tmp cache file remains strictly blocked!
+            proc_deny = subprocess.run(
+                [sys.executable, hook_py],
+                input=json.dumps({"toolName": "write_to_file", "toolArgs": {"TargetFile": ".agents/cache/evil.py"}}),
+                capture_output=True, text=True, env=env, check=True,
+            )
+            self.assertEqual("deny", json.loads(proc_deny.stdout)["decision"])
+
+
+
+
+class TestV155MediumAndPortabilityFixes(unittest.TestCase):
+    """Comprehensive regression tests for F-07 through F-13 security, parser, Android gate, and portability fixes."""
+    _KIT = Path(__file__).resolve().parents[2]
+
+    def test_f07_dep_inspect_blocks_traversal_coordinates_and_oversized_zip_entries(self) -> None:
+        import zipfile
+        import dep_inspect
+        import web_relay
+        from _vnext_common import ValidationError
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for bad_coord in (
+                "../../etc:../../passwd:1.0",
+                "com.example:../evil:1.0",
+                "com.example:lib:1.0/../../pwn",
+                "-flag:lib:1.0",
+                "com.example::1.0",
+            ):
+                with self.assertRaises(ValidationError, msg=bad_coord):
+                    dep_inspect.resolve_dependency_coordinate(repo, bad_coord, offline=True)
+
+            # Oversized ZIP entry (>16 MiB uncompressed header) blocked cleanly in both dep_inspect and web_relay
+            big_jar = repo / "bomb-sources.jar"
+            with zipfile.ZipFile(big_jar, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("com/demo/Huge.kt", "a" * (17 * 1024 * 1024))
+            with self.assertRaises(ValidationError):
+                dep_inspect.inspect_sources_jar(big_jar, entry_filter="Huge.kt")
+
+            big_merge_zip = repo / "bomb-merge.zip"
+            with zipfile.ZipFile(big_merge_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("payload.json", " " * (17 * 1024 * 1024))
+            with self.assertRaises(ValidationError) as wr_ctx:
+                web_relay._resolve_incoming_merge_payload(repo, str(big_merge_zip), False)
+            self.assertIn("ZIP_ENTRY_TOO_LARGE", str(wr_ctx.exception))
+
+    def test_f08_html_entity_repair_preserves_kotlin_literals_xml_amp_and_root_res_values(self) -> None:
+        from _web_relay.merge_applier import _repair_web_ui_html_entities_for_file
+
+        # 1) Root-relative `res/values/strings.xml` is NOT touched
+        strings_lines = ['<resources>', '    <string name="html_ sample">&lt;b&gt;Bold &amp; Clean&lt;/b&gt;</string>', '</resources>']
+        self.assertEqual(strings_lines, _repair_web_ui_html_entities_for_file("res/values/strings.xml", strings_lines))
+
+        # 2) Kotlin string literals stay intact while generics AND standalone `->` / `&&` are repaired!
+        kt_in = [
+            'val expectedHtml = "Result&lt;String&gt; -&gt; a &amp;&amp; b"',
+            'val mapped: Result&lt;List&lt;String&gt;&gt; = items.filter { it -&gt; it.ok &amp;&amp; it.n &gt; 0 }',
+        ]
+        kt_out = _repair_web_ui_html_entities_for_file("app/src/main/kotlin/com/demo/Mapper.kt", kt_in)
+        self.assertEqual('val expectedHtml = "Result&lt;String&gt; -&gt; a &amp;&amp; b"', kt_out[0])
+        self.assertEqual('val mapped: Result<List<String>> = items.filter { it -> it.ok && it.n > 0 }', kt_out[1])
+
+        # 3) XML layout/menu unescapes escaped tags/quotes WITHOUT breaking valid `&amp;` into invalid bare `&`
+        xml_in = ['&lt;item android:title=&quot;Terms &amp; Conditions&quot; /&gt;']
+        xml_out = _repair_web_ui_html_entities_for_file("app/src/main/res/menu/main_menu.xml", xml_in)
+        self.assertEqual(['<item android:title="Terms &amp; Conditions" />'], xml_out)
+
+    def test_f09_exported_component_guard_catches_implicit_export_blank_perm_and_one_sided_provider_advisory(self) -> None:
+        import exported_component_guard as ecg
+
+        manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.demo">
+            <application>
+                <provider android:name=".ReadOnlyProtectedProvider" android:exported="true" android:readPermission="com.demo.READ" />
+                <provider android:name=".BlankPermProvider" android:exported="true" android:permission="   " />
+                <provider android:name=".FullyProtectedProvider" android:exported="true" android:readPermission="com.demo.READ" android:writePermission="com.demo.WRITE" />
+                <receiver android:name=".MisusedReadPermReceiver" android:exported="true" android:readPermission="com.demo.READ" />
+                <service android:name=".ImplicitExportService">
+                    <intent-filter><action android:name="com.demo.SYNC" /></intent-filter>
+                </service>
+                <activity android:name=".MainActivity" android:exported="true">
+                    <intent-filter><action android:name="android.intent.action.MAIN" /></intent-filter>
+                </activity>
+            </application>
+        </manifest>"""
+        res = ecg.open_components(manifest)
+        self.assertFalse(res[("provider", ".ReadOnlyProtectedProvider")])
+        self.assertEqual([".ReadOnlyProtectedProvider (missing android:writePermission)"], ecg.partially_protected_providers(manifest))
+        self.assertTrue(res[("provider", ".BlankPermProvider")])
+        self.assertFalse(res[("provider", ".FullyProtectedProvider")])
+        self.assertTrue(res[("receiver", ".MisusedReadPermReceiver")])
+        self.assertTrue(res[("service", ".ImplicitExportService")])
+        self.assertNotIn(("activity", ".MainActivity"), res)
+
+    def test_f10_java_non_nested_javadoc_symbol_edit_default_lambda_and_fast_kt_lint_interp_quotes(self) -> None:
+        import fast_kt_lint
+        import symbol_edit
+
+        with tempfile.TemporaryDirectory() as td:
+            # 1) Java file with `/*` inside `/** ... */` Javadoc parses all symbols cleanly
+            java_f = Path(td) / "Scanner.java"
+            java_f.write_text(
+                "package com.demo;\n"
+                "/** Scans app/src/* for files. */\n"
+                "public class Scanner {\n"
+                "    public int scan() { return 7; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            j_syms = symbol_edit.parse_symbols(java_f)
+            self.assertEqual(["Scanner", "Scanner.scan"], [s["qualified_name"] for s in j_syms])
+
+            # 2) Kotlin Composable with multi-line default lambda parameter captures full function body
+            kt_f = Path(td) / "PaywallScreen.kt"
+            kt_f.write_text(
+                "package com.demo\n"
+                "fun PaywallScreen(\n"
+                "    onAction: () -> Unit = {\n"
+                "        logDefault()\n"
+                "    }\n"
+                ")\n"
+                "{\n"
+                "    renderPaywall()\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            k_syms = symbol_edit.parse_symbols(kt_f)
+            self.assertEqual(1, len(k_syms))
+            self.assertEqual(2, k_syms[0]["declaration_line"])
+            self.assertEqual(9, k_syms[0]["end_line"])
+
+        # 3) fast_kt_lint catches swallowed CancellationException even after nested `/* /* */ */` and `"${"{"}"`!
+        tricky_kt = (
+            "package com.demo\n"
+            "/* outer /* nested */ still comment */\n"
+            "suspend fun syncData(flag: Boolean) {\n"
+            "    val tag = \"mode=${if (flag) \"{\" else \"ok\"}\"\n"
+            "    try {\n"
+            "        fetchRemote(tag)\n"
+            "    } catch (e: Exception) {\n"
+            "        println(e.message)\n"
+            "    }\n"
+            "}\n"
+        )
+        cleaned = fast_kt_lint._strip_kotlin_comments_preserve_lines(tricky_kt)
+        swallows = fast_kt_lint._find_suspend_cancellation_swallows(cleaned, None)
+        self.assertEqual([(7, "e")], swallows)
+
+    def test_f11_check_strings_tracks_same_name_string_and_plurals_independently(self) -> None:
+        import check_strings
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            b_xml = repo / "app/src/main/res/values/strings.xml"
+            ar_xml = repo / "app/src/main/res/values-ar/strings.xml"
+            b_xml.parent.mkdir(parents=True)
+            ar_xml.parent.mkdir(parents=True)
+            b_xml.write_text(
+                "<resources>\n"
+                "    <string name=\"days\">Days: %1$s</string>\n"
+                "    <plurals name=\"days\">\n"
+                "        <item quantity=\"one\">%1$d day</item>\n"
+                "        <item quantity=\"other\">%1$d days</item>\n"
+                "    </plurals>\n"
+                "</resources>\n",
+                encoding="utf-8",
+            )
+            # Missing <string name="days"> in Arabic while <plurals name="days"> exists -> MUST fail!
+            ar_xml.write_text(
+                "<resources>\n"
+                "    <plurals name=\"days\">\n"
+                "        <item quantity=\"zero\">لا أيام</item>\n"
+                "        <item quantity=\"one\">يوم واحد</item>\n"
+                "        <item quantity=\"two\">يومان</item>\n"
+                "        <item quantity=\"few\">%1$d أيام</item>\n"
+                "        <item quantity=\"many\">%1$d يوما</item>\n"
+                "        <item quantity=\"other\">%1$d يوم</item>\n"
+                "    </plurals>\n"
+                "</resources>\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            self.assertNotEqual(0, check_strings.main(["--all"], repo=repo))
+
+            # Add matching <string name="days"> with matching `%1$s` -> passes!
+            ar_xml.write_text(
+                ar_xml.read_text(encoding="utf-8").replace(
+                    "<resources>\n",
+                    "<resources>\n    <string name=\"days\">الأيام: %1$s</string>\n",
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(0, check_strings.main(["--all"], repo=repo))
+
+    def test_f12_reviewer_discovery_allows_python3_py3_and_windows_backslashes(self) -> None:
+        from reviewer_host import discovery_command_allowed as allowed
+
+        self.assertTrue(allowed("python3 .agents/harness.py task-context --file app/src/A.kt --json"))
+        self.assertTrue(allowed("py -3 .agents\\harness.py task-context --file app\\src\\A.kt --json"))
+        self.assertTrue(allowed("/usr/bin/python3 .agents/harness.py graph --find Paywall --json"))
+        self.assertTrue(allowed('C:\\Python312\\python.exe .agents\\harness.py task-context --file "app\\src\\A.kt" --json'))
+        self.assertFalse(allowed("py -3 .agents\\harness.py task-context --file ..\\secret.txt --json"))
+        self.assertFalse(allowed("python3 .agents/harness.py task-context --file C:\\Windows\\win.ini --json"))
+        self.assertFalse(allowed("python3 .agents/harness.py task-context --file app/A.kt --json && whoami"))
+
+    def test_f13_direct_slice_imports_checksum_check_flag_and_plugin_manifest_logo(self) -> None:
+        # 1) Fresh-process direct import of all 5 extracted slice submodules succeeds without circular ImportError
+        for submod in (
+            "_web_relay.merge_applier",
+            "_web_relay.pack_builder",
+            "_workflow.delivery_ops",
+            "_workflow.phase_checkpoints",
+            "_delegation.utility_waves",
+        ):
+            proc = subprocess.run(
+                [sys.executable, "-c", f"import sys; sys.path.insert(0, {str(self._KIT / 'agents/scripts')!r}); import {submod}"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, proc.returncode, f"{submod} failed direct import: {proc.stderr}")
+
+        # 2) generate_release_checksums.py --check verifies without overwriting
+        chk_proc = subprocess.run(
+            [sys.executable, str(self._KIT / "scripts_dev/generate_release_checksums.py"), "--check"],
+            cwd=self._KIT, capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(0, chk_proc.returncode, chk_proc.stdout + chk_proc.stderr)
+        self.assertIn("[OK]", chk_proc.stdout)
+
+        # 3) plugin.json declares valid existing logo asset and pyproject.toml declares packaging>=24.2
+        pm = json.loads((self._KIT / ".antigravity-plugin/plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual("docs/assets/logo-icon.png", pm.get("logo"))
+        self.assertTrue((self._KIT / pm["logo"]).is_file())
+        self.assertIn("packaging>=24.2", (self._KIT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    def test_v155_version_gated_crlf_edit_and_doctor_quote_bom_guards(self) -> None:
+        import antigravity_runtime as agr
+        import platform_quirks as pq
+        from _safety.path_and_read_guard import _normalize_crlf_for_edit
+        from doctor.engine import HarnessDoctor
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            shutil.copytree(
+                self._KIT / "agents",
+                repo / ".agents",
+                ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc"),
+            )
+            (repo / "README.md").write_text("# Demo\n", encoding="utf-8")
+            target = repo / "app/src/main/kotlin/com/demo/Sample.kt"
+            target.parent.mkdir(parents=True)
+            crlf_bytes = b"package com.demo\r\nclass Sample {\r\n    val x = 1\r\n}\r\n"
+            edit_args = {"Target": "class Sample {\n    val x = 1\n}", "Replacement": "class Sample {\n    val x = 2\n}"}
+
+            # 1) Modern CLI >= 1.5.1 (1.5.1 and 1.5.12) skips disk CRLF mutation!
+            for modern_ver in ("1.5.1", "1.5.12"):
+                target.write_bytes(crlf_bytes)
+                self.assertFalse(agr.should_normalize_crlf_for_edit(repo, env={"ANTIGRAVITY_CLI_VERSION": modern_ver}))
+                _normalize_crlf_for_edit(repo, [str(target)], edit_args, env={"ANTIGRAVITY_CLI_VERSION": modern_ver})
+                self.assertEqual(crlf_bytes, target.read_bytes(), f"CLI {modern_ver} must preserve CRLF bytes untouched")
+
+            # 2) Explicit kill-switch HARNESS_DISABLE_QUIRKS=crlf-edit skips disk CRLF mutation even without version env
+            target.write_bytes(crlf_bytes)
+            _normalize_crlf_for_edit(repo, [str(target)], edit_args, env={"HARNESS_DISABLE_QUIRKS": "crlf-edit"})
+            self.assertEqual(crlf_bytes, target.read_bytes())
+
+            # 3) Legacy CLI 1.5.0 (< 1.5.1) still normalizes CRLF -> LF so legacy edit_file does not fail!
+            target.write_bytes(crlf_bytes)
+            self.assertTrue(agr.should_normalize_crlf_for_edit(repo, env={"ANTIGRAVITY_CLI_VERSION": "1.5.0"}))
+            _normalize_crlf_for_edit(repo, [str(target)], edit_args, env={"ANTIGRAVITY_CLI_VERSION": "1.5.0"})
+            self.assertEqual(crlf_bytes.replace(b"\r\n", b"\n"), target.read_bytes())
+
+            # 4) Doctor check_antigravity_installation handles UTF-8 BOM + Windows double-quoted hook commands cleanly:
+            #    - Pre-1.5.8 (1.5.7 on Windows): Antigravity Hooks parses cleanly (no JSONDecodeError FAIL!), CLI Version-Gated Workarounds = WARN
+            #    - Modern >= 1.5.8 (1.5.8 / 1.5.12 on Windows): CLI Version-Gated Workarounds = PASS
+            hooks_file = repo / ".agents/hooks.json"
+            hooks_obj = json.loads(hooks_file.read_text(encoding="utf-8"))
+            for grp in hooks_obj.values():
+                if isinstance(grp, dict):
+                    for hlist in grp.values():
+                        if isinstance(hlist, list):
+                            for entry in hlist:
+                                for sh in (entry.get("hooks") if isinstance(entry, dict) and "hooks" in entry else [entry]):
+                                    if isinstance(sh, dict) and str(sh.get("command") or "").startswith("python "):
+                                        sh["command"] = f'"{sys.executable}" ' + sh["command"][len("python "):]
+            hooks_file.write_bytes(b"\xef\xbb\xbf" + json.dumps(hooks_obj, indent=2).encode("utf-8"))
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_CLI_VERSION": "1.5.7"},
+                clear=False,
+            ):
+                doc_legacy = HarnessDoctor(repo, run_selftest=False)
+                doc_legacy.check_antigravity_installation()
+                by_name = {r.name: r for r in doc_legacy.results}
+                self.assertNotIn("Antigravity Hooks", by_name, f"UTF-8 BOM hooks.json must not fail JSON parsing: {doc_legacy.results}")
+                self.assertEqual("PASS", by_name["Hook Runtime Smoke"].status, by_name["Hook Runtime Smoke"])
+                vg_legacy = next(r for r in doc_legacy.results if r.name == "CLI Version-Gated Workarounds")
+                self.assertEqual("WARN", vg_legacy.status)
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_CLI_VERSION": "1.5.8"},
+                clear=False,
+            ):
+                doc_modern = HarnessDoctor(repo, run_selftest=False)
+                doc_modern.check_antigravity_installation()
+                vg_modern = next(r for r in doc_modern.results if r.name == "CLI Version-Gated Workarounds")
+                self.assertEqual("PASS", vg_modern.status)
+                self.assertIn("CLI >=1.5.8", vg_modern.message)
+                self.assertTrue(pq.is_quirk_mitigated_upstream("AGY_WIN_HOOK_QUOTE_AND_BOM"))
+                self.assertTrue(pq.is_quirk_mitigated_upstream("AGY_WIN_CRLF_EDIT_NORMALIZATION"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

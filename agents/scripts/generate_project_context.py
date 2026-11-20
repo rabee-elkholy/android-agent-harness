@@ -296,7 +296,7 @@ def cmd_note(args: argparse.Namespace) -> int:
                 return 0
         sec_pattern = rf"(##\s+{re.escape(section)}[^\n]*\n)"
         if re.search(sec_pattern, content):
-            updated = re.sub(sec_pattern, rf"\1- {norm_new}\n", content, count=1)
+            updated = re.sub(sec_pattern, lambda m: f"{m.group(1)}- {norm_new}\n", content, count=1)
         else:
             updated = content.rstrip() + f"\n\n## {section}\n- {norm_new}\n"
         atomic_write_text(notes_file, updated)
@@ -333,7 +333,7 @@ def cmd_instruct(args: argparse.Namespace) -> int:
     existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
     if inst_file.is_file():
         try:
-            loaded = json.loads(inst_file.read_text(encoding="utf-8"))
+            loaded = json.loads(inst_file.read_text(encoding="utf-8-sig"))
             if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
                 existing_store = loaded
         except (OSError, ValueError):

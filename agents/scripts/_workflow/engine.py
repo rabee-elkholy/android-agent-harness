@@ -826,7 +826,7 @@ def _applicable_developer_instructions_for_task(
         inst_file = repo / ".agents" / "project-context" / "developer-instructions.json"
         if inst_file.is_file():
             try:
-                data = json.loads(inst_file.read_text(encoding="utf-8"))
+                data = json.loads(inst_file.read_text(encoding="utf-8-sig"))
                 raw_instructions = data.get("instructions", [])
             except (OSError, ValueError, ValidationError):
                 pass

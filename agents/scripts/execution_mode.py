@@ -438,7 +438,7 @@ def _measure_non_test_code_mass_bytes(repo: Path, rel_paths: list[str]) -> int:
     total = 0
     seen: set[str] = set()
     for raw in rel_paths or []:
-        rel = str(raw or "").replace("\\", "/").strip().lstrip("./")
+        rel = re.sub(r"^(?:\./)+", "", str(raw or "").replace("\\", "/").strip()).lstrip("/")
         if not rel or rel in seen:
             continue
         seen.add(rel)
@@ -468,7 +468,7 @@ def _infer_distinct_modules_from_paths(rel_paths: list[str], explicit_modules: l
     if mods:
         return mods
     for raw in rel_paths or []:
-        norm = str(raw or "").replace("\\", "/").strip().lstrip("./")
+        norm = re.sub(r"^(?:\./)+", "", str(raw or "").replace("\\", "/").strip()).lstrip("/")
         if not norm:
             continue
         padded = f"/{norm}"

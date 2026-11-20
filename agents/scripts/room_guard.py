@@ -595,7 +595,7 @@ def check_room_working_tree(
                     for var_name, a_str, b_str in var_matches:
                         edge = (int(a_str), int(b_str))
                         if target_start <= edge[0] < edge[1] <= new_ver:
-                            if var_name in registered_tokens or var_name in str(new_decl.registered):
+                            if var_name in registered_tokens or var_name in new_decl.registered:
                                 all_migs.add(edge)
                             else:
                                 unregistered_candidates.append((var_name, edge[0], edge[1]))
@@ -605,7 +605,7 @@ def check_room_working_tree(
                         edge = (int(a_str), int(b_str))
                         if target_start <= edge[0] < edge[1] <= new_ver:
                             c_name = f"MIGRATION_{edge[0]}_{edge[1]}"
-                            if c_name in registered_tokens or c_name in str(new_decl.registered):
+                            if c_name in registered_tokens or c_name in new_decl.registered:
                                 all_migs.add(edge)
                             else:
                                 unregistered_candidates.append((c_name, edge[0], edge[1]))

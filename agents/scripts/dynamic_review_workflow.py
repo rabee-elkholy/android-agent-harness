@@ -7,6 +7,7 @@ to fan out all pending V2 specialist reviewers in parallel, await completion, an
 from __future__ import annotations
 
 import argparse
+import builtins
 import io
 import json
 import os
@@ -22,6 +23,33 @@ if str(SCRIPTS_DIR) not in sys.path:
 from _vnext_common import ValidationError, read_json, task_dir, validate_id  # noqa: E402
 
 WORKFLOW_FINGERPRINT = "HARNESS_DYNAMIC_REVIEW_WORKFLOW_V1"
+
+
+def _extract_reviewer_selection_map(profile: dict[str, Any] | None, current: dict[str, Any] | None) -> dict[str, Any]:
+    for source in (profile, current):
+        if not isinstance(source, dict):
+            continue
+        if isinstance(source.get("review_models"), dict) and isinstance(source["review_models"].get("reviewers"), dict):
+            return dict(source["review_models"]["reviewers"])
+        if isinstance(source.get("reviewers"), dict):
+            return dict(source["reviewers"])
+    return {}
+
+
+def _discover_runtime_spawner() -> Callable[[list[dict[str, str]]], list[dict[str, Any]]] | None:
+    """Bind host-provided `invoke_subagent` callable when running inside Antigravity `run_workflow`."""
+    for candidate_owner in (globals(), vars(builtins)):
+        fn = candidate_owner.get("invoke_subagent")
+        if callable(fn):
+            def _host_spawner(invocations: list[dict[str, str]], _fn: Any = fn) -> list[dict[str, Any]]:
+                raw = _fn(Subagents=invocations)
+                if isinstance(raw, dict) and isinstance(raw.get("results"), list):
+                    return list(raw["results"])
+                if isinstance(raw, list):
+                    return raw
+                return [raw] if isinstance(raw, dict) else []
+            return _host_spawner
+    return None
 
 
 def build_dynamic_review_plan(repo: Path, task_id: str | None = None) -> dict[str, Any]:
@@ -65,20 +93,31 @@ def build_dynamic_review_plan(repo: Path, task_id: str | None = None) -> dict[st
     profile = resolve_execution_profile(repo_root, resolved_tid, host=review_host)
     from workflow import _reviewer_prompts
     prompts = _reviewer_prompts(profile, pending)
-    from review_models import antigravity_dispatch_model_hint, reviewer_model_map
-    hint_text = str(antigravity_dispatch_model_hint(profile, pending, repo=repo_root) or "")
-    use_flash_offload = '"flash"' in hint_text or "'flash'" in hint_text
+    from review_models import reviewer_model_map, reviewer_requires_flash_offload
+    effective_models = reviewer_model_map(profile or current, pending)
+    rev_selections = _extract_reviewer_selection_map(profile, current)
 
     invocations: list[dict[str, str]] = []
     for role in pending:
+        sel_info = rev_selections.get(role)
+        eff_label = str(effective_models.get(role) or "").strip().lower()
+        resolved_m = str(
+            (sel_info.get("resolved_model") if isinstance(sel_info, dict) else "")
+            or eff_label
+        ).strip().lower()
+        needs_flash = reviewer_requires_flash_offload(
+            repo_root,
+            sel_info if isinstance(sel_info, dict) else {"resolved_model": resolved_m},
+        )
+        allowed_native_model = "flash" if needs_flash else ("pro" if "pro" in resolved_m and resolved_m != "inherit" else None)
         item: dict[str, str] = {
             "TypeName": role,
-            "Role": f"V2 Specialist Review ({role})",
+            "Role": role,
             "Prompt": str(prompts.get(role) or f"Execute specialist V2 code review from .agents/state/tasks/{resolved_tid}/brief-{role}.md"),
             "Workspace": str(repo_root),
         }
-        if use_flash_offload:
-            item["Model"] = "flash"
+        if allowed_native_model:
+            item["Model"] = allowed_native_model
         invocations.append(item)
 
     return {
@@ -88,7 +127,7 @@ def build_dynamic_review_plan(repo: Path, task_id: str | None = None) -> dict[st
         "run_id": run_id,
         "required_reviewers": required,
         "pending_reviewers": pending,
-        "reviewer_models": reviewer_model_map(profile or current, pending),
+        "reviewer_models": effective_models,
         "subagent_invocations": invocations,
     }
 
@@ -99,12 +138,12 @@ def execute_dynamic_review(
     *,
     spawner: Callable[[list[dict[str, str]]], list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
-    """Emit a deterministic V2 reviewer fan-out plan, or execute via an injected spawner and run complete-all."""
+    """Emit a deterministic V2 reviewer fan-out plan, or execute via an injected/host spawner and run complete-all."""
     spec = build_dynamic_review_plan(repo, task_id)
     resolved_tid = spec["task_id"]
     invocations = spec["subagent_invocations"]
 
-    active_spawner = spawner
+    active_spawner = spawner if spawner is not None else _discover_runtime_spawner()
     spawn_results: list[dict[str, Any]] = []
     if invocations and active_spawner is not None:
         from review_orchestrator import record_dispatch_batch

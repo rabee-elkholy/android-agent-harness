@@ -2940,5 +2940,214 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
         self.assertEqual("MAX", reqs["reviewers"]["security-perf-reviewer-agent"]["reasoning_intent"])
 
 
+    def test_v155_pass3_room_substring_rename_lines_symlinks_zoho_paths_and_cli_repo_equals(self):
+        import change_classifier
+        import room_guard
+        import verification_contract
+        import zoho_sync
+        from _web_relay import engine as wr_engine
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            # P3-05: room_guard must not credit unregistered MIGRATION_1_2 via substring match on MIGRATION_1_20
+            r_repo = root / "room_app"
+            db_dir = r_repo / "app/src/main/java/com/example/db"
+            db_dir.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=r_repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=r_repo, check=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=r_repo, check=True)
+            ent_p = db_dir / "UserEntity.kt"
+            db_p = db_dir / "AppDatabase.kt"
+            ent_p.write_text(
+                "package com.example.db\nimport androidx.room.Entity\nimport androidx.room.PrimaryKey\n"
+                "@Entity(tableName = \"users\")\ndata class UserEntity(@PrimaryKey val id: Int, val name: String)\n",
+                encoding="utf-8",
+            )
+            db_p.write_text(
+                "package com.example.db\nimport androidx.room.*\nimport androidx.room.migration.Migration\n"
+                "val MIGRATION_1_20 = object : Migration(1, 20) {}\n"
+                "@Database(entities = [UserEntity::class], version = 1, exportSchema = false)\n"
+                "abstract class AppDatabase : RoomDatabase() {\n"
+                "  companion object {\n"
+                "    fun build(c: android.content.Context) = Room.databaseBuilder(c, AppDatabase::class.java, \"a\").addMigrations(MIGRATION_1_20).build()\n"
+                "  }\n}\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=r_repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "v1"], cwd=r_repo, check=True)
+
+            ent_p.write_text(
+                "package com.example.db\nimport androidx.room.Entity\nimport androidx.room.PrimaryKey\n"
+                "@Entity(tableName = \"users\")\ndata class UserEntity(@PrimaryKey val id: Int, val name: String, val age: Int = 0)\n",
+                encoding="utf-8",
+            )
+            db_p.write_text(
+                db_p.read_text(encoding="utf-8")
+                .replace("version = 1", "version = 2")
+                .replace("val MIGRATION_1_20", "val MIGRATION_1_2 = object : Migration(1, 2) {}\nval MIGRATION_1_20"),
+                encoding="utf-8",
+            )
+            ok_unreg, msg_unreg = room_guard.check_room_working_tree(r_repo)
+            self.assertFalse(ok_unreg, msg_unreg)
+            self.assertIn("MIGRATION_1_2", msg_unreg)
+
+            db_p.write_text(
+                db_p.read_text(encoding="utf-8").replace("addMigrations(MIGRATION_1_20)", "addMigrations(MIGRATION_1_20, MIGRATION_1_2)"),
+                encoding="utf-8",
+            )
+            ok_reg, msg_reg = room_guard.check_room_working_tree(r_repo)
+            self.assertTrue(ok_reg, msg_reg)
+
+            # P3-06: change_classifier._changed_line_count counts lines on renamed + modified files
+            c_repo = root / "cls_app"
+            s_dir = c_repo / "app/src/main/java/com/example"
+            s_dir.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q"], cwd=c_repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=c_repo, check=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=c_repo, check=True)
+            old_f = s_dir / "OldService.kt"
+            old_f.write_text("package com.example\nclass OldService {\n" + "".join(f"  fun f{i}() = {i}\n" for i in range(25)) + "}\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=c_repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=c_repo, check=True)
+            new_f = s_dir / "NewService.kt"
+            subprocess.run(["git", "mv", str(old_f), str(new_f)], cwd=c_repo, check=True)
+            new_f.write_text("package com.example\nclass NewService {\n" + "".join(f"  fun f{i}() = {i + 10}\n" for i in range(25)) + "}\n", encoding="utf-8")
+            cls_res = change_classifier.classify(c_repo, progress=False)
+            self.assertEqual(1, cls_res["changed_files"])
+            self.assertGreaterEqual(cls_res["changed_lines"], 50)
+
+            # P3-07: external contract symlink & web_relay absolute symlink inside repo
+            real_vc = root / "real_vc.json"
+            real_vc.write_text(json.dumps({"criteria": [{"id": "c1", "expected": "ok", "method": "unit_test", "required": True}]}), encoding="utf-8")
+            sym_vc = root / "sym_vc.json"
+            sym_vc.symlink_to(real_vc)
+            with self.assertRaises(verification_contract.ValidationError):
+                verification_contract.load_definition(c_repo, str(sym_vc))
+            loaded_real = verification_contract.load_definition(c_repo, str(real_vc))
+            self.assertEqual("c1", loaded_real["criteria"][0]["id"])
+
+            sym_dir = c_repo / "sym_main"
+            sym_dir.symlink_to(c_repo / "app/src/main")
+            with self.assertRaises(wr_engine.ValidationError):
+                wr_engine._norm_rel(c_repo, str(sym_dir / "java/com/example/NewService.kt"))
+            self.assertEqual(
+                "app/src/main/java/com/example/NewService.kt",
+                wr_engine._norm_rel(c_repo, str(new_f)),
+            )
+
+            # P3-08: zoho_sync quoted Windows / POSIX paths & AIza/sk- secrets + harness_cli task --repo=<path>
+            (c_repo / ".agents/state/tasks/t-z").mkdir(parents=True)
+            (c_repo / ".agents/state/tasks/t-z/plan.json").write_text(json.dumps({"task_id": "t-z", "plan_sha256": "a" * 64}), encoding="utf-8")
+            for bad_obj in (
+                "Fixed `D:\\Work\\Rashaqa\\Auth.kt` crash",
+                "Fixed `/opt/workspace/App.kt` crash",
+                "Key AIzaSyA123456789012345678901234567890123",
+            ):
+                rc_bad = zoho_sync.main([
+                    "prepare-report", "--repo", str(c_repo), "--task-id", "t-z",
+                    "--objective", bad_obj, "--changes", "Safe fix", "--impact", "Auth", "--tests", "AuthTest",
+                ])
+                self.assertEqual(1, rc_bad, f"Expected zoho_sync rejection for: {bad_obj}")
+
+            (c_repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+            (c_repo / ".agents/scripts").mkdir(parents=True, exist_ok=True)
+            (c_repo / ".agents/scripts/workflow.py").write_text(
+                "import sys; print('DISPATCHED_TO_REPO_EQ:' + ' '.join(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            other_cwd = root / "other_cwd"
+            other_cwd.mkdir()
+            cli_proc = subprocess.run(
+                [sys.executable, str(SCRIPTS.parents[1] / "harness_cli.py"), "task", "status", f"--repo={c_repo}"],
+                cwd=other_cwd, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(0, cli_proc.returncode, cli_proc.stderr)
+            self.assertIn("DISPATCHED_TO_REPO_EQ:", cli_proc.stdout)
+
+            # POST-06: macOS `/tmp -> private/tmp` symlinked temp directory external contract works while repo-internal symlink escape still fails
+            real_tmp = root / "private_tmp"
+            real_tmp.mkdir()
+            mac_tmp = root / "mac_tmp"
+            mac_tmp.symlink_to(real_tmp)
+            ext_contract = mac_tmp / "contract.json"
+            ext_contract.write_text(json.dumps({
+                "schema_version": 1,
+                "criteria": [{"id": "C1", "description": "unit", "verification": "automated"}],
+            }), encoding="utf-8")
+            import verification_contract as vc
+            import symbol_edit
+            loaded_mac = vc.load_definition(c_repo, str(ext_contract))
+            self.assertEqual("C1", loaded_mac["criteria"][0]["id"])
+
+            # POST-07: Multi-line raw string `"""..."""` without `.trimIndent()` spans full closing line in symbol_edit
+            raw_kt = root / "RawQuery.kt"
+            raw_kt.write_text(
+                'package com.example\n\nconst val SQL = """\n    SELECT * FROM users\n"""\n\nfun nextFn(): Int {\n    return 1\n}\n',
+                encoding="utf-8",
+            )
+            parsed_raw = {s["qualified_name"]: s for s in symbol_edit.parse_symbols(raw_kt)}
+            self.assertEqual((3, 5), (parsed_raw["SQL"]["start_line"], parsed_raw["SQL"]["end_line"]))
+            self.assertEqual((7, 9), (parsed_raw["nextFn"]["start_line"], parsed_raw["nextFn"]["end_line"]))
+
+            # POST-08: Android Auto `values-car` is not treated as a language locale in check_strings
+            import check_strings
+            self.assertFalse(check_strings._is_language_locale_tag("car"))
+            self.assertFalse(check_strings._is_language_locale_tag("watch"))
+            self.assertTrue(check_strings._is_language_locale_tag("ar"))
+            self.assertTrue(check_strings._is_language_locale_tag("b+ar+EG"))
+
+            # P4-01: Web-Relay _norm_rel preserves leading dots so .env / .github / .agents remain blocked and .gitignore stays .gitignore
+            for secret_dot in (".env", ".github/workflows/ci.yml", ".agents/rules/harness-rules.md"):
+                norm_dot = wr_engine._norm_rel(c_repo, secret_dot)
+                self.assertEqual(secret_dot, norm_dot)
+                self.assertTrue(wr_engine._is_protected_or_secret_path(norm_dot)[0], secret_dot)
+            self.assertEqual(".gitignore", wr_engine._norm_rel(c_repo, "./.gitignore"))
+
+            # P4-03: Scout subagent blocks git grep --no-index / -f and --rebuild / --out
+            from delegation_policy import scout_command_allowed
+            self.assertFalse(scout_command_allowed("git grep --no-index root /etc/passwd"))
+            self.assertFalse(scout_command_allowed("git grep -f /etc/passwd foo"))
+            self.assertFalse(scout_command_allowed("python .agents/scripts/project_graph.py --rebuild"))
+            self.assertFalse(scout_command_allowed("python .agents/harness.py graph --out /tmp/g.json"))
+
+            # P4-04: generate_project_context `note` handles `\s+`, `\u`, `C:\Users\dev`, and `\1` without re.error
+            (c_repo / ".agents/project-context").mkdir(parents=True, exist_ok=True)
+            notes_md = c_repo / ".agents/project-context/project-notes.md"
+            notes_md.write_text("# Notes\n\n## Architecture\n- First note\n", encoding="utf-8")
+            note_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "generate_project_context.py"),
+                    "note",
+                    "--repo",
+                    str(c_repo),
+                    "--section",
+                    "Architecture",
+                    "--note",
+                    r"Escape \\s+ and \\u200f and C:\\Users\\dev and \\1 safely",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, note_proc.returncode, note_proc.stderr)
+            self.assertIn(r"C:\\Users\\dev", notes_md.read_text(encoding="utf-8"))
+
+            # P4-05: UTF-8 BOM (`\xef\xbb\xbf`) resilience in `quirks.json` and `_vnext_common.read_json`
+            from _vnext_common import read_json as _read_json_bom
+            from platform_quirks import is_quirk_enabled
+            bom_quirks = c_repo / ".agents/project-context/quirks.json"
+            bom_quirks.write_bytes(b"\xef\xbb\xbf" + json.dumps({"disabled": ["1649"]}).encode("utf-8"))
+            self.assertFalse(is_quirk_enabled("1649", repo=c_repo))
+            self.assertEqual(["1649"], _read_json_bom(bom_quirks)["disabled"])
+
+            # P4-07: Setup wizard `discover_clean_locales` ignores `values-car`/`values-watch` and normalizes `values-b+ar+EG` -> `ar`
+            from wizard.discovery import discover_clean_locales
+            self.assertEqual(
+                ["en", "ar"],
+                discover_clean_locales(["values", "values-car", "values-watch", "values-b+ar+EG", "values-night"]),
+            )
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

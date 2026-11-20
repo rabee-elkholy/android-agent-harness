@@ -1421,9 +1421,22 @@ class LifecycleTests(RepoCase):
 
     def test_release_checksums_survive_windows_autocrlf_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
+            source_repo = KIT
+            if not (KIT / ".git").exists():
+                source_repo = Path(raw) / "seed-kit"
+                shutil.copytree(
+                    KIT,
+                    source_repo,
+                    ignore=shutil.ignore_patterns("state", "cache", "__pycache__", "*.pyc", "*.pyo"),
+                )
+                subprocess.run(["git", "init", "-q"], cwd=source_repo, check=True)
+                subprocess.run(["git", "config", "user.email", "selftest@example.com"], cwd=source_repo, check=True)
+                subprocess.run(["git", "config", "user.name", "Selftest"], cwd=source_repo, check=True)
+                subprocess.run(["git", "add", "."], cwd=source_repo, check=True)
+                subprocess.run(["git", "commit", "-qm", "seed"], cwd=source_repo, check=True)
             checkout = Path(raw) / "kit"
             proc = subprocess.run(
-                ["git", "-c", "core.autocrlf=true", "clone", "--quiet", "--no-local", str(KIT), str(checkout)],
+                ["git", "-c", "core.autocrlf=true", "clone", "--quiet", "--no-local", str(source_repo), str(checkout)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -4326,6 +4339,111 @@ class CleanInstallV2SpecificationTests(RepoCase):
             harness_entry._print_next_step(step_args=["device", "install-start"], exit_code=30)
             harness_entry._print_next_step(step_args=["device", "install-start"], exit_code=0)
         self.assertEqual("", step_buf.getvalue())
+
+
+    def test_v155_pass2_preflight_repo_override_verdict_rebase_sha_and_bcp47_locale(self) -> None:
+        """Pass-2 regressions (P2-05..P2-08): preflight --repo isolation, V1 bug prose, rebase-merge, early SHA slip, BCP-47."""
+        import _adb_core
+        import preflight_check
+        import review_orchestrator as ro
+        from delivery_manifest import git_merge_in_progress
+        from record_review import _extract_evidence_and_verdict
+
+        # P2-06: Unstructured bug report prose without literal FAIL/HIGH keywords must not auto-PASS
+        pkg = "4f27663ba9eb"
+        v_bug, _, _ = _extract_evidence_and_verdict(
+            "bug-test-reviewer-agent",
+            "NullPointerException in Foo.bar() when input is null; causes crash on launch.\nEVIDENCE pkg=4f27663ba9eb",
+            pkg,
+        )
+        self.assertEqual("FINDINGS", v_bug)
+        v_after, _, _ = _extract_evidence_and_verdict(
+            "bug-test-reviewer-agent",
+            "EVIDENCE pkg=4f27663ba9eb cites=0\nPASS",
+            pkg,
+        )
+        self.assertEqual("PASS", v_after)
+
+        # P2-08a: Single repeated-digit slip in first 24 chars of review_package_sha256
+        exp_sha = "aa1234567890abcdef1234567890abcdef1234567890abcdef00112233445566"
+        self.assertEqual(64, len(exp_sha))
+        self.assertTrue(ro._package_sha256_matches_or_single_repeat_typo(exp_sha[1:], exp_sha))
+        self.assertTrue(ro._package_sha256_matches_or_single_repeat_typo("a" + exp_sha, exp_sha))
+        self.assertFalse(ro._package_sha256_matches_or_single_repeat_typo("b" + exp_sha[2:], exp_sha))
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            target_repo = root / "target_app"
+            caller_cwd = root / "caller_cwd"
+            target_repo.mkdir()
+            caller_cwd.mkdir()
+            (target_repo / ".agents" / "state").mkdir(parents=True)
+            (target_repo / "app" / "src" / "main" / "res" / "values").mkdir(parents=True)
+            (target_repo / "app" / "src" / "main" / "res" / "values-b+ar+EG").mkdir(parents=True)
+            (target_repo / "app" / "src" / "main" / "res" / "values-night").mkdir(parents=True)
+            (target_repo / "app" / "src" / "main" / "res" / "values-car").mkdir(parents=True)
+            (target_repo / "app" / "src" / "main" / "res" / "values" / "strings.xml").write_text(
+                '<resources><string name="hello">Hello</string></resources>\n', encoding="utf-8"
+            )
+            (target_repo / "app" / "src" / "main" / "res" / "values-b+ar+EG" / "strings.xml").write_text(
+                '<resources><string name="hello">أهلا</string></resources>\n', encoding="utf-8"
+            )
+            (target_repo / "app" / "src" / "main" / "res" / "values-night" / "strings.xml").write_text(
+                '<resources><string name="hello">HelloDark</string></resources>\n', encoding="utf-8"
+            )
+            (target_repo / "app" / "src" / "main" / "res" / "values-car" / "strings.xml").write_text(
+                '<resources><string name="hello">HelloCar</string></resources>\n', encoding="utf-8"
+            )
+
+            # P2-08b: BCP-47 locale indexed as 'ar'; non-locale qualifiers ('night', 'car') excluded
+            s_idx = _adb_core.index_string_resources(target_repo)
+            self.assertEqual("أهلا", s_idx.get("ar", {}).get("hello"))
+            self.assertNotIn("b+ar+eg", s_idx)
+            self.assertNotIn("night", s_idx)
+            self.assertNotIn("car", s_idx)
+
+            # P2-07: git_merge_in_progress detects paused interactive rebase (.git/rebase-merge) without REBASE_HEAD
+            subprocess.run(["git", "init", "-q"], cwd=target_repo, check=True)
+            subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=target_repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Dev"], cwd=target_repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=target_repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=target_repo, check=True)
+            git_dir_raw = subprocess.check_output(["git", "rev-parse", "--git-dir"], cwd=target_repo, text=True).strip()
+            git_dir = Path(git_dir_raw) if Path(git_dir_raw).is_absolute() else (target_repo / git_dir_raw)
+            (git_dir / "rebase-merge").mkdir()
+            m_state = git_merge_in_progress(target_repo)
+            self.assertTrue(m_state["merge_in_progress"], m_state)
+            self.assertEqual("rebase-merge", m_state.get("rebase_state_dir"))
+            (git_dir / "rebase-merge").rmdir()
+
+            # P2-05: preflight_check.py --repo <target_repo> writes gate result into target_repo, never kit repo
+            plan_dir = target_repo / ".agents" / "state" / "tasks" / "t1"
+            plan_dir.mkdir(parents=True)
+            plan_obj = {
+                "task_id": "t1",
+                "plan_id": "p1",
+                "status": "IMPLEMENTING",
+                "execution_nonce": "n1",
+                "plan_sha256": "a" * 64,
+                "approval": {"single_use_nonce": "n1", "plan_sha256": "a" * 64},
+            }
+            (plan_dir / "plan.json").write_text(json.dumps(plan_obj), encoding="utf-8")
+            (target_repo / ".agents" / "state" / "active-task.json").write_text(
+                json.dumps({"task_id": "t1", "plan_path": str(plan_dir / "plan.json")}), encoding="utf-8"
+            )
+            kit_res_file = Path(preflight_check.__file__).resolve().parents[2] / "agents" / "state" / "results" / "preflight.json"
+            existed_before = kit_res_file.exists()
+            pf_proc = subprocess.run(
+                [sys.executable, str(preflight_check.__file__), "--repo", str(target_repo), "--skip-hook-selftest", "--json"],
+                cwd=caller_cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, pf_proc.returncode, pf_proc.stdout + pf_proc.stderr)
+            self.assertTrue((target_repo / ".agents" / "state" / "results" / "preflight.json").is_file())
+            if not existed_before:
+                self.assertFalse(kit_res_file.exists())
 
 
 if __name__ == "__main__":

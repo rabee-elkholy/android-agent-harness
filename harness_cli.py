@@ -658,7 +658,7 @@ def cmd_update(args: argparse.Namespace) -> int:
         answers = repo / ".harness-setup" / "answers.json"
         if answers.is_file():
             try:
-                ans_data = json.loads(answers.read_text(encoding="utf-8"))
+                ans_data = json.loads(answers.read_text(encoding="utf-8-sig"))
                 if isinstance(ans_data, dict) and ans_data.get("schema") not in (None, 2):
                     print(
                         "[FAIL] Existing setup answers use an unsupported schema.\n"
@@ -741,6 +741,9 @@ def cmd_task(args: argparse.Namespace) -> int:
     for index, value in enumerate(task_args):
         if value == "--repo" and index + 1 < len(task_args):
             repo_value = task_args[index + 1]
+            break
+        if value.startswith("--repo=") and value.split("=", 1)[1]:
+            repo_value = value.split("=", 1)[1]
             break
     repo = Path(repo_value).expanduser().resolve() if repo_value else Path.cwd().resolve()
     installed = repo / ".agents" / "scripts" / "workflow.py"

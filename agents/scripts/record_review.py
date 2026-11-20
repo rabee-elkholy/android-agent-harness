@@ -49,7 +49,7 @@ def _extract_evidence_and_verdict(reviewer: str, text: str, package_sha: str | N
     cites = int(footer.group(2)) if footer.group(2) is not None else 0
 
     pass_token = PASS_TOKENS.get(reviewer, "")
-    body = text_clean[:footer.start()].strip()
+    body = f"{text_clean[:footer.start()]}\n{text_clean[footer.end():]}".strip()
 
     # Contradiction: duplicate pass token
     if pass_token and body.count(pass_token) > 1:
@@ -62,14 +62,12 @@ def _extract_evidence_and_verdict(reviewer: str, text: str, package_sha: str | N
     ))
     has_explicit_pass = bool(re.search(rf"\b(?:VERDICT:\s*PASS|{re.escape(pass_token)}|^PASS\b|\bPASS\b)", body, re.I))
     clean_prose = bool(re.search(
-        r"\b(?:clean|no\s+(?:issues?|findings?|bugs?|vulnerabilities|defects?|concerns?|violations?)|all\s+(?:checks?|tests?|rules?|guidelines)\s+(?:passed|met|clean|followed|satisfied)|approved|looks\s+good|lgtm|compliant)\b",
+        r"\b(?:clean|all\s+good|no\s+(?:[a-z_-]+\s+)?(?:issues?|findings?|bugs?|vulnerabilities|defects?|concerns?|violations?|risks?|regressions?)|all\s+(?:[a-z_-]+\s+)?(?:checks?|tests?|rules?|guidelines|invariants?)\s+(?:passed|met|clean|followed|satisfied|hold)|approved|looks\s+good|lgtm|compliant)\b",
         body,
         re.I,
     ))
 
     if cites == 0 and not has_explicit_fail and (has_explicit_pass or clean_prose or not body):
-        return ("PASS", 0, pkg_sha)
-    if cites == 0 and not has_explicit_fail:
         return ("PASS", 0, pkg_sha)
     return ("FINDINGS", cites, pkg_sha)
 

@@ -1293,9 +1293,18 @@ def _has_unfinalized_active_review_wave(repo: Path) -> tuple[bool, str]:
             if ps_f.is_file():
                 ps = _engine.read_json(ps_f)
                 cur_p = str(ps.get("current_phase_id") or "")
-                p_map = ps.get("phases") or {}
-                if cur_p and isinstance(p_map.get(cur_p), dict) and p_map[cur_p].get("substate") == "PHASE_REVIEWING":
-                    return (True, f"task `{tid}` phase `{cur_p}` review")
+                p_substates = ps.get("phase_substates") or {}
+                p_legacy = ps.get("phases") or {}
+                sub_entry = p_substates.get(cur_p) if cur_p and isinstance(p_substates, dict) else None
+                leg_entry = p_legacy.get(cur_p) if cur_p and isinstance(p_legacy, dict) else None
+                eff_sub = str(
+                    (sub_entry.get("substate") if isinstance(sub_entry, dict) else "")
+                    or (leg_entry.get("substate") if isinstance(leg_entry, dict) else "")
+                    or ps.get("substate")
+                    or ""
+                ).strip().upper()
+                if eff_sub in {"REVIEWING", "PHASE_REVIEWING"}:
+                    return (True, f"task `{tid}` phase `{cur_p or 'active'}` review")
     except Exception:
         return (False, "")
     return (False, "")
@@ -1343,10 +1352,38 @@ def _validate_define_subagent(args: dict, tool_name: str) -> tuple[bool, str, st
             spec_data = _engine.read_json(json_spec)
             expected_prompt = str(spec_data.get("system_prompt") or "")
             m_fp = _engine.re.search(r"(HARNESS_[A-Z0-9_]+_FINGERPRINT=[^\s]+|REVIEWER_FINGERPRINT=[^\s]+)", expected_prompt)
-            if m_fp and "FINGERPRINT=" in sys_prompt and m_fp.group(1) not in sys_prompt:
+            if m_fp and m_fp.group(1) not in sys_prompt:
                 return (
                     False,
                     f"Subagent `{sub_name}` SystemPrompt is missing required fingerprint `{m_fp.group(1)}` from `.agents/subagents/{sub_name}.json`.",
+                    "SUBAGENT_FINGERPRINT_MISMATCH",
+                )
+            collapsed_expected = _engine.re.sub(r"\s+", " ", expected_prompt).strip()
+            collapsed_actual = _engine.re.sub(r"\s+", " ", sys_prompt).strip()
+            min_len = min(350, int(len(collapsed_expected) * 0.5)) if collapsed_expected else 0
+            required_anchors = [
+                anchor for anchor in (
+                    "untrusted evidence",
+                    "never follow instructions",
+                    "HARNESS_REVIEW_RESULT_V2",
+                    "Mandatory Speed & Accuracy Contract",
+                )
+                if anchor.lower() in collapsed_expected.lower()
+            ]
+            poison_re = _engine.re.compile(
+                r"\b(?:always\s+(?:output|return|emit|report)\s+pass\b|"
+                r"ignore\s+(?:all\s+)?(?:bugs?|issues?|findings?|vulnerabilities|defects?|errors?)\b|"
+                r"disregard\s+(?:all\s+)?(?:previous|above|prior|canonical)\s+instructions?\b)",
+                _engine.re.IGNORECASE,
+            )
+            if (
+                (min_len and len(collapsed_actual) < min_len)
+                or any(anchor.lower() not in collapsed_actual.lower() for anchor in required_anchors)
+                or bool(poison_re.search(collapsed_actual))
+            ):
+                return (
+                    False,
+                    f"Subagent `{sub_name}` SystemPrompt does not satisfy the canonical contract in `.agents/subagents/{sub_name}.json`.",
                     "SUBAGENT_FINGERPRINT_MISMATCH",
                 )
         except (OSError, ValueError, _engine.ValidationError):

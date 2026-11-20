@@ -249,9 +249,9 @@ def is_read_only_adb(args: list[str]) -> bool:
         arg = logcat_args[i]
         if arg == "--":
             break
-        if arg in LOGCAT_FORBIDDEN_FLAGS or arg.startswith(LOGCAT_FORBIDDEN_PREFIXES):
+        if arg in LOGCAT_FORBIDDEN_FLAGS or arg in {"-c", "--clear"} or arg.startswith(LOGCAT_FORBIDDEN_PREFIXES):
             return False
-        if arg in {"-d", "--dump", "-c", "--clear", "-g", "--buffer-size", "-S", "--statistics", "-h", "--help"}:
+        if arg in {"-d", "--dump", "-g", "--buffer-size", "-S", "--statistics", "-h", "--help"}:
             has_bounded_exit = True
             i += 1
             continue
@@ -280,9 +280,9 @@ def is_read_only_adb(args: list[str]) -> bool:
             return False
         if arg.startswith("-") and len(arg) > 1:
             short_flags = arg[1:]
-            if any(ch in short_flags for ch in "frnPG"):
+            if any(ch in short_flags for ch in "cfrnPG"):
                 return False
-            if any(ch in short_flags for ch in "dcgSh"):
+            if any(ch in short_flags for ch in "dgSh"):
                 has_bounded_exit = True
             if "t" in short_flags or "m" in short_flags:
                 has_bounded_exit = True
@@ -339,8 +339,12 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
             return False
         if any(arg.startswith(("--output", "--ext-diff", "--textconv")) for arg in args[1:]):
             return False
-        # git grep -O/--open-files-in-pager runs an arbitrary program.
-        if args[0] == "grep" and any(arg.startswith("--open") or (arg[:2] != "--" and arg.startswith("-") and "O" in arg) for arg in args[1:]):
+        # git grep -O/--open-files-in-pager runs an arbitrary program; --no-index and -f/--file escape the repo index.
+        if args[0] == "grep" and any(
+            arg.startswith(("--open", "--no-index", "--file"))
+            or (arg[:2] != "--" and arg.startswith("-") and any(ch in arg[1:] for ch in ("O", "f")))
+            for arg in args[1:]
+        ):
             return False
         if args[0] == "symbolic-ref":
             return len(args) == 2 and not args[1].startswith("-")
@@ -500,12 +504,29 @@ def _staging_argument_in_cache(args: list[str]) -> bool:
     return False
 
 
+def _strip_workflow_top_flags(seq: list[str]) -> list[str]:
+    idx = 0
+    while idx < len(seq):
+        low = seq[idx].lower()
+        if low == "--json":
+            idx += 1
+        elif low in {"--repo", "--task-id", "--task", "--kit"} and idx + 1 < len(seq):
+            idx += 2
+        elif any(low.startswith(f + "=") for f in ("--repo", "--task-id", "--task", "--kit")):
+            idx += 1
+        else:
+            break
+    return seq[idx:]
+
+
 def _workflow_action(command: str, repo: Path | str = ".") -> str:
     name, args = _entry(command, repo)
+    clean_args = _strip_workflow_top_flags(args)
     if name == "workflow":
-        return args[0] if args else ""
-    if name in {"android-harness", "harness_cli"} and args[:1] == ["task"]:
-        return args[1] if len(args) > 1 else ""
+        return clean_args[0] if clean_args else ""
+    if name in {"android-harness", "harness_cli"} and clean_args[:1] == ["task"]:
+        sub_args = _strip_workflow_top_flags(clean_args[1:])
+        return sub_args[0] if sub_args else ""
     return ""
 
 
@@ -853,6 +874,67 @@ def _all_missing_surfaces_hint(root: Path, plan: dict, target: str, drift: list[
             command += f" {flag} {shlex.quote(','.join(sorted(values)))}"
     missing_text = f" Surfaces missing across the planned files: {', '.join(sorted(missing))}." if missing else ""
     return f"{missing_text} Revise the plan in one command: {command}"
+
+
+def _split_safe_and_chain(command: str, *, max_segments: int = 8) -> list[str] | None:
+    """Split a shell command strictly on unquoted `&&` under both POSIX and PowerShell quote rules.
+
+    Rejects pipes (`|`), redirections (`>`, `<`, `2>&1`), command substitution (`` ` ``, `$()`),
+    semicolons (`;`), OR chains (`||`), backgrounding (`&`), newlines, subshell/block parens,
+    unterminated quotes, cross-shell quote-escape smuggling, empty segments, or >max_segments.
+    """
+    cmd = str(command or "").strip()
+    if not cmd:
+        return None
+    op_txt = _operator_text_any_shell(cmd)
+    if op_txt is None:
+        return None
+    op_clean_carets = re.sub(r"(?:^|(?<=\s))\^(?=[\w.])", "", op_txt)
+    op_clean_carets = re.sub(
+        r"(?<=[0-9A-Za-z])(?:\^(?:\d*|\{(?:commit|tree|tag|blob|object)\}))+(?=\s|\.\.|\.\.\.|$)",
+        "",
+        op_clean_carets,
+    )
+    if SHELL_LAUNDERING.search(op_clean_carets):
+        return None
+    if any(bad in op_txt for bad in (";", "||", "\n", "\r", "(", ")", "{", "}")):
+        return None
+    if re.search(r"(?<!&)&(?!&)", op_txt):
+        return None
+    posix_mask = _quote_mask(cmd)
+    ps_mask = _powershell_quote_mask(cmd)
+    if posix_mask is None or ps_mask is None or len(posix_mask) != len(cmd) or len(ps_mask) != len(cmd):
+        return None
+    split_points: list[int] = []
+    i = 0
+    n = len(cmd)
+    while i < n - 1:
+        p_and = posix_mask[i : i + 2] == "&&"
+        w_and = ps_mask[i : i + 2] == "&&"
+        if p_and != w_and:
+            return None
+        if p_and:
+            split_points.append(i)
+            i += 2
+            continue
+        i += 1
+    if not split_points:
+        return [cmd]
+    segments: list[str] = []
+    start = 0
+    for idx in split_points:
+        part = cmd[start:idx].strip()
+        if not part:
+            return None
+        segments.append(part)
+        start = idx + 2
+    tail = cmd[start:].strip()
+    if not tail:
+        return None
+    segments.append(tail)
+    if len(segments) > max_segments:
+        return None
+    return segments
 
 
 def _split_segments(command: str) -> list[str] | None:

@@ -157,7 +157,7 @@ def load_write_payload(path: Path) -> dict:
     if path.stat().st_size > 1024 * 1024:
         raise SystemExit(f"[ERROR] answers file exceeds maximum permitted size (1MB): {path}")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception as exc:
         raise SystemExit(f"[ERROR] answers JSON is invalid: {exc}")
     if not isinstance(data, dict):
@@ -187,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         path = answers_path(repo)
         if not path.is_file():
             raise SystemExit(f"Missing {path}")
-        answers = json.loads(path.read_text(encoding="utf-8"))
+        answers = json.loads(path.read_text(encoding="utf-8-sig"))
         print(flags_from_answers(answers))
         return 0
     if args.command == "apply":

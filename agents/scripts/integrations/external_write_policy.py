@@ -49,7 +49,26 @@ HIGH_IMPACT_TOKENS = frozenset({
     "batch", "raw",
 })
 
-INFO_ARGS = frozenset({"--help", "-h", "help", "--version", "version"})
+INFO_FLAGS = frozenset({"--help", "-h", "--version"})
+INFO_SUBCOMMANDS = frozenset({"help", "version"})
+INFO_ARGS = INFO_FLAGS | INFO_SUBCOMMANDS
+
+GLOBAL_BOOL_FLAGS = frozenset({
+    "--verbose", "-v", "--quiet", "-q", "--debug", "--json", "--no-color",
+    "--help", "-h", "--version",
+})
+LOCAL_OUTPUT_FLAGS = frozenset({
+    "--output", "--out", "-o", "--dest", "--destination", "--file", "--path",
+})
+PROTECTED_DOWNLOAD_PREFIXES = (
+    ".agents/", "agents/scripts/", "agents/state/", "agents/project-context/",
+    ".harness-setup/", ".android-harness/", ".git/", ".github/workflows/",
+    "gradle/wrapper/",
+)
+PROTECTED_DOWNLOAD_BASENAMES = frozenset({
+    "gradlew", "gradlew.bat", "agents.md", "gemini.md", "claude.md",
+    ".cursorrules", ".windsurfrules", ".clinerules", "copilot-instructions.md", "hooks.json",
+})
 
 SENSITIVE_BASENAMES = frozenset({
     ".env", "local.properties", "key.properties", "keystore.properties", "signing.properties",
@@ -88,8 +107,24 @@ def is_sensitive_path(value: str) -> bool:
     return any(pattern.match(name) for pattern in SENSITIVE_PATTERNS)
 
 
+_INLINE_SECRET_VALUE_RE = re.compile(
+    r"(?:\b(?:ghp|gho|ghu|ghs|ghr|pat|sec)_[A-Za-z0-9_]{16,}\b"
+    r"|\bAIza[0-9A-Za-z_-]{20,}\b"
+    r"|\bsk-[A-Za-z0-9_-]{20,}\b"
+    r"|\bAKIA[0-9A-Z]{16}\b"
+    r"|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"
+    r"|\b(?:storePassword|keyPassword|client_secret|access_token|refresh_token)\s*[:=]\s*[\x27\"]?[A-Za-z0-9_./+-]{8,})",
+    re.IGNORECASE,
+)
+_FLAG_OR_FIELD_PATH_RE = re.compile(
+    r"(?:--?[A-Za-z0-9_-]+=|\b(?:file|path|attach(?:ment)?|upload|bundle|keystore|cert|key_file)\s*[:=]\s*|(?<=\s)@|^@)"
+    r"([\x27\"]?[^\s\x27\",;{}()<>]+[\x27\"]?)",
+    re.IGNORECASE,
+)
+
+
 def sensitive_values(values: Iterable[Any]) -> list[str]:
-    """Every string (searched recursively through lists and mappings) that names a secret file."""
+    """Every string (searched recursively through lists and mappings) that names or leaks a secret."""
     found: list[str] = []
 
     def visit(item: Any, depth: int = 0) -> None:
@@ -98,6 +133,20 @@ def sensitive_values(values: Iterable[Any]) -> list[str]:
         if isinstance(item, str):
             if is_sensitive_path(item):
                 found.append(item)
+                return
+            s_trim = item.strip()
+            if s_trim.startswith(("{", "[")):
+                for q1, q2 in re.findall(r'"((?:\\.|[^"\\])*)"|\x27((?:\\.|[^\x27\\])*)\x27', s_trim):
+                    cand = q1 or q2
+                    if cand and is_sensitive_path(cand):
+                        found.append(cand)
+            for m_flag in _FLAG_OR_FIELD_PATH_RE.finditer(item):
+                cand = m_flag.group(1).strip("\"\x27")
+                if cand and is_sensitive_path(cand):
+                    found.append(cand)
+            m_sec = _INLINE_SECRET_VALUE_RE.search(item)
+            if m_sec:
+                found.append("[REDACTED_SECRET_VALUE]")
         elif isinstance(item, dict):
             for nested in item.values():
                 visit(nested, depth + 1)
@@ -148,16 +197,96 @@ def workspace_cli_tokens(command: str) -> list[str] | None:
     return tokens
 
 
+def _extract_workspace_positionals(args: list[str]) -> list[str]:
+    """Extract positional tokens while skipping values of leading global options before the namespace."""
+    positional: list[str] = []
+    idx = 0
+    n = len(args)
+    while idx < n:
+        tok = args[idx]
+        if tok.startswith("-"):
+            if not positional and "=" not in tok and tok.lower() not in GLOBAL_BOOL_FLAGS:
+                if idx + 1 < n and not args[idx + 1].startswith("-"):
+                    idx += 2
+                    continue
+            idx += 1
+            continue
+        positional.append(tok)
+        idx += 1
+    return positional
+
+
+def _has_standalone_info_flag(args: list[str]) -> bool:
+    for idx, tok in enumerate(args):
+        low = tok.lower()
+        if low in INFO_FLAGS:
+            if idx > 0 and args[idx - 1].startswith("-") and "=" not in args[idx - 1] and args[idx - 1].lower() not in GLOBAL_BOOL_FLAGS:
+                continue
+            return True
+    return False
+
+
+def _extract_local_output_targets(args: list[str], positional: list[str]) -> list[str]:
+    targets: list[str] = []
+    idx = 0
+    n = len(args)
+    while idx < n:
+        tok = args[idx]
+        low = tok.lower()
+        if "=" in tok and tok.startswith("-"):
+            k, v = tok.split("=", 1)
+            if k.lower() in LOCAL_OUTPUT_FLAGS and v.strip():
+                targets.append(v.strip().strip("\"\x27"))
+        elif low in LOCAL_OUTPUT_FLAGS and idx + 1 < n:
+            targets.append(args[idx + 1].strip().strip("\"\x27"))
+            idx += 2
+            continue
+        idx += 1
+    if len(positional) >= 4:
+        targets.extend(t.strip().strip("\"\x27") for t in positional[3:] if t.strip())
+    return targets
+
+
+def _is_protected_download_target(raw_target: str) -> bool:
+    import posixpath
+    norm = str(raw_target or "").strip().strip("\"\x27").replace("\\", "/")
+    if not norm:
+        return False
+    if is_sensitive_path(norm):
+        return True
+    collapsed = posixpath.normpath(re.sub(r"^(?:\./)+", "", norm)).replace("\\", "/")
+    low = re.sub(r"^(?:\./)+", "", collapsed.lower())
+    base = _basename(collapsed)
+    if base in PROTECTED_DOWNLOAD_BASENAMES:
+        return True
+    if low == ".." or low.startswith("../"):
+        return True
+    for pref in PROTECTED_DOWNLOAD_PREFIXES:
+        p_clean = pref.rstrip("/")
+        if low == p_clean or low.startswith(pref) or f"/{pref}" in low or low.endswith(f"/{p_clean}"):
+            return True
+    return False
+
+
 def classify_workspace_cli(tokens: list[str]) -> tuple[str, str, str]:
     """(decision, reason, reason_code) for a Workspace CLI invocation."""
     cli = _workspace_cli_name(tokens[0])
     args = [token for token in tokens[1:] if token]
-    positional = [token for token in args if not token.startswith("-")]
+    positional = _extract_workspace_positionals(args)
     namespace = positional[0].lower() if positional else ""
     subcommand = positional[1].lower() if len(positional) > 1 else ""
+    _resource_nouns = {
+        "files", "permissions", "comments", "revisions", "drives", "folders",
+        "sheets", "spreadsheets", "documents", "presentations", "events", "calendars",
+    }
+    if namespace == "readonly" and subcommand == "mutate":
+        namespace = "mutate"
+        subcommand = positional[2].lower() if len(positional) > 2 else ""
+    elif namespace in {"readonly", "mutate"} and subcommand in _resource_nouns and len(positional) > 2:
+        subcommand = f"{subcommand}-{positional[2].lower()}"
     label = " ".join(part for part in (cli, namespace, subcommand) if part)
 
-    if not args or all(token.lower() in INFO_ARGS for token in args) or namespace in INFO_ARGS:
+    if not args or all(token.lower() in INFO_ARGS for token in args) or (namespace in INFO_SUBCOMMANDS and not sensitive_values(args)):
         return ALLOW, f"{cli} help/version output is read-only.", "WORKSPACE_CLI_READ"
     if namespace == "auth":
         if subcommand in {"status", ""}:
@@ -165,16 +294,22 @@ def classify_workspace_cli(tokens: list[str]) -> tuple[str, str, str]:
         return ASK, f"{label} changes the {cli} login; confirm it.", "WORKSPACE_CLI_AUTH"
 
     if namespace == "readonly":
-        if any(token.lower() in INFO_ARGS for token in args):
-            return ALLOW, f"{label} help is read-only.", "WORKSPACE_CLI_READ"
         sub_tokens = set(re.split(r"[-_]+", subcommand))
+        if sub_tokens & LOCAL_WRITE_READ_TOKENS:
+            for out_tgt in _extract_local_output_targets(args, positional):
+                if _is_protected_download_target(out_tgt):
+                    return (
+                        DENY,
+                        f"{label} cannot overwrite protected harness, wrapper, or credential path '{out_tgt}'.",
+                        "PROTECTED_PATH",
+                    )
+        if _has_standalone_info_flag(args):
+            return ALLOW, f"{label} help is read-only.", "WORKSPACE_CLI_READ"
         if sub_tokens & LOCAL_WRITE_READ_TOKENS:
             return ASK, f"{label} writes a local file; confirm the destination.", "WORKSPACE_CLI_LOCAL_WRITE"
         return ALLOW, f"{label} is a read-only Workspace command.", "WORKSPACE_CLI_READ"
 
     if namespace == "mutate":
-        if any(token.lower() in INFO_ARGS for token in args):
-            return ALLOW, f"{label} help is read-only.", "WORKSPACE_CLI_READ"
         secrets = sensitive_values(args)
         if secrets:
             return (
@@ -183,6 +318,8 @@ def classify_workspace_cli(tokens: list[str]) -> tuple[str, str, str]:
                 "this machine. Upload a copy without secrets instead.",
                 "SENSITIVE_EXTERNAL_UPLOAD",
             )
+        if _has_standalone_info_flag(args):
+            return ALLOW, f"{label} help is read-only.", "WORKSPACE_CLI_READ"
         sub_tokens = set(re.split(r"[-_]+", subcommand)) if subcommand else set()
         if not subcommand or sub_tokens & HIGH_IMPACT_TOKENS:
             return (

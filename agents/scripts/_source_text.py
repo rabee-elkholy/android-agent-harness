@@ -4,7 +4,15 @@ from __future__ import annotations
 _EXPR_CONT_PREFIXES = (".", "?.", "?:", "&&", "||")
 
 
-def _scan_source(text: str, *, mask_strings: bool) -> str:
+def _scan_source(
+    text: str,
+    *,
+    mask_strings: bool,
+    nested_comments: bool = True,
+    allow_raw_strings: bool = True,
+    allow_dollar_interp: bool = True,
+    line_open_states: list[bool] | None = None,
+) -> str:
     """Single-pass lexer for comments and string/char/raw literals with `${...}` nesting."""
     out = list(text)
     n = len(text)
@@ -20,6 +28,8 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
 
     while i < n:
         ch = text[i]
+        if ch == "\n" and line_open_states is not None:
+            line_open_states.append(mode == "RAW_STRING" or bool(interp_stack))
         if mode == "LINE_COMMENT":
             if ch == "\n":
                 mode = "CODE"
@@ -29,7 +39,7 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
                     out[i] = " "
                 i += 1
         elif mode == "BLOCK_COMMENT":
-            if text.startswith("/*", i):
+            if nested_comments and text.startswith("/*", i):
                 _blank(i, i + 2)
                 comment_depth += 1
                 i += 2
@@ -45,12 +55,17 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
                     out[i] = " "
                 i += 1
         elif mode == "RAW_STRING":
-            if text.startswith("${", i):
+            if allow_dollar_interp and text.startswith("${", i):
                 if mask_strings:
                     _blank(i, i + 2)
                 interp_stack.append(("RAW_STRING", 1))
                 mode = "CODE"
                 i += 2
+            elif not allow_dollar_interp and ch == "\\" and i + 1 < n:
+                end_esc = min(n, i + 2)
+                if mask_strings:
+                    _blank(i, end_esc)
+                i = end_esc
             elif text.startswith('"""', i):
                 end_q = i + 3
                 while end_q < n and text[end_q] == '"':
@@ -69,7 +84,7 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
                 if mask_strings:
                     _blank(i, end_esc)
                 i = end_esc
-            elif text.startswith("${", i):
+            elif allow_dollar_interp and text.startswith("${", i):
                 if mask_strings:
                     _blank(i, i + 2)
                 interp_stack.append(("STRING", 1))
@@ -115,7 +130,7 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
                 comment_depth = 1
                 mode = "BLOCK_COMMENT"
                 i += 2
-            elif text.startswith('"""', i):
+            elif allow_raw_strings and text.startswith('"""', i):
                 if mask_strings:
                     _blank(i, i + 3)
                 mode = "RAW_STRING"
@@ -148,17 +163,63 @@ def _scan_source(text: str, *, mask_strings: bool) -> str:
                 i += 1
             else:
                 i += 1
+    if line_open_states is not None:
+        line_open_states.append(mode == "RAW_STRING" or bool(interp_stack))
     return "".join(out)
 
 
-def mask_comments_and_strings(text: str) -> str:
+def _uses_dollar_interp(rel_path: str) -> bool:
+    low = str(rel_path or "").lower()
+    return (not low) or low.endswith((".kt", ".kts", ".groovy", ".gradle"))
+
+
+def mask_comments_and_strings(text: str, *, rel_path: str = "") -> str:
     """Mask comments and string/char/raw literals to spaces while preserving `\\r`/`\\n` and `${...}` code expressions."""
-    return _scan_source(text, mask_strings=True)
+    is_java = str(rel_path or "").lower().endswith(".java")
+    return _scan_source(
+        text,
+        mask_strings=True,
+        nested_comments=not is_java,
+        allow_dollar_interp=_uses_dollar_interp(rel_path),
+    )
+
+
+def mask_comments_and_strings_with_state(text: str, *, rel_path: str = "") -> tuple[list[str], list[bool]]:
+    """Return `(masked_lines, raw_literal_open_at_eol)` for exact multi-line triple-quoted symbol spans."""
+    if not text:
+        return ([], [])
+    is_java = str(rel_path or "").lower().endswith(".java")
+    open_states: list[bool] = []
+    masked = _scan_source(
+        text,
+        mask_strings=True,
+        nested_comments=not is_java,
+        allow_dollar_interp=_uses_dollar_interp(rel_path),
+        line_open_states=open_states,
+    )
+    lines = masked.split("\n")
+    if len(open_states) < len(lines):
+        open_states.extend([False] * (len(lines) - len(open_states)))
+    return (lines, open_states[: len(lines)])
 
 
 def strip_kotlin_comments_preserving_strings(text: str) -> str:
     """Blank `//` and nested `/* ... */` comments while keeping string and raw-string literals intact."""
     return _scan_source(text, mask_strings=False)
+
+
+def strip_comments_for_path(text: str, rel_path: str = "") -> str:
+    """Blank `//` and `/* ... */` comments with language-accurate nesting and raw-string handling."""
+    low = str(rel_path or "").lower()
+    supports_nested = low.endswith((".kt", ".kts", ".swift"))
+    allow_raw = low.endswith((".kt", ".kts", ".java", ".swift", ".groovy", ".gradle"))
+    return _scan_source(
+        text,
+        mask_strings=False,
+        nested_comments=supports_nested,
+        allow_raw_strings=allow_raw,
+        allow_dollar_interp=_uses_dollar_interp(rel_path),
+    )
 
 
 def scan_top_level_assignment(line: str, start_parens: int = 0) -> tuple[bool, bool]:

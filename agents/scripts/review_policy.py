@@ -629,9 +629,32 @@ def decide_later_round(
                     else int(fix_delta["changed_lines"]) <= 40
                 )
             )
+            hard_security_surfaces = {"AUTH", "CRYPTO", "SECURITY", "SENSITIVE_DATA", "MANIFEST_PERMISSION", "HARNESS_CONFIG"}
+            hard_security_path_re = re.compile(
+                r"(?:^|/)(?:auth[^/]*|login[^/]*|oauth[^/]*|signin[^/]*|credential[^/]*|biometric[^/]*|"
+                r"crypto[^/]*|cipher[^/]*|keystore[^/]*|token[^/]*|secret[^/]*|security[^/]*|"
+                r"network_security_config[^/]*|androidmanifest\.xml)$",
+                re.IGNORECASE,
+            )
+            unflagged_prod_files = [str(x) for x in (fix_delta.get("unflagged_production_files") or []) if str(x).strip()]
+            delta_sec_surfaces = (
+                set(fix_delta.get("security_surfaces") or fix_delta.get("surfaces") or [])
+                & hard_security_surfaces
+            )
+            path_implies_hard_sec = any(
+                hard_security_path_re.search(str(fp).replace("\\", "/"))
+                for fp in (fix_delta.get("files") or [])
+            )
+            unowned_hard_security = (
+                bool(delta_sec_surfaces or path_implies_hard_sec)
+                and ("security-perf-reviewer-agent" in current_required)
+                and ("security-perf-reviewer-agent" not in owners)
+            )
             surgical_owner_only = (
                 bool(owners)
                 and not promoted
+                and not unflagged_prod_files
+                and not unowned_hard_security
                 and fix_delta.get("comparison") == "REVIEWED_TEXT"
                 and fix_delta.get("all_previously_reviewed") is True
                 and within_surgical_budget
@@ -661,6 +684,10 @@ def decide_later_round(
                 **({"surgical_owner_only": True} if surgical_owner_only else {}),
                 **({"developer_accepted_files": sorted(fix_delta["developer_accepted_files"])}
                    if fix_delta.get("developer_accepted_files") else {}),
+                **({"unflagged_production_files": sorted(unflagged_prod_files)}
+                   if unflagged_prod_files else {}),
+                **({"security_surfaces": sorted(fix_delta["security_surfaces"])}
+                   if fix_delta.get("security_surfaces") else {}),
             }
 
     result["reviewers"] = sorted(rerun)
@@ -879,7 +906,7 @@ def main() -> int:
         active_p = repo / ".agents" / "state" / "active-task.json"
         if active_p.is_file():
             try:
-                active_data = json.loads(active_p.read_text(encoding="utf-8"))
+                active_data = json.loads(active_p.read_text(encoding="utf-8-sig"))
                 task_id = active_data.get("task_id")
             except (OSError, ValueError, ValidationError):
                 pass
@@ -889,7 +916,7 @@ def main() -> int:
         plan_p = repo / ".agents" / "state" / "tasks" / task_id / "plan.json"
         if plan_p.is_file():
             try:
-                plan = json.loads(plan_p.read_text(encoding="utf-8"))
+                plan = json.loads(plan_p.read_text(encoding="utf-8-sig"))
                 task_kind = str(plan.get("task_kind") or "FEATURE")
             except (OSError, ValueError, ValidationError):
                 pass

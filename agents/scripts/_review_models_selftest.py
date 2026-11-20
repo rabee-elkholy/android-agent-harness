@@ -623,10 +623,11 @@ class ReviewerModelsTests(unittest.TestCase):
         run = read_json(phase_run_file(task_dir(fixture.repo, task), "p1"))
         briefs = {r: Path(run["briefs"][r]).read_text(encoding="utf-8") for r in roster}
 
-        # 1. define_subagent is allowed during DISPATCH_PHASE_REVIEWERS
+        # 1. define_subagent is allowed during DISPATCH_PHASE_REVIEWERS when matching canonical spec
+        canonical_spec_prompt = read_json(fixture.repo / ".agents/subagents" / f"{roster[0]}.json")["system_prompt"]
         _, def_res = fixture._run_pre_tool_safety({
             "toolName": "define_subagent",
-            "toolArgs": {"name": roster[0], "description": "Reviewer", "system_prompt": "Review"},
+            "toolArgs": {"name": roster[0], "description": "Reviewer", "system_prompt": canonical_spec_prompt},
         })
         self.assertEqual("allow", def_res.get("decision"), def_res)
 
@@ -641,7 +642,7 @@ class ReviewerModelsTests(unittest.TestCase):
         #    define_subagent and exact cohort replay are allowed without charging extra calls!
         _, def_res2 = fixture._run_pre_tool_safety({
             "toolName": "define_subagent",
-            "toolArgs": {"name": roster[0], "description": "Reviewer", "system_prompt": "Review"},
+            "toolArgs": {"name": roster[0], "description": "Reviewer", "system_prompt": canonical_spec_prompt},
         })
         self.assertEqual("allow", def_res2.get("decision"), def_res2)
 

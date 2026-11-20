@@ -46,17 +46,17 @@ def sanitize_surrogates(text: str) -> str:
 
 
 def read_utf8_stdin() -> str:
-    """Read stdin bytes directly as UTF-8 on Windows instead of cp1252 surrogateescape."""
+    """Read stdin bytes directly as UTF-8 (stripping UTF-8 BOM) on Windows instead of cp1252 surrogateescape."""
     import sys
     buf = getattr(sys.stdin, "buffer", None)
     if buf is not None:
         try:
             raw_bytes = buf.read()
             if isinstance(raw_bytes, (bytes, bytearray)):
-                return bytes(raw_bytes).decode("utf-8", errors="replace")
+                return bytes(raw_bytes).decode("utf-8-sig", errors="replace")
         except (OSError, ValueError, TypeError):
             pass
-    return sanitize_surrogates(sys.stdin.read())
+    return sanitize_surrogates(sys.stdin.read()).lstrip("\ufeff")
 
 
 def configure_utf8_output() -> None:
@@ -163,7 +163,7 @@ def atomic_write_json(path: Path, value: Any) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValidationError(f"cannot read JSON artifact {path}: {exc}") from exc
     if not isinstance(value, dict):

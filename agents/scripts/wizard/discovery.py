@@ -476,9 +476,13 @@ def discover_ui_framework(text: str, modules: list[str]) -> str:
 
 
 NON_LOCALE_QUALIFIERS = {
-    "night", "notnight", "land", "port", "square", "round", "long", "notlong",
-    "ldr", "ldrtl", "ldltr", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
+    "night", "notnight", "land", "port", "square", "round", "notround", "long", "notlong",
+    "ldr", "ldrtl", "ldltr", "ldpi", "hdpi", "mdpi", "xhdpi", "xxhdpi", "xxxhdpi", "nodpi",
     "tvdpi", "anydpi", "small", "normal", "large", "xlarge",
+    "car", "watch", "desk", "television", "appliance", "vrheadset",
+    "widecg", "nowidecg", "highdr", "lowdr",
+    "finger", "notouch", "stylus", "keysexposed", "keyshidden", "keyssoft",
+    "nokeys", "qwerty", "12key", "navexposed", "navhidden", "nonav", "dpad", "trackball", "wheel",
 }
 NON_LOCALE_PATTERNS = [
     re.compile(r"^v\d+$"),
@@ -495,7 +499,7 @@ def is_language_locale_tag(tag: str) -> bool:
         return False
     if any(pat.match(tag_lower) for pat in NON_LOCALE_PATTERNS):
         return False
-    return bool(re.match(r"^(?:b\+[a-zA-Z0-9+]+|[a-z]{2,3}(?:-r?[a-zA-Z0-9]+)?)$", tag_lower))
+    return bool(re.fullmatch(r"(?:b\+[a-z0-9]+(?:\+[a-z0-9]+)*|[a-z]{2,3}(?:-r[a-z]{2})?)", tag_lower))
 
 
 def discover_clean_locales(raw_locales: list[str]) -> list[str]:
@@ -503,8 +507,17 @@ def discover_clean_locales(raw_locales: list[str]) -> list[str]:
     for item in raw_locales:
         if item.startswith("values-"):
             tag = item[len("values-") :].split("-")[0].lower()
-            if tag and is_language_locale_tag(tag) and tag not in locales:
-                locales.append(tag)
+            if not tag or not is_language_locale_tag(tag):
+                continue
+            if tag.startswith("b+"):
+                subtags = [s for s in tag[2:].split("+") if s]
+                if not subtags or not (2 <= len(subtags[0]) <= 3 and subtags[0].isalpha()):
+                    continue
+                norm_lang = subtags[0]
+            else:
+                norm_lang = tag.split("-r", 1)[0]
+            if norm_lang not in NON_LOCALE_QUALIFIERS and norm_lang not in locales:
+                locales.append(norm_lang)
     return locales
 
 

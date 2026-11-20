@@ -809,7 +809,7 @@ _COMPLEX_TECHNICAL_SURFACES = frozenset({
 
 
 def _is_test_path(raw_path: str) -> bool:
-    norm = str(raw_path or "").replace("\\", "/").strip().lstrip("./").lower()
+    norm = re.sub(r"^(?:\./)+", "", str(raw_path or "").replace("\\", "/").strip()).lstrip("/").lower()
     if not norm:
         return False
     if any(seg in norm for seg in ("/src/test/", "/src/androidtest/", "/src/commontest/", "/src/jvmtest/", "/src/iostest/")):
@@ -905,7 +905,7 @@ def compute_task_complexity_tier(
             if _is_test_path(p):
                 continue
             non_test_file_count += 1
-            fp = repo / str(p).replace("\\", "/").lstrip("./")
+            fp = repo / re.sub(r"^(?:\./)+", "", str(p).replace("\\", "/")).lstrip("/")
             try:
                 if fp.is_file() and not fp.is_symlink():
                     sz = fp.stat().st_size

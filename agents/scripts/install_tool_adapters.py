@@ -480,7 +480,7 @@ def _prune_legacy_claude_settings(repo: Path, *, dry_run: bool) -> str | None:
         return None
     rel_s = rel_of(settings_path, repo)
     try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        data = json.loads(settings_path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     hooks = data.get("hooks")
@@ -697,7 +697,7 @@ def sync_hooks_json(repo: Path, py: str, *, dry_run: bool) -> list[str]:
     hooks_path = repo / ".agents" / "hooks.json"
     if not hooks_path.is_file():
         return []
-    data = json.loads(hooks_path.read_text(encoding="utf-8"))
+    data = json.loads(hooks_path.read_text(encoding="utf-8-sig"))
     if not rewrite_python_hooks(data, configured_python_command(py)):
         return []
     if dry_run:

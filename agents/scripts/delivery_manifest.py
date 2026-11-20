@@ -151,6 +151,28 @@ def git_merge_in_progress(repo: Path) -> dict[str, str | list[str]]:
         sha = (proc.stdout or "").strip() if proc.returncode == 0 else ""
         if sha and re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
             state[key] = sha
+    for rebase_sub in ("rebase-merge", "rebase-apply"):
+        p_dir = subprocess.run(
+            ["git", "rev-parse", "--git-path", rebase_sub],
+            cwd=str(root),
+            capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            check=False,
+        )
+        raw_sub = (p_dir.stdout or "").strip() if p_dir.returncode == 0 else ""
+        if raw_sub:
+            cand_dir = Path(raw_sub) if Path(raw_sub).is_absolute() else (root / raw_sub)
+            if cand_dir.is_dir():
+                state["rebase_state_dir"] = rebase_sub
+                if "rebase_head" not in state:
+                    for sha_file in ("orig-head", "onto"):
+                        sf = cand_dir / sha_file
+                        if sf.is_file():
+                            cand_sha = sf.read_text(encoding="utf-8", errors="replace").strip()
+                            if re.fullmatch(r"[0-9a-fA-F]{40,64}", cand_sha):
+                                state["rebase_head"] = cand_sha
+                                break
+                break
     unmerged = unmerged_paths(root)
     if unmerged:
         state["unmerged_paths"] = unmerged
@@ -739,7 +761,7 @@ def load_task_baseline(repo: Path, task_id: str | None = None) -> dict | None:
             active_file = state_dir / "active-task.json"
             if active_file.is_file():
                 try:
-                    data = json.loads(active_file.read_text(encoding="utf-8"))
+                    data = json.loads(active_file.read_text(encoding="utf-8-sig"))
                     tid = data.get("task_id")
                     if tid:
                         break
@@ -833,7 +855,7 @@ def build_task_diff(
             plan_file = candidate_state / "tasks" / resolved_task_id / "plan.json"
             if plan_file.is_file() and not task_base_head:
                 try:
-                    pdata = json.loads(plan_file.read_text(encoding="utf-8"))
+                    pdata = json.loads(plan_file.read_text(encoding="utf-8-sig"))
                     task_base_head = (
                         pdata.get("task_base_head")
                         or ((pdata.get("task_baseline") or {}).get("repository") or {}).get("head")
@@ -972,7 +994,7 @@ def _load_task_plan_dict(repo: Path, task_id: str) -> dict | None:
         pfile = sdir / "tasks" / task_id / "plan.json"
         if pfile.is_file():
             try:
-                data = json.loads(pfile.read_text(encoding="utf-8"))
+                data = json.loads(pfile.read_text(encoding="utf-8-sig"))
                 if isinstance(data, dict):
                     return data
             except Exception as exc:
@@ -1009,7 +1031,7 @@ def task_owned_files(repo: Path, task_id: str, plan: dict | None = None) -> set[
         for mfile in manifest_candidates:
             if mfile.is_file():
                 try:
-                    mdata = json.loads(mfile.read_text(encoding="utf-8"))
+                    mdata = json.loads(mfile.read_text(encoding="utf-8-sig"))
                     if any(mdata.get(field) != plan.get(plan_field) for field, plan_field in (
                         ("delivery_snapshot_sha256", "ready_delivery_snapshot_sha256"),
                         ("change_set_sha256", "ready_change_set_sha256"),
@@ -1124,7 +1146,7 @@ def disjoint_sibling_file_sets(
                 continue
             seen_tasks.add(sub.name)
             try:
-                other_plan = json.loads(pfile.read_text(encoding="utf-8"))
+                other_plan = json.loads(pfile.read_text(encoding="utf-8-sig"))
             except Exception as exc:
                 raise ValidationError(f"TASK_STATE_INVALID: cannot load sibling '{sub.name}'") from exc
             if not isinstance(other_plan, dict):
