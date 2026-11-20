@@ -46,7 +46,7 @@
     "agents/scripts/_graph_core.py": "b5bf86825e1b497a4f138ad8aa298c441ee69e84e8f523944827671a99348079",
     "agents/scripts/_graph_discovery_selftest.py": "4dbcca4853f884bfc9b588b78ded20fbfef4620e2f1fc4414953609ea3ac54bf",
     "agents/scripts/_graph_selftest.py": "c2fd510a0b711479f6cbb5e871b0dded56a9f67012a76d525bd346a643afc25b",
-    "agents/scripts/_hook_selftest.py": "964d6106b17edf2958e35a51f0f8a9e1af89f60362de6579a102da57a4b6cc95",
+    "agents/scripts/_hook_selftest.py": "2f9d7dfa93f33764daab6043896726a7b37349f966e7c64b9887cc39fda17159",
     "agents/scripts/_host_continuation_selftest.py": "945ba9af48e55ff21ab8de5fa9c48bfdd61ff235cd5d1e8682de0fef446ad802",
     "agents/scripts/_idempotency.py": "5dd7e5b05ea2934f514b49e408744a547c903efbd57bb6c267f66929dac9eb6a",
     "agents/scripts/_installer_config.py": "e725cd2ec0ed7338b45a1f6700f185ecad621a02a330e49ac3e901eaba44d791",
