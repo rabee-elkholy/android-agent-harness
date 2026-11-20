@@ -1577,6 +1577,7 @@ class GenericMCPTests(unittest.TestCase):
             input='\ufeff{"hookEventName":"PreToolUse","tool_name":"run_command","tool_input":{"CommandLine":"git status"}}',
             env=clean_env,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )
@@ -1587,6 +1588,7 @@ class GenericMCPTests(unittest.TestCase):
             input='\ufeff{"invocationNum":0,"conversationId":"conv-pass5-bom"}',
             env=clean_env,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )
