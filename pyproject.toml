@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "packaging>=24.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-agent-harness"
-version = "1.5.4"
+version = "1.5.5"
 description = "Approval-first, evidence-bound engineering harness for Android and KMM/KMP (Kotlin Multiplatform Mobile) projects on Google Antigravity."
 readme = "README.md"
 requires-python = ">=3.10"
