@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.6] - 2026-11-20
+
+### Antigravity IDE v2.8.0 Gate, `#1697` Model-Steering Loop Guard, Image Read Hardening (`#1667`/`#1691`) & UTF-8 BOM Resilience
+
+- **Antigravity IDE v2.8.0 Upstream Gate for `#200763` Post-Wipe Recovery Loops (`platform_quirks.py`, `antigravity_runtime.py`, `doctor/engine.py`)**: Added `fixed_upstream_in={"antigravity_ide": "2.8.0"}` to `AGY_200687_200763_WIN_GOGC_ACCEPTEX_995` and updated `inspect_windows_go_gc_and_handle_risk()` to skip the `#200763` post-wipe crash-loop scan when `ANTIGRAVITY_IDE_VERSION >= 2.8.0` (which raised Windows backend startup timeout 30s -> 60s and fixed transient local metadata wipes) while retaining `#200687` `GOMEMLIMIT`/`GOGC` checks for large Android workspaces.
+- **`#1697` CLI `modelSteering` Stream-Loop Guard & Session Forensics (`platform_quirks.py`, `antigravity_runtime.py`, `doctor/engine.py`, `session_forensics.py`)**: Added `AGY_1697_MODEL_STEERING_STREAM_LOOP` and `inspect_cli_model_steering_risk()` to warn in `HarnessDoctor` (`CLI Model Steering Guard`) when `experimental.modelSteering` is enabled in `~/.gemini/antigravity-cli/settings.json` (protecting against unclosed `<SYSTEM_MESSAGE>` 166k-token EOS loops on `agy` CLI `v1.5.13`), and added `MODEL_STEERING_RUNAWAY_EOS_LOOP` detection (`>= 32,000` output tokens or runaway `⎯` U+23AF separator repetition after background task notifications) in `session_forensics.py`.
+- **`#1667` Corrupt JPEG Integrity Guard & `#1691` Parallel Image Read Cap (`platform_quirks.py`, `_safety/path_and_read_guard.py`, `_safety/engine.py`)**: Added `AGY_1691_1667_IMAGE_READ_BATCH_AND_JPEG` to verify JPEG SOI/EOI markers (`FFD8..FFD9`) before `read_file`/`view_file` (`CORRUPT_JPEG_IMAGE_BLOCKED` — preventing permanent HTTP 400 `INVALID_ARGUMENT` conversation poisoning) and cap parallel image read bursts at `<= 6` images per wave (`IMAGE_READ_PARALLEL_CAP_REACHED` — avoiding silent 4.5-7m copyright/recitation filter hangs on large PNG batches).
+- **MCP OAuth `#1707` Documentation, Version Metadata Alignment & Remaining UTF-8 BOM JSON Readers (`platform_quirks.py`, `antigravity_runtime.py`, `doctor/engine.py`, `session_forensics.py`, `_safety/path_and_read_guard.py`)**: Documented `#1707` concurrent Remote MCP OAuth 2.1 rotating refresh-token `invalid_grant` protection on `AGY_201491_201582_NESTED_AGY_CLI_TOS`, updated `LATEST_KNOWN_ANTIGRAVITY_VERSIONS` to IDE `2.8.0` / CLI `1.5.13`, and upgraded remaining user/host JSON readers (`mcp_config.json`, `active-conversation.json`, `hook-conversations.json`, `answers.json`, and subagent metadata) to `utf-8-sig`.
+
 ## [1.5.5] - 2026-11-19
 
 ### Security Boundary Alignment, Hard-Security Review Carry Guard, Raw-String Lexer Unification, Safe Web-Relay File Ordering & V2 Dynamic Workflow Fixes
