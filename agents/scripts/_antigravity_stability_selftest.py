@@ -9996,7 +9996,7 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
 
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("#1649"))
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("201731"))
-        self.assertEqual("1.5.13", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
+        self.assertEqual("1.5.14", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
         self.assertEqual("2.8.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["ide_version"])
         self.assertEqual("1.13.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["vscode_extension_version"])
         vers = agr.detect_antigravity_versions({"ANTIGRAVITY_CLI_VERSION": "1.5.12", "ANTIGRAVITY_VSCODE_VERSION": "1.13.0"})
@@ -11479,6 +11479,242 @@ class TestV155MediumAndPortabilityFixes(unittest.TestCase):
                 self.assertGreaterEqual(diag["transcript"]["separator_repeat_hits"], 1)
                 codes = {f["code"] for f in diag["findings"]}
                 self.assertIn("MODEL_STEERING_RUNAWAY_EOS_LOOP", codes)
+
+    def test_v157_ide_280_sac_203416_neon_xhigh_1720_and_acp_adc_1722(self) -> None:
+        """v1.5.7: IDE v2.8.0 SAC Error 4551 regression (#203416), #1720 Neon XHigh warning/forensics, #1718 registry, and #1722 agy acp ADC 60m OAuth death."""
+        import unittest.mock
+        import antigravity_runtime as agr
+        import platform_quirks as pq
+        import review_models as rm
+        import session_forensics as sf
+        from doctor.engine import HarnessDoctor
+
+        # 1) Platform quirks registry & upstream gate check (#203416, #1718, #1720, #1722)
+        self.assertEqual("AGY_200037_WIN11_SAC_ERROR_4551", pq.resolve_quirk_id("#203416"))
+        self.assertEqual("AGY_200632_WIN_POWERSHELL_TURBO", pq.resolve_quirk_id("#1718"))
+        self.assertEqual("AGY_1720_NEON_XHIGH_CACHE_COLLAPSE", pq.resolve_quirk_id("#1720"))
+        self.assertEqual("AGY_1722_ACP_ADC_60M_OAUTH_CANCEL", pq.resolve_quirk_id("#1722"))
+        self.assertNotIn(
+            "antigravity_ide",
+            pq.PLATFORM_QUIRKS["AGY_200037_WIN11_SAC_ERROR_4551"]["fixed_upstream_in"],
+        )
+        self.assertFalse(
+            pq.is_quirk_mitigated_upstream(
+                "AGY_200037_WIN11_SAC_ERROR_4551",
+                env={"ANTIGRAVITY_IDE_VERSION": "2.8.0"},
+            )
+        )
+        self.assertTrue(
+            pq.is_quirk_mitigated_upstream(
+                "AGY_200037_WIN11_SAC_ERROR_4551",
+                env={"ANTIGRAVITY_APP_VERSION": "2.33.0"},
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            repo = root / "app"
+            shutil.copytree(self._KIT / "agents", repo / ".agents")
+            (repo / "GEMINI.md").write_text("# Antigravity\n", encoding="utf-8")
+
+            # 2) #203416 IDE 2.8.0 version & installer detection + Doctor WARN
+            empty_dl = root / "empty_dl"
+            empty_dl.mkdir()
+            sac_280_ver = agr.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_IDE_VERSION": "2.8.0"},
+                installer_dirs=[empty_dl],
+            )
+            self.assertTrue(sac_280_ver["at_risk"])
+            self.assertIn("ANTIGRAVITY_IDE_VERSION=2.8.0", sac_280_ver["flagged_artifacts"])
+
+            dl_280 = root / "dl_280"
+            dl_280.mkdir()
+            (dl_280 / "AntigravityIDE-2.8.0-x64.exe").write_bytes(b"MZ")
+            sac_280_exe = agr.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32"},
+                installer_dirs=[dl_280],
+            )
+            self.assertTrue(sac_280_exe["at_risk"])
+
+            sac_271_ok = agr.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_IDE_VERSION": "2.7.1"},
+                installer_dirs=[empty_dl],
+            )
+            self.assertFalse(sac_271_ok["at_risk"])
+
+            sac_281_ok = agr.inspect_windows_smart_app_control_4551_risk(
+                env={"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_IDE_VERSION": "2.8.1"},
+                installer_dirs=[empty_dl],
+            )
+            self.assertFalse(sac_281_ok["at_risk"])
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"HARNESS_SIMULATE_PLATFORM": "win32", "ANTIGRAVITY_IDE_VERSION": "2.8.0"},
+                clear=False,
+            ):
+                doc_sac = HarnessDoctor(repo, run_selftest=False)
+                doc_sac.check_antigravity_installation()
+                sac_res = next(r for r in doc_sac.results if r.name == "Hydrogen Pacer & Win11 Guard")
+                self.assertEqual("WARN", sac_res.status)
+                self.assertIn("#203416", sac_res.message)
+
+            # 3) #1720 Neon XHigh model warnings (review_models + antigravity_runtime + Doctor + forensics)
+            warns_xh = rm.collect_model_policy_warnings(
+                {"schema_version": 1, "default": "gemini-4-neon-xhigh", "overrides": {}},
+                repo=repo,
+            )
+            self.assertEqual(1, len(warns_xh))
+            self.assertEqual("NEON_XHIGH_CACHE_COLLAPSE_1720", warns_xh[0]["code"])
+            self.assertEqual("gemini-4-neon-high", warns_xh[0]["recommended_model"])
+
+            warns_extra = rm.collect_model_policy_warnings(
+                {"schema_version": 1, "default": "inherit", "overrides": {"bug-test-reviewer-agent": "neon@extra"}},
+                repo=repo,
+            )
+            self.assertEqual(1, len(warns_extra))
+            self.assertEqual([], rm.collect_model_policy_warnings(
+                {"schema_version": 1, "default": "gemini-4-neon-high", "overrides": {}},
+                repo=repo,
+            ))
+
+            nov_neon = agr.inspect_nov15_antigravity_hazards(
+                repo,
+                env={"ANTIGRAVITY_ACTIVE_MODEL": "models/gemini-4-neon-xhigh"},
+            )
+            self.assertTrue(nov_neon["neon_xhigh_cache_collapse_risk"])
+            nov_neon_high = agr.inspect_nov15_antigravity_hazards(
+                repo,
+                env={"ANTIGRAVITY_ACTIVE_MODEL": "models/gemini-4-neon-high"},
+            )
+            self.assertFalse(nov_neon_high["neon_xhigh_cache_collapse_risk"])
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_ACTIVE_MODEL": "models/gemini-4-neon-extra"},
+                clear=False,
+            ):
+                doc_neon = HarnessDoctor(repo, run_selftest=False)
+                doc_neon.check_antigravity_installation()
+                neon_res = next(r for r in doc_neon.results if r.name == "Nov 15 Quota & Diff Guard")
+                self.assertEqual("WARN", neon_res.status)
+                self.assertIn("#1720", neon_res.message)
+
+            app_data = root / "agy-data"
+            conv_neon = "conv-1720-neon-xhigh"
+            tx_neon = app_data / "brain" / conv_neon / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_neon.parent.mkdir(parents=True, exist_ok=True)
+            tx_neon.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 1,
+                        "created_at": "2026-11-21T19:34:25Z",
+                        "model": "gemini-4-neon-xhigh",
+                        "usage": {"promptTokenCount": 220000, "cachedContentTokenCount": 217000},
+                    }),
+                    json.dumps({
+                        "step_index": 2,
+                        "created_at": "2026-11-21T19:34:58Z",
+                        "model": "gemini-4-neon-xhigh",
+                        "usage": {"promptTokenCount": 221100, "cachedContentTokenCount": 0},
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag_neon = sf.diagnose_session(repo, conversation_id=conv_neon)
+                self.assertGreaterEqual(diag_neon["transcript"]["neon_xhigh_cache_drop_hits"], 1)
+                self.assertIn("NEON_XHIGH_CACHE_COLLAPSE", {f["code"] for f in diag_neon["findings"]})
+
+            # 4) #1722 agy acp (mode=adc / agent-platform) 60-minute OAuth context canceled & silent empty end_turn
+            conv_acp_err = "conv-1722-oauth-cancel"
+            tx_acp_err = app_data / "brain" / conv_acp_err / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_acp_err.parent.mkdir(parents=True, exist_ok=True)
+            tx_acp_err.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 1,
+                        "created_at": "2026-11-21T20:45:42Z",
+                        "content": 'ACP authenticate: methodId="agent-platform" mode=adc',
+                    }),
+                    json.dumps({
+                        "step_index": 2,
+                        "created_at": "2026-11-21T21:45:37Z",
+                        "content": 'Failed to get OAuth token: failed to compute token: Post "https://oauth2.googleapis.com/token": context canceled',
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag_err = sf.diagnose_session(repo, conversation_id=conv_acp_err)
+                self.assertGreaterEqual(diag_err["transcript"]["acp_oauth_context_canceled_hits"], 1)
+                self.assertGreaterEqual(diag_err["transcript"]["session_duration_minutes"], 59.0)
+                self.assertIn("ACP_ADC_60M_OAUTH_CONTEXT_CANCELED", {f["code"] for f in diag_err["findings"]})
+
+            # Silent empty end_turn after >=59m in ACP ADC session (no explicit OAuth error in transcript)
+            conv_acp_silent = "conv-1722-silent-end-turn"
+            tx_acp_silent = app_data / "brain" / conv_acp_silent / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_acp_silent.parent.mkdir(parents=True, exist_ok=True)
+            tx_acp_silent.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 1,
+                        "created_at": "2026-11-21T20:00:00Z",
+                        "content": 'Starting agy acp server mode=adc agent-platform',
+                    }),
+                    json.dumps({
+                        "step_index": 2,
+                        "created_at": "2026-11-21T21:00:02Z",
+                        "result": {"stopReason": "end_turn"},
+                        "content": "",
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag_silent = sf.diagnose_session(repo, conversation_id=conv_acp_silent)
+                self.assertGreaterEqual(diag_silent["transcript"]["acp_silent_empty_end_turn_hits"], 1)
+                self.assertIn("ACP_ADC_60M_OAUTH_CONTEXT_CANCELED", {f["code"] for f in diag_silent["findings"]})
+
+            # Empty end_turn at 30 minutes (<59m) must NOT false-positive as #1722
+            conv_acp_short = "conv-1722-short-30m"
+            tx_acp_short = app_data / "brain" / conv_acp_short / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_acp_short.parent.mkdir(parents=True, exist_ok=True)
+            tx_acp_short.write_text(
+                "\n".join([
+                    json.dumps({
+                        "step_index": 1,
+                        "created_at": "2026-11-21T20:00:00Z",
+                        "content": 'Starting agy acp server mode=adc agent-platform',
+                    }),
+                    json.dumps({
+                        "step_index": 2,
+                        "created_at": "2026-11-21T20:30:00Z",
+                        "result": {"stopReason": "end_turn"},
+                        "content": "",
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag_short = sf.diagnose_session(repo, conversation_id=conv_acp_short)
+                self.assertEqual(0, diag_short["transcript"]["acp_silent_empty_end_turn_hits"])
+                self.assertNotIn("ACP_ADC_60M_OAUTH_CONTEXT_CANCELED", {f["code"] for f in diag_short["findings"]})
+
+            # acp-server-*.log inspection path for #1722
+            acp_logs = root / "acp-logs"
+            acp_logs.mkdir()
+            (acp_logs / "acp-server-20261121_211259.log").write_text(
+                'E1121 22:13:00.558545 83 server.go:1615] Failed to get OAuth token: failed to compute token: Post "https://oauth2.googleapis.com/token": context canceled\n',
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_APP_DATA": str(app_data), "ANTIGRAVITY_ACP_LOG_DIR": str(acp_logs)},
+                clear=False,
+            ):
+                diag_log = sf.diagnose_session(repo, conversation_id=conv_acp_short)
+                self.assertIn("ACP_ADC_60M_OAUTH_CONTEXT_CANCELED", {f["code"] for f in diag_log["findings"]})
 
 
 if __name__ == "__main__":

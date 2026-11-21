@@ -1801,7 +1801,7 @@ class HarnessDoctor:
                 "Subagent manifests strip 'schedule' wakeup triggers and zero #199713 zombie wakeup spikes detected.",
             )
 
-        # 9d. Hydrogen 403 Anti-Burst Pacer (#200029/#199971), Turn-3 Prefix Lock (#200026) & Win11 v2.7.0 Error 4551 (#200037)
+        # 9d. Hydrogen 403 Anti-Burst Pacer (#200029/#199971), Turn-3 Prefix Lock (#200026) & Win11 v2.7.0/v2.8.0 Error 4551 (#200037/#203416)
         pts_file = self.agents_dir / "scripts" / "pre_tool_safety.py"
         pir_file = self.agents_dir / "scripts" / "pre_invocation_reminder.py"
         has_pacer = pts_file.is_file() and "check_and_apply_hydrogen_burst_pacer" in pts_file.read_text(encoding="utf-8", errors="ignore")
@@ -1820,10 +1820,10 @@ class HarnessDoctor:
                 category,
                 "Hydrogen Pacer & Win11 Guard",
                 "WARN",
-                f"Antigravity IDE v2.7.0 / Windows 11 Smart App Control Error 4551 hazard detected ({arts}) (#200037).",
+                f"Antigravity IDE v2.7.0 / v2.8.0 Windows 11 Smart App Control Error 4551 hazard detected ({arts}) (#200037/#203416).",
                 [
                     "Do NOT disable Windows 11 Smart App Control (cannot be re-enabled without reinstalling Windows).",
-                    "Upgrade to re-signed Antigravity IDE v2.7.1+ / Antigravity App v2.33.0+ / VS Code extension v1.13.0+ (or use agy CLI 1.5.12+), and delete leftover unsigned v2.7.0 installers from Downloads.",
+                    "Avoid unsigned IDE v2.7.0 and v2.8.0 builds (#203416); stay on signed IDE v2.7.1 / Antigravity App v2.33.0+ / VS Code extension / agy CLI 1.5.14+ until a re-signed IDE v2.8.1+ ships, and delete unsigned 2.7.0/2.8.0 installers from Downloads.",
                 ],
             )
         else:
@@ -1831,10 +1831,10 @@ class HarnessDoctor:
                 category,
                 "Hydrogen Pacer & Win11 Guard",
                 "PASS",
-                "HYDROGEN_ANTI_BURST_PACER (#200029/#199971), Turn-0 KV-prefix lock (#200026), and Win11 v2.7.0 Error 4551 guard (#200037) active.",
+                "HYDROGEN_ANTI_BURST_PACER (#200029/#199971), Turn-0 KV-prefix lock (#200026), and Win11 v2.7.0/v2.8.0 Error 4551 guard (#200037/#203416) active.",
             )
 
-        # 9e. Nov 15 Runtime Guards: Hydrogen Extra -> Argon Quota Leak (#200467), Turbo Shell (#200632) & Inline Diff / autoAcceptOnChat (#200619)
+        # 9e. Runtime Model/Quota & Diff Guards: Hydrogen Extra (#200467), Hydrogen Medium (#1649), Neon XHigh (#1720), Turbo Shell (#200632/#1718) & Inline Diff (#200619)
         if is_ag and not self.is_raw_kit:
             try:
                 from antigravity_runtime import inspect_nov15_antigravity_hazards
@@ -1851,6 +1851,24 @@ class HarnessDoctor:
                         f"Active Windows Lead chat is set to {nov15_rep.get('active_lead_model')} (Hydrogen Medium), which can drop thinking_tokens to 0 after workspace read_file/view_file calls (#1649/#201731)."
                     )
                     rems_15.append("Switch Antigravity model selector from 'Gemini 4 Hydrogen (Medium)' to 'Gemini 4 Hydrogen (High)' (same 1.00x quota, immune to #1649).")
+                if nov15_rep.get("neon_xhigh_cache_collapse_risk"):
+                    warns_15.append(
+                        f"Active Lead chat is set to {nov15_rep.get('active_lead_model')} (Neon XHigh / Extra), which suffers alternating 0%/99% KV prompt-cache collapse (~44.6% hit rate) due to unshared multi-replica routing (#1720)."
+                    )
+                    rems_15.append("Switch Antigravity model selector from 'Gemini 4 Neon (XHigh)' to 'Gemini 4 Neon (High)' (89.8%-99.4% cache hit rate after the Nov 21 patch) for long multi-turn sessions.")
+                else:
+                    try:
+                        from review_models import collect_model_policy_warnings, load_policy
+                        from _vnext_common import ValidationError
+                        rm_pol, _ = load_policy(self.repo)
+                        for mw in collect_model_policy_warnings(rm_pol, repo=self.repo):
+                            if mw.get("code") == "NEON_XHIGH_CACHE_COLLAPSE_1720":
+                                warns_15.append(
+                                    f"Review model policy selects Neon XHigh ({', '.join(mw.get('affected') or [])}): {mw['message']}"
+                                )
+                                rems_15.append("Prefer 'gemini-4-neon-high' (or 'hydrogen-dynamic') instead of 'gemini-4-neon-xhigh' for multi-turn cache stability (#1720).")
+                    except (ImportError, OSError, ValueError, ValidationError):
+                        pass
                 if nov15_rep.get("auto_accept_at_risk"):
                     warns_15.append(
                         ".vscode/settings.json sets 'antigravity.autoAcceptOnChat': true, which silently merges unreviewed agent Inline Diffs on follow-up chat messages (#200619)."
@@ -1869,7 +1887,7 @@ class HarnessDoctor:
                         category,
                         "Nov 15 Quota & Diff Guard",
                         "PASS",
-                        f"Zero #200467 Hydrogen Extra Argon quota leak, #200632 PowerShell Turbo single-line command hygiene active, and #200619 Inline Diff guard ready ({aa_note}).",
+                        f"Zero #200467 Hydrogen Extra / #1720 Neon XHigh cache hazard, #200632/#1718 PowerShell Turbo & Start-Process hygiene active, and #200619 Inline Diff guard ready ({aa_note}).",
                     )
             except Exception as exc:
                 self.log(category, "Nov 15 Quota & Diff Guard", "WARN", f"Could not complete Nov 15 hazard check: {exc}")

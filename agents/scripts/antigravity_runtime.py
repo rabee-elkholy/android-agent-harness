@@ -452,7 +452,7 @@ def _parse_semver_prefix(raw: str) -> tuple[int, int, int] | None:
 LATEST_KNOWN_ANTIGRAVITY_VERSIONS: dict[str, str] = {
     "app_version": "2.33.0",
     "ide_version": "2.8.0",
-    "cli_version": "1.5.13",
+    "cli_version": "1.5.14",
     "vscode_extension_version": "1.13.0",
 }
 
@@ -901,7 +901,7 @@ def inspect_windows_smart_app_control_4551_risk(
     env: dict[str, str] | None = None,
     installer_dirs: list[Path] | None = None,
 ) -> dict[str, object]:
-    """Detect Windows 11 Smart App Control Error 4551 blocking Antigravity IDE v2.7.0 installer (#200037)."""
+    """Detect Windows 11 Smart App Control Error 4551 blocking unsigned Antigravity IDE v2.7.0 / v2.8.0 (#200037/#203416)."""
     import sys as _sys
     environ = env if env is not None else os.environ
     sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
@@ -911,11 +911,16 @@ def inspect_windows_smart_app_control_4551_risk(
 
     ide_ver = str(environ.get("ANTIGRAVITY_IDE_VERSION") or environ.get("AGY_IDE_VERSION") or "").strip()
     sac_err = str(environ.get("ANTIGRAVITY_INSTALLER_ERROR") or "").strip()
+    sac_err_low = sac_err.lower()
     flagged: list[str] = []
 
-    if re.search(r"(?:^|[^0-9])2\.7\.0(?:$|[^0-9])", ide_ver):
+    if re.search(r"(?:^|[^0-9])2\.[78]\.0(?:$|[^0-9])", ide_ver):
         flagged.append(f"ANTIGRAVITY_IDE_VERSION={ide_ver}")
-    if "4551" in sac_err or "smart app control" in sac_err.lower():
+    if (
+        "4551" in sac_err
+        or "smart app control" in sac_err_low
+        or ("3077" in sac_err and "notsigned" in sac_err_low)
+    ):
         flagged.append(f"installer_error={sac_err[:120]}")
 
     dirs_to_scan: list[Path] = []
@@ -927,13 +932,13 @@ def inspect_windows_smart_app_control_4551_risk(
             if d is not None and d.is_dir():
                 dirs_to_scan.append(d)
 
-    v270_re = re.compile(r"antigravity.*2[._-]7[._-]0.*\.(?:exe|msi)$", re.IGNORECASE)
+    unsigned_ide_re = re.compile(r"antigravity.*2[._-][78][._-]0.*\.(?:exe|msi)$", re.IGNORECASE)
     for d in dirs_to_scan:
         if not d.is_dir():
             continue
         try:
             for child in d.iterdir():
-                if child.is_file() and v270_re.search(child.name):
+                if child.is_file() and unsigned_ide_re.search(child.name):
                     flagged.append(str(child))
         except OSError:
             continue
@@ -1080,6 +1085,16 @@ def inspect_nov15_antigravity_hazards(
         and quirk_1649_on
         and re.search(r"gemini-4-hydrogen-(?:tiered-)?medium\b|hydrogen@medium\b", norm_model)
     )
+    quirk_1720_on = True
+    try:
+        from platform_quirks import is_quirk_enabled
+        quirk_1720_on = is_quirk_enabled("1720", repo=repo, env=environ)
+    except ImportError:
+        quirk_1720_on = True
+    neon_xhigh_cache_collapse_risk = bool(
+        quirk_1720_on
+        and re.search(r"gemini-4-neon-(?:tiered-)?(?:extra|xhigh)\b|neon@(?:extra|xhigh)\b", norm_model)
+    )
 
     auto_accept_state = "no_vscode_settings"
     auto_accept_at_risk = False
@@ -1116,6 +1131,7 @@ def inspect_nov15_antigravity_hazards(
     return {
         "hydrogen_extra_leak_active": hydrogen_extra_leak_active,
         "hydrogen_medium_win_tool_risk": hydrogen_medium_win_tool_risk,
+        "neon_xhigh_cache_collapse_risk": neon_xhigh_cache_collapse_risk,
         "active_lead_model": active_lead_model,
         "active_lead_conversation_id": active_lead_cid,
         "auto_accept_on_chat_state": auto_accept_state,

@@ -1827,5 +1827,29 @@ class GenericMCPTests(unittest.TestCase):
             self.assertEqual(0, proc.returncode, proc.stderr)
             self.assertEqual("allow", json.loads(proc.stdout)["decision"], target_p.name)
 
+    def test_v157_windows_start_process_pipe_hang_1718(self):
+        """v1.5.7: Block verb-position Windows Start-Process / saps (#1718) under AGY_200632_WIN_POWERSHELL_TURBO without false-positiving on quoted args."""
+        for bad_cmd in (
+            "Start-Process notepad.exe",
+            'Start-Process -FilePath "C:\\Program Files\\App\\electron.exe"; node script.mjs',
+            "Microsoft.PowerShell.Management\\Start-Process calc.exe",
+            "saps notepad.exe",
+            "& Start-Process code.exe",
+            "echo ok | Start-Process notepad.exe",
+        ):
+            res = self.call("run_command", {"CommandLine": bad_cmd})
+            self.assertEqual("deny", res["decision"], (bad_cmd, res))
+            self.assertIn("1718", res.get("reason", ""), (bad_cmd, res))
+            self.assertIn("Empty log", res.get("reason", ""), (bad_cmd, res))
+
+        # Quoted Start-Process text inside an audited harness command must NOT trigger #1718
+        ok_cmd = 'python .agents/harness.py task status --json --next'
+        res_ok = self.call("run_command", {"CommandLine": ok_cmd})
+        self.assertEqual("allow", res_ok["decision"], res_ok)
+
+        note_cmd = 'python .agents/harness.py context note "Avoid Start-Process; use headless runner"'
+        res_note = self.call("run_command", {"CommandLine": note_cmd})
+        self.assertNotIn("1718", res_note.get("reason", ""), res_note)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

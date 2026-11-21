@@ -582,6 +582,61 @@ def default_policy() -> dict:
     return {"schema_version": 1, "default": "inherit", "overrides": {}}
 
 
+def collect_model_policy_warnings(
+    policy: dict | None,
+    *,
+    repo: Path | None = None,
+    active_lead_model: str = "",
+) -> list[dict[str, Any]]:
+    """Return advisory warnings for model selections with known upstream runtime hazards (e.g. #1720 Neon XHigh)."""
+    warnings: list[dict[str, Any]] = []
+    quirk_1720_on = True
+    try:
+        from platform_quirks import is_quirk_enabled
+        quirk_1720_on = is_quirk_enabled("1720", repo=repo)
+    except ImportError:
+        quirk_1720_on = True
+    if not quirk_1720_on:
+        return warnings
+
+    affected_targets: list[str] = []
+    if isinstance(policy, dict):
+        default_norm = normalize_model_token(policy.get("default"))
+        if default_norm == "gemini-4-neon-xhigh":
+            affected_targets.append("default=gemini-4-neon-xhigh")
+        overrides = policy.get("overrides")
+        if isinstance(overrides, dict):
+            for role, raw_m in sorted(overrides.items()):
+                if normalize_model_token(raw_m) == "gemini-4-neon-xhigh":
+                    affected_targets.append(f"{role}=gemini-4-neon-xhigh")
+
+    lead_clean = re.sub(
+        r"[\s()]+",
+        "-",
+        str(active_lead_model or "").strip().lower().removeprefix("models/"),
+    ).strip("-")
+    if lead_clean and re.search(
+        r"gemini-4-neon-(?:tiered-)?(?:extra|xhigh)\b|neon@(?:extra|xhigh)\b",
+        lead_clean,
+    ):
+        affected_targets.append(f"lead_session={active_lead_model.strip()}")
+
+    if affected_targets:
+        warnings.append({
+            "code": "NEON_XHIGH_CACHE_COLLAPSE_1720",
+            "severity": "WARN",
+            "issue": "#1720",
+            "affected": affected_targets,
+            "recommended_model": "gemini-4-neon-high",
+            "message": (
+                "Gemini 4 Neon (XHigh / Extra) suffers alternating 0%/99% KV prompt-cache collapse (~44.6% hit rate) "
+                "due to unshared multi-replica routing (#1720). Switch to `gemini-4-neon-high` (89.8%-99.4% cache hit rate "
+                "after the Nov 21 patch) for long multi-turn sessions."
+            ),
+        })
+    return warnings
+
+
 def host_capability(host: str) -> dict:
     host = str(host).strip().lower()
     if host == "antigravity":
@@ -2197,6 +2252,9 @@ def main(argv: list[str] | None = None) -> int:
                     "pass Model='pro' for reviewers whose model contains 'pro', "
                     "and omit Model (INHERIT_PARENT_BY_OMISSION) only for explicit inherit, gemini-4-neon-*, gemini-4-argon-*, or gemini-4-carbon-* reviewers."
                 )
+            policy_warnings = collect_model_policy_warnings(policy, repo=repo)
+            if policy_warnings:
+                result["warnings"] = policy_warnings
         else:
             policy, source = load_policy(repo, args.task)
             result = {"policy": policy, "source": source, "capability": host_capability(host)}
@@ -2205,6 +2263,14 @@ def main(argv: list[str] | None = None) -> int:
                 if path.is_file():
                     run = read_json(path)
                     result["active_run_models"] = frozen_models(run)
+            import os as _os
+            policy_warnings = collect_model_policy_warnings(
+                policy,
+                repo=repo,
+                active_lead_model=str(_os.environ.get("ANTIGRAVITY_ACTIVE_MODEL") or ""),
+            )
+            if policy_warnings:
+                result["warnings"] = policy_warnings
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
     except (ValidationError, OSError, ValueError) as exc:

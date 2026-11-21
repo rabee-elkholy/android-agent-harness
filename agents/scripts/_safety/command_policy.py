@@ -462,6 +462,52 @@ def _read_only_adb_command(command: str) -> bool:
             return False
         saw_adb = True
     return saw_adb
+def _contains_windows_start_process(command: str) -> bool:
+    """Detect verb-position PowerShell `Start-Process` / `saps` launches outside quoted arguments (#1718)."""
+    from mutation_guard import _split_segments, _tokens
+    segments = _split_segments(command or "")
+    if segments is None:
+        return bool(_engine.re.search(
+            r"(?:^|[;&|\r\n]\s*)(?:Microsoft\.PowerShell\.Management\\)?(?:Start-Process|saps)(?:\s|$)",
+            command or "",
+            _engine.re.I | _engine.re.M,
+        ))
+    start_verbs = {
+        "start-process",
+        "microsoft.powershell.management\\start-process",
+        "microsoft.powershell.management/start-process",
+        "saps",
+    }
+    for seg in segments:
+        parts: list[str] = []
+        buf: list[str] = []
+        quote = ""
+        for ch in seg:
+            if quote:
+                if ch == quote:
+                    quote = ""
+                buf.append(ch)
+            elif ch in "\"'":
+                quote = ch
+                buf.append(ch)
+            elif ch == "|":
+                parts.append("".join(buf).strip())
+                buf = []
+            else:
+                buf.append(ch)
+        if buf:
+            parts.append("".join(buf).strip())
+        for part in parts:
+            toks = _tokens(part)
+            if not toks:
+                continue
+            idx = 1 if toks[0] == "&" and len(toks) > 1 else 0
+            head = toks[idx].strip().strip("\"'").lower()
+            if head in start_verbs:
+                return True
+    return False
+
+
 def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '') -> None:
     from mutation_guard import _is_read_only, _split_segments, _tokens
     from platform_quirks import is_quirk_enabled
@@ -733,6 +779,18 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             "WINDOWS_TURBO_SHELL_HYGIENE (#200632): Inline `python -c` / `py -c` / `powershell -Command` snippets inside `run_command` break "
             "Antigravity Turbo Mode auto-approval on Windows PowerShell and bypass standalone CLI auditing. "
             "Run a single-line `python .agents/harness.py <subcommand>` or use native `view_file`/`grep_search` tools instead.",
+            tool="run_command",
+            command=command,
+            reason_code="COMMAND_MUTATION_GUARD",
+            task_id=active_tid,
+        )
+        return
+    if is_quirk_enabled("200632", repo=_engine.REPO) and _contains_windows_start_process(command):
+        _engine.emit(
+            "deny",
+            "WINDOWS_START_PROCESS_PIPE_HANG (#1718 / #200632): Direct `Start-Process` / `saps` invocations inside `run_command` on Windows "
+            "let spawned GUI/background child processes inherit parent stdout/stderr pipe handles, causing Antigravity's background task runner "
+            "to hang indefinitely at `Empty log` waiting for pipe EOF. Use bounded headless `python .agents/harness.py <subcommand>` calls instead.",
             tool="run_command",
             command=command,
             reason_code="COMMAND_MUTATION_GUARD",

@@ -109,11 +109,11 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "summary": "Preserves Turn-0 {} subagent prefix-cache lock and detects Turn-3 +701 cache=0 drops.",
     },
     "AGY_200037_WIN11_SAC_ERROR_4551": {
-        "issues": ("#200037",),
+        "issues": ("#200037", "#203416"),
         "platforms": ("win32",),
         "default_enabled": True,
-        "fixed_upstream_in": {"antigravity_ide": "2.7.1", "antigravity_app": "2.33.0", "agy_cli": "1.5.11"},
-        "summary": "Detects leftover unsigned Antigravity IDE v2.7.0 installers triggering Windows 11 Smart App Control Error 4551 (fixed in IDE v2.7.1+ / App v2.33.0+).",
+        "fixed_upstream_in": {"antigravity_app": "2.33.0", "agy_cli": "1.5.11"},
+        "summary": "Detects unsigned Antigravity IDE v2.7.0 / v2.8.0 installs and installers triggering Windows 11 Smart App Control Error 4551 (re-regressed in IDE v2.8.0 #203416; App v2.33.0+ and agy CLI v1.5.11+ remain signed).",
     },
     "AGY_200144_CLI_SUBAGENT_MODEL_ID": {
         "issues": ("#200144", "#171228"),
@@ -134,10 +134,10 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "summary": "Warns when antigravity.autoAcceptOnChat=true risks silent inline diff corruption.",
     },
     "AGY_200632_WIN_POWERSHELL_TURBO": {
-        "issues": ("#200632",),
+        "issues": ("#200632", "#1718"),
         "platforms": ("win32",),
         "default_enabled": True,
-        "summary": "Blocks PowerShell pipes, chaining, and inline powershell -c that break Turbo Mode.",
+        "summary": "Blocks PowerShell pipes, chaining, inline powershell -c (#200632), and direct Start-Process / saps child launches (#1718 inherited stdout/stderr pipe EOF 'Empty log' hangs) inside run_command.",
     },
     "AGY_200671_CARBON_TOOL_TURN_TRUNCATION": {
         "issues": ("#200671",),
@@ -201,6 +201,18 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "platforms": ("all",),
         "default_enabled": True,
         "summary": "Caps parallel image read bursts at <=6 per wave (#1691 recitation hang) and validates JPEG SOI/EOI markers (FFD8..FFD9) before read_file (#1667 400 INVALID_ARGUMENT).",
+    },
+    "AGY_1720_NEON_XHIGH_CACHE_COLLAPSE": {
+        "issues": ("#1720",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when Gemini 4 Neon (XHigh / Extra) is selected for long multi-turn sessions (~44.6% cache hit rate from unshared multi-replica KV routing; Neon High/Medium and Hydrogen High stabilized at ~89.8%-99.4% after Nov 21 patch).",
+    },
+    "AGY_1722_ACP_ADC_60M_OAUTH_CANCEL": {
+        "issues": ("#1722",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Detects agy acp (mode=adc / agent-platform) 60-minute OAuth token refresh context-canceled errors and silent empty end_turn responses after >=59m.",
     },
 }
 

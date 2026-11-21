@@ -153,6 +153,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     tos_violation_403_hits = 0
     hydrogen_extra_leak_hits = 0
     hydrogen_medium_zero_thinking_hits = 0
+    session_seen_neon_xhigh = False
+    neon_xhigh_cache_drop_hits = 0
     saw_workspace_read_tool = False
     session_seen_hydrogen_medium = False
     workspace_read_tools = frozenset({
@@ -176,6 +178,14 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     runaway_eos_loop_hits = 0
     separator_repeat_hits = 0
     saw_background_system_msg = False
+    first_step_epoch: float | None = None
+    last_step_epoch: float | None = None
+    max_reported_elapsed_sec = 0.0
+    saw_acp_signal = False
+    saw_adc_signal = bool(str(os.environ.get("AGY_ADC_AUTH") or "").strip())
+    acp_oauth_context_canceled_hits = 0
+    acp_silent_empty_end_turn_hits = 0
+    prev_step_was_user_input = False
     runaway_sep_re = re.compile(r"(?:\u23af|\u2500|\u2014){24,}")
     iso_ts_re = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
     tool_counts: Counter[str] = Counter()
@@ -200,11 +210,35 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             hm_raw = str(n_meta.get("host_configured_model") or "").lower()
             if re.search(r"gemini-4-hydrogen-(?:tiered-)?medium\b|hydrogen[\s@(-]+medium\b", hm_raw):
                 session_seen_hydrogen_medium = True
+            if re.search(r"gemini-4-neon-(?:tiered-)?(?:xhigh|extra)\b|neon[\s@(-]+(?:xhigh|extra)\b", hm_raw):
+                session_seen_neon_xhigh = True
     except (ImportError, OSError, ValueError, ValidationError):
         session_seen_hydrogen_medium = False
 
     try:
-        lines = tp.read_text(encoding="utf-8", errors="replace").splitlines()[-800:]
+        all_lines = tp.read_text(encoding="utf-8", errors="replace").splitlines()
+        # Capture earliest session timestamp even when the transcript exceeds 800 lines (#1722 >=59m check)
+        for early_ln in all_lines[:20]:
+            s_early = early_ln.strip()
+            if not s_early:
+                continue
+            early_low = s_early.lower()
+            if "agy acp" in early_low or "acp authenticate" in early_low or "antigravity-acp" in early_low or "session/prompt" in early_low:
+                saw_acp_signal = True
+            if "mode=adc" in early_low or "agent-platform" in early_low or "agy_adc_auth" in early_low:
+                saw_adc_signal = True
+            if s_early.startswith("{") and s_early.endswith("}"):
+                try:
+                    early_obj = json.loads(s_early)
+                except ValueError:
+                    early_obj = {}
+            else:
+                early_obj = {}
+            ep = _parse_step_epoch(early_obj if isinstance(early_obj, dict) else {}, s_early)
+            if ep is not None:
+                first_step_epoch = ep
+                break
+        lines = all_lines[-800:]
         for idx, ln in enumerate(lines, start=1):
             low = ln.lower()
             if "malformed function call" in low or "function call is empty" in low:
@@ -222,6 +256,15 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             if "gemini-4-hydrogen-extra" in low or "gemini-4-hydrogen-xhigh" in low:
                 hydrogen_extra_leak_hits += 1
             if (
+                "gemini-4-neon-xhigh" in low
+                or "gemini-4-neon-extra" in low
+                or "gemini-4-neon-tiered-xhigh" in low
+                or "gemini 4 neon (xhigh)" in low
+                or "neon@xhigh" in low
+                or "neon@extra" in low
+            ):
+                session_seen_neon_xhigh = True
+            if (
                 "gemini-4-hydrogen-medium" in low
                 or "gemini-4-hydrogen-tiered-medium" in low
                 or "gemini 4 hydrogen (medium)" in low
@@ -232,6 +275,29 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 search_web_eof_stalls += 1
             if "<system_message>" in low or "background command" in low or "waitmsbeforeasync" in low:
                 saw_background_system_msg = True
+            if (
+                "agy acp" in low
+                or "acp authenticate" in low
+                or "acp server" in low
+                or "antigravity-acp" in low
+                or "session/prompt" in low
+                or '"stopreason": "end_turn"' in low
+                or '"stopreason":"end_turn"' in low
+            ):
+                saw_acp_signal = True
+            if (
+                "mode=adc" in low
+                or "agent-platform" in low
+                or "agy_adc_auth" in low
+                or "oauth2.googleapis.com/token" in low
+            ):
+                saw_adc_signal = True
+            if "context canceled" in low and (
+                "oauth2.googleapis.com/token" in low
+                or "failed to get oauth token" in low
+                or ("oauth" in low and "token" in low)
+            ):
+                acp_oauth_context_canceled_hits += 1
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -256,6 +322,18 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
             if cur_step > step_count:
                 step_count = cur_step
             step_epoch = _parse_step_epoch(obj, ln)
+            if step_epoch is not None:
+                if first_step_epoch is None or step_epoch < first_step_epoch:
+                    first_step_epoch = step_epoch
+                if last_step_epoch is None or step_epoch > last_step_epoch:
+                    last_step_epoch = step_epoch
+            explicit_elapsed = obj.get("session_elapsed_seconds") or obj.get("uptime_seconds")
+            if isinstance(explicit_elapsed, (int, float)) and float(explicit_elapsed) > max_reported_elapsed_sec:
+                max_reported_elapsed_sec = float(explicit_elapsed)
+            cur_elapsed_sec = max(
+                (step_epoch - first_step_epoch) if (step_epoch is not None and first_step_epoch is not None and step_epoch >= first_step_epoch) else 0.0,
+                max_reported_elapsed_sec,
+            )
             if pending_search_web_ts is not None and step_epoch is not None and step_epoch >= pending_search_web_ts:
                 sw_elapsed = step_epoch - pending_search_web_ts
                 if sw_elapsed > max_search_web_sec:
@@ -327,6 +405,7 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                     usage_candidates.append(u_cand)
             if "input_tokens" in obj or "cache_read_tokens" in obj or "promptTokenCount" in obj:
                 usage_candidates.append(obj)
+            step_has_output_tokens = False
             for u in usage_candidates:
                 if isinstance(u, dict):
                     raw_prompt = int(u.get("promptTokenCount") or u.get("input_tokens") or u.get("prompt_tokens") or 0)
@@ -355,6 +434,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         )
                     )
                     out_tok = int(u.get("candidatesTokenCount") or u.get("output_tokens") or u.get("completion_tokens") or 0)
+                    if out_tok > 0:
+                        step_has_output_tokens = True
                     if out_tok > max_output_tokens:
                         max_output_tokens = out_tok
                     if out_tok >= 32000 and not step_eos_flagged:
@@ -379,6 +460,14 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         ):
                             turn_gap_sec = step_epoch - prev_usage_epoch
                         cache_zero_now = cached_tok == 0 and (not has_cache_field or u.get("cachedContentTokenCount", 0) == 0)
+                        if (
+                            not compacted
+                            and session_seen_neon_xhigh
+                            and cache_zero_now
+                            and prev_cached_tokens >= 4096
+                            and turn_gap_sec < 240.0
+                        ):
+                            neon_xhigh_cache_drop_hits += 1
                         if (
                             not compacted
                             and turn_gap_sec >= 120.0
@@ -408,10 +497,44 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         inter_turn_tool_wait_sec = 0.0
                         usage_turn_index += 1
                     break
+
+            # #1722: Detect silent empty end_turn responses or unanswered USER_INPUT turns at >=59m
+            step_type_str = str(obj.get("type") or "").upper()
+            step_type_num = obj.get("step_type")
+            res_obj = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+            stop_reason = str(
+                obj.get("stopReason")
+                or obj.get("stop_reason")
+                or res_obj.get("stopReason")
+                or res_obj.get("stop_reason")
+                or ""
+            ).strip().lower()
+            is_empty_end_turn = (
+                stop_reason == "end_turn"
+                and not content_str.strip()
+                and not t_name
+                and not t_calls_arr
+                and not step_has_output_tokens
+            )
+            is_user_input_step = step_type_str == "USER_INPUT" or step_type_num == 14
+            if cur_elapsed_sec >= 3540.0:
+                if is_empty_end_turn:
+                    acp_silent_empty_end_turn_hits += 1
+                elif is_user_input_step and prev_step_was_user_input:
+                    acp_silent_empty_end_turn_hits += 1
+            prev_step_was_user_input = is_user_input_step
+
             if step_had_workspace_read:
                 saw_workspace_read_tool = True
     except OSError:
         pass
+
+    session_duration_sec = max(
+        (last_step_epoch - first_step_epoch)
+        if (first_step_epoch is not None and last_step_epoch is not None and last_step_epoch >= first_step_epoch)
+        else 0.0,
+        max_reported_elapsed_sec,
+    )
 
     return {
         "available": True,
@@ -431,6 +554,7 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "tos_violation_403_hits": tos_violation_403_hits,
         "hydrogen_extra_leak_hits": hydrogen_extra_leak_hits,
         "hydrogen_medium_zero_thinking_hits": hydrogen_medium_zero_thinking_hits,
+        "neon_xhigh_cache_drop_hits": neon_xhigh_cache_drop_hits,
         "turn3_cache_drop_hits": turn3_cache_drop_hits,
         "cache_regression_hits": cache_regression_hits,
         "long_wait_cache_ttl_drops": long_wait_cache_ttl_drops,
@@ -438,6 +562,10 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "search_web_eof_stalls": search_web_eof_stalls,
         "search_web_max_duration_sec": round(max_search_web_sec, 1),
         "search_web_max_parallel": max_parallel_search_web,
+        "session_duration_minutes": round(session_duration_sec / 60.0, 1),
+        "acp_adc_session_detected": bool(saw_acp_signal and saw_adc_signal),
+        "acp_oauth_context_canceled_hits": acp_oauth_context_canceled_hits,
+        "acp_silent_empty_end_turn_hits": acp_silent_empty_end_turn_hits,
         "top_tools": dict(tool_counts.most_common(8)),
     }
 
@@ -646,6 +774,102 @@ def diagnose_session(
             "remedy": (
                 "Keep implementation on warm-cache Lead (`INLINE_LEAD_DIRECT`), use `task quick-start` / `task ship` (`T0`/`T1` 0-reviewer fast path) "
                 "and `--defer-gradle-to-final` with warm Gradle daemons (no routine `clean`), or route large multi-module tasks via `web-pack` (`Web-Relay`)."
+            ),
+        })
+    quirk_1720_on = True
+    quirk_1722_on = True
+    try:
+        from platform_quirks import is_quirk_enabled as _is_q_nov21
+        quirk_1720_on = _is_q_nov21("1720", repo=repo)
+        quirk_1722_on = _is_q_nov21("1722", repo=repo)
+    except ImportError:
+        pass
+    if quirk_1720_on and transcript.get("neon_xhigh_cache_drop_hits", 0) > 0:
+        findings.append({
+            "code": "NEON_XHIGH_CACHE_COLLAPSE",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected {transcript.get('neon_xhigh_cache_drop_hits', 0)} short-gap KV prompt-cache drop(s) "
+                "(`cachedContentTokenCount=0`) on `Gemini 4 Neon (XHigh / Extra)` (#1720 unshared multi-replica routing)."
+            ),
+            "remedy": (
+                "Switch main session from `Gemini 4 Neon (XHigh)` to `Gemini 4 Neon (High)` "
+                "(89.8%-99.4% cache hit rate after the Nov 21 patch) for long multi-turn sessions."
+            ),
+        })
+    acp_log_oauth_hits = 0
+    acp_log_paths: list[str] = []
+    if quirk_1722_on:
+        acp_candidates: list[Path] = []
+        exp_acp_log = str(os.environ.get("ANTIGRAVITY_ACP_LOG") or "").strip()
+        if exp_acp_log:
+            p_acp = Path(exp_acp_log).expanduser()
+            if p_acp.is_file():
+                acp_candidates.append(p_acp)
+        acp_dirs: list[Path] = []
+        exp_acp_dir = str(os.environ.get("ANTIGRAVITY_ACP_LOG_DIR") or "").strip()
+        if exp_acp_dir:
+            acp_dirs.append(Path(exp_acp_dir).expanduser())
+        app_data_ovr = str(os.environ.get("ANTIGRAVITY_APP_DATA") or "").strip()
+        if app_data_ovr:
+            acp_dirs.append(Path(app_data_ovr).expanduser())
+            acp_dirs.append(Path(app_data_ovr).expanduser() / "logs")
+        elif not exp_acp_log and not exp_acp_dir:
+            acp_dirs.append(Path.home() / ".gemini" / "antigravity-acp" / "logs")
+            acp_dirs.append(Path.home() / ".gemini" / "antigravity-cli" / "logs")
+        for d_acp in acp_dirs:
+            if not d_acp.is_dir():
+                continue
+            try:
+                logs_found = sorted(
+                    [f for f in d_acp.glob("acp-server-*.log") if f.is_file() and not f.is_symlink()],
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )[:4]
+                acp_candidates.extend(logs_found)
+            except OSError:
+                continue
+        seen_acp: set[Path] = set()
+        for lf in acp_candidates[:4]:
+            try:
+                rlf = lf.resolve()
+                if rlf in seen_acp or not rlf.is_file() or rlf.is_symlink():
+                    continue
+                seen_acp.add(rlf)
+                sz = rlf.stat().st_size
+                if sz <= 0:
+                    continue
+                with rlf.open("rb") as fh:
+                    fh.seek(max(0, sz - 65536))
+                    tail = fh.read(65536).decode("utf-8", errors="replace").lower()
+                if "context canceled" in tail and (
+                    "oauth2.googleapis.com/token" in tail or "failed to get oauth token" in tail
+                ):
+                    acp_log_oauth_hits += tail.count("context canceled")
+                    acp_log_paths.append(str(rlf))
+            except OSError:
+                continue
+    acp_oauth_canceled_total = int(transcript.get("acp_oauth_context_canceled_hits") or 0) + acp_log_oauth_hits
+    if quirk_1722_on and (
+        acp_oauth_canceled_total > 0
+        or (
+            int(transcript.get("acp_silent_empty_end_turn_hits") or 0) > 0
+            and float(transcript.get("session_duration_minutes") or 0.0) >= 59.0
+            and (bool(transcript.get("acp_adc_session_detected")) or bool(str(os.environ.get("AGY_ADC_AUTH") or "").strip()))
+        )
+    ):
+        log_note = f", matched_acp_logs={acp_log_paths[:2]}" if acp_log_paths else ""
+        findings.append({
+            "code": "ACP_ADC_60M_OAUTH_CONTEXT_CANCELED",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected `agy acp` (`mode=adc` / `agent-platform`) 60-minute OAuth token refresh `context canceled` or silent empty `end_turn` "
+                f"(oauth_context_canceled_hits={acp_oauth_canceled_total}, silent_empty_end_turn_hits={transcript.get('acp_silent_empty_end_turn_hits', 0)}, "
+                f"session_duration_min={transcript.get('session_duration_minutes', 0.0)}{log_note}) — Go `oauth2.TokenSource` bound to expired `authenticate` RPC context (#1722)."
+            ),
+            "remedy": (
+                "Kill and restart the `agy acp` server process completely (re-sending `authenticate` is a no-op once expired) "
+                "or use interactive `agy` TUI / `oauth-personal` auth until Google creates ADC `TokenSource` with `context.Background()` (#1722)."
             ),
         })
     if transcript.get("turn3_cache_drop_hits", 0) > 0 or transcript.get("cache_regression_hits", 0) >= 2:
