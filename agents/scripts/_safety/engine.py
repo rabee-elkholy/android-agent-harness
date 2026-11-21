@@ -342,6 +342,8 @@ SEARCH_WEB_BURST_WINDOW_SEC = 8.0
 SEARCH_WEB_MAX_PARALLEL_CALLS = 2
 SEARCH_WEB_WAVE_WINDOW_SEC = 45.0
 SEARCH_WEB_MAX_WAVE_CALLS = 4
+IMAGE_READ_BURST_WINDOW_SEC = 10.0
+IMAGE_READ_MAX_PARALLEL_CALLS = 6
 
 
 def main() -> None:
@@ -597,6 +599,13 @@ def _main() -> None:
             if _self._installed_engine_target(target, recursive=name in SEARCH_TOOLS | {"list_dir"}):
                 _self._deny_engine_read(name)
                 return
+            if name in {"view_file", "read_file", "read"}:
+                jpeg_ok, jpeg_msg = _self._check_jpeg_integrity(target)
+                if not jpeg_ok:
+                    _self.emit("deny", jpeg_msg, tool=name, reason_code="CORRUPT_JPEG_IMAGE_BLOCKED")
+                    return
+                if _self._enforce_image_read_parallel_cap(target, conversation):
+                    return
         if name in WRITE_TOOLS:
             targets = _extract_all_targets(args)
             if name in {"move_file", "rename_file"} and len(targets) < 2:
@@ -852,6 +861,8 @@ _LAZY_SUBMODULE_EXPORTS: dict[str, str] = {
     "_deny_engine_read": "path_and_read_guard",
     "_is_large_step_output_paginated_read": "path_and_read_guard",
     "_is_large_build_artifact_paginated_read": "path_and_read_guard",
+    "_check_jpeg_integrity": "path_and_read_guard",
+    "_enforce_image_read_parallel_cap": "path_and_read_guard",
 }
 
 

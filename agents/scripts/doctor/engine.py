@@ -517,7 +517,7 @@ class HarnessDoctor:
         if not answers_file.is_file():
             return
         try:
-            answers = json.loads(answers_file.read_text(encoding="utf-8"))
+            answers = json.loads(answers_file.read_text(encoding="utf-8-sig"))
             if not isinstance(answers, dict):
                 return
         except Exception as exc:
@@ -1290,7 +1290,7 @@ class HarnessDoctor:
         is_ag = True
         if answers_file.is_file():
             try:
-                ans = json.loads(answers_file.read_text(encoding="utf-8"))
+                ans = json.loads(answers_file.read_text(encoding="utf-8-sig"))
                 tools = ans.get("tools") or []
                 is_ag = bool("antigravity" in tools or ("gemini" in tools and (self.repo / ".agents" / "agents").is_dir()))
             except (OSError, ValueError):
@@ -1438,7 +1438,7 @@ class HarnessDoctor:
             # Check enforcement metadata drift
             if answers_file.is_file():
                 try:
-                    ans = json.loads(answers_file.read_text(encoding="utf-8"))
+                    ans = json.loads(answers_file.read_text(encoding="utf-8-sig"))
                     if "antigravity" in (ans.get("tools") or []):
                         prod_file = self.agents_dir / "scripts" / "_product.py"
                         if prod_file.is_file():
@@ -1908,11 +1908,16 @@ class HarnessDoctor:
                         if gc_rep.get("gc_tuned")
                         else "tip: set GOMEMLIMIT=8GiB and GOGC=200 on 32GB Windows 11 hosts to prevent #200687 Go GC handle-recycling crashes"
                     )
+                    ide_note = (
+                        "IDE >=2.8.0 fixed #200763 post-wipe recovery loop; "
+                        if gc_rep.get("post_wipe_recovery_mitigated_upstream")
+                        else ""
+                    )
                     self.log(
                         category,
                         "Windows Go GC & AcceptEx Guard",
                         "PASS",
-                        f"Zero language_server.exe AcceptEx code-2 crash loops detected ({gc_note}).",
+                        f"Zero language_server.exe AcceptEx code-2 crash loops detected ({ide_note}{gc_note}).",
                     )
         except Exception as exc:
             self.log(category, "Windows Go GC & AcceptEx Guard", "WARN", f"Could not inspect Windows Go GC / AcceptEx health: {exc}")
@@ -2036,6 +2041,31 @@ class HarnessDoctor:
                 )
         except Exception as exc:
             self.log(category, "CLI Version-Gated Workarounds", "WARN", f"Could not inspect CLI version-gated workarounds: {exc}")
+
+        # 9k. CLI Model Steering Stream Loop Guard (#1697)
+        try:
+            from antigravity_runtime import inspect_cli_model_steering_risk
+            ms_rep = inspect_cli_model_steering_risk(repo=self.repo)
+            if ms_rep.get("applicable"):
+                if ms_rep.get("at_risk"):
+                    self.log(
+                        category,
+                        "CLI Model Steering Guard",
+                        "WARN",
+                        f"`experimental.modelSteering` is enabled in {ms_rep.get('path')} (#1697 — background command notifications on agy CLI v1.5.13 can inject unclosed `<SYSTEM_MESSAGE>` into active streaming output and trigger 166k-token EOS loops).",
+                        [
+                            'Set `"experimental": {"modelSteering": false}` in ~/.gemini/antigravity-cli/settings.json until Google fixes missing `</SYSTEM_MESSAGE>` tag injection on background task completion.',
+                        ],
+                    )
+                else:
+                    self.log(
+                        category,
+                        "CLI Model Steering Guard",
+                        "PASS",
+                        "`experimental.modelSteering` is disabled or absent in Antigravity CLI settings (#1697 safe).",
+                    )
+        except Exception as exc:
+            self.log(category, "CLI Model Steering Guard", "WARN", f"Could not inspect CLI modelSteering setting: {exc}")
 
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""

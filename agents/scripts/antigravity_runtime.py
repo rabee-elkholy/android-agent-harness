@@ -451,8 +451,8 @@ def _parse_semver_prefix(raw: str) -> tuple[int, int, int] | None:
 
 LATEST_KNOWN_ANTIGRAVITY_VERSIONS: dict[str, str] = {
     "app_version": "2.33.0",
-    "ide_version": "2.7.1",
-    "cli_version": "1.5.12",
+    "ide_version": "2.8.0",
+    "cli_version": "1.5.13",
     "vscode_extension_version": "1.13.0",
 }
 
@@ -502,7 +502,7 @@ def inspect_windows_stdio_mcp_risk(repo: Path, env: dict[str, str] | None = None
             if resolved in seen_files or not resolved.is_file() or resolved.is_symlink():
                 continue
             seen_files.add(resolved)
-            data = _json.loads(resolved.read_text(encoding="utf-8", errors="replace"))
+            data = _json.loads(resolved.read_text(encoding="utf-8-sig", errors="replace"))
             if not isinstance(data, dict):
                 continue
             servers = data.get("mcpServers") or data.get("servers") or {}
@@ -960,7 +960,7 @@ def extract_lead_candidates_from_state(state_dir: Path) -> list[str]:
     active_conv = state_dir / "active-conversation.json"
     if active_conv.is_file():
         try:
-            doc = _json.loads(active_conv.read_text(encoding="utf-8", errors="replace"))
+            doc = _json.loads(active_conv.read_text(encoding="utf-8-sig", errors="replace"))
             if isinstance(doc, dict):
                 cid = str(doc.get("conversation_id") or "").strip()
                 if cid and not _is_invalid_conversation_id(cid) and cid not in candidates:
@@ -972,7 +972,7 @@ def extract_lead_candidates_from_state(state_dir: Path) -> list[str]:
         if not hc_path.is_file():
             continue
         try:
-            doc = _json.loads(hc_path.read_text(encoding="utf-8", errors="replace"))
+            doc = _json.loads(hc_path.read_text(encoding="utf-8-sig", errors="replace"))
         except (OSError, ValueError):
             continue
         if not isinstance(doc, dict):
@@ -1256,7 +1256,7 @@ def inspect_windows_go_gc_and_handle_risk(
     repo: Path,
     env: dict[str, str] | None = None,
 ) -> dict[str, object]:
-    """Check Windows 11 `GOMEMLIMIT` / `GOGC` tuning, `stdio` MCP count, and `AcceptEx` crash fingerprints (#200687/#199301)."""
+    """Check Windows 11 `GOMEMLIMIT` / `GOGC` tuning (#200687), `stdio` MCP count (#199301), and pre-IDE-2.8.0 `AcceptEx` post-wipe crash loops (#200763)."""
     import sys as _sys
     environ = env if env is not None else os.environ
     try:
@@ -1283,8 +1283,24 @@ def inspect_windows_go_gc_and_handle_risk(
         mcp_env["HARNESS_SIMULATE_WINDOWS_MCP"] = "1"
     mcp_rep = inspect_windows_stdio_mcp_risk(repo, env=mcp_env)
     stdio_servers = list(mcp_rep.get("stdio_servers") or [])
-    crash_rep = inspect_language_server_acceptex_crashes(env=environ)
-    crash_loop = bool(crash_rep.get("crash_loop_detected"))
+
+    vers = detect_antigravity_versions(dict(environ))
+    ide_v = _parse_semver_prefix(vers["ide_version"])
+    post_wipe_mitigated = bool(ide_v is not None and ide_v >= (2, 8, 0))
+    if post_wipe_mitigated:
+        crash_rep: dict[str, object] = {
+            "applicable": False,
+            "crash_loop_detected": False,
+            "mitigated_upstream": True,
+            "code2_crashes": 0,
+            "port_restarts": 0,
+            "zero_byte_crash_logs": 0,
+            "matched_logs": [],
+        }
+        crash_loop = False
+    else:
+        crash_rep = inspect_language_server_acceptex_crashes(env=environ)
+        crash_loop = bool(crash_rep.get("crash_loop_detected"))
 
     at_risk = bool(
         gogc_off_without_memlimit
@@ -1299,7 +1315,87 @@ def inspect_windows_go_gc_and_handle_risk(
         "gomemlimit": gomemlimit,
         "gogc_off_without_memlimit": gogc_off_without_memlimit,
         "stdio_servers": stdio_servers,
+        "post_wipe_recovery_mitigated_upstream": post_wipe_mitigated,
         "crash_report": crash_rep,
+    }
+
+
+def inspect_cli_model_steering_risk(
+    repo: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Check `~/.gemini/antigravity-cli/settings.json` for `experimental.modelSteering: true` (#1697).
+
+    In Antigravity CLI v1.5.13, background command completion notifications can inject an unclosed
+    `<SYSTEM_MESSAGE>` into active streaming output when `modelSteering` is enabled, triggering
+    runaway 166k-token EOS separator loops.
+    """
+    import json as _json
+
+    environ = env if env is not None else os.environ
+    try:
+        from platform_quirks import is_quirk_enabled
+        if not is_quirk_enabled("1697", repo=repo, env=environ):
+            return {
+                "applicable": False,
+                "at_risk": False,
+                "model_steering_enabled": False,
+                "path": "",
+                "cli_version": "",
+                "quirk_disabled": True,
+            }
+    except ImportError:
+        pass
+
+    vers = detect_antigravity_versions(dict(environ))
+    candidates: list[Path] = []
+    explicit_file = str(environ.get("ANTIGRAVITY_CLI_SETTINGS_JSON") or "").strip()
+    app_data_ovr = str(environ.get("ANTIGRAVITY_APP_DATA") or "").strip()
+    if explicit_file:
+        candidates.append(Path(explicit_file).expanduser())
+    elif app_data_ovr:
+        ap = Path(app_data_ovr).expanduser()
+        candidates.append(ap / "settings.json")
+        candidates.append(ap.parent / "antigravity-cli" / "settings.json")
+    else:
+        candidates.append(Path.home() / ".gemini" / "antigravity-cli" / "settings.json")
+
+    target_file: Path | None = None
+    for cand in candidates:
+        try:
+            if cand.is_file() and not cand.is_symlink():
+                target_file = cand.resolve()
+                break
+        except OSError:
+            continue
+
+    if target_file is None:
+        return {
+            "applicable": True,
+            "at_risk": False,
+            "model_steering_enabled": False,
+            "path": "",
+            "cli_version": vers["cli_version"],
+        }
+
+    enabled = False
+    try:
+        doc = _json.loads(target_file.read_text(encoding="utf-8-sig", errors="replace"))
+        if isinstance(doc, dict):
+            exp = doc.get("experimental")
+            if isinstance(exp, dict) and exp.get("modelSteering") is True:
+                enabled = True
+            elif doc.get("modelSteering") is True:
+                enabled = True
+    except (OSError, ValueError, TypeError):
+        enabled = False
+
+    return {
+        "applicable": True,
+        "at_risk": bool(enabled),
+        "model_steering_enabled": bool(enabled),
+        "path": str(target_file),
+        "cli_version": vers["cli_version"],
     }
 
 

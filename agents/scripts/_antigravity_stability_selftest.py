@@ -9996,7 +9996,8 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
 
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("#1649"))
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("201731"))
-        self.assertEqual("1.5.12", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
+        self.assertEqual("1.5.13", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
+        self.assertEqual("2.8.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["ide_version"])
         self.assertEqual("1.13.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["vscode_extension_version"])
         vers = agr.detect_antigravity_versions({"ANTIGRAVITY_CLI_VERSION": "1.5.12", "ANTIGRAVITY_VSCODE_VERSION": "1.13.0"})
         self.assertEqual("1.5.12", vers["cli_version"])
@@ -11328,6 +11329,156 @@ class TestV155MediumAndPortabilityFixes(unittest.TestCase):
                 self.assertIn("CLI >=1.5.8", vg_modern.message)
                 self.assertTrue(pq.is_quirk_mitigated_upstream("AGY_WIN_HOOK_QUOTE_AND_BOM"))
                 self.assertTrue(pq.is_quirk_mitigated_upstream("AGY_WIN_CRLF_EDIT_NORMALIZATION"))
+
+    def test_v156_ide_2_8_0_gate_model_steering_1697_forensics_and_oauth_1707(self) -> None:
+        """v1.5.6: IDE 2.8.0 #200763 post-wipe gate, #1697 modelSteering Doctor + forensics, #1707 OAuth doc, and BOM JSON resilience."""
+        import unittest.mock
+        import antigravity_runtime as agr
+        import platform_quirks as pq
+        import session_forensics as sf
+        from doctor.engine import HarnessDoctor
+
+        self.assertEqual("AGY_201491_201582_NESTED_AGY_CLI_TOS", pq.resolve_quirk_id("#1707"))
+        self.assertEqual("AGY_1697_MODEL_STEERING_STREAM_LOOP", pq.resolve_quirk_id("#1697"))
+        self.assertEqual("AGY_1691_1667_IMAGE_READ_BATCH_AND_JPEG", pq.resolve_quirk_id("#1691"))
+        self.assertEqual("AGY_1691_1667_IMAGE_READ_BATCH_AND_JPEG", pq.resolve_quirk_id("#1667"))
+        self.assertEqual(
+            {"antigravity_ide": "2.8.0"},
+            pq.PLATFORM_QUIRKS["AGY_200687_200763_WIN_GOGC_ACCEPTEX_995"]["fixed_upstream_in"],
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td).resolve()
+            repo = root / "app"
+            shutil.copytree(self._KIT / "agents", repo / ".agents")
+            (repo / "GEMINI.md").write_text("# Antigravity\n", encoding="utf-8")
+
+            # 1) UTF-8 BOM mcp_config.json is parsed cleanly on Windows
+            mcp_cfg = repo / ".agents" / "mcp_config.json"
+            mcp_cfg.write_bytes(
+                b"\xef\xbb\xbf" + json.dumps({
+                    "mcpServers": {
+                        "s1": {"command": "node", "args": ["a.js"]},
+                        "s2": {"command": "node", "args": ["b.js"]},
+                    }
+                }).encode("utf-8")
+            )
+            mcp_rep = agr.inspect_windows_stdio_mcp_risk(
+                repo,
+                env={"HARNESS_SIMULATE_WINDOWS_MCP": "1", "ANTIGRAVITY_APP_DATA": str(root / "empty-appdata")},
+            )
+            self.assertEqual(["s1", "s2"], mcp_rep["stdio_servers"])
+
+            # 2) IDE v2.8.0 mitigates #200763 post-wipe crash-loop scan while keeping #200687 GOMEMLIMIT/GOGC checks active
+            fake_log = root / "main.log"
+            fake_log.write_text(
+                "language_server.exe exit code 2 AcceptEx error 995\n"
+                "language_server.exe exit code 2 AcceptEx error 995\n"
+                "language_server.exe exit code 2 AcceptEx error 995\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.object(
+                agr,
+                "inspect_language_server_acceptex_crashes",
+                return_value={"applicable": True, "crash_loop_detected": True, "code2_crashes": 3, "port_restarts": 2, "zero_byte_crash_logs": 0, "matched_logs": [str(fake_log)]},
+            ):
+                rep_old_ide = agr.inspect_windows_go_gc_and_handle_risk(
+                    repo,
+                    env={
+                        "HARNESS_SIMULATE_PLATFORM": "win32",
+                        "ANTIGRAVITY_IDE_VERSION": "2.7.1",
+                        "GOMEMLIMIT": "8GiB",
+                        "GOGC": "200",
+                        "ANTIGRAVITY_APP_DATA": str(root / "empty-appdata"),
+                    },
+                )
+                self.assertFalse(rep_old_ide["post_wipe_recovery_mitigated_upstream"])
+                self.assertTrue(rep_old_ide["at_risk"])
+
+                rep_ide_280_tuned = agr.inspect_windows_go_gc_and_handle_risk(
+                    repo,
+                    env={
+                        "HARNESS_SIMULATE_PLATFORM": "win32",
+                        "ANTIGRAVITY_IDE_VERSION": "2.8.0",
+                        "GOMEMLIMIT": "8GiB",
+                        "GOGC": "200",
+                        "ANTIGRAVITY_APP_DATA": str(root / "empty-appdata"),
+                    },
+                )
+                self.assertTrue(rep_ide_280_tuned["post_wipe_recovery_mitigated_upstream"])
+                self.assertFalse(rep_ide_280_tuned["at_risk"])
+
+                rep_ide_280_bad_gc = agr.inspect_windows_go_gc_and_handle_risk(
+                    repo,
+                    env={
+                        "HARNESS_SIMULATE_PLATFORM": "win32",
+                        "ANTIGRAVITY_IDE_VERSION": "2.8.0",
+                        "GOGC": "off",
+                        "GOMEMLIMIT": "",
+                        "ANTIGRAVITY_APP_DATA": str(root / "empty-appdata"),
+                    },
+                )
+                self.assertTrue(rep_ide_280_bad_gc["post_wipe_recovery_mitigated_upstream"])
+                self.assertTrue(rep_ide_280_bad_gc["at_risk"])
+                self.assertTrue(rep_ide_280_bad_gc["gogc_off_without_memlimit"])
+
+            # 3) #1697 CLI experimental.modelSteering=true (with UTF-8 BOM) triggers Doctor WARN; false triggers PASS
+            cli_settings = root / "settings.json"
+            cli_settings.write_bytes(
+                b"\xef\xbb\xbf" + json.dumps({"experimental": {"modelSteering": True}}).encode("utf-8")
+            )
+            ms_warn = agr.inspect_cli_model_steering_risk(
+                repo=repo,
+                env={"ANTIGRAVITY_CLI_SETTINGS_JSON": str(cli_settings), "ANTIGRAVITY_CLI_VERSION": "1.5.13"},
+            )
+            self.assertTrue(ms_warn["at_risk"])
+            self.assertTrue(ms_warn["model_steering_enabled"])
+
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_CLI_SETTINGS_JSON": str(cli_settings), "ANTIGRAVITY_CLI_VERSION": "1.5.13"},
+                clear=False,
+            ):
+                doc_warn = HarnessDoctor(repo, run_selftest=False)
+                doc_warn.check_antigravity_installation()
+                ms_res_warn = next(r for r in doc_warn.results if r.name == "CLI Model Steering Guard")
+                self.assertEqual("WARN", ms_res_warn.status)
+                self.assertIn("#1697", ms_res_warn.message)
+
+            cli_settings.write_text(json.dumps({"experimental": {"modelSteering": False}}), encoding="utf-8")
+            with unittest.mock.patch.dict(
+                os.environ,
+                {"ANTIGRAVITY_CLI_SETTINGS_JSON": str(cli_settings), "ANTIGRAVITY_CLI_VERSION": "1.5.13"},
+                clear=False,
+            ):
+                doc_ok = HarnessDoctor(repo, run_selftest=False)
+                doc_ok.check_antigravity_installation()
+                ms_res_ok = next(r for r in doc_ok.results if r.name == "CLI Model Steering Guard")
+                self.assertEqual("PASS", ms_res_ok.status)
+
+            # 4) #1697 session_forensics detects runaway EOS separator loop + >32k output tokens
+            app_data = root / "agy-data"
+            conv_id = "conv-1697-runaway"
+            tx_file = app_data / "brain" / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+            tx_file.parent.mkdir(parents=True, exist_ok=True)
+            tx_file.write_text(
+                "\n".join([
+                    json.dumps({"step_index": 1, "content": "<SYSTEM_MESSAGE>Background command finished: pytest"}),
+                    json.dumps({
+                        "step_index": 2,
+                        "content": "Checking output " + ("\u23af" * 64),
+                        "usage": {"promptTokenCount": 12000, "candidatesTokenCount": 42000},
+                    }),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.dict(os.environ, {"ANTIGRAVITY_APP_DATA": str(app_data)}, clear=False):
+                diag = sf.diagnose_session(repo, conversation_id=conv_id)
+                self.assertGreaterEqual(diag["transcript"]["max_output_tokens"], 42000)
+                self.assertGreaterEqual(diag["transcript"]["runaway_eos_loop_hits"], 1)
+                self.assertGreaterEqual(diag["transcript"]["separator_repeat_hits"], 1)
+                codes = {f["code"] for f in diag["findings"]}
+                self.assertIn("MODEL_STEERING_RUNAWAY_EOS_LOOP", codes)
 
 
 if __name__ == "__main__":

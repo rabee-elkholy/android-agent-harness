@@ -510,7 +510,7 @@ def _conversation_started_at(payload: dict) -> float | None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with StateLock(path.parent / ".hook-conversations-lock"):
             try:
-                seen = _engine.json.loads(path.read_text(encoding="utf-8"))
+                seen = _engine.json.loads(path.read_text(encoding="utf-8-sig"))
                 if not isinstance(seen, dict):
                     seen = {}
             except (OSError, ValueError):
@@ -695,3 +695,104 @@ def _is_large_build_artifact_paginated_read(raw_target: str, args: dict) -> bool
     except OSError:
         return offset_val >= 46080
     return offset_val >= 46080
+
+
+_IMAGE_READ_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+_JPEG_READ_SUFFIXES = (".jpg", ".jpeg")
+
+
+def _check_jpeg_integrity(raw_target: str) -> tuple[bool, str]:
+    """Validate JPEG SOI (FFD8) and EOI (FFD9) markers before host image reads (#1667 400 INVALID_ARGUMENT)."""
+    norm = str(raw_target or "").strip().strip('"').strip("'")
+    if not norm or not norm.lower().endswith(_JPEG_READ_SUFFIXES):
+        return True, ""
+    try:
+        from platform_quirks import is_quirk_enabled
+        if not is_quirk_enabled("1667", repo=_engine.REPO):
+            return True, ""
+    except ImportError:
+        pass
+    try:
+        cand = Path(norm).expanduser()
+        resolved = cand.resolve() if cand.is_absolute() else (_engine.REPO / cand).resolve()
+        if not resolved.is_file() or resolved.is_symlink():
+            return True, ""
+        size = resolved.stat().st_size
+        if size < 4:
+            return (
+                False,
+                f"CORRUPT_JPEG_IMAGE_BLOCKED (#1667): '{norm}' is empty or truncated ({size} bytes) and lacks JPEG SOI/EOI markers (FFD8..FFD9). "
+                "Reading malformed JPEG files permanently poisons Antigravity conversations with HTTP 400 INVALID_ARGUMENT (-2011). "
+                "Verify or re-export the asset before calling read_file/view_file.",
+            )
+        with resolved.open("rb") as fh:
+            head = fh.read(4)
+            tail_offset = max(0, size - 64)
+            fh.seek(tail_offset)
+            tail = fh.read(64)
+        if not head.startswith(b"\xff\xd8") or b"\xff\xd9" not in tail:
+            return (
+                False,
+                f"CORRUPT_JPEG_IMAGE_BLOCKED (#1667): '{norm}' is missing valid JPEG SOI/EOI markers (FFD8..FFD9). "
+                "Reading truncated or corrupt JPEG files permanently poisons Antigravity conversations with HTTP 400 INVALID_ARGUMENT (-2011). "
+                "Inspect or re-export the asset before calling read_file/view_file.",
+            )
+    except OSError:
+        return True, ""
+    return True, ""
+
+
+def _enforce_image_read_parallel_cap(raw_target: str, conv_key: str) -> bool:
+    """Cap parallel image reads at <=6 per burst window (#1691 silent copyright/recitation filter hang)."""
+    norm = str(raw_target or "").strip().strip('"').strip("'")
+    if not norm or not norm.lower().endswith(_IMAGE_READ_SUFFIXES):
+        return False
+    try:
+        from platform_quirks import is_quirk_enabled
+        if not is_quirk_enabled("1691", repo=_engine.REPO):
+            return False
+    except ImportError:
+        pass
+    key = str(conv_key or "default").strip() or "default"
+    cache_dir = (_engine.REPO / ".agents" / "cache") if (_engine.REPO / ".agents").is_dir() else (_engine.REPO / "agents" / "state" / "cache")
+    guard_path = cache_dir / "image-read-guard.json"
+    lock_base = (_engine.REPO / ".agents" / "state") if (_engine.REPO / ".agents").is_dir() else (_engine.REPO / "agents" / "state")
+    now = _engine.time.time()
+    try:
+        from _vnext_common import atomic_write_json
+        from evidence_store import StateLock
+        lock_base.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with StateLock(lock_base):
+            store: dict[str, Any] = {}
+            if guard_path.is_file():
+                try:
+                    loaded = _engine.read_json(guard_path)
+                    if isinstance(loaded, dict):
+                        store = loaded
+                except (OSError, ValueError, _engine.ValidationError):
+                    store = {}
+            pruned_store: dict[str, list[float]] = {}
+            for ck, stamps in store.items():
+                if isinstance(stamps, list):
+                    kept = [float(t) for t in stamps if isinstance(t, (int, float)) and 0.0 <= (now - float(t)) <= _engine.IMAGE_READ_BURST_WINDOW_SEC]
+                    if kept:
+                        pruned_store[str(ck)] = kept
+            cur_stamps = pruned_store.get(key, [])
+            if len(cur_stamps) >= _engine.IMAGE_READ_MAX_PARALLEL_CALLS:
+                _engine.emit(
+                    "deny",
+                    f"IMAGE_READ_PARALLEL_CAP_REACHED (#1691): Do NOT read more than {_engine.IMAGE_READ_MAX_PARALLEL_CALLS} images in a single parallel batch "
+                    "(reading large PNG/image batches in one step triggers silent 4.5-7m copyright/recitation safety filter hangs on agy CLI v1.5.13). "
+                    "Split image inspection into small batches (<=4-6 images per turn).",
+                    tool="read_file",
+                    reason_code="IMAGE_READ_PARALLEL_CAP_REACHED",
+                )
+                return True
+            cur_stamps.append(now)
+            pruned_store[key] = cur_stamps[-12:]
+            atomic_write_json(guard_path, pruned_store)
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        return False
+    return False
+

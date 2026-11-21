@@ -149,7 +149,8 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "issues": ("#200687", "#199301", "#200763"),
         "platforms": ("win32",),
         "default_enabled": True,
-        "summary": "Checks GOMEMLIMIT/GOGC tuning and detects post-wipe main.log AcceptEx code-2 crash loops.",
+        "fixed_upstream_in": {"antigravity_ide": "2.8.0"},
+        "summary": "Checks GOMEMLIMIT/GOGC tuning (#200687) and detects pre-IDE-2.8.0 post-wipe main.log AcceptEx code-2 recovery loops (#200763 fixed upstream in IDE v2.8.0).",
     },
     "AGY_201208_PREAMBLE_BOILERPLATE_QUOTA": {
         "issues": ("#201208",),
@@ -164,10 +165,10 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "summary": "Detects silent DONE subagent turns with empty/<16-char payloads immediately.",
     },
     "AGY_201491_201582_NESTED_AGY_CLI_TOS": {
-        "issues": ("#201491", "#201582"),
+        "issues": ("#201491", "#201582", "#1707"),
         "platforms": ("all",),
         "default_enabled": True,
-        "summary": "Blocks verb-position agy/antigravity subprocess calls inside run_command (Section 6 ToS).",
+        "summary": "Blocks verb-position agy/antigravity subprocess calls inside run_command (Section 6 ToS and concurrent Remote MCP OAuth rotating refresh-token invalid_grant #1707).",
     },
     "AGY_201621_SEARCH_WEB_PARALLEL_EOF": {
         "issues": ("#201621",),
@@ -188,6 +189,18 @@ PLATFORM_QUIRKS: dict[str, dict[str, Any]] = {
         "default_enabled": True,
         "fixed_upstream_in": {"agy_cli": "1.5.8", "antigravity_app": "2.33.0"},
         "summary": "Pre-1.5.8 Windows hooks.json double-quote command parsing and UTF-8 BOM hazard check (fixed upstream in agy CLI 1.5.8 and plugin.json BOM in 1.5.11).",
+    },
+    "AGY_1697_MODEL_STEERING_STREAM_LOOP": {
+        "issues": ("#1697",),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Warns when experimental.modelSteering=true in agy CLI settings.json risks unclosed <SYSTEM_MESSAGE> 166k-token EOS loops and flags runaway separator loops in session forensics.",
+    },
+    "AGY_1691_1667_IMAGE_READ_BATCH_AND_JPEG": {
+        "issues": ("#1691", "#1667"),
+        "platforms": ("all",),
+        "default_enabled": True,
+        "summary": "Caps parallel image read bursts at <=6 per wave (#1691 recitation hang) and validates JPEG SOI/EOI markers (FFD8..FFD9) before read_file (#1667 400 INVALID_ARGUMENT).",
     },
 }
 

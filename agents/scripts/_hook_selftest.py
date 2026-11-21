@@ -1773,5 +1773,59 @@ class GenericMCPTests(unittest.TestCase):
             res_bad = self.call("run_command", {"CommandLine": bad_sym_chain})
             self.assertEqual("deny", res_bad["decision"], (bad_sym_chain, res_bad))
 
+    def test_v156_jpeg_integrity_1667_and_image_read_parallel_cap_1691(self):
+        """v1.5.6: Corrupt JPEG SOI/EOI guard (#1667) and <=6 parallel image read cap (#1691)."""
+        assets = self.repo / "app/src/main/res/drawable"
+        assets.mkdir(parents=True, exist_ok=True)
+        (self.repo / ".agents").mkdir(exist_ok=True)
+
+        # 1) Corrupt / truncated JPEGs are denied BEFORE host read_file and do NOT burn a burst slot
+        bad_empty = assets / "empty.jpg"
+        bad_empty.write_bytes(b"")
+        bad_no_eoi = assets / "truncated.jpeg"
+        bad_no_eoi.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01")
+        bad_no_soi = assets / "wrong_hdr.jpg"
+        bad_no_soi.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32 + b"\xff\xd9")
+
+        for corrupt in (bad_empty, bad_no_eoi, bad_no_soi):
+            res_c = self.call("read_file", {"AbsolutePath": str(corrupt)})
+            self.assertEqual("deny", res_c["decision"], (corrupt.name, res_c))
+            self.assertEqual("CORRUPT_JPEG_IMAGE_BLOCKED", res_c.get("reason_code"), (corrupt.name, res_c))
+
+        # 2) Valid JPEG (FFD8..FFD9) + 5 PNGs (total 6 images in burst) are allowed; 7th is denied (#1691)
+        good_jpg = assets / "valid.jpg"
+        good_jpg.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 24 + b"\xff\xd9\x00\x00")
+        res_jpg = self.call("view_file", {"AbsolutePath": str(good_jpg)})
+        self.assertEqual("allow", res_jpg["decision"], res_jpg)
+
+        for idx in range(1, 6):
+            png = assets / f"shot_{idx}.png"
+            png.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+            res_p = self.call("read_file", {"AbsolutePath": str(png)})
+            self.assertEqual("allow", res_p["decision"], (idx, res_p))
+
+        png_7 = assets / "shot_7.png"
+        png_7.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+        res_7 = self.call("read_file", {"AbsolutePath": str(png_7)})
+        self.assertEqual("deny", res_7["decision"], res_7)
+        self.assertEqual("IMAGE_READ_PARALLEL_CAP_REACHED", res_7.get("reason_code"), res_7)
+
+        # 3) Disabling #1691 and #1667 via HARNESS_DISABLE_QUIRKS bypasses cleanly
+        bypass_env = dict(self.env, HARNESS_DISABLE_QUIRKS="1691,1667")
+        for target_p in (png_7, bad_no_eoi):
+            proc = subprocess.run(
+                [sys.executable, str(ENGINE)],
+                input=json.dumps({"toolCall": {"name": "read_file", "args": {"AbsolutePath": str(target_p)}}}),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=bypass_env,
+                check=False,
+                timeout=15,
+            )
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertEqual("allow", json.loads(proc.stdout)["decision"], target_p.name)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

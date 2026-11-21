@@ -172,6 +172,11 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
     max_search_web_sec = 0.0
     max_parallel_search_web = 0
     pending_search_web_ts: float | None = None
+    max_output_tokens = 0
+    runaway_eos_loop_hits = 0
+    separator_repeat_hits = 0
+    saw_background_system_msg = False
+    runaway_sep_re = re.compile(r"(?:\u23af|\u2500|\u2014){24,}")
     iso_ts_re = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
     tool_counts: Counter[str] = Counter()
 
@@ -225,6 +230,8 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 session_seen_hydrogen_medium = True
             if "search_web" in low and "unexpected eof" in low:
                 search_web_eof_stalls += 1
+            if "<system_message>" in low or "background command" in low or "waitmsbeforeasync" in low:
+                saw_background_system_msg = True
             if not (ln.strip().startswith("{") and ln.strip().endswith("}")):
                 continue
             try:
@@ -233,6 +240,17 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                 continue
             if not isinstance(obj, dict):
                 continue
+            step_eos_flagged = False
+            raw_content = obj.get("content")
+            content_str = raw_content if isinstance(raw_content, str) else ""
+            if content_str and (
+                bool(runaway_sep_re.search(content_str))
+                or content_str.count("\u23af") >= 40
+            ):
+                separator_repeat_hits += 1
+                if saw_background_system_msg or "\u23af" * 24 in content_str or len(content_str) >= 2000:
+                    runaway_eos_loop_hits += 1
+                    step_eos_flagged = True
             s_idx = obj.get("step_index")
             cur_step = int(s_idx) if isinstance(s_idx, int) else idx
             if cur_step > step_count:
@@ -337,6 +355,11 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
                         )
                     )
                     out_tok = int(u.get("candidatesTokenCount") or u.get("output_tokens") or u.get("completion_tokens") or 0)
+                    if out_tok > max_output_tokens:
+                        max_output_tokens = out_tok
+                    if out_tok >= 32000 and not step_eos_flagged:
+                        runaway_eos_loop_hits += 1
+                        step_eos_flagged = True
                     if (
                         saw_workspace_read_tool
                         and session_seen_hydrogen_medium
@@ -397,6 +420,9 @@ def _analyze_transcript(conversation_id: str) -> dict[str, Any]:
         "steps_observed": step_count,
         "peak_context_tokens": peak_tokens,
         "peak_token_step": peak_step,
+        "max_output_tokens": max_output_tokens,
+        "runaway_eos_loop_hits": runaway_eos_loop_hits,
+        "separator_repeat_hits": separator_repeat_hits,
         "malformed_tool_calls": malformed_calls,
         "http_503_retries": http_503_retries,
         "zero_quota_429_hits": zero_quota_429_hits,
@@ -525,6 +551,17 @@ def diagnose_session(
                 f"max_parallel_in_turn={transcript.get('search_web_max_parallel', 0)}) — upstream search service hang + client Parallel Barrier freeze (#201621), not a harness logic stall."
             ),
             "remedy": "Keep `search_web` to <=1-2 focused queries per turn (never 3+ parallel `search_web` calls or back-to-back waves) after exhausting `.agents/project-context/`.",
+        })
+    if transcript.get("runaway_eos_loop_hits", 0) > 0 or int(transcript.get("max_output_tokens") or 0) >= 32000:
+        findings.append({
+            "code": "MODEL_STEERING_RUNAWAY_EOS_LOOP",
+            "severity": "HIGH",
+            "evidence": (
+                f"Detected runaway output generation / EOS separator loop "
+                f"(hits={transcript.get('runaway_eos_loop_hits', 0)}, max_output_tokens={transcript.get('max_output_tokens', 0)}, "
+                f"separator_repeat_hits={transcript.get('separator_repeat_hits', 0)}) — matches Antigravity CLI v1.5.13 #1697 unclosed `<SYSTEM_MESSAGE>` stream injection."
+            ),
+            "remedy": 'Disable `"experimental": {"modelSteering": false}` in `~/.gemini/antigravity-cli/settings.json` until Google fixes missing `</SYSTEM_MESSAGE>` tag closure on background command completion (#1697).',
         })
 
     ls_health: dict[str, Any] = {"crash_loop_detected": False}
@@ -733,7 +770,7 @@ def export_related_chat_bundle(
     if sub_meta_dir.is_dir():
         for sf in sorted(sub_meta_dir.glob("*.json")):
             try:
-                s_doc = json.loads(sf.read_text(encoding="utf-8", errors="replace"))
+                s_doc = json.loads(sf.read_text(encoding="utf-8-sig", errors="replace"))
                 cid_sub = str(s_doc.get("conversationId") or sf.stem).strip()
             except ValueError:
                 cid_sub = sf.stem.strip()
