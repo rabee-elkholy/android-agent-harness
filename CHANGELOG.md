@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.9] - 2026-11-22
+
+### Web-Relay values XML Tag Entity Repair & Multi-Line Kotlin Expression-Body Lint Fix
+
+- **Values XML Outer Resource Tag Entity Repair (`_web_relay/merge_applier.py`, `_web_relay_selftest.py`)**: Added `_repair_values_xml_resource_tags()` so HTML-escaped outer Android resource tags (`&lt;string ...&gt;`, `&lt;/string&gt;`, `&lt;item ...&gt;`, `&lt;plurals&gt;`, `&lt;resources&gt;`, `&lt;?xml ... ?&gt;`, `&lt;!-- ... --&gt;`) copied from Web UIs inside `res/values*/strings.xml` and `composeResources/values*/strings.xml` are repaired cleanly without touching inner literal entities such as `&lt;b&gt;Save &amp; Go&lt;/b&gt;` (collapsing double-escaped entities only on repaired tag lines). Added regression test `test_21_values_xml_outer_resource_tag_entity_repair_preserves_inner_entities`.
+- **Multi-Line Kotlin Expression-Body `UNUSED_PARAMETER` Fix (`fast_kt_lint.py`, `_antigravity_stability_selftest.py`)**: Updated the `= expr` body scanner in `fast_kt_lint.py` to advance past leading whitespace/newlines after `=` and continue scanning across newlines when lines end with continuation operators (`=`, `&&`, `||`, `?:`, etc.) or start with continuation tokens, eliminating false-positive `UNUSED_PARAMETER` findings on formatted Kotlin expression-body functions. Extended `test_v142_roborazzi_robolectric_webpack_context_shield_and_unused_code_guard` with multi-line regression assertions.
+
 ## [1.5.8] - 2026-11-22
 
 ### Conversation-Authorized Device Signoff, Unified Device Authority, --help Hygiene & Windows Symlink Portability
