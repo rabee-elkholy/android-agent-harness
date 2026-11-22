@@ -10519,6 +10519,47 @@ class TestFlexibleCliAndTwoKeySensitiveInference(unittest.TestCase):
             self.assertNotIn("BILLING", s_expl)
             self.assertIn("SENSITIVE_PLANNED_FILES=BILLING", out_expl)
 
+            # G) Enclosing-class sensitive surface guarantee: file whose non-passive top-level class is SignInFragmentViewModel
+            #    always pulls AUTH at prepare-verification, so draft promotes AUTH up front even for non-auth outcomes.
+            signin_vm = "app/src/main/kotlin/com/demo/SignInAndSyncViewModel.kt"
+            (repo / signin_vm).parent.mkdir(parents=True, exist_ok=True)
+            (repo / signin_vm).write_text(
+                "package com.demo\n"
+                "sealed interface LoginUiState { data object Idle : LoginUiState }\n"
+                "class SignInFragmentViewModel {\n"
+                "    fun onRestoreDietFlag(): Boolean = false\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            mixed_home = "app/src/main/kotlin/com/demo/MixedHome.kt"
+            (repo / mixed_home).write_text(
+                "package com.demo\n"
+                "class HomeViewModel { fun render() {} }\n"
+                "private class SignInDialogHelper { fun show() {} }\n",
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", signin_vm, mixed_home], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "add signin vm and mixed home"], cwd=repo, check=True)
+
+            s_signin, out_signin = run_draft(
+                "signin-enclosing",
+                "Suppress diet update toast for STEPS users",
+                [signin_vm],
+                surfaces=["BUSINESS_LOGIC"],
+            )
+            self.assertIn("AUTH", s_signin)
+            self.assertNotIn("SENSITIVE_PLANNED_FILES=AUTH", out_signin)
+
+            # H) Mixed multi-class file (HomeViewModel + private SignInDialogHelper) must NOT auto-promote AUTH
+            s_mixed, out_mixed = run_draft(
+                "mixed-home",
+                "Adjust home greeting spacing",
+                [mixed_home],
+                surfaces=["BUSINESS_LOGIC"],
+            )
+            self.assertNotIn("AUTH", s_mixed)
+            self.assertIn("SENSITIVE_PLANNED_FILES=AUTH", out_mixed)
+
 
 class TestSurgicalProductionBudgetAndPriorFindingsBrief(unittest.TestCase):
     """Covers production-code-weighted surgical_owner_only carry, legacy verifier compat, and owner-scoped prior findings."""

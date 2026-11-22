@@ -964,11 +964,56 @@ def _with_planned_file_surfaces(
     except (OSError, ValueError, _engine.ValidationError):
         pass
     return sorted(set(expected) | drifting)
+_TOP_LEVEL_TYPE_DECL_RE = _engine.re.compile(r"\b(?:class|interface|object|struct|actor)\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _guaranteed_enclosing_class_sensitive_surfaces(repo: Path, rel: str) -> set[str]:
+    """Return CRITICAL_SURFACES matched by every top-level non-passive type header in `rel`.
+
+    When an entire Kotlin/Java/Swift file IS an auth/billing/crypto/security class (e.g.
+    `SignInFragmentViewModel`), every edit inside that class receives that structural context at
+    `prepare-verification`. Promoting it at initial `task draft` lets the developer approve once
+    up front instead of halting mid-task for a second approval.
+    """
+    path = repo / rel
+    if path.suffix.lower() not in {".kt", ".java", ".swift"} or not path.is_file():
+        return set()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return set()
+    from change_classifier import CRITICAL_SURFACES, PASSIVE_UI_CONTAINER_RE, PATTERNS, _strip_code_line
+
+    top_decls: list[tuple[str, str]] = []
+    depth = 0
+    in_block = False
+    in_triple = None
+    for line in text.splitlines():
+        clean, in_block, in_triple = _strip_code_line(line, in_block, in_triple)
+        if depth == 0:
+            decl_header = clean.split("{", 1)[0].split("(", 1)[0]
+            match = _TOP_LEVEL_TYPE_DECL_RE.search(decl_header)
+            if match:
+                top_decls.append((match.group(1), decl_header))
+        depth = max(0, depth + clean.count("{") - clean.count("}"))
+    if not top_decls:
+        return set()
+    non_passive = [decl for name, decl in top_decls if not PASSIVE_UI_CONTAINER_RE.search(name)]
+    candidates = non_passive if non_passive else [decl for _, decl in top_decls]
+    matched: set[str] = set()
+    for surface, pattern, _reason in PATTERNS:
+        if surface in CRITICAL_SURFACES and all(pattern.search(decl) for decl in candidates):
+            matched.add(surface)
+    return matched
+
+
 def _planned_file_surfaces(repo: Path, files: list[str]) -> tuple[set[str], list[str]]:
     """Surfaces the classifier reads from the planned files, the way the write guard reads them.
 
     A tracked file's existing sign-in or purchase text does not make the plan sensitive (its diff
-    is judged at verification). Returns the surfaces and the files that yielded none.
+    is judged at verification), except when every top-level enclosing class header in the file
+    itself guarantees that sensitive surface (so `prepare-verification` would always require it).
+    Returns the surfaces and the files that yielded none.
     """
     from mutation_guard import PRE_EXISTING_CONTENT_SURFACES, _is_tracked
 
@@ -980,7 +1025,8 @@ def _planned_file_surfaces(repo: Path, files: list[str]) -> tuple[set[str], list
         except Exception:
             found = set()
         if _is_tracked(repo, rel):
-            found -= PRE_EXISTING_CONTENT_SURFACES
+            guaranteed = _guaranteed_enclosing_class_sensitive_surfaces(repo, rel)
+            found -= (PRE_EXISTING_CONTENT_SURFACES - guaranteed)
         surfaces |= found
         if not found:
             unread.append(rel)
