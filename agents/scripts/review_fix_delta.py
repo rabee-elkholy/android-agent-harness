@@ -74,7 +74,7 @@ def _matches(text, identity, algorithm):
 
 def _input_path(repo, task_id, run_id):
     from _vnext_common import state_root, validate_id
-    return state_root(repo).parent / "cache/review-inputs" / validate_id(task_id) / (validate_id(run_id) + ".json")
+    return state_root(Path(repo).resolve()).parent / "cache/review-inputs" / validate_id(task_id) / (validate_id(run_id) + ".json")
 
 
 def capture_review_inputs(repo, task_directory, run_id, manifest, plan):

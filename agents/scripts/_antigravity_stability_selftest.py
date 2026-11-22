@@ -11944,7 +11944,7 @@ class TestV1515AuditFixesAndDeltaCarryover(unittest.TestCase):
         from _vnext_common import read_json
 
         with tempfile.TemporaryDirectory() as td:
-            repo = Path(td) / "kmp"
+            repo = (Path(td) / "kmp").resolve()
             shared_kt = "shared/src/commonMain/kotlin/com/demo/Feature.kt"
             self._init_git_repo(repo, {
                 "settings.gradle.kts": 'include(":androidApp", ":shared")\n',
@@ -12047,7 +12047,7 @@ class TestV1515AuditFixesAndDeltaCarryover(unittest.TestCase):
         ]) + "\n"
 
         with tempfile.TemporaryDirectory() as td:
-            repo = Path(td) / "kmp"
+            repo = (Path(td) / "kmp").resolve()
             summary_rel = "shared/src/commonMain/kotlin/com/demo/ui/SummaryScreen.kt"
             app_entry_rel = "androidApp/src/main/kotlin/com/demo/MainApp.kt"
             self._init_git_repo(repo, {
