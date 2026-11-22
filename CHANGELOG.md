@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.11] - 2026-11-22
+
+### Provider-Neutral PM Grant/Sync Scripts & Keyword-Free Authorization
+
+- **Keyword-Free PM, Execution Mode & Quick-Start Authorization (`pm_grant.py`, `execution_mode.py`, `_workflow/engine.py`)**: Removed hardcoded Arabic/English magic-word and trigger-phrase lists from PM write authorization (`pm_grant.py`), execution-mode confirmation (`execution_mode.py`), and Express Track requests (`_workflow/engine.py`), so any explicit non-empty developer confirmation via `--source conversation --proof-reference` succeeds in one turn across any language while empty proofs and unanswered questions ending in `?` / `؟` remain rejected. Replaced prose-scanning close-order heuristics with explicit `--allow-close` and `--provider` flags on `pm authorize` / `zoho authorize`.
+- **Vendor-Neutral PM Scripts & State (`pm_grant.py`, `pm_sync.py`, `pm_discovery.py`, `mutation_guard.py`, `harness_cli.py`)**: Replaced `zoho_grant.py` and `zoho_sync.py` with provider-neutral `pm_grant.py` (state file `pm-write-grant.json` with read fallback for legacy `zoho-write-grant.json`) and `pm_sync.py`, keeping the `harness.py zoho ...` CLI alias for backward compatibility. Updated rules, workflows, docs, and selftests (`_pm_selftest.py`, `_hook_selftest.py`, `_external_write_policy_selftest.py`, `_security_selftest.py`, `_public_cli_selftest.py`) and enforced PreToolUse `_developer_authority_violation` checks on `pm authorize` / `zoho authorize`.
+
 ## [1.5.10] - 2026-11-22
 
 ### Structurally Guaranteed Enclosing-Class Sensitive Surface Promotion at Draft
