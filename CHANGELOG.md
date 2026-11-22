@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.8] - 2026-11-22
+
+### Conversation-Authorized Device Signoff, Unified Device Authority, --help Hygiene & Windows Symlink Portability
+
+- **Conversation-Authorized `device signoff` (`_safety/engine.py`, `_safety/command_policy.py`, `_hook_selftest.py`)**: Added `_authorized_conversation_device_signoff()` and `DENY_HINTS["signoff_authority"]` so public CLI `python .agents/harness.py device signoff` with explicit `--source conversation` + non-empty `--proof-reference` (and `--help`) succeeds after developer verification, while bare `device signoff`, direct `run_device.py signoff`, spoofed `--source developer_terminal` / `host_native`, empty proof references, and chained/laundered commands remain denied.
+- **Symmetric Device Authority Enforcement (`_safety/command_policy.py`)**: Extended `_developer_authority_violation()` to consistently validate `--source conversation` and non-empty `--proof-reference` on `device skip-validation` and `device validate-automatically` (exempting `--help`/`-h`).
+- **`--help` Hygiene, Leading-Flag Stripping & Review Flag Parsing (`mutation_guard.py`, `_delegation/engine.py`)**: Fixed false-positive mutation/authority denials on `--help` / `-h` for `task-context`, `symbol replace-body/insert-after`, `android-ui`, `debug add/strip/install/arm`, `execution-mode set`, `review models set`, and `review resume`; supported `=`/empty-quote proof checks in `review resume`; normalized case-insensitive `--source` in `review models set`; and stripped leading `--json`/`--repo`/`--task-id`/`--task`/`--kit` flags before `IMPLEMENTING` / `VERIFYING` / `READY_FOR_DELIVERY` / `debug` routing.
+- **Canonical CLI Reference & Windows Symlink Portability (`command-contract.md`, `_security_selftest.py`)**: Updated `device signoff` and `device skip-validation` examples in `command-contract.md` to the canonical `python .agents/harness.py device ...` form, and guarded `symlink_to` calls in `_security_selftest.py` against `WinError 1314` on Windows hosts lacking `SeCreateSymbolicLinkPrivilege`.
+
 ## [1.5.7] - 2026-11-21
 
 ### Antigravity IDE v2.8.0 SAC Error 4551 Regression Guard (`#203416`), Neon XHigh Cache Advisory (`#1720`), Windows `Start-Process` Pipe-Hang Block (`#1718`) & `agy acp` 60m ADC OAuth Forensics (`#1722`)
