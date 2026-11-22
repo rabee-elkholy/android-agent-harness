@@ -414,6 +414,91 @@ def _extract_kmp_declarations(source_dir: Path, pattern: re.Pattern[str]) -> set
     return names
 
 
+_ROOM_DB_CONSTRUCTOR_RE = re.compile(r":\s*(?:[A-Za-z0-9_.]*\.)?RoomDatabaseConstructor\s*<")
+_FILE_SUPPRESS_RE = re.compile(r"@file\s*:\s*Suppress\s*\(")
+_DECL_SUPPRESS_RE = re.compile(r"@Suppress\s*\(")
+_NO_ACTUAL_SUPPRESS_RE = re.compile(r"""["'](?:NO_ACTUAL_FOR_EXPECT|KotlinNoActualForExpect)["']""")
+_DECL_MODIFIER_LINE_RE = re.compile(
+    r"^(?:public|internal|protected|private|suspend|inline|infix|operator|tailrec|external|open|abstract|final|sealed|data|value|enum|annotation|fun|expect|actual|\s)+$"
+)
+
+
+def _balanced_paren_arg_slice(no_comments: str, clean: str, open_paren_idx: int) -> str:
+    """Return the comment-free `(...)` argument slice matching `open_paren_idx` using masked parens."""
+    n = len(clean)
+    if open_paren_idx < 0 or open_paren_idx >= n or clean[open_paren_idx] != "(":
+        return ""
+    depth = 0
+    for idx in range(open_paren_idx, n):
+        ch = clean[idx]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return no_comments[open_paren_idx : idx + 1]
+    return no_comments[open_paren_idx:]
+
+
+def _declaration_header_start(clean: str, match_start: int) -> int:
+    """Walk backward across immediate annotations/modifiers belonging to the declaration at `match_start`."""
+    span_start = clean.rfind("\n", 0, match_start) + 1
+    cursor = span_start
+    paren_balance = 0
+    while cursor > 0:
+        prev_end = cursor - 1
+        prev_start = clean.rfind("\n", 0, prev_end) + 1
+        line = clean[prev_start:prev_end].rstrip("\r")
+        stripped = line.strip()
+        if not stripped:
+            cursor = prev_start
+            continue
+        if paren_balance > 0:
+            paren_balance += line.count(")") - line.count("(")
+            span_start = prev_start
+            cursor = prev_start
+            continue
+        if stripped.startswith("@") and not stripped.startswith("@file"):
+            paren_balance += line.count(")") - line.count("(")
+            span_start = prev_start
+            cursor = prev_start
+            continue
+        if _DECL_MODIFIER_LINE_RE.match(stripped):
+            span_start = prev_start
+            cursor = prev_start
+            continue
+        break
+    return span_start
+
+
+def _is_compiler_generated_expect_decl(raw: str, clean: str, no_comments: str, match: re.Match[str]) -> bool:
+    """True for compiler-generated KMP `expect` declarations (Room KSP constructors or active NO_ACTUAL_FOR_EXPECT)."""
+    if match.group(1) == "object":
+        tail = clean[match.end() : match.end() + 260]
+        brace_idx = tail.find("{")
+        if brace_idx != -1:
+            tail = tail[:brace_idx]
+        blank_idx = tail.find("\n\n")
+        if blank_idx != -1:
+            tail = tail[:blank_idx]
+        if _ROOM_DB_CONSTRUCTOR_RE.search(tail):
+            return True
+
+    for fs_match in _FILE_SUPPRESS_RE.finditer(clean, 0, match.start()):
+        arg_slice = _balanced_paren_arg_slice(no_comments, clean, fs_match.end() - 1)
+        if _NO_ACTUAL_SUPPRESS_RE.search(arg_slice):
+            return True
+
+    span_start = _declaration_header_start(clean, match.start())
+    for ds_match in _DECL_SUPPRESS_RE.finditer(clean, span_start, match.end()):
+        arg_slice = _balanced_paren_arg_slice(no_comments, clean, ds_match.end() - 1)
+        if _NO_ACTUAL_SUPPRESS_RE.search(arg_slice):
+            return True
+
+    del raw
+    return False
+
+
 def _extract_kmp_declaration_signatures(
     source_dir: Path, pattern: re.Pattern[str]
 ) -> dict[str, set[tuple[str, str, int | None]]]:
@@ -428,9 +513,12 @@ def _extract_kmp_declaration_signatures(
             raw = kt_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        from _source_text import mask_comments_and_strings
+        from _source_text import mask_comments_and_strings, strip_kotlin_comments_preserving_strings
         clean = mask_comments_and_strings(raw)
+        no_comments = strip_kotlin_comments_preserving_strings(raw)
         for match in pattern.finditer(clean):
+            if pattern is _EXPECT_DECL_RE and _is_compiler_generated_expect_decl(raw, clean, no_comments, match):
+                continue
             raw_kind = match.group(1)
             raw_recv = match.group(2) or ""
             sym_name = match.group(3)

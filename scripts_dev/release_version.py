@@ -110,6 +110,15 @@ def update_version_files(new_version: str) -> list[str]:
         citation_file.write_text(text, encoding="utf-8", newline="\n")
         logs.append(f"Updated CITATION.cff -> version: {new_version}, date-released: {today}")
 
+    # 3b. .antigravity-plugin/plugin.json
+    plugin_file = ROOT / ".antigravity-plugin" / "plugin.json"
+    if plugin_file.is_file():
+        p_data = json.loads(plugin_file.read_text(encoding="utf-8"))
+        if isinstance(p_data, dict):
+            p_data["version"] = new_version
+            plugin_file.write_text(json.dumps(p_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+            logs.append(f"Updated .antigravity-plugin/plugin.json -> version = \"{new_version}\"")
+
     # 4. agents/scripts/_hook_selftest.py
     selftest_file = ROOT / "agents" / "scripts" / "_hook_selftest.py"
     if selftest_file.is_file():
@@ -514,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
                 for line in pin_logs + checksum_logs:
                     print(f"  + {line}")
             if generate_checksums:
-                generate_checksums()
+                generate_checksums([])
                 print("  + Generated agents/release_checksums.json")
         else:
             print(f"  [dry-run] Would pin URLs to v{target_version} and compute prompt hashes.")
@@ -582,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with step_progress("[5/5] Committing, tagging, and publishing release"):
         stage_paths = [
+            ".antigravity-plugin/plugin.json",
             ".gitignore",
             ".github/",
             "agents/",

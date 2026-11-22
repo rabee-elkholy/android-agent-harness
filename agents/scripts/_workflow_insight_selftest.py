@@ -545,6 +545,45 @@ class WorkflowInsightTests(unittest.TestCase):
             ok_ea2, msg_ea2 = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/Common.kt"])
             self.assertTrue(ok_ea2, msg_ea2)
 
+            # 3. Room KMP compiler-generated RoomDatabaseConstructor & active @Suppress("NO_ACTUAL_FOR_EXPECT")
+            room_f = repo / "shared/src/commonMain/kotlin/AppDb.kt"
+            room_f.write_text(
+                "package shared\n"
+                '@Suppress("NO_ACTUAL_FOR_EXPECT")\n'
+                "expect object AppDbConstructor : RoomDatabaseConstructor<AppDb> {\n"
+                "    override fun initialize(): AppDb\n"
+                "}\n"
+                "expect object FqcnDbConstructor : androidx.room.RoomDatabaseConstructor<AppDb> {\n"
+                "    override fun initialize(): AppDb\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            ok_room, msg_room = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/AppDb.kt"])
+            self.assertTrue(ok_room, msg_room)
+
+            # 4. Real missing expect AFTER a suppressed declaration is still flagged (no leak across declarations)
+            room_f.write_text(
+                "package shared\n"
+                '@Suppress("NO_ACTUAL_FOR_EXPECT")\n'
+                "expect object AppDbConstructor : RoomDatabaseConstructor<AppDb>\n\n"
+                "expect class MissingPlatformHelper\n",
+                encoding="utf-8",
+            )
+            ok_leak, msg_leak = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/AppDb.kt"])
+            self.assertFalse(ok_leak)
+            self.assertIn("MissingPlatformHelper", msg_leak)
+
+            # 5. Commented-out @Suppress does NOT suppress expect/actual verification
+            room_f.write_text(
+                "package shared\n"
+                '// @Suppress("NO_ACTUAL_FOR_EXPECT")\n'
+                "expect class CommentSuppressed\n",
+                encoding="utf-8",
+            )
+            ok_comment, msg_comment = check_kmp_expect_actual_pairs(repo, ["shared/src/commonMain/kotlin/AppDb.kt"])
+            self.assertFalse(ok_comment)
+            self.assertIn("CommentSuppressed", msg_comment)
+
     def test_kmp_sqldelight_graphql_swift_classification_and_swift_lint(self):
         import change_classifier
         import fast_kt_lint
