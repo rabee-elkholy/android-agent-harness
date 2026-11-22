@@ -123,7 +123,66 @@ def _developer_authority_violation(command: str) -> str:
         if is_ctx_instruct and not any(flag in rest for flag in ("-h", "--help")):
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "context-instruct"
+        is_device_cmd = (
+            name in ("run_device.py", "run_device")
+            or (name in _engine.TASK_ENTRYPOINTS and rest[:1] == ["device"])
+        )
+        if is_device_cmd:
+            dev_rest = _strip_leading_cli_flags(rest[1:] if name in _engine.TASK_ENTRYPOINTS else rest)
+            if dev_rest[:1] in (["skip-validation"], ["validate-automatically"]) and not any(flag in rest for flag in ("-h", "--help")):
+                if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                    return f"device-{dev_rest[0]}"
     return ""
+
+
+def _authorized_conversation_device_signoff(command: str) -> bool:
+    """True only when every `signoff_authority` match is an unlaundered public CLI `device signoff`
+    with explicit `--source conversation` + non-empty `--proof-reference` (or read-only `--help`).
+
+    Direct `run_device.py signoff`, bare `device signoff`, `--source developer_terminal`,
+    `--source host_native`, empty proof references, and chained non-harness commands remain denied.
+    """
+    try:
+        from mutation_guard import (
+            SHELL_LAUNDERING,
+            _entry,
+            _operator_text_any_shell,
+            _split_safe_and_chain,
+        )
+    except Exception:
+        return False
+    outside_quotes = _operator_text_any_shell(command or "")
+    if outside_quotes is None or SHELL_LAUNDERING.search(outside_quotes):
+        return False
+    segments = _split_safe_and_chain(command or "", max_segments=8)
+    if not segments:
+        return False
+    signoff_re = next((pat for code, pat in _engine.DANGEROUS if code == "signoff_authority"), None)
+    if signoff_re is None:
+        return False
+    saw_signoff = False
+    for seg in segments:
+        entry, seg_args = _entry(seg, _engine.REPO)
+        if entry not in {"harness_cli", "android-harness"} and not _single_audited_harness_segment(seg):
+            return False
+        if not signoff_re.search(seg):
+            continue
+        if entry not in {"harness_cli", "android-harness"}:
+            return False
+        clean = _strip_leading_cli_flags(seg_args)
+        if clean[:1] != ["device"]:
+            return False
+        dev_rest = _strip_leading_cli_flags(clean[1:])
+        if dev_rest[:1] != ["signoff"]:
+            return False
+        signoff_args = dev_rest[1:]
+        if any(flag in signoff_args for flag in ("-h", "--help")):
+            saw_signoff = True
+            continue
+        if _engine._flag(signoff_args, "--source").lower() != "conversation" or not _engine._flag(signoff_args, "--proof-reference").strip():
+            return False
+        saw_signoff = True
+    return saw_signoff
 def _flag(rest: list[str], name: str) -> str:
     for pos, part in enumerate(rest):
         if part.startswith(name + "="):
@@ -590,6 +649,8 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             if code == "git_mutation" and _engine._read_only_git_branch_command(command):
                 continue
             if code in ("raw_adb", "adb_destructive") and _engine._read_only_adb_command(command):
+                continue
+            if code == "signoff_authority" and _authorized_conversation_device_signoff(command):
                 continue
             hint = f" {_engine.DENY_HINTS[code]}" if code in _engine.DENY_HINTS else ""
             _engine.emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)

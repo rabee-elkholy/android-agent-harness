@@ -305,10 +305,11 @@ python .agents/harness.py device install-start
 # engine form: python .agents/scripts/run_device.py install-start
 
 # 3a. Device sign-off (router step DEVICE_SIGNOFF_REQUIRED): ask the developer with ask_question, giving the
-#     numbered walkthrough steps and the expected result of each; the answer is PASS or FAIL.
+#     numbered walkthrough steps and the expected result of each; then record the explicit answer:
+python .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<developer answer>"
 
 # 3b. Optional skip validation (when developer explicitly requests to skip device verification)
-python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<developer_skip_confirmation>"
+python .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<developer_skip_confirmation>"
 
 # 4. Capture screen (optional)
 python .agents/scripts/capture_screen.py [--name <prefix>]
@@ -463,7 +464,8 @@ When an exception occurs:
 | **Device Install over a newer build** | `python .agents/harness.py device install-start --allow-downgrade` | When the phone has a newer build (`INSTALL_FAILED_VERSION_DOWNGRADE`) and the developer chooses to keep its data (`adb install -d`) |
 | **Device Status** | `python .agents/scripts/run_device.py status` | Inspect connected Android physical devices and emulators |
 | **Device Deploy** | `python .agents/harness.py device install-start` (engine: `run_device.py install-start`) | Install and launch on target device/emulator |
-| **Device Skip** | `python .agents/scripts/run_device.py skip-validation --task-id <id> --proof-reference "<phrase>"` | Record explicit developer skip of mobile validation |
+| **Device Sign-Off** | `python .agents/harness.py device signoff --task-id <id> --verdict PASS --source conversation --proof-reference "<answer>"` | Record explicit developer manual device verification result |
+| **Device Skip** | `python .agents/harness.py device skip-validation --task-id <id> --source conversation --proof-reference "<phrase>"` | Record explicit developer skip of mobile validation |
 | **Screen Capture** | `python .agents/scripts/capture_screen.py --name <prefix>` | Capture device screen for verification proof |
 | **Harness Doctor** | `python .agents/harness.py doctor` (kit: `harness_cli.py doctor --repo <app> --json`) | Health check harness installation & adapters |
 | **Version / Update** | `python .agents/harness.py version` / `python .agents/harness.py update-info` | Installed version; how to update to a newer release |

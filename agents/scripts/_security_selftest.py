@@ -3021,16 +3021,24 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
             real_vc = root / "real_vc.json"
             real_vc.write_text(json.dumps({"criteria": [{"id": "c1", "expected": "ok", "method": "unit_test", "required": True}]}), encoding="utf-8")
             sym_vc = root / "sym_vc.json"
-            sym_vc.symlink_to(real_vc)
-            with self.assertRaises(verification_contract.ValidationError):
-                verification_contract.load_definition(c_repo, str(sym_vc))
+            try:
+                sym_vc.symlink_to(real_vc)
+            except (OSError, NotImplementedError):
+                sym_vc = None
+            if sym_vc is not None:
+                with self.assertRaises(verification_contract.ValidationError):
+                    verification_contract.load_definition(c_repo, str(sym_vc))
             loaded_real = verification_contract.load_definition(c_repo, str(real_vc))
             self.assertEqual("c1", loaded_real["criteria"][0]["id"])
 
             sym_dir = c_repo / "sym_main"
-            sym_dir.symlink_to(c_repo / "app/src/main")
-            with self.assertRaises(wr_engine.ValidationError):
-                wr_engine._norm_rel(c_repo, str(sym_dir / "java/com/example/NewService.kt"))
+            try:
+                sym_dir.symlink_to(c_repo / "app/src/main", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                sym_dir = None
+            if sym_dir is not None:
+                with self.assertRaises(wr_engine.ValidationError):
+                    wr_engine._norm_rel(c_repo, str(sym_dir / "java/com/example/NewService.kt"))
             self.assertEqual(
                 "app/src/main/java/com/example/NewService.kt",
                 wr_engine._norm_rel(c_repo, str(new_f)),
@@ -3069,7 +3077,10 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
             real_tmp = root / "private_tmp"
             real_tmp.mkdir()
             mac_tmp = root / "mac_tmp"
-            mac_tmp.symlink_to(real_tmp)
+            try:
+                mac_tmp.symlink_to(real_tmp, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                mac_tmp = real_tmp
             ext_contract = mac_tmp / "contract.json"
             ext_contract.write_text(json.dumps({
                 "schema_version": 1,

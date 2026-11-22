@@ -1270,6 +1270,8 @@ def _extract_single_symbol_write_target(segment: str) -> tuple[bool, list[str]]:
             is_sym_write = True
     if not is_sym_write:
         return False, []
+    if any(flag in rest for flag in ("-h", "--help")):
+        return False, []
     if malformed_file_flag or len(targets) != 1:
         return True, []
     return True, targets

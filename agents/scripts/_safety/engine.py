@@ -130,6 +130,9 @@ DENY_HINTS = {
                "`python .agents/harness.py debug logs` or standalone `adb logcat -d -t 500`. For device status or app install/launch, use "
                "`python .agents/harness.py device status` or `python .agents/harness.py device install-start`.",
     "agy_headless_loop_tos_guard": "Subprocess invocations of `agy` / `antigravity` CLI and programmatic UI keystroke injection inside `run_command` are blocked because driving `agy` from an agent or testing `AGENTS.md` via nested `agy` triggers automated Google Section 6 ToS 403 PERMISSION_DENIED account suspension (#201582/#201491/#199748/#199756). Validate rules deterministically via `python harness_cli.py selftest` / `validate_release.py` instead.",
+    "signoff_authority": "Record explicit developer device sign-off only via the public CLI with conversation proof after asking the developer: "
+                         "`python .agents/harness.py device signoff --task-id <id> --verdict PASS|FAIL --source conversation --proof-reference \"<developer answer>\"` "
+                         "(never direct `run_device.py signoff` or `--source developer_terminal`).",
 }
 DANGEROUS = (
     ("git_mutation", re.compile(r"(?:^|[;&|\n]\s*|\s)(?:[^\s/\\]+[/\\])*g[i\u0131]t(?:\.exe)?(?:\s+-c\s+\S+)*\s+(?:add|am|apply|branch|checkout|clean|commit|config|fetch|gc|merge|mv|prune|pull|push|rebase|remote\s+(?:add|remove|set-url)|reset|restore|rm|stash|switch|tag|update-index|worktree)(?![\w-])", re.I)),

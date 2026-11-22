@@ -409,7 +409,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return bool(inspection_args) and inspection_args[0] in {"capabilities", *ACTIONS}
     if name in INSPECTION_SCRIPTS:
         if name == "task_context":
-            return _valid_context_targets(args)
+            return (bool(args) and args[-1] in {"--help", "-h"}) or _valid_context_targets(args)
         if name == "incident_reporter" and "--submit" in args:
             return False
         return not any(arg.startswith("--out") for arg in args)
@@ -445,7 +445,7 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if args[:2] in (["pm", "discover"], ["pm", "status"], ["pm", "find-item"]):
             return True
         if args[:1] == ["task-context"]:
-            return _valid_context_targets(args)
+            return (bool(args) and args[-1] in {"--help", "-h"}) or _valid_context_targets(args)
         if args[:2] in (["context", "preview"], ["context", "status"], ["context", "drift-report"]):
             return True
         # `graph` forwards to project_graph.py and gets the same read-only rule.
@@ -1240,22 +1240,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if raw_entry in {"gradlew", "gradlew.bat", "gradle"} or (raw_entry == "adb" and not is_read_only_adb(raw_args)):
         return False, "Direct Gradle/ADB execution is blocked; use the harness build or device commands."
     entry, model_args = _entry(normalized, repo)
-    if entry == "android_ui" or (entry in {"harness_cli", "android-harness"} and model_args[:1] == ["android-ui"]):
-        ui_args = model_args[1:] if entry != "android_ui" else model_args
-        if ui_args[:1] == ["capabilities"]:
-            return True, "Android UI capability probe; adapter validates host and executable"
-        try:
-            from android_ui import authorize
-            if not ui_args or ui_args[0] not in {"list", "render", "hub"}:
-                return False, "Unknown Android UI action"
-            authorize(Path(repo), ui_args[0])
-            return True, "Android UI adapter validates task, snapshot and physical-device binding"
-        except ValidationError as exc:
-            return False, str(exc)
-    if entry in {"harness_cli", "android-harness"} and model_args[:2] == ["review", "resume"]:
-        if "--source" in model_args and model_args[model_args.index("--source") + 1:model_args.index("--source") + 2] == ["conversation"] and "--proof-reference" in model_args:
-            return True, "explicit developer reviewer resume; command validates native cancellation and execution"
-        return False, "reviewer resume requires explicit conversation authority"
+    is_help_request = any(flag in model_args for flag in ("-h", "--help"))
     def _strip_top_opts(seq: list[str]) -> list[str]:
         i = 0
         while i < len(seq):
@@ -1270,31 +1255,41 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
                 break
         return seq[i:]
 
+    def _opt_value(seq: list[str], flag: str) -> str:
+        for index, arg in enumerate(seq):
+            if arg.startswith(flag + "="):
+                return arg.split("=", 1)[1].strip().strip("\"'").strip()
+            if arg == flag and index + 1 < len(seq):
+                return seq[index + 1].strip().strip("\"'").strip()
+        return ""
+
     model_args_clean = _strip_top_opts(model_args)
+    if not is_help_request and (entry == "android_ui" or (entry in {"harness_cli", "android-harness"} and model_args_clean[:1] == ["android-ui"])):
+        ui_args = model_args_clean[1:] if entry != "android_ui" else model_args_clean
+        if ui_args[:1] == ["capabilities"]:
+            return True, "Android UI capability probe; adapter validates host and executable"
+        try:
+            from android_ui import authorize
+            if not ui_args or ui_args[0] not in {"list", "render", "hub"}:
+                return False, "Unknown Android UI action"
+            authorize(Path(repo), ui_args[0])
+            return True, "Android UI adapter validates task, snapshot and physical-device binding"
+        except ValidationError as exc:
+            return False, str(exc)
+    if not is_help_request and entry in {"harness_cli", "android-harness"} and model_args_clean[:2] == ["review", "resume"]:
+        if _opt_value(model_args, "--source").lower() == "conversation" and _opt_value(model_args, "--proof-reference").strip():
+            return True, "explicit developer reviewer resume; command validates native cancellation and execution"
+        return False, "reviewer resume requires explicit conversation authority"
     if entry in {"harness_cli", "android-harness"} and model_args_clean[:1] == ["execution-mode"]:
         entry, model_args_clean = "execution_mode", _strip_top_opts(model_args_clean[1:])
-    if entry == "execution_mode" and model_args_clean[:1] == ["set"]:
-        def _em_val(flag):
-            for index, arg in enumerate(model_args):
-                if arg.startswith(flag + "="):
-                    return arg.split("=", 1)[1]
-                if arg == flag and index + 1 < len(model_args):
-                    return model_args[index + 1]
-            return ""
-        if _em_val("--source").lower() == "conversation" and _em_val("--proof-reference").strip():
+    if not is_help_request and entry == "execution_mode" and model_args_clean[:1] == ["set"]:
+        if _opt_value(model_args, "--source").lower() == "conversation" and _opt_value(model_args, "--proof-reference").strip():
             return True, "explicit developer execution-mode decision; command validates tamper-evident state"
         return False, "execution-mode changes require `--source conversation` and a non-empty `--proof-reference`"
     if entry in {"harness_cli", "android-harness"} and model_args_clean[:2] == ["review", "models"]:
         entry, model_args_clean = "review_models", _strip_top_opts(model_args_clean[2:])
-    if entry == "review_models" and model_args_clean[:1] == ["set"]:
-        def value(flag):
-            for index, arg in enumerate(model_args):
-                if arg.startswith(flag + "="):
-                    return arg.split("=", 1)[1]
-                if arg == flag and index + 1 < len(model_args):
-                    return model_args[index + 1]
-            return ""
-        if value("--source") == "conversation" and value("--proof-reference").strip():
+    if not is_help_request and entry == "review_models" and model_args_clean[:1] == ["set"]:
+        if _opt_value(model_args, "--source").lower() == "conversation" and _opt_value(model_args, "--proof-reference").strip():
             return True, "explicit developer reviewer-model decision; command validates native policy"
         return False, "review model changes require the developer's explicit conversation decision and proof reference"
     if _workflow_action(normalized, repo) not in {"continue", "bridge"} and not _is_read_only(normalized, repo):
@@ -1316,8 +1311,8 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
                 assert_execution_session(Path(repo), plan.get("task_id"))
             except ValidationError as exc:
                 return False, str(exc)
-    if raw_entry in {"harness_cli", "android-harness"} and raw_args[:1] == ["debug"]:
-        action = raw_args[1:2]
+    if not is_help_request and raw_entry in {"harness_cli", "android-harness"} and _strip_top_opts(raw_args)[:1] == ["debug"]:
+        action = _strip_top_opts(raw_args)[1:2]
         if action in (["arm"], ["add"], ["strip"], ["install"]):
             try:
                 plan = active_plan(repo)
@@ -1366,6 +1361,7 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         )
     status = str(plan.get("status") or "")
     entry, arguments = _entry(normalized, repo)
+    clean_arguments = _strip_workflow_top_flags(arguments)
     action = _workflow_action(normalized, repo)
     if action == "cancel":
         # Real app: the developer chose "Cancel task" for a READY task; the cancel was refused in that state,
@@ -1373,15 +1369,15 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         # is decided before this (the developer's words as proof); the state never blocks it.
         return True, f"cancel of {status.lower() or 'the'} task on the developer's request"
     if status == "IMPLEMENTING":
-        if entry == "journey_runner" or (entry in {"harness_cli", "android-harness"} and arguments[:1] == ["journey"]):
+        if entry == "journey_runner" or (entry in {"harness_cli", "android-harness"} and clean_arguments[:1] == ["journey"]):
             return False, "Journey replay requires VERIFYING and current install/review evidence."
         is_ios_device_action = (
-            (entry == "run_device" and arguments[:1] in (["ios-status"], ["ios-build"], ["ios-run"]))
-            or (entry in {"harness_cli", "android-harness"} and arguments[:2] in (["device", "ios-status"], ["device", "ios-build"], ["device", "ios-run"]))
+            (entry == "run_device" and clean_arguments[:1] in (["ios-status"], ["ios-build"], ["ios-run"]))
+            or (entry in {"harness_cli", "android-harness"} and clean_arguments[:2] in (["device", "ios-status"], ["device", "ios-build"], ["device", "ios-run"]))
         )
         if not is_ios_device_action and (
             re.search(r"(?:^|\s|python(?:\d+(?:\.\d+)?)?(?:\.exe)?\s+.*)run_device(?:\.py)?\b", normalized, re.I)
-            or (entry in {"harness_cli", "android-harness"} and arguments[:1] == ["device"])
+            or (entry in {"harness_cli", "android-harness"} and clean_arguments[:1] == ["device"])
         ):
             return False, (
                 "Device operation is blocked during IMPLEMENTING. For diagnostic/debug builds without reviewers, "
@@ -1405,13 +1401,13 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
     if status == "VERIFYING" and (
         entry in VERIFICATION_SCRIPTS
         or action in {"verify", "complete", "bind-evidence", "ship"}
-        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["roborazzi"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"], ["maestro"]))
+        or (entry in {"harness_cli", "android-harness"} and clean_arguments[:1] in (["verify"], ["verify-steps"], ["preflight"], ["test"], ["roborazzi"], ["compile"], ["assemble"], ["device"], ["review"], ["journey"], ["e2e"], ["maestro"]))
     ):
         return True, f"verification command authorized for plan {plan.get('plan_id')}"
     if status == "READY_FOR_DELIVERY" and (
         entry in {"run_device", "phone_e2e", "maestro_bridge", "run_gradle_task"}
         or action in {"verify", "ship"}
-        or (entry in {"harness_cli", "android-harness"} and arguments[:1] in (["device"], ["assemble"], ["e2e"], ["maestro"], ["verify"]))
+        or (entry in {"harness_cli", "android-harness"} and clean_arguments[:1] in (["device"], ["assemble"], ["e2e"], ["maestro"], ["verify"]))
     ):
         return True, f"post-verification device/build command authorized for ready plan {plan.get('plan_id')}"
     # READY resume is routed for a stale delivery; workflow.resume() refuses an unchanged one unless --reopen.

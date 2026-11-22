@@ -1419,6 +1419,66 @@ class GenericMCPTests(unittest.TestCase):
         self.assertEqual("deny", res_task_alias_cancel["decision"], res_task_alias_cancel)
         self.assertEqual("DEVELOPER_AUTHORITY", res_task_alias_cancel.get("reason_code"), res_task_alias_cancel)
 
+    def test_v158_device_signoff_conversation_authority_and_help_hygiene(self):
+        """Regression: public CLI `device signoff` with explicit conversation proof & `--help` are allowed,
+        while bare/spoofed/chained/raw-script signoff and spoofed skip/auto-validate remain denied."""
+        self.activate(status="VERIFYING")
+        allowed_commands = (
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --source conversation --proof-reference "Manual phone check passed"',
+            'python .agents/harness.py device signoff --task-id task-one --verdict FAIL --source conversation --proof-reference "Crash on open"',
+            'python .agents/harness.py --json device signoff --task-id task-one --verdict PASS --source=conversation --proof-reference="Manual PASS"',
+            'python .agents/harness.py device signoff --help',
+            'python .agents/harness.py device skip-validation --task-id task-one --source conversation --proof-reference "Skip phone check"',
+            'python .agents/harness.py device skip-validation --help',
+            'python .agents/harness.py device validate-automatically --task-id task-one --serial dev123 --source conversation --proof-reference "Run auto"',
+            'python .agents/harness.py device validate-automatically --help',
+            'python .agents/harness.py execution-mode set --help',
+            'python .agents/harness.py review models set --help',
+            'python .agents/harness.py review resume --help',
+            'python .agents/harness.py review resume --source=conversation --proof-reference="Resume reviewer"',
+            'python .agents/harness.py symbol replace-body --help',
+            'python .agents/harness.py symbol insert-after --help',
+            'python .agents/harness.py task-context --help',
+            'python .agents/harness.py android-ui list --help',
+            'python .agents/harness.py debug add --help',
+        )
+        for cmd in allowed_commands:
+            with self.subTest(allowed=cmd):
+                res = self.call("run_command", {"CommandLine": cmd})
+                self.assertEqual("allow", res["decision"], f"{cmd} must be allowed: {res}")
+
+        denied_signoff_commands = (
+            'python .agents/harness.py device signoff',
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --source developer_terminal --proof-reference "Spoofed"',
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --source host_native --proof-reference "Spoofed"',
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --source conversation --proof-reference ""',
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --proof-reference "No source"',
+            'python .agents/scripts/run_device.py signoff --task-id task-one --verdict PASS --source conversation --proof-reference "Direct script"',
+            'python .agents/harness.py device signoff --task-id task-one --verdict PASS --source conversation --proof-reference "ok" && echo injected',
+        )
+        for cmd in denied_signoff_commands:
+            with self.subTest(denied_signoff=cmd):
+                res = self.call("run_command", {"CommandLine": cmd})
+                self.assertEqual("deny", res["decision"], f"{cmd} must be denied: {res}")
+                self.assertEqual("SIGNOFF_AUTHORITY", res.get("reason_code"), res)
+
+        denied_device_auth_commands = (
+            'python .agents/harness.py device skip-validation --task-id task-one --proof-reference "Missing source"',
+            'python .agents/harness.py device skip-validation --task-id task-one --source developer_terminal --proof-reference "Spoofed"',
+            'python .agents/harness.py device validate-automatically --task-id task-one --serial dev123',
+            'python .agents/harness.py device validate-automatically --task-id task-one --serial dev123 --source developer_terminal --proof-reference "Spoofed"',
+        )
+        for cmd in denied_device_auth_commands:
+            with self.subTest(denied_dev_auth=cmd):
+                res = self.call("run_command", {"CommandLine": cmd})
+                self.assertEqual("deny", res["decision"], f"{cmd} must be denied: {res}")
+                self.assertEqual("DEVELOPER_AUTHORITY", res.get("reason_code"), res)
+
+        res_empty_resume = self.call("run_command", {
+            "CommandLine": 'python .agents/harness.py review resume --source=conversation --proof-reference=""',
+        })
+        self.assertEqual("deny", res_empty_resume["decision"], res_empty_resume)
+
 
     def test_v155_pass3_define_subagent_prompt_integrity_and_phase_review_kill_all_guard(self):
         """Pass-3 regressions (P3-03 & P3-04): define_subagent blocks omitted/gutted prompts; kill_all blocks active Phase Review V2."""
