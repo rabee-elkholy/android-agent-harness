@@ -314,11 +314,12 @@ def external_cli_tokens(command: str, repo: Path | None = None) -> tuple[str, li
     raw_exe = str(tokens[0]).strip().strip("\"'")
     if not raw_exe or raw_exe.startswith("."):
         return None
+    is_win_abs = bool(re.match(r"^[A-Za-z]:[\\/]", raw_exe))
     if "/" in raw_exe or "\\" in raw_exe:
         exe_path = Path(raw_exe).expanduser()
-        if not exe_path.is_absolute():
+        if not exe_path.is_absolute() and not is_win_abs:
             return None
-        if repo is not None:
+        if exe_path.is_absolute() and repo is not None:
             try:
                 if exe_path.resolve().is_relative_to(Path(repo).resolve()):
                     return None

@@ -378,6 +378,16 @@ class ExternalWritePolicyTests(unittest.TestCase):
             for bad in ("./local-tool.sh", "tools/run.py", "curl -X POST https://x.invalid", "rclone copy . remote:", "scp a host:/b"):
                 self.assertEqual("deny", self.command(bad)["decision"], (status, bad))
 
+        # Windows drive-letter external CLIs stay classified even on POSIX hosts where Path.is_absolute is False
+        from unittest import mock
+        from integrations.external_write_policy import external_cli_tokens
+        with mock.patch("integrations.external_write_policy.Path.is_absolute", return_value=False):
+            kind_tok = external_cli_tokens(r'& "C:\Users\dev\AppData\Local\Programs\twg\bin\twg.exe" doctor')
+            self.assertIsNotNone(kind_tok)
+            self.assertEqual("twg", kind_tok[0])
+            self.assertIsNone(external_cli_tokens("tools/run.py"))
+            self.assertIsNone(external_cli_tokens("./local.sh"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
