@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.13] - 2026-11-22
+
+### Room KMP RoomDatabaseConstructor Expect/Actual Exemption & Release Script Fixes
+
+- **Room KMP & `@Suppress("NO_ACTUAL_FOR_EXPECT")` Exemption (`_modules.py`, `_workflow_insight_selftest.py`)**: Updated `_extract_kmp_declaration_signatures()` with `_is_compiler_generated_expect_decl()` so KSP-generated Room KMP `expect object ... : RoomDatabaseConstructor<...>` declarations and `expect` declarations carrying an active declaration-level or `@file:` `@Suppress("NO_ACTUAL_FOR_EXPECT")` / `@Suppress("KotlinNoActualForExpect")` no longer trigger false-positive `KMP_EXPECT_ACTUAL_MISMATCH` errors in `preflight`, while preserving strict checks for unannotated missing declarations, preventing `@Suppress` leakage across declarations, and ignoring commented-out `@Suppress`. Added regression cases to `test_kmp_cross_source_set_purity_and_expect_actual_signatures`.
+- **Release Automation Fixes (`release_version.py`)**: Passed explicit `[]` to `generate_checksums([])` so `generate_release_checksums.py` does not attempt to parse `release_version.py`'s CLI flags, and added `.antigravity-plugin/plugin.json` version bumping and staging to `update_version_files()` / `stage_paths`.
+
 ## [1.5.12] - 2026-11-22
 
 ### Batch Context Instruct, Comma-Safe Phases, Surface Aliases & Complete CLI Docs
