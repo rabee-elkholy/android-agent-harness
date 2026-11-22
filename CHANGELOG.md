@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.10] - 2026-11-22
+
+### Structurally Guaranteed Enclosing-Class Sensitive Surface Promotion at Draft
+
+- **Enclosing-Class Sensitive Surface Promotion (`_workflow/delivery_ops.py`, `_antigravity_stability_selftest.py`)**: Added `_guaranteed_enclosing_class_sensitive_surfaces()` and wired it into `_planned_file_surfaces()` so when every non-passive top-level type header in a planned `.kt`/`.java`/`.swift` file itself guarantees a `CRITICAL_SURFACES` match (for example `class SignInFragmentViewModel` in `SignInAndSyncViewModel.kt` guaranteeing `AUTH_PATTERN_CONTEXT` at `prepare-verification`), `task draft` promotes that surface up front for single-approval planning while preserving `N2`/`P3b` safeguards for generic or mixed multi-class files. Extended `test_two_key_outcome_confirmed_sensitive_surfaces_and_gemini_draft_hint` with enclosing-class promotion and mixed-class regression cases.
+
 ## [1.5.9] - 2026-11-22
 
 ### Web-Relay values XML Tag Entity Repair & Multi-Line Kotlin Expression-Body Lint Fix

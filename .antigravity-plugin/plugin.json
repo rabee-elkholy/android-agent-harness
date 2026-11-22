@@ -1,7 +1,7 @@
 {
   "name": "android-agent-harness",
   "displayName": "Android Agent Harness",
-  "version": "1.5.9",
+  "version": "1.5.10",
   "description": "Approval-first, evidence-bound engineering governance for AI coding agents on Native Android and Kotlin Multiplatform (KMM / KMP).",
   "author": {
     "name": "Rabee Elkholy",
