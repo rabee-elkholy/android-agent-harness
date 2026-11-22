@@ -8674,26 +8674,42 @@ class TestV1319ForensicIntegration(unittest.TestCase):
                 "    }\n"
                 "    fun withUnderscoreAndDefault(_ignored: Int, base: Int, doubled: Int = base * 2): Int = doubled\n"
                 "    private operator fun invoke(): Int = withUnderscoreAndDefault(0, 3)\n"
+                "    internal fun shouldShowDietPlanUpdateToast(goal: Int?): Boolean =\n"
+                "        goal != 1\n"
+                "    internal fun isEligible(minVal: Int, maxVal: Int): Boolean =\n"
+                "        minVal > 0 &&\n"
+                "        maxVal > 0\n"
+                "    internal fun badMultiLine(usedArg: Int, deadFlag: Boolean): Boolean =\n"
+                "        usedArg > 0\n"
                 "}\n\n"
                 "@Preview\n"
                 "@Composable\n"
                 "private fun NutritionCardPreview() {\n"
                 "    println(renderNutritionCard(\"Macro\"))\n"
-                "    println(LiveHandler()())\n"
+                "    val h = LiveHandler()\n"
+                "    println(h())\n"
+                "    println(h.shouldShowDietPlanUpdateToast(1))\n"
+                "    println(h.isEligible(1, 2))\n"
+                "    println(h.badMultiLine(1, false))\n"
                 "}\n",
                 encoding="utf-8",
             )
             intra_issues = fast_kt_lint.lint_file(dead_kt)
             by_type = {iss["type"]: iss for iss in intra_issues}
             self.assertIn("UNUSED_PARAMETER", by_type, intra_issues)
-            self.assertIn("unusedSubtitle", by_type["UNUSED_PARAMETER"]["msg"])
+            unused_param_msgs = " | ".join(iss["msg"] for iss in intra_issues if iss["type"] == "UNUSED_PARAMETER")
+            self.assertIn("unusedSubtitle", unused_param_msgs)
+            self.assertIn("deadFlag", unused_param_msgs)
             self.assertIn("UNUSED_PRIVATE_FUNCTION", by_type, intra_issues)
             self.assertIn("deadPrivateHelper", by_type["UNUSED_PRIVATE_FUNCTION"]["msg"])
             self.assertIn("UNUSED_PRIVATE_CLASS", by_type, intra_issues)
             self.assertIn("DeadPrivateModel", by_type["UNUSED_PRIVATE_CLASS"]["msg"])
             # Ensure valid patterns did NOT trigger false positives
             all_msgs = " | ".join(iss["msg"] for iss in intra_issues)
-            for valid_sym in ("rawCode", "_ignored", "base", "doubled", "usedPrivateHelper", "NutritionCardPreview", "invoke"):
+            for valid_sym in (
+                "rawCode", "_ignored", "base", "doubled", "goal", "minVal", "maxVal", "usedArg",
+                "usedPrivateHelper", "NutritionCardPreview", "invoke",
+            ):
                 self.assertNotIn(f"'{valid_sym}'", all_msgs, intra_issues)
 
             # Cross-repo unreferenced public declaration check + reviewer brief injection + --strict-unused CLI

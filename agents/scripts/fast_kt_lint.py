@@ -559,6 +559,8 @@ def _find_unused_intra_file_code(
                         break
                     if sch == "=" and (scan + 1 >= n or tmpl_text[scan + 1] != "="):
                         epos = scan + 1
+                        while epos < n and tmpl_text[epos] in " \t\r\n":
+                            epos += 1
                         eb = ep = ek = 0
                         while epos < n:
                             ech = tmpl_text[epos]
@@ -579,8 +581,12 @@ def _find_unused_intra_file_code(
                             elif ech == "]":
                                 ek = max(0, ek - 1)
                             elif eb == 0 and ep == 0 and ek == 0 and ech == "\n":
+                                prev_ln = tmpl_text[scan + 1:epos].rstrip(" \t\r")
                                 rest_ln = tmpl_text[epos + 1:].lstrip(" \t\r\n")
-                                if not rest_ln.startswith((".", "?.", "?:", "else", "+", "-", "&&", "||", "{")):
+                                if not (
+                                    prev_ln.endswith(("=", "&&", "||", "?:", "+", "-", "*", "/", "==", "!=", "<", ">", "<=", ">=", "->", ","))
+                                    or rest_ln.startswith((".", "?.", "?:", "else", "+", "-", "*", "/", "&&", "||", "==", "!=", "{"))
+                                ):
                                     break
                             epos += 1
                         body_region = tmpl_text[close_paren + 1:epos]

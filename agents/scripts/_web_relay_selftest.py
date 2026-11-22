@@ -2362,6 +2362,57 @@ class WebRelaySelftest(unittest.TestCase):
         self.assertIn("WEB_MERGE_JSON_TRUNCATED", str(ctx.exception))
         self.assertIn(local_pid, str(ctx.exception))
 
+    def test_21_values_xml_outer_resource_tag_entity_repair_preserves_inner_entities(self) -> None:
+        """Web-Relay repairs HTML-escaped outer resource tags in `res/values*/strings.xml` while keeping inner entities intact."""
+        import web_relay
+
+        raw_patch = (
+            "<<<HARNESS_WEB_PATCH_V1>>>\n"
+            "PACK_ID: wpack-163004cba0f2\n"
+            "STATUS: READY\n"
+            "TASK_ID: values-xml-entity-21\n"
+            "KIND: BUG\n"
+            "OUTCOME: Repair outer values XML tags\n\n"
+            "<<<MODIFY app/src/main/res/values/strings.xml>>>\n"
+            "<<<<<<< SEARCH\n"
+            "    &lt;string name=&quot;validation_of_steps&quot;&gt;Enter 500-120000&lt;/string&gt;\n"
+            "    &lt;string name=&quot;bold_msg&quot;&gt;&lt;b&gt;Save &amp; Go&lt;/b&gt;&lt;/string&gt;\n"
+            "    &lt;string name=&quot;double_msg&quot;&gt;&amp;lt;b&amp;gt;Save &amp;amp; Go&amp;lt;/b&amp;gt;&lt;/string&gt;\n"
+            "    <string name=\"untouched_msg\">&lt;b&gt;Keep &amp; Preserve&lt;/b&gt;</string>\n"
+            "=======\n"
+            "    &lt;string name=&quot;validation_of_steps&quot;&gt;Enter 500-30000&lt;/string&gt;\n"
+            "    &lt;string name=&quot;bold_msg&quot;&gt;&lt;b&gt;Run &amp; Save&lt;/b&gt;&lt;/string&gt;\n"
+            "    &lt;string name=&quot;double_msg&quot;&gt;&amp;lt;b&amp;gt;Run &amp;amp; Save&amp;lt;/b&amp;gt;&lt;/string&gt;\n"
+            "    <string name=\"untouched_msg\">&lt;b&gt;Keep &amp; Preserve&lt;/b&gt;</string>\n"
+            ">>>>>>> REPLACE\n"
+            "<<<END_FILE>>>\n\n"
+            "<<<MODIFY app/src/main/res/values-ar/strings.xml>>>\n"
+            "<<<<<<< SEARCH\n"
+            "    &lt;string name=&quot;validation_of_steps&quot;&gt;ادخل رقم بين 500 و 120000&lt;/string&gt;\n"
+            "=======\n"
+            "    &lt;string name=&quot;validation_of_steps&quot;&gt;ادخل رقم بين 500 و 30000&lt;/string&gt;\n"
+            ">>>>>>> REPLACE\n"
+            "<<<END_FILE>>>\n"
+            "<<<END_HARNESS_WEB_PATCH_V1>>>\n"
+        )
+        doc = web_relay._extract_merge_json_from_text(raw_patch)
+        self.assertIsNotNone(doc)
+        ops = doc["operations"]
+        self.assertEqual(2, len(ops))
+
+        en_search = ops[0]["hunks"][0]["search"]
+        en_replace = ops[0]["hunks"][0]["replace"]
+        self.assertIn('<string name="validation_of_steps">Enter 500-120000</string>', en_search)
+        self.assertIn('<string name="validation_of_steps">Enter 500-30000</string>', en_replace)
+        self.assertIn('<string name="bold_msg">&lt;b&gt;Save &amp; Go&lt;/b&gt;</string>', en_search)
+        self.assertIn('<string name="bold_msg">&lt;b&gt;Run &amp; Save&lt;/b&gt;</string>', en_replace)
+        self.assertIn('<string name="double_msg">&lt;b&gt;Save &amp; Go&lt;/b&gt;</string>', en_search)
+        self.assertIn('<string name="double_msg">&lt;b&gt;Run &amp; Save&lt;/b&gt;</string>', en_replace)
+        self.assertIn('<string name="untouched_msg">&lt;b&gt;Keep &amp; Preserve&lt;/b&gt;</string>', en_search)
+
+        ar_replace = ops[1]["hunks"][0]["replace"]
+        self.assertEqual('    <string name="validation_of_steps">ادخل رقم بين 500 و 30000</string>', ar_replace)
+
 
 if __name__ == "__main__":
     unittest.main()

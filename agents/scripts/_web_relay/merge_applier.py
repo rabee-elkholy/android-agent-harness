@@ -104,6 +104,64 @@ def _unescape_patch_protocol_markers(raw_text: str) -> str:
 
 _DOUBLE_ESCAPED_XML_AMP_RE = _engine.re.compile(r"&amp;(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);")
 
+_VALUES_XML_TAG_NAMES = (
+    r"resources|string-array|integer-array|declare-styleable|eat-comment|"
+    r"string|plurals|item|color|dimen|style|integer|bool|attr|array|fraction|public"
+)
+_VALUES_XML_DECL_RE = _engine.re.compile(r"^([ \t]*)&lt;\?xml\b((?:(?!&lt;|&gt;).)*?)\?&gt;([ \t]*)$")
+_VALUES_XML_COMMENT_RE = _engine.re.compile(r"^([ \t]*)&lt;!--(.*)--&gt;([ \t]*)$")
+_VALUES_XML_CLOSE_TAG_RE = _engine.re.compile(rf"^([ \t]*)&lt;/({_VALUES_XML_TAG_NAMES})&gt;([ \t]*)$")
+_VALUES_XML_OPEN_TAG_RE = _engine.re.compile(
+    rf"^([ \t]*)&lt;({_VALUES_XML_TAG_NAMES})(?=&gt;|[\s/])((?:(?!&lt;|&gt;).)*?)(/?)&gt;(.*)$"
+)
+
+
+def _repair_values_xml_resource_tags(lines: list[str]) -> list[str]:
+    """Repair HTML-escaped outer Android resource tags in values XML while preserving inner literal entities."""
+    if not lines:
+        return lines
+    out: list[str] = []
+    for ln in lines:
+        if "&lt;" not in ln and "&gt;" not in ln and "&quot;" not in ln:
+            out.append(ln)
+            continue
+        m_decl = _VALUES_XML_DECL_RE.match(ln)
+        if m_decl:
+            attrs = m_decl.group(2).replace("&quot;", '"').replace("&apos;", "'")
+            fixed = f"{m_decl.group(1)}<?xml{attrs}?>{m_decl.group(3)}"
+            out.append(_DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", fixed))
+            continue
+        m_cmt = _VALUES_XML_COMMENT_RE.match(ln)
+        if m_cmt:
+            fixed = f"{m_cmt.group(1)}<!--{m_cmt.group(2)}-->{m_cmt.group(3)}"
+            out.append(_DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", fixed))
+            continue
+        m_cls = _VALUES_XML_CLOSE_TAG_RE.match(ln)
+        if m_cls:
+            out.append(f"{m_cls.group(1)}</{m_cls.group(2)}>{m_cls.group(3)}")
+            continue
+        m_open = _VALUES_XML_OPEN_TAG_RE.match(ln)
+        if m_open:
+            indent, tag, raw_attrs, self_close, tail = m_open.groups()
+            attrs = raw_attrs.replace("&quot;", '"').replace("&apos;", "'")
+            if self_close:
+                fixed = f"{indent}<{tag}{attrs}/>{tail}"
+                out.append(_DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", fixed))
+                continue
+            m_tail_close = _engine.re.match(
+                rf"^(.*)&lt;/{_engine.re.escape(tag)}&gt;([ \t]*)$",
+                tail,
+            )
+            if m_tail_close:
+                inner = _DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", m_tail_close.group(1))
+                out.append(f"{indent}<{tag}{attrs}>{inner}</{tag}>{m_tail_close.group(2)}")
+                continue
+            fixed_tail = _DOUBLE_ESCAPED_XML_AMP_RE.sub(r"&\1;", tail)
+            out.append(f"{indent}<{tag}{attrs}>{fixed_tail}")
+            continue
+        out.append(ln)
+    return out
+
 
 def _unescape_code_chunk_outside_literals(chunk: str) -> str:
     if "&" not in chunk:
@@ -165,13 +223,13 @@ def _repair_code_preserving_literals_and_comments(full_text: str, *, is_java: bo
 
 
 def _repair_web_ui_html_entities_for_file(path: str, lines: list[str]) -> list[str]:
-    """Safely unescape web-UI HTML-entity corruption in code/manifest/nav XML lines without touching strings.xml or literals."""
+    """Safely unescape web-UI HTML-entity corruption in code/manifest/nav XML and outer values-XML tags without touching literal entities."""
     p_low = str(path or "").replace("\\", "/").lower()
     norm_slash = "/" + p_low.lstrip("/")
-    if p_low.endswith((".html", ".htm", ".xhtml")) or (
-        ("/res/values" in norm_slash or "/composeresources/values" in norm_slash) and p_low.endswith(".xml")
-    ):
+    if p_low.endswith((".html", ".htm", ".xhtml")):
         return lines
+    if ("/res/values" in norm_slash or "/composeresources/values" in norm_slash) and p_low.endswith(".xml"):
+        return _repair_values_xml_resource_tags(lines)
 
     is_xml = p_low.endswith(".xml")
     is_code = p_low.endswith((".kt", ".kts", ".java", ".swift", ".gradle", ".groovy"))
