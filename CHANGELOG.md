@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.12] - 2026-11-22
+
+### Batch Context Instruct, Comma-Safe Phases, Surface Aliases & Complete CLI Docs
+
+- **Natural `--expected-surfaces` Aliases & Explicit CLI Help (`plan_authority.py`, `_workflow/engine.py`)**: Added missing surface aliases (`MANIFEST` / `ANDROID_MANIFEST` -> `MANIFEST_PERMISSION`, `SENSITIVE` -> `SENSITIVE_DATA`, `COROUTINE` -> `COROUTINES`, `DOC` -> `DOCS`, `DEVICE` -> `DEVICE_API`, `I18N` / `L10N` -> `LOCALIZATION`, plus `ANALYTICS` and `HARNESS_CONFIG`) and enriched `--expected-surfaces` help text to document that it is optional (auto-inferred from `--expected-files`) alongside all 24 canonical surface names.
+- **Comma-Safe Phases & Repeatable `--phase` (`_workflow/engine.py`, `_workflow/planning.py`, `_safety/command_policy.py`)**: Added repeatable `--phase "id:Title"` on `task draft`, `task quick-start`, and `task revise` (preserving `--phase` overrides in `_revision_args` and rejecting mixed `--phase`/`--phases`), upgraded compact `--phases` parsing and `PreToolUse` phase counting to split on `;` or `id:`-prefixed commas so commas inside phase titles never fail validation, and improved `validate_phases` / `PHASE_PLAN_REQUIRED` guidance.
+- **Atomic Batch `context instruct` (`generate_project_context.py`)**: Added `--entry "SCOPE :: Rule text"` (repeatable), `--batch-json` (with PowerShell quote recovery), and `--batch-file` to record multiple scoped developer instructions in a single atomic call guarded by `StateLock`, validating every entry before writing and keeping single-instruction calls fully backward-compatible.
+- **Proactive Execution-Mode Guidance (`_safety/command_policy.py`, `execution_mode.py`)**: Clarified `SELECT_EXECUTION_MODE_REQUIRED` with the proactive `execution-mode show --files ... [--surfaces ...] [--phases N] --json` pre-draft check so heavy tasks prompt cleanly before `task draft`, and aligned `build_execution_mode_prompt` with `web-pack --task-id <id>`.
+- **Complete Public Command Reference Parity (`GEMINI.md.template`, `harness-rules.md`, `AGENTS.md.template`, `android-harness-global.md.template`, `command-contract.md`, `web-relay.md`, `_public_commands.py`)**: Documented canonical surfaces, repeatable `--phase`, batch `context instruct`, `execution-mode show`, `web-pack --retry-failure`/`--dirty`/`--add-files`, `web-apply --dry-run`/`--staged-phase`, `task review-budget`, `task approve-sensitive`, `task change-decision`, `task validate-finding`, `task cancel`, `review models set`, `symbol`, `device`, `debug`, and `commands --filter` within ADR-009 character budgets, with regression tests across `_project_intelligence_selftest.py`, `_daily_workflow_selftest.py`, `_execution_mode_selftest.py`, and `_vnext_selftest.py`.
+
 ## [1.5.11] - 2026-11-22
 
 ### Provider-Neutral PM Grant/Sync Scripts & Keyword-Free Authorization
