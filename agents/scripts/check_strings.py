@@ -35,10 +35,58 @@ primary_res = REPO.joinpath(*ANDROID_SRC) / "res"
 RES_DIRS: list[Path] = discover_res_dirs(REPO, primary_res=primary_res)
 
 PLACEHOLDER_RE = re.compile(
-    r"(?<!\d)%(?:(\d+)\$)?([+\-# 0,(<]*\d*(?:\.\d+)?[tT]?[sSdDfFgGxXbBcCeEoaAn%])(?![a-zA-Z0-9])|\{([a-zA-Z0-9_]+)\}"
+    r"(?<!\d)%(?:(\d+)\$)?([+\-# 0,(<]*\d*(?:\.\d+)?[tT]?[sSdDfFgGxXbBcCeEoaAn%])(?(1)|(?![a-zA-Z0-9]))|\{([a-zA-Z0-9_]+)\}"
 )
 
 # UI call sites that must not carry a raw user-facing literal.
+_COMPOSE_ANIM_CALL_RE = re.compile(
+    r"\b(?:"
+    r"animate(?:Float|Dp|Color|Int|Offset|Size|Rect|IntOffset|IntSize|Value)AsState"
+    r"|rememberInfiniteTransition|updateTransition|rememberTransition|createChildTransition"
+    r"|AnimatedContent|Crossfade"
+    r"|animate(?:Float|Dp|Color|Int|Offset|Size|Rect|IntOffset|IntSize|Value)"
+    r")\s*(?:<[^>\n]*>\s*)?\("
+)
+_LABEL_LIT_RE = re.compile(r'\blabel\s*=\s*"')
+_OTHER_KT_UI_ATTR_RE = re.compile(
+    r'\b(?:text|placeholder|headline|supportingText|contentDescription)\s*=\s*"[^"]{2,}"'
+)
+
+
+def _is_compose_animation_label_line(lines: list[str], line_idx_0: int, clean_line: str) -> bool:
+    """Return True when `label = "..."` belongs solely to a Compose animation API (tooling inspector tag)."""
+    if not _LABEL_LIT_RE.search(clean_line) or _OTHER_KT_UI_ATTR_RE.search(clean_line):
+        return False
+    # If another UI call pattern also matched on this line (e.g. `Text(...)`), do not exempt it.
+    if any(
+        pat.search(clean_line)
+        for idx, pat in enumerate(HARDCODED_KT)
+        if idx != 3
+    ):
+        return False
+    if _COMPOSE_ANIM_CALL_RE.search(clean_line):
+        return True
+    # Walk backward from just before `label =` to find the immediately enclosing call header `funcName(`.
+    before_label = clean_line[:clean_line.find("label")]
+    balance = 0
+    for idx in range(line_idx_0, max(-1, line_idx_0 - 25), -1):
+        seg = before_label if idx == line_idx_0 else _KT_STRING_LIT_RE.sub('""', _cut_line_comment(lines[idx]))
+        # Strip string literals in current line prefix too.
+        if idx == line_idx_0:
+            seg = _KT_STRING_LIT_RE.sub('""', seg)
+        for pos in range(len(seg) - 1, -1, -1):
+            ch = seg[pos]
+            if ch == ")":
+                balance += 1
+            elif ch == "(":
+                balance -= 1
+                if balance < 0:
+                    prefix_text = seg[:pos + 1]
+                    if idx > 0 and not re.search(r"[A-Za-z0-9_>]\s*\($", prefix_text):
+                        # Multi-line signature like `animateFloatAsState\n(`: include previous line.
+                        prefix_text = _cut_line_comment(lines[idx - 1]) + " " + prefix_text
+                    return bool(_COMPOSE_ANIM_CALL_RE.search(prefix_text))
+    return False
 HARDCODED_KT = [
     re.compile(r'\bText\s*\([^;\n]{0,200}(?:text\s*=\s*)?"[^"]{2,}"'),
     re.compile(r'\bText\s*\([^;\n]{0,200}"[^"]*"\s*\+'),
@@ -560,8 +608,9 @@ def check_hardcoded_strings(
 
         modified_lines = lines_map.get(path) if lines_map else None
         in_triple_string = False
+        content_lines = content.splitlines()
 
-        for i, line in enumerate(content.splitlines(), 1):
+        for i, line in enumerate(content_lines, 1):
             if modified_lines is not None and i not in modified_lines:
                 continue
 
@@ -581,8 +630,10 @@ def check_hardcoded_strings(
                     continue
                 clean_line = RESOURCE_CALL.sub('""', code_line)
                 is_hardcoded = any(pat.search(clean_line) for pat in HARDCODED_KT) and _kt_line_has_translatable_literal(clean_line)
+                if is_hardcoded and _is_compose_animation_label_line(content_lines, i - 1, clean_line):
+                    is_hardcoded = False
                 if not is_hardcoded and i > 1:
-                    prev_stripped = _cut_line_comment(content.splitlines()[i - 2]).strip()
+                    prev_stripped = _cut_line_comment(content_lines[i - 2]).strip()
                     if re.search(r'\b(?:Text|Button|TextButton|OutlinedButton|ElevatedButton)\s*\(\s*$', prev_stripped):
                         if re.search(r'^\s*(?:text\s*=\s*)?"[^"]{2,}"', clean_line) and _kt_line_has_translatable_literal(clean_line):
                             is_hardcoded = True

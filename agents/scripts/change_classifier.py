@@ -594,6 +594,86 @@ GENERIC_MULTI_PURPOSE_DEPENDENCY_RE = re.compile(
 )
 
 
+def _extract_type_declaration_snippet(stripped_text: str, type_name: str) -> str:
+    """Extract only the declaration block(s) for `type_name` from comment-stripped Kotlin/Java text."""
+    if not stripped_text or not type_name:
+        return ""
+    decl_re = re.compile(
+        rf"\b(?:(?:public|internal|private|protected|open|abstract|final|sealed|data|value|enum|annotation|inner|expect|actual)\s+)*"
+        rf"(?:class|interface|object|typealias)\s+{re.escape(type_name)}\b"
+    )
+    snippets: list[str] = []
+    n = len(stripped_text)
+    for match in decl_re.finditer(stripped_text):
+        start = match.start()
+        # Walk back to the beginning of the declaration line (and any contiguous preceding @Annotation lines).
+        line_start = stripped_text.rfind("\n", 0, start) + 1
+        while line_start > 1:
+            prev_end = line_start - 1
+            prev_start = stripped_text.rfind("\n", 0, prev_end) + 1
+            if stripped_text[prev_start:prev_end].strip().startswith("@"):
+                line_start = prev_start
+            else:
+                break
+        i = match.end()
+        paren = 0
+        brace = 0
+        in_body = False
+        in_quote: str | None = None
+        end = n
+        while i < n:
+            ch = stripped_text[i]
+            if in_quote:
+                if len(in_quote) == 3:
+                    if stripped_text[i:i+3] == in_quote:
+                        in_quote = None
+                        i += 3
+                        continue
+                elif ch == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                elif ch == in_quote:
+                    in_quote = None
+                i += 1
+                continue
+            if stripped_text[i:i+3] in ('"""', "'''"):
+                in_quote = stripped_text[i:i+3]
+                i += 3
+                continue
+            if ch in ('"', "'"):
+                in_quote = ch
+                i += 1
+                continue
+            if ch == "(":
+                paren += 1
+            elif ch == ")":
+                paren = max(0, paren - 1)
+            elif ch == "{" and (paren == 0 or in_body):
+                in_body = True
+                brace += 1
+            elif ch == "}" and in_body:
+                brace -= 1
+                if brace == 0:
+                    end = i + 1
+                    break
+            elif not in_body and paren == 0:
+                if ch == ";":
+                    end = i + 1
+                    break
+                if ch == "\n":
+                    # Peek ahead past whitespace to see if multiline supertype list `{` / `:` / `where` continues.
+                    j = i + 1
+                    while j < n and stripped_text[j] in " \t\r\n":
+                        j += 1
+                    rest = stripped_text[j:]
+                    if not (rest.startswith("{") or rest.startswith(":") or rest.startswith("where ") or rest.startswith("where\t")):
+                        end = i
+                        break
+            i += 1
+        snippets.append(stripped_text[line_start:end])
+    return "\n".join(snippets)
+
+
 def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list[Path]]) -> tuple[str, str] | None:
     """Check if a dependency type maps to a sensitive surface directly or via target source file (1 hop)."""
     if PASSIVE_UI_CONTAINER_RE.search(type_name):
@@ -622,8 +702,14 @@ def _resolve_type_surface(root: Path, type_name: str, type_index: dict[str, list
         resolved_surfaces: set[str] = set()
         for target_path in matches:
             target_text = _read_text(target_path)
+            stripped_text = _strip_comments_only(target_text)
+            scan_text = stripped_text
+            if target_path.stem != type_name:
+                snippet = _extract_type_declaration_snippet(stripped_text, type_name)
+                if snippet:
+                    scan_text = snippet
             for surface, pattern, _reason in PATTERNS:
-                if surface in CRITICAL_SURFACES and pattern.search(target_text):
+                if surface in CRITICAL_SURFACES and pattern.search(scan_text):
                     resolved_surfaces.add(surface)
         if len(resolved_surfaces) == 1:
             surface = next(iter(resolved_surfaces))
@@ -722,6 +808,11 @@ def _strip_code_line(line: str, in_block: bool, in_triple: str | None = None) ->
     return "".join(res), in_block, in_triple
 
 
+_ORPHAN_KDOC_LINE_RE = re.compile(
+    r"^\s*\*(?:\s*$|/\s*$|\s+@|\s+(?:[A-Z][a-z]+|TODO\b|FIXME\b|NOTE\b|HACK\b)(?:\s|[.,:;]|$)|\s+(?:[a-z]{2,}\s+){2,}[a-z]{2,})"
+)
+
+
 def _strip_comments_only(text: str) -> str:
     """Strip // and /* */ comments from code or diff text while preserving string literals."""
     if not text:
@@ -735,6 +826,10 @@ def _strip_comments_only(text: str) -> str:
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---")):
             prefix = line[0]
             line = line[1:]
+        if not in_block and not in_triple and _ORPHAN_KDOC_LINE_RE.match(line):
+            if "*/" not in line or line.rstrip().endswith("*/"):
+                out_lines.append(prefix)
+                continue
         buf: list[str] = []
         i = 0
         n = len(line)

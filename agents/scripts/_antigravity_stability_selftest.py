@@ -11774,5 +11774,436 @@ class TestV155MediumAndPortabilityFixes(unittest.TestCase):
                 self.assertIn("ACP_ADC_60M_OAUTH_CONTEXT_CANCELED", {f["code"] for f in diag_log["findings"]})
 
 
+class TestV1515AuditFixesAndDeltaCarryover(unittest.TestCase):
+    """Regression suite for v1.5.15: KMP project_kind, classifier scoping, strings/lint DX, and bounded post-PASS polish."""
+
+    def _git(self, repo: Path, *args: str) -> None:
+        proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=False)
+        if proc.returncode != 0:
+            raise AssertionError(proc.stderr or proc.stdout)
+
+    def _init_git_repo(self, root: Path, files: dict[str, str]) -> Path:
+        root.mkdir(parents=True, exist_ok=True)
+        for rel, content in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        self._git(root, "init", "-q")
+        self._git(root, "config", "user.name", "Harness Test")
+        self._git(root, "config", "user.email", "test@example.invalid")
+        self._git(root, "config", "core.autocrlf", "false")
+        self._git(root, "add", ".")
+        self._git(root, "commit", "-qm", "init")
+        return root
+
+    def test_01_kmp_project_kind_resolution_and_product_agreement(self) -> None:
+        from _workflow import engine as wf_engine
+
+        with tempfile.TemporaryDirectory() as td:
+            kmp_repo = Path(td) / "kmp"
+            (kmp_repo / "gradle").mkdir(parents=True)
+            (kmp_repo / "settings.gradle.kts").write_text('include(":androidApp", ":shared")\n', encoding="utf-8")
+            (kmp_repo / "androidApp").mkdir()
+            (kmp_repo / "androidApp" / "build.gradle.kts").write_text(
+                'plugins { id("com.android.application") }\nandroid { applicationId = "com.example.kmp"\n namespace = "com.example.kmp" }\n',
+                encoding="utf-8",
+            )
+            (kmp_repo / "shared").mkdir()
+            (kmp_repo / "shared" / "build.gradle.kts").write_text(
+                'plugins { id("com.android.kotlin.multiplatform.library") }\n',
+                encoding="utf-8",
+            )
+            # Without _product.py: discover_modules finds :androidApp -> application
+            self.assertEqual("application", wf_engine.project_kind(kmp_repo))
+
+            # With installed _product.py: matches _product.py PROJECT_KIND
+            (kmp_repo / ".agents" / "scripts").mkdir(parents=True)
+            (kmp_repo / ".agents" / "scripts" / "_product.py").write_text("PROJECT_KIND = 'application'\n", encoding="utf-8")
+            self.assertEqual("application", wf_engine.project_kind(kmp_repo))
+
+            # Pure Android library without app/ or _product.py -> library
+            lib_repo = Path(td) / "lib"
+            (lib_repo / "shared").mkdir(parents=True)
+            (lib_repo / "shared" / "build.gradle.kts").write_text(
+                'plugins { id("com.android.library") }\nandroid { namespace = "com.example.lib" }\n',
+                encoding="utf-8",
+            )
+            self.assertEqual("library", wf_engine.project_kind(lib_repo))
+
+    def test_02_classifier_kdoc_stripping_and_declaration_scoped_propagation(self) -> None:
+        import change_classifier as cc
+
+        diff_sample = "\n".join([
+            "+ * @param sessionManager Encrypted session state manager.",
+            "+ * Core encrypted session manager providing authentication state.",
+            "+ * so onboarding inspects authentication state and OAuth token.",
+            "+ *",
+            "+ */",
+            "+    val scaled = base",
+            "+        * 2",
+        ])
+        stripped = cc._strip_comments_only(diff_sample)
+        self.assertNotIn("Encrypted", stripped)
+        self.assertNotIn("authentication", stripped)
+        self.assertNotIn("OAuth", stripped)
+        self.assertIn("* 2", stripped)
+
+        models_kt = "\n".join([
+            "package com.example.onboarding.model",
+            "enum class ServiceTrack {",
+            "    NUTRITION,",
+            "    WORKOUT,",
+            "    BOTH,",
+            "}",
+            "sealed interface OnboardingCommitResult {",
+            "    data object Saved : OnboardingCommitResult",
+            "    data object NeedsSignIn : OnboardingCommitResult",
+            "}",
+        ])
+        repo_kt = "\n".join([
+            "package com.example.onboarding.repo",
+            "/**",
+            " * Inspects authentication state and OAuth display name.",
+            " */",
+            "interface OnboardingRepository {",
+            "    fun loadSummary(): String",
+            "}",
+        ])
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            self._init_git_repo(repo, {
+                "app/src/main/kotlin/com/example/onboarding/model/OnboardingModels.kt": models_kt,
+                "app/src/main/kotlin/com/example/onboarding/repo/OnboardingRepository.kt": repo_kt,
+                "app/src/main/kotlin/com/example/onboarding/ui/SummaryScreen.kt": (
+                    "package com.example.onboarding.ui\n"
+                    "import com.example.onboarding.model.ServiceTrack\n"
+                    "import com.example.onboarding.repo.OnboardingRepository\n"
+                    "class SummaryPresenter(private val repo: OnboardingRepository) {\n"
+                    "    fun trackLabel(track: ServiceTrack) = track.name\n"
+                    "}\n"
+                ),
+                "app/src/main/kotlin/com/example/onboarding/ui/AuthGateCaller.kt": (
+                    "package com.example.onboarding.ui\n"
+                    "import com.example.onboarding.model.OnboardingCommitResult\n"
+                    "fun nextStep(res: OnboardingCommitResult): Boolean = res == OnboardingCommitResult.Saved\n"
+                ),
+            })
+            summary_rel = "app/src/main/kotlin/com/example/onboarding/ui/SummaryScreen.kt"
+            (repo / summary_rel).write_text(
+                (repo / summary_rel).read_text(encoding="utf-8") + "\nfun helperPad(v: Int) = v + 1\n",
+                encoding="utf-8",
+            )
+            cls_summary = cc.classify(repo, task_changes=[{"path": summary_rel, "status": "M"}], progress=False)
+            self.assertNotIn("AUTH", cls_summary.get("surfaces") or [])
+
+            auth_rel = "app/src/main/kotlin/com/example/onboarding/ui/AuthGateCaller.kt"
+            (repo / auth_rel).write_text(
+                "package com.example.onboarding.ui\n"
+                "import com.example.onboarding.model.OnboardingCommitResult\n"
+                "import com.example.onboarding.model.OnboardingCommitResult.NeedsSignIn\n"
+                "fun nextStep(res: OnboardingCommitResult): Boolean = res == NeedsSignIn\n",
+                encoding="utf-8",
+            )
+            cls_auth = cc.classify(repo, task_changes=[{"path": auth_rel, "status": "M"}], progress=False)
+            self.assertIn("AUTH", cls_auth.get("surfaces") or [])
+
+    def test_03_check_strings_animation_label_exemption_and_positional_units(self) -> None:
+        import check_strings as cs
+
+        self.assertEqual(["%1$s"], cs._extract_placeholders("%1$sg"))
+        self.assertEqual(["%1$s"], cs._extract_placeholders("%1$s \u062c\u0645"))
+        self.assertEqual([], cs._extract_placeholders("100%sales"))
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            kt = repo / "app/src/main/kotlin/com/demo/Motion.kt"
+            kt.parent.mkdir(parents=True)
+            kt.write_text("\n".join([
+                "package com.demo",
+                "import androidx.compose.animation.core.*",
+                "fun DemoAnim(pressed: Boolean, index: Int) {",
+                '    val infinite = rememberInfiniteTransition(label = "curaFitTypingDots")',
+                "    val scale by animateFloatAsState(",
+                "        targetValue = if (pressed) 0.96f else 1f,",
+                "        animationSpec = spring(dampingRatio = 0.8f),",
+                '        label = "curaFitPressScale",',
+                "    )",
+                '    val alpha by infinite.animateFloat(initialValue = 0f, targetValue = 1f, label = "typingDotAlpha_$index")',
+                '    ActionButton(label = "Save Settings")',
+                '    Text("Visible Label")',
+                "}",
+            ]), encoding="utf-8")
+            findings = cs.check_hardcoded_strings([kt], repo_root=repo)
+            self.assertEqual(2, len(findings), f"Expected only real UI hardcoded findings, got: {findings}")
+            self.assertTrue(any("ActionButton" in f for f in findings))
+            self.assertTrue(any("Visible Label" in f for f in findings))
+
+    def test_04_checkpoint_phase_baseline_dirty_removed_and_detailed_lint_output(self) -> None:
+        import argparse
+        import workflow
+        from _vnext_common import read_json
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "kmp"
+            shared_kt = "shared/src/commonMain/kotlin/com/demo/Feature.kt"
+            self._init_git_repo(repo, {
+                "settings.gradle.kts": 'include(":androidApp", ":shared")\n',
+                "androidApp/build.gradle.kts": 'plugins { id("com.android.application") }\nandroid { applicationId = "com.demo"\n namespace = "com.demo" }\n',
+                "shared/build.gradle.kts": 'plugins { id("com.android.library") }\nandroid { namespace = "com.demo.shared" }\n',
+                shared_kt: "package com.demo\nclass Feature { fun run() = 1 }\n",
+            })
+            (repo / ".agents" / "scripts").mkdir(parents=True)
+            (repo / ".agents" / "scripts" / "_product.py").write_text("PROJECT_KIND = 'application'\n", encoding="utf-8")
+            (repo / ".agents" / "VERSION").write_text("1.5.15\n", encoding="utf-8")
+            shutil.copytree(REPO_ROOT / "agents" / "skills", repo / ".agents" / "skills")
+
+            # Pre-existing untracked root doc captured in task-baseline.json, NOT part of plan expected_files
+            rules_doc = repo / "doc/PROJECT_RULES.md"
+            rules_doc.parent.mkdir(parents=True, exist_ok=True)
+            rules_doc.write_text("# Pre-existing dirty doc\n", encoding="utf-8")
+
+            with unittest.mock.patch.dict(os.environ, {"HARNESS_HOOK_STATE": str(repo / ".agents" / "state" / "hook-state.json")}):
+                plan = workflow.draft(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="phase-doc-lint",
+                    outcome="Update shared feature logic",
+                    kind="FEATURE",
+                    expected_surfaces=["BUSINESS_LOGIC"],
+                    expected_modules=[":shared"],
+                    expected_files=[shared_kt],
+                    phases=["p1:Update shared logic", "p2:Follow up"],
+                    phase=None,
+                    force=True,
+                    planning_depth="BOUNDED",
+                    architecture_intent="EXISTING_CHANGE",
+                    architecture_target_scope=shared_kt,
+                    architecture_target_family=None,
+                    quick_edit=False,
+                    interactive=False,
+                    verification_contract=None,
+                ))
+                workflow.record_approval(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="phase-doc-lint",
+                    plan_sha256=plan["plan_sha256"],
+                    source="conversation",
+                    proof_reference="approved",
+                    enforcement_tier="RULE_ENFORCED",
+                ))
+                workflow.begin_task(argparse.Namespace(repo=str(repo), task_id="phase-doc-lint", approve=False))
+
+                # Removing pre-existing untracked doc triggers status == BASELINE_DIRTY_REMOVED; must not block or get absorbed
+                rules_doc.unlink()
+                (repo / shared_kt).write_text("package com.demo\nclass Feature { fun run() = 2 }\n", encoding="utf-8")
+                p1_dir = repo / ".agents" / "state" / "tasks" / "phase-doc-lint" / "phases" / "p1"
+                p1_dir.mkdir(parents=True, exist_ok=True)
+                (p1_dir / "unit_tests.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+                cp_res = workflow.checkpoint_phase(argparse.Namespace(repo=str(repo), task_id="phase-doc-lint", phase_id="p1"))
+                self.assertEqual("p1", cp_res["checkpoint"]["phase_id"])
+                saved_plan = read_json(repo / ".agents" / "state" / "tasks" / "phase-doc-lint" / "plan.json")
+                self.assertNotIn("doc/PROJECT_RULES.md", saved_plan.get("expected_files") or [])
+
+                # Verify detailed Kotlin lint error output on the next active phase or active phase re-check
+                pstate = read_json(repo / ".agents" / "state" / "tasks" / "phase-doc-lint" / "phase-state.json")
+                next_pid = str(pstate.get("current_phase_id") or "p1")
+                (repo / shared_kt).write_text(
+                    "package com.demo\nclass Feature { fun run() = java.time.Instant.now().toString() }\n",
+                    encoding="utf-8",
+                )
+                with self.assertRaises(workflow.ValidationError) as ctx:
+                    workflow.checkpoint_phase(argparse.Namespace(repo=str(repo), task_id="phase-doc-lint", phase_id=next_pid))
+                err_msg = str(ctx.exception)
+                self.assertIn("phase checkpoint Kotlin lint failed: 1 issue(s) detected", err_msg)
+                self.assertIn("[INLINE_FQCN]", err_msg)
+                self.assertIn("Feature.kt:2", err_msg)
+
+    def test_05_smart_delta_carryover_bounded_post_pass_polish_and_round_cap_relief(self) -> None:
+        import argparse
+        import final_verifier
+        import review_fix_delta
+        import review_package
+        import review_policy
+        import workflow
+        from _vnext_common import atomic_write_json, read_json, sha256_file, state_root, task_dir
+        from review_orchestrator import record_dispatch_batch, complete_review
+
+        skills_root = REPO_ROOT / "agents/skills"
+        base_summary = "\n".join([
+            "package com.demo.ui",
+            "import androidx.compose.foundation.layout.padding",
+            "import androidx.compose.runtime.Composable",
+            "import androidx.compose.ui.Modifier",
+            "import androidx.compose.ui.unit.dp",
+            "import kotlinx.coroutines.Dispatchers",
+            "import kotlinx.coroutines.withContext",
+            "@Composable",
+            "fun SummaryScreen() {",
+            "    val boxMod = Modifier.padding(12.dp)",
+            "}",
+            "suspend fun computeSummary(): Int = withContext(Dispatchers.IO) {",
+            "    val a = 1",
+            "    a + 1",
+            "}",
+        ]) + "\n"
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "kmp"
+            summary_rel = "shared/src/commonMain/kotlin/com/demo/ui/SummaryScreen.kt"
+            app_entry_rel = "androidApp/src/main/kotlin/com/demo/MainApp.kt"
+            self._init_git_repo(repo, {
+                "settings.gradle.kts": 'include(":androidApp", ":shared")\n',
+                "androidApp/build.gradle.kts": 'plugins { id("com.android.application") }\nandroid { applicationId = "com.demo"\n namespace = "com.demo" }\n',
+                "shared/build.gradle.kts": 'plugins { id("com.android.library") }\nandroid { namespace = "com.demo.shared" }\n',
+                app_entry_rel: "package com.demo\nclass MainApp\n",
+                summary_rel: base_summary,
+            })
+            (repo / ".agents" / "scripts").mkdir(parents=True)
+            (repo / ".agents" / "scripts" / "_product.py").write_text("PROJECT_KIND = 'application'\n", encoding="utf-8")
+            (repo / ".agents" / "VERSION").write_text("1.5.15\n", encoding="utf-8")
+            shutil.copytree(REPO_ROOT / "agents" / "skills", repo / ".agents" / "skills")
+            (repo / ".agents" / "hooks" / "state" / "transcripts").mkdir(parents=True, exist_ok=True)
+            from review_models import set_policy
+            set_policy(
+                repo,
+                {"schema_version": 1, "default": "inherit", "overrides": {}},
+                task_id=None,
+                host="antigravity",
+                source="conversation",
+                proof_reference="Use chat model for test",
+            )
+            mock_transcripts: dict[str, Path] = {}
+            with (
+                unittest.mock.patch.dict(os.environ, {"HARNESS_HOOK_STATE": str(repo / ".agents" / "state" / "hook-state.json")}),
+                unittest.mock.patch("review_orchestrator.resolve_trusted_review_source", side_effect=lambda _host, eid: mock_transcripts.get(eid)),
+            ):
+                plan = workflow.draft(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="post-pass-polish",
+                    outcome="Implement summary motion and multi-module entry",
+                    kind="FEATURE",
+                    expected_surfaces=["BUSINESS_LOGIC", "COMPOSE_UI", "COROUTINES"],
+                    expected_modules=[":androidApp", ":shared"],
+                    expected_files=[app_entry_rel, summary_rel],
+                    phases=None,
+                    phase=None,
+                    force=True,
+                    planning_depth="BOUNDED",
+                    architecture_intent="EXISTING_CHANGE",
+                    architecture_target_scope=None,
+                    architecture_target_family=None,
+                    quick_edit=False,
+                    interactive=False,
+                    verification_contract=None,
+                ))
+                workflow.record_approval(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="post-pass-polish",
+                    plan_sha256=plan["plan_sha256"],
+                    source="conversation",
+                    proof_reference="approved",
+                    enforcement_tier="RULE_ENFORCED",
+                ))
+                workflow.begin_task(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", approve=False))
+
+                # Round 1 initial changes across both modules including Dispatchers -> all 3 reviewers required
+                r1_summary = base_summary.replace("Dispatchers.IO", "Dispatchers.Default")
+                (repo / app_entry_rel).write_text("package com.demo\nclass MainApp { val ver = 2 }\n", encoding="utf-8")
+                (repo / summary_rel).write_text(r1_summary, encoding="utf-8")
+                cur1 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", host="antigravity"))
+                pol1 = read_json(Path(cur1["policy"]))
+                self.assertEqual("application", pol1["project_kind"])
+                self.assertEqual(
+                    ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                    pol1["reviewers"],
+                )
+                pkg1_path, _ = review_package.build_package(repo, "post-pass-polish")
+                pkg1_sha = sha256_file(pkg1_path)
+                record_dispatch_batch(repo, "post-pass-polish", pol1["reviewers"])
+                for idx, rev in enumerate(pol1["reviewers"]):
+                    t_file = repo / ".agents" / "hooks" / "state" / "transcripts" / f"r1-{idx}.jsonl"
+                    t_file.write_text(json.dumps({
+                        "source": "MODEL",
+                        "content": json.dumps({
+                            "schema_version": 2,
+                            "task_id": "post-pass-polish",
+                            "run_id": cur1["run_id"],
+                            "reviewer": rev,
+                            "review_package_sha256": pkg1_sha,
+                            "verdict": "PASS",
+                            "findings": [],
+                        }),
+                    }) + "\n", encoding="utf-8")
+                    mock_transcripts[f"r1-{idx}"] = t_file
+                    complete_review(repo, "post-pass-polish", rev, f"r1-{idx}")
+
+                # Resume and apply a pure Compose visual modifier polish (PaddingValues / .dp) in SummaryScreen.kt ONLY
+                workflow.resume(argparse.Namespace(repo=str(repo), task_id="post-pass-polish"))
+                (repo / summary_rel).write_text(
+                    r1_summary.replace("Modifier.padding(12.dp)", "Modifier.padding(24.dp)"),
+                    encoding="utf-8",
+                )
+                cur2 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", host="antigravity"))
+                pol2 = read_json(Path(cur2["policy"]))
+                man2 = read_json(Path(cur2["manifest"]))
+                self.assertEqual([], pol2["reviewers"], f"Expected 0 reviewers for visual polish, got policy={pol2}")
+                self.assertEqual(
+                    ["arch-regression-reviewer-agent", "bug-test-reviewer-agent", "security-perf-reviewer-agent"],
+                    [c["reviewer"] for c in pol2["carried_reviews"]],
+                )
+                self.assertTrue((pol2.get("fix_delta") or {}).get("bounded_post_pass_polish"))
+                _, val_err, val_status = final_verifier.validate_policy_artifact(
+                    repo, read_json(task_dir(repo, "post-pass-polish") / "plan.json"), pol2,
+                    state_root(repo), Path(cur2["policy"]),
+                    current_change_set=man2["change_set_sha256"], task_changes=man2.get("task_changes"),
+                )
+                self.assertEqual("PASS", val_status, val_err)
+
+                # Even if review_rounds == 3, pure carried visual polish must NOT hit REVIEW_ROUND_CAP_REACHED!
+                workflow.resume(argparse.Namespace(repo=str(repo), task_id="post-pass-polish"))
+                p_doc = read_json(task_dir(repo, "post-pass-polish") / "plan.json")
+                p_doc["review_rounds"] = 3
+                atomic_write_json(task_dir(repo, "post-pass-polish") / "plan.json", p_doc)
+                cur_cap_ok = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", host="antigravity"))
+                self.assertEqual([], read_json(Path(cur_cap_ok["policy"]))["reviewers"])
+
+                # Now test bounded behavioral UI/logic polish after PASS (<=40 prod lines, 1 module, non-visual, no arch/sec):
+                # Only bug-test-reviewer-agent re-runs; arch-regression and security-perf are carried!
+                workflow.resume(argparse.Namespace(repo=str(repo), task_id="post-pass-polish"))
+                p_doc = read_json(task_dir(repo, "post-pass-polish") / "plan.json")
+                p_doc["review_rounds"] = 1
+                atomic_write_json(task_dir(repo, "post-pass-polish") / "plan.json", p_doc)
+                (repo / summary_rel).write_text(
+                    r1_summary
+                    + "\ninternal fun formatCount(count: Int): String = if (count > 0) count.toString() else \"0\"\n",
+                    encoding="utf-8",
+                )
+                cur3 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", host="antigravity"))
+                pol3 = read_json(Path(cur3["policy"]))
+                man3 = read_json(Path(cur3["manifest"]))
+                self.assertEqual(["bug-test-reviewer-agent"], pol3["reviewers"])
+                self.assertEqual(
+                    ["arch-regression-reviewer-agent", "security-perf-reviewer-agent"],
+                    [c["reviewer"] for c in pol3["carried_reviews"]],
+                )
+                self.assertTrue((pol3.get("fix_delta") or {}).get("bounded_post_pass_polish"))
+                _, val_err3, val_status3 = final_verifier.validate_policy_artifact(
+                    repo, read_json(task_dir(repo, "post-pass-polish") / "plan.json"), pol3,
+                    state_root(repo), Path(cur3["policy"]),
+                    current_change_set=man3["change_set_sha256"], task_changes=man3.get("task_changes"),
+                )
+                self.assertEqual("PASS", val_status3, val_err3)
+
+                # Security invariant: touching Dispatchers / coroutine hazard in delta MUST NOT trigger bounded_post_pass_polish and MUST rerun security-perf
+                workflow.resume(argparse.Namespace(repo=str(repo), task_id="post-pass-polish"))
+                (repo / summary_rel).write_text(
+                    r1_summary.replace("Dispatchers.Default", "Dispatchers.Unconfined"),
+                    encoding="utf-8",
+                )
+                cur4 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="post-pass-polish", host="antigravity"))
+                pol4 = read_json(Path(cur4["policy"]))
+                self.assertIn("security-perf-reviewer-agent", pol4["reviewers"])
+                self.assertFalse((pol4.get("fix_delta") or {}).get("bounded_post_pass_polish", False))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

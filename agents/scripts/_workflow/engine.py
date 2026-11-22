@@ -315,9 +315,18 @@ def skills_root(repo: Path) -> Path:
 
 
 def project_kind(repo: Path) -> str:
-    from wizard.discovery import discover_android_modules
-    has_app = any("application" in item.lower() for item in discover_android_modules(repo))
-    return "application" if (has_app or (repo / "app").is_dir()) else "library"
+    env_override = os.environ.get("HARNESS_PROJECT_KIND_OVERRIDE", "").strip().lower()
+    if env_override in ("application", "library"):
+        return env_override
+    from change_classifier import _read_product_kind_file
+    for cand in (repo / ".agents" / "scripts" / "_product.py", repo / "agents" / "scripts" / "_product.py"):
+        if cand.is_file():
+            target_kind = _read_product_kind_file(cand)
+            if target_kind:
+                return target_kind
+    from wizard.discovery import discover_modules
+    has_app = bool(discover_modules(repo)) or (repo / "app").is_dir()
+    return "application" if has_app else "library"
 
 
 def _plan_path(repo: Path, task_id: str) -> Path:

@@ -345,14 +345,24 @@ def compute_fix_delta(
                                progress=False, review_comparison=comparison)
         if not delta_class.get("surfaces"):
             return None
+        delta_surfaces = sorted(str(s) for s in (delta_class.get("surfaces") or []))
+        has_delete_or_rename = any(path not in after for path in files)
+        non_doc_files = [f for f in files if not is_documentation_path(f)]
+        if non_doc_files:
+            from plan_authority import changed_modules
+            delta_modules = changed_modules(repo, {"changes": [{"path": f} for f in non_doc_files]}, task_only=False)
+            delta_modules_count = max(1, len(delta_modules))
+        else:
+            delta_modules_count = 1
+        delta_class_for_decide = {**delta_class, "delta_modules_count": delta_modules_count}
         # The delta's own classification (surfaces, size, severity), never mixed with the whole change's.
-        routed = decide(delta_class, skills_root, project_kind=project_kind,
+        routed = decide(delta_class_for_decide, skills_root, project_kind=project_kind,
                         task_kind=str(plan.get("task_kind") or "FEATURE"), plan=plan, review_scope="FIX_DELTA")
         reviewers = set(routed.get("reviewers") or [])
-        if any(path not in after for path in files):
+        if has_delete_or_rename:
             reviewers.add("arch-regression-reviewer-agent")
         hard_sec = sorted(
-            set(delta_class.get("surfaces") or [])
+            set(delta_surfaces)
             & {"AUTH", "CRYPTO", "SECURITY", "SENSITIVE_DATA", "MANIFEST_PERMISSION", "HARNESS_CONFIG"}
         )
         extra_meta = (
@@ -360,6 +370,9 @@ def compute_fix_delta(
                 "changed_lines": real_changed_lines,
                 "production_changed_lines": production_changed_lines,
                 "all_previously_reviewed": all_previously_reviewed,
+                "delta_surfaces": delta_surfaces,
+                "delta_modules_count": delta_modules_count,
+                "has_delete_or_rename": has_delete_or_rename,
             }
             if comparison is not None
             else {}

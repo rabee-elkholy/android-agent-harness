@@ -305,6 +305,15 @@ class AndroidUiTests(unittest.TestCase):
                  self.assertRaisesRegex(ValidationError, 'exact local Gradle module'):
                 ui.preview_reference(self.repo, bad_ref)
 
+    def test_kmp_shared_module_failure_emits_app_reference_hint(self):
+        err_out = "FAILURE: Project ':shared' is not an Android application or library project."
+        with patch.object(ui, 'invoke', return_value=(1, err_out)):
+            with self.assertRaises(ValidationError) as ctx:
+                self.render(self.args(reference=':shared'), identity='kmp-hint')
+        msg = str(ctx.exception)
+        self.assertIn('PREVIEW_TOOL_FAILED', msg)
+        self.assertIn('--reference :<app-module> --include-dependencies', msg)
+
 
 if __name__ == "__main__":
     unittest.main()

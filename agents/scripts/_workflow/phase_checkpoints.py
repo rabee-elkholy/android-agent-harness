@@ -578,6 +578,8 @@ def checkpoint_phase(args: _engine.argparse.Namespace) -> dict:
     if phase_expected_modules:
         norm_mods = [m.strip("/:").replace("\\", "/") for m in phase_expected_modules]
         for change in phase_changes:
+            if isinstance(change, dict) and change.get("status") == "BASELINE_DIRTY_REMOVED":
+                continue
             raw_p = change.get("path") if isinstance(change, dict) else str(change)
             change_path = (raw_p or "").replace("\\", "/").strip("/")
             if change_path.startswith(".agents/"):
@@ -590,6 +592,8 @@ def checkpoint_phase(args: _engine.argparse.Namespace) -> dict:
     if phase_expected_files:
         norm_expected = _engine.normalize_expected_files(repo, phase_expected_files)
         for change in phase_changes:
+            if isinstance(change, dict) and change.get("status") == "BASELINE_DIRTY_REMOVED":
+                continue
             raw_p = change.get("path") if isinstance(change, dict) else str(change)
             change_path = (raw_p or "").replace("\\", "/").strip("/")
             if change_path.startswith(".agents/"):
@@ -620,14 +624,23 @@ def checkpoint_phase(args: _engine.argparse.Namespace) -> dict:
     # 1. Deterministic Preflight
     # Fast Kotlin lint
     try:
-        kt_issues = []
+        kt_issues: list[tuple[str, dict]] = []
         for c in phase_changes:
             rel_p = c.get("path", "") if isinstance(c, dict) else str(c or "")
             p = repo / rel_p
             if p.suffix == ".kt" and p.is_file():
-                kt_issues.extend(_engine.new_kotlin_lint_issues(repo, args.task_id, p, plan.get("task_base_head") or (plan.get("repository") or {}).get("head")))
+                for iss in _engine.new_kotlin_lint_issues(repo, args.task_id, p, plan.get("task_base_head") or (plan.get("repository") or {}).get("head")):
+                    kt_issues.append((rel_p, iss))
         if kt_issues:
-            raise _engine.ValidationError(f"phase checkpoint Kotlin lint failed: {len(kt_issues)} issue(s) detected")
+            lines = [f"phase checkpoint Kotlin lint failed: {len(kt_issues)} issue(s) detected"]
+            for rel_p, iss in kt_issues[:10]:
+                if isinstance(iss, dict):
+                    lines.append(f"  - [{iss.get('type', 'LINT')}] {rel_p}:{iss.get('line', '?')} -> {iss.get('msg', '')}")
+                else:
+                    lines.append(f"  - {rel_p}: {iss}")
+            if len(kt_issues) > 10:
+                lines.append(f"  ... (+{len(kt_issues) - 10} more)")
+            raise _engine.ValidationError("\n".join(lines))
     except (ImportError, _engine.ValidationError):
         raise
     except Exception as exc:

@@ -277,7 +277,10 @@ def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
         from _vnext_common import redact
         (directory / "tool-output.txt").write_text(redact(output), encoding="utf-8")
         if code:
-            raise ValidationError("PREVIEW_TOOL_FAILED: inspect the bounded local diagnostic log; no test verdict was recorded. " + str(directory))
+            msg = "PREVIEW_TOOL_FAILED: inspect the bounded local diagnostic log; no test verdict was recorded. " + str(directory)
+            if "is not an android application or library project" in output.lower():
+                msg += " Hint: for KMP shared modules, rerun with --reference :<app-module> --include-dependencies (e.g. --reference :androidApp --include-dependencies)."
+            raise ValidationError(msg)
         if identity != input_identity(repo, plan, caps, selection):
             raise ValidationError("STALE: project inputs changed during preview; output cannot be reused.")
         files = output_files(directory)

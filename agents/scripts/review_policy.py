@@ -184,7 +184,7 @@ def _is_analytics_scope(classification: dict, plan: dict | None = None, task_kin
     return False
 
 
-def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE") -> bool:
+def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: str = "FEATURE", *, review_scope: str = "FULL") -> bool:
     surfaces = set(classification.get("surfaces") or [])
     if not surfaces and plan:
         surfaces = set(plan.get("expected_surfaces") or plan.get("surfaces") or [])
@@ -208,7 +208,10 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
         return False
     if bool(classification.get("has_delete_or_rename")):
         return False
-    if plan:
+    if review_scope == "FIX_DELTA":
+        if int(classification.get("delta_modules_count") or 1) > 1:
+            return False
+    elif plan:
         planning_depth = str(plan.get("planning_depth") or "").upper()
         if planning_depth == "ARCHITECTURAL":
             return False
@@ -348,13 +351,15 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         and unknown_files <= approved_files
     )
 
-    micro = _micro_eligible(classification, plan=plan, task_kind=task_kind)
+    micro = _micro_eligible(classification, plan=plan, task_kind=task_kind, review_scope=review_scope)
     planning_depth = str(classification.get("planning_depth") or (plan or {}).get("planning_depth") or "BOUNDED").upper()
     arch_intent = str((plan or {}).get("architecture_intent") or "").upper()
     if review_scope == "FIX_DELTA":
         planning_depth, arch_intent = "BOUNDED", "EXISTING_CHANGE"
-    changed_modules = (plan or {}).get("changed_modules") or []
-    changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
+        changed_modules_count = int(classification.get("delta_modules_count") or 1)
+    else:
+        changed_modules = (plan or {}).get("changed_modules") or []
+        changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
 
     if micro:
         tier_reason = "BOUNDED_MICRO_CHANGE"
@@ -659,11 +664,55 @@ def decide_later_round(
                 and fix_delta.get("all_previously_reviewed") is True
                 and within_surgical_budget
             )
+            delta_surfaces_set = set(str(s) for s in (fix_delta.get("delta_surfaces") or []))
+            polish_disallowed_surfaces = (
+                CRITICAL_SURFACES
+                | {
+                    "NAVIGATION",
+                    "PUBLIC_API",
+                    "BUILD_CONFIG",
+                    "ROOM_SCHEMA",
+                    "PERSISTENCE",
+                    "NETWORK",
+                    "DEVICE_API",
+                    "NATIVE_CODE",
+                    "MANIFEST_PERMISSION",
+                    "HARNESS_CONFIG",
+                    "UNKNOWN",
+                }
+            )
+            delta_routed_set = set(fix_delta.get("reviewers") or []) & current_required
+            bounded_post_pass_polish = (
+                not owners
+                and not promoted
+                and not unowned_hard_security
+                and fix_delta.get("comparison") == "REVIEWED_TEXT"
+                and fix_delta.get("all_previously_reviewed") is True
+                and has_prod_count
+                and within_surgical_budget
+                and not bool(fix_delta.get("has_delete_or_rename"))
+                and int(fix_delta.get("delta_modules_count") or 1) <= 1
+                and not (delta_surfaces_set & polish_disallowed_surfaces)
+                and "security-perf-reviewer-agent" not in set(fix_delta.get("reviewers") or [])
+            )
             if surgical_owner_only:
                 # Bounded surgical fix (<=40 non-comment production code lines and <=120 total lines
                 # including companion unit tests/KDoc inside already-reviewed files with zero new
                 # surfaces): re-run ONLY the finding owner(s) and carry every other passed reviewer.
                 rerun = set(owners) & current_required
+                carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
+                rerun |= current_required - set(carried) - (still_carried - rerun)
+            elif bounded_post_pass_polish:
+                # Bounded post-PASS polish (previous round had 0 blocking findings, delta is <=40 prod
+                # lines / <=120 total lines inside already-reviewed files within 1 module with zero
+                # security/arch surfaces): carry all prior PASS reviewers for visual micro-polish, or
+                # rerun only bug-test-reviewer-agent for bounded behavior/test tweaks.
+                if not delta_routed_set:
+                    rerun = set()
+                elif "bug-test-reviewer-agent" in current_required:
+                    rerun = {"bug-test-reviewer-agent"}
+                else:
+                    rerun = set(delta_routed_set)
                 carried = sorted((set(passed_reviewers) & previous_required & current_required) - rerun)
                 rerun |= current_required - set(carried) - (still_carried - rerun)
             else:
@@ -681,7 +730,11 @@ def decide_later_round(
                 **({"changed_lines": int(fix_delta["changed_lines"])} if "changed_lines" in fix_delta else {}),
                 **({"production_changed_lines": int(fix_delta["production_changed_lines"])} if has_prod_count else {}),
                 **({"all_previously_reviewed": bool(fix_delta["all_previously_reviewed"])} if "all_previously_reviewed" in fix_delta else {}),
+                **({"delta_surfaces": sorted(delta_surfaces_set)} if "delta_surfaces" in fix_delta else {}),
+                **({"delta_modules_count": int(fix_delta["delta_modules_count"])} if "delta_modules_count" in fix_delta else {}),
+                **({"has_delete_or_rename": bool(fix_delta["has_delete_or_rename"])} if "has_delete_or_rename" in fix_delta else {}),
                 **({"surgical_owner_only": True} if surgical_owner_only else {}),
+                **({"bounded_post_pass_polish": True} if bounded_post_pass_polish else {}),
                 **({"developer_accepted_files": sorted(fix_delta["developer_accepted_files"])}
                    if fix_delta.get("developer_accepted_files") else {}),
                 **({"unflagged_production_files": sorted(unflagged_prod_files)}
