@@ -28,9 +28,9 @@ Never create, update, comment, transition, or delete any item on any PM MCP with
    - Target Action (`Create Task`, `Update Description`, `Add Bug QA Comment`, `Update Status`)
    - Exact Status Transition (e.g. `In progress` or `Ready To ReTest` / `In Review`)
    - Exact formatted Description or Comment body (prepared via `python .agents/harness.py pm prepare-report ...`)
-2. **Wait for Explicit Approval**:
-   - When the developer replies (`حدث التاسك` / `update pm` / `update zoho` / `update jira` / `update linear` / `حدث زوهو`), record the 30-minute write grant:
-     `python .agents/harness.py pm authorize --proof-reference "<developer's message>"`
+2. **Wait for Explicit Confirmation**:
+   - Once the developer confirms in chat, record the 30-minute write grant:
+     `python .agents/harness.py pm authorize --source conversation --proof-reference "<developer's confirmation>"` (add `--allow-close` only when closing a terminal state is explicitly confirmed).
    - Never revise the code task plan (`workflow.py revise`) just to update the PM tracker.
 
 ## 3. Universal PM Safety & Quality Rules (All Providers)
@@ -39,7 +39,7 @@ Never create, update, comment, transition, or delete any item on any PM MCP with
 |---|---|
 | **Bug / Issue Description Preservation** | For **Bug / Defect / Issue** items, **NEVER modify or overwrite the Bug's Description** (preserves QA's original bug report and reproduction steps). Always post the QA delivery report as a **Comment** (`ZohoProjects_add_issue_comments`, `addCommentToJiraIssue`, `zoho_add_comment`, etc.). |
 | **Task / Story Delivery** | For **Task / Story / Feature** items, write the full 5-section QA delivery report in the **Description** and post a short **Comment** with `Commit: <short-hash>`. |
-| **Terminal Status Protection** | Never set `Done`, `Closed`, `Solved`, `Completed`, or `Resolved` automatically — always transition to `Ready To ReTest` / `In Review` / `Ready for Testing`, **unless** the developer explicitly ordered closing the task (`close task` / `اقفل التاسك`). |
+| **Terminal Status Protection** | Never set `Done`, `Closed`, `Solved`, `Completed`, or `Resolved` automatically — always transition to `Ready To ReTest` / `In Review` / `Ready for Testing`, **unless** the developer explicitly confirmed closing the task (`pm authorize --allow-close`). |
 | **Zero Code / File / Class Leak** | Never include raw source file names (`.kt`, `.java`, `.xml`, `.kts`, `.gradle`), class/architecture identifiers (`*ViewModel`, `*Fragment`, `*Activity`, `*Repository`, `*UseCase`, `*Composable`), or internal code jargon. Write for **QA / Testers & Product Stakeholders** in functional user-facing terms. |
 | **5-Section RTL HTML Standard (when required by `project-notes.md` or HTML trackers)** | Use `<div dir="rtl" style="font-family: inherit; line-height: 1.6; text-align: right;">` with `<h3>` headings (`1. سبب المشكلة والهدف من المهمة`, `2. التعديلات الوظيفية والسلوكية للتطبيق` + Unit Tests PASS + Commit hash, `3. نطاق التأثير وفحص الآثار الجانبية`, `4. سيناريوهات الفحص اليدوي وفريق الجودة` in a 4-column `<table>`, `5. معايير القبول`). Never hardcode dark colors (`#2c3e50`, `#000000`); use `inherit` and `rgba(128,128,128,0.15)` for Dark/Light Mode compatibility. **Zoho Sprints HTTP 414 Guard**: `ZohoSprints_UpdateItem` sends `query_params.description` in the URL query string (where Arabic URL-encodes to 6 chars/letter), so ALWAYS pass the whitespace-minified `zoho_query_param_html` (`<= 1,050` chars) returned by `pm prepare-report` for `ZohoSprints_UpdateItem` (`ZohoSprints_AddItemComment` sends `body.name` in the POST body without URI length limits). |
 
@@ -187,8 +187,8 @@ Commit: <hash>
 1. <سيناريوهات التحقق والتأكد من عمل التحسين>
 ```
 
-After every device phase is Pass, remind once in chat that Zoho is not updated until they say `update zoho`. No modal.
+After every device phase is Pass, remind once in chat that Zoho is not updated until they confirm. No modal.
 
 ## After local delivery (no Zoho yet)
 
-Walkthrough + Conventional Commit message stay as in harness-rules section 4. Zoho waits for the explicit phrase.
+Walkthrough + Conventional Commit message stay as in harness-rules section 4. Zoho waits for explicit developer confirmation.

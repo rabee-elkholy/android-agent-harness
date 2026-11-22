@@ -38,12 +38,12 @@ The built-in Zoho implementation provides:
 Set during setup (wizard question I.20) or by editing `PM_PROVIDER` in
 `.agents/scripts/_product.py`:
 
-| `PM_PROVIDER` | Tracker | Transport | Trigger phrase |
+| `PM_PROVIDER` | Tracker | Transport | Authorization |
 |---|---|---|---|
-| `zoho_sprints` (default; also when the field is absent) | Zoho Sprints | External MCP server (`zoho-sprints` / `zoho_sync.py`) | `update zoho` / `update pm` |
-| `github_projects` | GitHub Projects & Issues | `gh` CLI via `pm_github.py` | `update github` |
-| `jira_mcp` | Jira | Official upstream MCP server | `update jira` |
-| `linear_mcp` | Linear | Official upstream MCP server | `update linear` |
+| `zoho_sprints` (default; also when the field is absent) | Zoho Sprints | External MCP server (`zoho-sprints` / `pm_sync.py`) | Explicit developer confirmation via `pm authorize` (or `zoho authorize` alias) |
+| `github_projects` | GitHub Projects & Issues | `gh` CLI via `pm_github.py` | Explicit developer confirmation via `pm authorize` |
+| `jira_mcp` | Jira | Official upstream MCP server | Explicit developer confirmation via `pm authorize` |
+| `linear_mcp` | Linear | Official upstream MCP server | Explicit developer confirmation via `pm authorize` |
 | `none` | None | No tracker mutations possible | (none) |
 
 Unknown values fail closed: the doctor reports an invalid `PM_PROVIDER`, and
@@ -107,7 +107,7 @@ same ingest/mutate discipline as Zoho:
 
 - Ingest (read-only): fetch the ticket, check attachments, explain in chat,
   plan before implementing.
-- Mutate: only on the explicit trigger phrase from the table above.
+- Mutate: only after explicit developer confirmation recorded via `pm authorize`.
 - If MCP tools are missing in a session, do not invent ticket fields; ask the
   developer to paste the ticket and continue locally.
 
@@ -120,7 +120,8 @@ any checkout containing `<provider>.json` secret files.
 
 ## Backward compatibility
 
-With `PM_PROVIDER=zoho_sprints` or the field absent, every existing message,
-flow, reminder, and validation outcome matches previous releases exactly:
-`update zoho` remains the only Zoho trigger, statuses stay
-`In progress` / `Ready To ReTest`, and handoff templates are unchanged.
+With `PM_PROVIDER=zoho_sprints` or the field absent, every existing flow,
+reminder, and validation outcome matches previous releases: statuses stay
+`In progress` / `Ready To ReTest`, handoff templates are unchanged, and any
+explicit developer confirmation in chat authorizes `pm authorize` (with `zoho`
+aliases kept for existing workflows).

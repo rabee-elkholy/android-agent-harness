@@ -1017,13 +1017,7 @@ def set_execution_mode(
             "DEVELOPER_AUTHORITY_REQUIRED: `execution-mode set` requires `--source conversation` "
             "and a non-empty `--proof-reference \"<developer words>\"`."
         )
-    _confirm_tokens = (
-        "normal", "web", "external", "local", "ask-every-task", "yes", "ok", "approve", "continue", "always",
-        "\u0639\u0627\u062f\u064a", "\u0648\u064a\u0628", "\u062e\u0627\u0631\u062c\u064a", "\u0647\u0646\u0627",
-        "\u0645\u062a\u0627\u0628\u0639\u0629", "\u0645\u062d\u0644\u064a", "\u0646\u0639\u0645",
-        "\u0627\u064a\u0648\u0629", "\u0623\u064a\u0648\u0629", "\u0645\u0648\u0627\u0641\u0642",
-    )
-    if norm_proof.rstrip().endswith(("?", "\u061f")) and not any(tok in norm_proof.lower() for tok in _confirm_tokens):
+    if norm_proof.rstrip().endswith(("?", "\u061f")):
         raise ValidationError(
             "DEVELOPER_AUTHORITY_REQUIRED: `--proof-reference` appears to be an unanswered developer question. "
             "Answer the developer's question first and wait for their explicit mode confirmation."

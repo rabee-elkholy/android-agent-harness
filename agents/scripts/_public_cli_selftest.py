@@ -1735,7 +1735,7 @@ class PhaseEDecoupleZohoSelftest(unittest.TestCase):
         self._activate_plan(external_writes=[])
         res_empty = self._invoke_hook("zoho_create_task", {"name": "Test Bug", "operation_id": "op-1"})
         self.assertEqual("deny", res_empty["decision"])
-        self.assertIn("zoho authorize", res_empty["reason"])
+        self.assertIn("pm authorize", res_empty["reason"])
 
     def test_zoho_mutation_denied_without_operation_id(self) -> None:
         """Zoho mutation is denied if operation_id is missing (idempotency requirement)."""

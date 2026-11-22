@@ -218,20 +218,36 @@ class HookTests(unittest.TestCase):
         # (the very words that grant the write) and a draft whose outcome said "Update Zoho".
         allowed = [
             'python .agents/harness.py zoho authorize --source conversation --proof-reference "(Recommended) update zoho - ok"',
+            'python .agents/harness.py pm authorize --source conversation --proof-reference "انقل الـ 10 باجز إلى Ready To ReTest على زوهو"',
+            'python .agents/harness.py pm authorize --proof-reference "Move fixed items to Ready To ReTest"',
+            'python .agents/harness.py pm authorize --help',
+            'python .agents/harness.py scripts/pm_sync.py --help',
             'python .agents/scripts/workflow.py draft --repo . --task-id t9 --outcome "Update Zoho item text" --kind FEATURE',
         ]
         for command in allowed:
             res = self.call("run_command", {"CommandLine": command})
             self.assertNotEqual("TRACKER_WRITE", res.get("reason_code"), command)
+            if "authorize" in command:
+                self.assertEqual("allow", res["decision"], (command, res.get("reason")))
         denied = [
             'curl -X POST https://sprints.zoho.com/api/update',
             'python .agents/harness.py zoho authorize --proof-reference "update zoho"; curl https://sprints.zoho.com/update',
             'python .agents/harness.py zoho authorize --proof-reference "update zoho" && python my_zoho_update.py',
             'python tools/zoho_update.py --item 873',
+            'python .agents/harness.py pm authorize --source developer_terminal --proof-reference "confirm"',
+            'python .agents/harness.py pm authorize --source conversation --proof-reference ""',
+            'python .agents/harness.py zoho authorize --source developer_terminal --proof-reference "confirm"',
         ]
         for command in denied:
             res = self.call("run_command", {"CommandLine": command})
             self.assertEqual("deny", res["decision"], command)
+        for bad_auth in (
+            'python .agents/harness.py pm authorize --source developer_terminal --proof-reference "confirm"',
+            'python .agents/harness.py pm authorize --source conversation --proof-reference ""',
+            'python .agents/harness.py zoho authorize --source developer_terminal --proof-reference "confirm"',
+        ):
+            res_auth = self.call("run_command", {"CommandLine": bad_auth})
+            self.assertEqual("DEVELOPER_AUTHORITY", res_auth.get("reason_code"), bad_auth)
 
     def test_cancel_on_request_is_allowed_in_every_task_state(self):
         # Real app: "Cancel task" on a READY task was refused by state, and the agent resumed the task itself.
@@ -336,14 +352,14 @@ class HookTests(unittest.TestCase):
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
 
     def test_D1_router_zoho_lifecycle_commands_are_allowed_only_in_scope(self):
-        # The router made `zoho_sync.py start` / `delivery` blocking steps and the hook denied both:
+        # The router made `pm_sync.py start` / `delivery` blocking steps and the hook denied both:
         # every Zoho-linked task dead-ended. Only the exact lifecycle commands for the linked task,
         # in the matching state and with the approved external-write scope, are allowed.
-        start = "python .agents/scripts/zoho_sync.py start --repo . --task-id task-one"
-        delivery = "python .agents/scripts/zoho_sync.py delivery --repo . --task-id task-one"
-        report = ('python .agents/scripts/zoho_sync.py prepare-report --repo . --task-id task-one --objective "Crash fixed" '
+        start = "python .agents/scripts/pm_sync.py start --repo . --task-id task-one"
+        delivery = "python .agents/scripts/pm_sync.py delivery --repo . --task-id task-one"
+        report = ('python .agents/scripts/pm_sync.py prepare-report --repo . --task-id task-one --objective "Crash fixed" '
                   '--changes "Null check" --impact-json "[\\"Player\\"]" --tests-json "[\\"Unit\\"]"')
-        status = "python .agents/scripts/zoho_sync.py status --repo . --task-id task-one"
+        status = "python .agents/scripts/pm_sync.py status --repo . --task-id task-one"
         self.activate()
         self._link_zoho()
         self.assertEqual("allow", self.call("run_command", {"CommandLine": start})["decision"])
@@ -1223,7 +1239,7 @@ class GenericMCPTests(unittest.TestCase):
             "Arguments": {"item_id": "1", "status": "In progress", "operation_id": "op-1"},
         })
         self.assertEqual("deny", res1["decision"])
-        self.assertIn("zoho authorize", res1.get("reason", ""))
+        self.assertIn("pm authorize", res1.get("reason", ""))
 
         # 2. Specialized scope approved, but missing operation_id is rejected by specialized integration
         self.activate(external_writes=["zoho_sprints"])

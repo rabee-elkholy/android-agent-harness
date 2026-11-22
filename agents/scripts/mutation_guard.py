@@ -150,7 +150,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[py_idx + 2:]
         path = tokens[py_idx].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "zoho_sync", "web_relay"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "pm_sync", "web_relay"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -1148,8 +1148,8 @@ def _strip_adb_logcat_pipes(command: str, repo: Path | str = ".") -> str | None:
     return "; ".join(cleaned) if saw_pipe else None
 
 
-# Router-issued Zoho lifecycle commands and the plan states they belong to (None: read-only, any state).
-ZOHO_LIFECYCLE_STATES = {
+# Router-issued PM lifecycle commands and the plan states they belong to (None: read-only, any state).
+PM_LIFECYCLE_STATES = {
     "start": {"APPROVED", "IMPLEMENTING"},
     "start-sync": {"APPROVED", "IMPLEMENTING"},
     "prepare-report": {"READY_FOR_DELIVERY", "DELIVERED"},
@@ -1159,48 +1159,47 @@ ZOHO_LIFECYCLE_STATES = {
 }
 
 
-def _zoho_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
-    """Allow only the audited zoho_sync / pm_discovery lifecycle commands for a linked task in scope."""
+def _pm_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] | None:
+    """Allow only the audited pm_sync / pm_discovery lifecycle commands for a linked task in scope."""
     name, args = _entry(command, repo)
     if name in {"harness_cli", "android-harness"} and args[:1] in (["zoho"], ["pm"]):
-        # The public form (`harness.py zoho delivery-sync` or `harness.py pm authorize`) runs zoho_sync/pm_discovery.
+        # The public form (`harness.py zoho delivery-sync` or `harness.py pm authorize`) runs pm_sync/pm_discovery.
         sub_type = args[0]
-        name, args = ("pm_discovery" if sub_type == "pm" else "zoho_sync"), args[1:]
+        name, args = ("pm_discovery" if sub_type == "pm" else "pm_sync"), args[1:]
     if name == "pm_discovery":
         action = args[0] if args else ""
         if action in {"--help", "-h", "discover", "status"} or args[1:2] in (["--help"], ["-h"]):
             return True, "pm_discovery read-only discovery/status"
         if action == "authorize":
-            return True, "records the developer's explicit PM update order as a short-lived PM write grant"
+            return True, "records the developer's explicit PM confirmation as a short-lived PM write grant"
         if action == "prepare-report":
             return True, "prepares a structured QA handoff report for the task"
         return False, f"pm '{action}' is not an audited PM command"
-    if name != "zoho_sync":
+    if name != "pm_sync":
         return None
     action = args[0] if args else ""
     if action in {"--help", "-h"} or args[1:2] in (["--help"], ["-h"]):
-        return True, "zoho_sync help only prints usage"
+        return True, "pm_sync help only prints usage"
     if action == "authorize":
-        # The script refuses a proof without the developer's `update zoho`; it writes only a 30-minute grant.
-        return True, "records the developer's explicit `update zoho` as a short-lived Zoho write grant"
-    if action not in ZOHO_LIFECYCLE_STATES:
-        return False, f"zoho_sync '{action}' is not an audited lifecycle command"
+        return True, "records the developer's explicit confirmation as a short-lived PM write grant"
+    if action not in PM_LIFECYCLE_STATES:
+        return False, f"pm_sync '{action}' is not an audited lifecycle command"
     task_id = args[args.index("--task-id") + 1] if "--task-id" in args and args.index("--task-id") + 1 < len(args) else ""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", task_id):
-        return False, "zoho_sync lifecycle commands must name the linked task with --task-id"
+        return False, "pm_sync lifecycle commands must name the linked task with --task-id"
     try:
         plan = read_json(_state_root(Path(repo)) / "tasks" / task_id / "plan.json")
     except Exception:
-        return False, f"zoho_sync: no plan found for task '{task_id}'"
-    from zoho_grant import active_grant
+        return False, f"pm_sync: no plan found for task '{task_id}'"
+    from pm_grant import active_grant
 
     if not plan.get("zoho_link") or ("zoho_sprints" not in (plan.get("external_writes") or []) and not active_grant(Path(repo))):
-        return False, f"zoho_sync: task '{task_id}' has no approved Zoho link and no Zoho write scope or `update zoho` grant"
-    states = ZOHO_LIFECYCLE_STATES[action]
+        return False, f"pm_sync: task '{task_id}' has no approved PM link and no PM write scope or active write grant"
+    states = PM_LIFECYCLE_STATES[action]
     status = str(plan.get("status") or "")
     if states is not None and status not in states:
-        return False, f"zoho_sync {action} is not part of the {status or 'missing'} state"
-    return True, f"audited Zoho lifecycle command for linked task {task_id}"
+        return False, f"pm_sync {action} is not part of the {status or 'missing'} state"
+    return True, f"audited PM lifecycle command for linked task {task_id}"
 
 
 def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
@@ -1321,9 +1320,9 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
                 return True, "Task diagnostic command; engine checks source ownership and session"
             except ValidationError as exc:
                 return False, str(exc)
-    zoho = _zoho_lifecycle_decision(repo, normalized)
-    if zoho is not None:
-        return zoho
+    pm_dec = _pm_lifecycle_decision(repo, normalized)
+    if pm_dec is not None:
+        return pm_dec
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
     if _is_read_only(normalized, repo):

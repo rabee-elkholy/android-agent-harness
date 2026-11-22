@@ -821,11 +821,16 @@ def main(argv: list[str] | None = None) -> int:
     p_stat.add_argument("--repo", default=".")
     p_stat.add_argument("--json", action="store_true")
 
-    p_auth = sub.add_parser("authorize", help="Record a short-lived PM write grant from the developer's update command")
+    p_auth = sub.add_parser("authorize", help="Record a short-lived PM write grant from explicit developer confirmation")
     p_auth.add_argument("--repo", default=".")
-    p_auth.add_argument("--proof-reference", required=True, help="Developer's exact message ordering the PM update")
-    p_auth.add_argument("--provider", default="all", help="Optional provider ID (default: all matching or all active)")
+    p_auth.add_argument("--proof-reference", required=True, help="Developer's exact message confirming the PM update")
+    p_auth.add_argument("--provider", default="all", help="Optional provider ID (default: all active)")
     p_auth.add_argument("--source", default="conversation", choices=("conversation", "developer_terminal"))
+    p_auth.add_argument(
+        "--allow-close",
+        action="store_true",
+        help="Explicitly authorize terminal status transitions (Done/Closed/Solved) when ordered by the developer",
+    )
     p_auth.add_argument("--json", action="store_true")
 
     p_rep = sub.add_parser("prepare-report", help="Prepare a structured QA handoff report for any PM tracker")
@@ -853,7 +858,7 @@ def main(argv: list[str] | None = None) -> int:
     repo = Path(args.repo).resolve()
 
     if args.subcommand in ("discover", "status"):
-        from zoho_grant import active_pm_grant
+        from pm_grant import active_pm_grant
         providers = discover_installed_pm_mcps(repo)
         grant = active_pm_grant(repo)
         tracker_lang = resolve_configured_pm_language(repo)
@@ -880,13 +885,22 @@ def main(argv: list[str] | None = None) -> int:
                     f"allow_close={grant.get('allow_close', False)} expires_epoch={int(grant.get('expires_epoch', 0))}"
                 )
             else:
-                print("PM_WRITE_GRANT=NONE (use `update pm` / `حدث التاسك` or `update <provider>` to grant writes)")
+                print(
+                    'PM_WRITE_GRANT=NONE (confirm in chat and run '
+                    '`python .agents/harness.py pm authorize --source conversation --proof-reference "<confirmation>"`)'
+                )
         return 0
 
     if args.subcommand == "authorize":
-        from zoho_grant import record_pm_grant
+        from pm_grant import record_pm_grant
         try:
-            grant = record_pm_grant(repo, args.proof_reference, provider=args.provider, source=args.source)
+            grant = record_pm_grant(
+                repo,
+                args.proof_reference,
+                provider=args.provider,
+                source=args.source,
+                allow_close=bool(getattr(args, "allow_close", False)),
+            )
         except ValidationError as exc:
             sys.stderr.write(f"ERROR: {exc}\n")
             return 1
@@ -914,8 +928,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.subcommand == "prepare-report":
-        import zoho_sync
-        return zoho_sync.cmd_prepare_report(args)
+        import pm_sync
+        return pm_sync.cmd_prepare_report(args)
 
     if args.subcommand == "find-item":
         if not str(args.item or "").strip() and not str(args.query or "").strip():

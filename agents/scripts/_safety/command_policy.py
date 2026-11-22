@@ -132,6 +132,17 @@ def _developer_authority_violation(command: str) -> str:
             if dev_rest[:1] in (["skip-validation"], ["validate-automatically"]) and not any(flag in rest for flag in ("-h", "--help")):
                 if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                     return f"device-{dev_rest[0]}"
+        is_pm_auth = (
+            name in ("pm_discovery.py", "pm_discovery", "pm_sync.py", "pm_sync")
+            or (name in _engine.TASK_ENTRYPOINTS and rest[:1] in (["pm"], ["zoho"]))
+        )
+        if is_pm_auth:
+            pm_rest = _strip_leading_cli_flags(rest[1:] if name in _engine.TASK_ENTRYPOINTS else rest)
+            if pm_rest[:1] == ["authorize"] and not any(flag in rest for flag in ("-h", "--help")):
+                src = _engine._flag(rest, "--source").lower()
+                proof = (_engine._flag(rest, "--proof-reference") or _engine._flag(rest, "--proof")).strip().strip("\"'")
+                if src not in ("", "conversation") or not proof:
+                    return "pm-authorize"
     return ""
 
 

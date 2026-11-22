@@ -1,7 +1,7 @@
-"""Canonical automated Zoho Sprints lifecycle writer.
+"""Canonical automated PM / Zoho Sprints lifecycle writer.
 
 Provides deterministic start and delivery sync, structured QA delivery reports,
-and stable idempotency operation IDs for Zoho Sprints items linked to task plans.
+and stable idempotency operation IDs for PM items linked to task plans.
 Standard library Python only.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from _vnext_common import (
     validate_id,
 )
 from integrations.zoho_sprints.policy import ZohoPolicyResolver
-from zoho_grant import active_grant, authorize_command, record_grant
+from pm_grant import active_grant, authorize_command, record_grant
 
 _SERVER_MODULE = None
 
@@ -40,7 +40,7 @@ def _get_zoho_server():
     raise RuntimeError(
         "Bundled Zoho Sprints MCP server has been removed in favor of external Antigravity PM MCP plugins "
         "(e.g., zoho-sprints, zoho-projects_mcp, atlassian-mcp-server). Use the external PM MCP tools after "
-        "authorizing via `python .agents/harness.py pm authorize --proof-reference \"<user approval>\"`."
+        "authorizing via `python .agents/harness.py pm authorize --source conversation --proof-reference \"<user confirmation>\"`."
     )
 
 
@@ -217,8 +217,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         external_writes.append("zoho_sprints")
     if "zoho_sprints" not in external_writes:
         msg = (
-            "EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho writes need the developer's explicit `update zoho`. When they type it, "
-            f"run `{authorize_command()}`; do not revise the task plan for a tracker update."
+            "EXTERNAL_WRITE_SCOPE_REQUIRED: PM tracker writes require explicit developer confirmation. "
+            f"Show what will be written; when they confirm in chat, run `{authorize_command()}`; "
+            "do not revise the task plan for a tracker update."
         )
         sys.stderr.write(f"ERROR: {msg}\n")
         return 1
@@ -306,10 +307,9 @@ def cmd_start(args: argparse.Namespace) -> int:
             "status": "ENV",
             "operation_id": op_id,
             "detail": str(exc),
-            # O67: the agent continued silently, then called the Zoho MCP tool directly (denied).
             "next": (
                 f"Tell the developer now that Zoho item {item_id} was not moved to In progress: {exc}. "
-                "Do not call Zoho MCP tools directly unless `update zoho` is granted via `pm authorize`; after syncing via external MCP, "
+                "Do not call Zoho MCP tools directly unless a PM write grant is recorded via `pm authorize`; after syncing via external MCP, "
                 f"record completion with `python .agents/harness.py zoho record-sync --task-id {task_id} --stage start --status PASS --reference \"<mcp-call>\"` "
                 f"(or re-run `python .agents/harness.py zoho start-sync --task-id {task_id}`)."
             ),
@@ -343,8 +343,9 @@ def cmd_delivery(args: argparse.Namespace) -> int:
         external_writes.append("zoho_sprints")
     if "zoho_sprints" not in external_writes:
         msg = (
-            "EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho writes need the developer's explicit `update zoho`. When they type it, "
-            f"run `{authorize_command()}`; do not revise the task plan for a tracker update."
+            "EXTERNAL_WRITE_SCOPE_REQUIRED: PM tracker writes require explicit developer confirmation. "
+            f"Show what will be written; when they confirm in chat, run `{authorize_command()}`; "
+            "do not revise the task plan for a tracker update."
         )
         sys.stderr.write(f"ERROR: {msg}\n")
         return 1
@@ -528,25 +529,28 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_authorize(args: argparse.Namespace) -> int:
-    """Record the developer's `update zoho` as a short-lived Zoho write grant."""
+    """Record the developer's explicit confirmation as a short-lived PM write grant."""
     repo = Path(args.repo).resolve()
+    allow_close = bool(getattr(args, "allow_close", False))
     try:
-        grant = record_grant(repo, args.proof_reference, source=args.source)
+        grant = record_grant(repo, args.proof_reference, source=args.source, allow_close=allow_close)
     except Exception as exc:
         sys.stderr.write(f"ERROR: {exc}\n")
         return 1
-    print(f"ZOHO_WRITE_GRANTED until {time.strftime('%H:%M', time.localtime(grant['expires_epoch']))} "
-          "(the developer's `update zoho`). Write only what the developer saw.")
+    print(
+        f"PM_WRITE_GRANTED=true ZOHO_WRITE_GRANTED until {time.strftime('%H:%M', time.localtime(grant['expires_epoch']))} "
+        "(explicit developer confirmation). Write only what the developer saw."
+    )
     try:
-        from project_context import extract_zoho_notes_section, load_project_notes
+        from project_context import extract_pm_notes_section, load_project_notes
         notes = load_project_notes(repo)
         if notes.get("has_custom_notes"):
-            zoho_sec = extract_zoho_notes_section(notes.get("content") or "")
-            if zoho_sec:
-                print("\nMANDATORY ZOHO RULES FROM .agents/project-context/project-notes.md:")
-                print(zoho_sec)
+            pm_sec = extract_pm_notes_section(notes.get("content") or "")
+            if pm_sec:
+                print("\nMANDATORY PM RULES FROM .agents/project-context/project-notes.md:")
+                print(pm_sec)
     except (ImportError, OSError, ValueError, KeyError):
-        zoho_sec = ""
+        pass
     return 0
 
 
@@ -569,7 +573,7 @@ def cmd_record_sync(args: argparse.Namespace) -> int:
     external_writes = list(plan.get("external_writes") or [])
     if "zoho_sprints" not in external_writes and not active_grant(repo):
         sys.stderr.write(
-            f"ERROR: EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho sync recording requires `zoho_sprints` in plan external_writes or `{authorize_command()}`.\n"
+            f"ERROR: EXTERNAL_WRITE_SCOPE_REQUIRED: PM sync recording requires `zoho_sprints` in plan external_writes or `{authorize_command()}`.\n"
         )
         return 1
     stage = str(args.stage or "").strip().lower()
@@ -645,10 +649,15 @@ def build_parser() -> argparse.ArgumentParser:
     rec_cmd.add_argument("--reference", required=True, help="External MCP tool call / confirmation summary")
     rec_cmd.set_defaults(handler=cmd_record_sync)
 
-    auth_cmd = sub.add_parser("authorize", help="Record the developer's explicit `update zoho` (30 minutes)")
+    auth_cmd = sub.add_parser("authorize", help="Record explicit developer confirmation as a short-lived PM write grant (30 minutes)")
     auth_cmd.add_argument("--repo", default=".", help="Repository root")
     auth_cmd.add_argument("--source", choices=["conversation", "developer_terminal"], default="conversation")
-    auth_cmd.add_argument("--proof-reference", required=True, help="The developer's message containing `update zoho`")
+    auth_cmd.add_argument("--proof-reference", required=True, help="The developer's message confirming the PM update")
+    auth_cmd.add_argument(
+        "--allow-close",
+        action="store_true",
+        help="Explicitly authorize terminal status transitions (Done/Closed/Solved) when ordered by the developer",
+    )
     auth_cmd.set_defaults(handler=cmd_authorize)
 
     return parser

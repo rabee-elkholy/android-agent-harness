@@ -10,4 +10,4 @@ description: Diagnose and fix an Android defect under an explicitly approved pla
 4. Let the classifier select skills, tests, reviewers, build, and device verification. A test change adds the test-quality reviewer; sensitive surfaces select the full review set and approval evidence.
 5. Follow `deliver.md` from verification preparation onward. Device/environment absence is `ENV_BLOCKED`, never a false success.
 
-Zoho remains unchanged until the developer says `update zoho`.
+Zoho remains unchanged until the developer explicitly confirms updating the tracker.

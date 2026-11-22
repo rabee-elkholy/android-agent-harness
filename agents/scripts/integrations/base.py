@@ -46,7 +46,7 @@ def validate_external_write(
 ) -> tuple[bool, str]:
     """Validate generic external write requirements against the active plan.
 
-    ``grant`` is the developer's short-lived write grant (Zoho: an explicit `update zoho`); it
+    ``grant`` is the developer's short-lived write grant (recorded via `pm authorize`); it
     stands in for the plan's external-write scope, and every other check still applies.
 
     Invariants:
@@ -71,9 +71,9 @@ def validate_external_write(
     if not authorized and not grant:
         if integration.name == "zoho_sprints":
             return False, (
-                "EXTERNAL_WRITE_SCOPE_REQUIRED: Zoho writes need the developer's explicit `update zoho`. Show them what "
-                "will be written; when they type it, run `python .agents/harness.py zoho authorize --proof-reference "
-                "\"<their message>\"` and retry. Do not revise the task plan for a tracker update."
+                "EXTERNAL_WRITE_SCOPE_REQUIRED: PM tracker writes require explicit developer confirmation. Show them what "
+                "will be written; when they confirm in chat, run `python .agents/harness.py pm authorize --source conversation "
+                "--proof-reference \"<their confirmation>\"` and retry. Do not revise the task plan for a tracker update."
             )
         return False, f"EXTERNAL_WRITE_SCOPE_REQUIRED: {integration.display_name} mutation is not included in the active approved plan. Run 'workflow.py revise --external-write {integration.name}' and obtain developer approval."
 

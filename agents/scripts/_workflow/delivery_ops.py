@@ -1107,7 +1107,7 @@ def approval_material_lines(repo: Path, result: dict, action: str) -> list[str]:
             f"ZOHO_WRITE_NOT_PLANNED=the plan links Zoho item {zoho_item} but cannot update it. If the developer "
             "wants the task to move it to In progress when work starts, add --external-write zoho_sprints before "
             "asking for approval. A later update needs no plan change: show the developer the text, and when they "
-            "type `update zoho`, run `python .agents/harness.py zoho authorize --proof-reference \"<their message>\"`."
+            "confirm in chat, run `python .agents/harness.py pm authorize --source conversation --proof-reference \"<their confirmation>\"`."
         )
     gaps = plan_gaps(result)
     if gaps:

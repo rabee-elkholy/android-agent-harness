@@ -10,7 +10,7 @@ This checkout is the harness kit itself, not a client Android application:
 - do not run Android Gradle or ADB gates against this repository;
 - keep runtime code Python standard-library only;
 - keep code, rules, prompts, documentation, and commit messages in English;
-- preserve Zoho Sprints behavior, but never perform a live tracker mutation without `update zoho`;
+- preserve Zoho Sprints behavior, but never perform a live tracker mutation without explicit developer confirmation recorded via `pm authorize`;
 - leave changes unstaged unless the maintainer explicitly asks for Git operations;
 - when committing and releasing, always commit functional/code/documentation changes first with a descriptive Conventional Commit subject (`feat(...)`, `fix(...)`, `docs(...)`), and then create a separate release metadata commit (`chore(release): vX.Y.Z — <headline>`) so repository directory listings never display bare version tags;
 - do not publish or tag a release until release validation and CI pass.

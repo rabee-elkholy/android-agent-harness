@@ -556,7 +556,7 @@ def _main(argv: list[str] | None = None) -> int:
             forwarded = ["--repo", str(REPO_ROOT), *forwarded]
         return _run("incident_reporter.py", forwarded)
     if command == "zoho":
-        return _run("zoho_sync.py", args)
+        return _run("pm_sync.py", args)
 
     print(f"[ERROR] Unknown installed harness command: {command}", file=sys.stderr)
     if command in TASK_SUBCOMMANDS:

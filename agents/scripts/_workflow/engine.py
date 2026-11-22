@@ -606,9 +606,7 @@ def quick_start(args: argparse.Namespace) -> dict:
         raise ValidationError("DEVELOPER_AUTHORITY_REQUIRED: `task quick-start` requires `--source conversation` (or `developer_terminal`).")
     if not proof_ref or len(proof_ref) < 2:
         raise ValidationError("DEVELOPER_AUTHORITY_REQUIRED: `task quick-start` requires a non-empty `--proof-reference \"<developer request>\"`.")
-    if proof_ref.rstrip().endswith(("?", "\u061f")) and not any(
-        tok in proof_ref.lower() for tok in ("fix", "add", "update", "change", "remove", "\u0639\u062f\u0644", "\u0636\u064a\u0641", "\u0627\u0635\u0644\u062d", "\u0635\u0644\u062d", "\u062d\u062f\u062b", "\u063a\u064a\u0631")
-    ):
+    if proof_ref.rstrip().endswith(("?", "\u061f")):
         raise ValidationError(
             "DEVELOPER_AUTHORITY_REQUIRED: `--proof-reference` appears to be a question rather than an explicit implementation request."
         )

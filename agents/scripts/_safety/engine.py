@@ -157,7 +157,7 @@ WORKFLOW_VALUE_FLAGS = {"--repo", "--task-id", "--task", "--kit"}
 
 
 AUDITED_HARNESS_ENTRY = re.compile(
-    r"^\s*(?:\"[^\"]+\"|'[^']+'|\S+)?(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?)\s+(?:-(?:3(?:\.\d+)?|u|B|S|E)\s+)*(?:\"[^\"]*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py\"|'[^']*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py'|\S*?(?:harness|harness_cli|workflow|zoho_sync|pm_discovery|web_relay|execution_mode|generate_project_context)\.py)\s", re.I,
+    r"^\s*(?:\"[^\"]+\"|'[^']+'|\S+)?(?:python(?:\d+(?:\.\d+)?)?(?:\.exe)?|py(?:\.exe)?)\s+(?:-(?:3(?:\.\d+)?|u|B|S|E)\s+)*(?:\"[^\"]*?(?:harness|harness_cli|workflow|pm_sync|pm_grant|pm_discovery|web_relay|execution_mode|generate_project_context)\.py\"|'[^']*?(?:harness|harness_cli|workflow|pm_sync|pm_grant|pm_discovery|web_relay|execution_mode|generate_project_context)\.py'|\S*?(?:harness|harness_cli|workflow|pm_sync|pm_grant|pm_discovery|web_relay|execution_mode|generate_project_context)\.py)\s", re.I,
 )
 
 

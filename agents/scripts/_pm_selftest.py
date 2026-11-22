@@ -17,8 +17,8 @@ from _idempotency import _ledger_lock, execute_once  # noqa: E402
 from _vnext_common import atomic_write_json, canonical_sha256, read_json  # noqa: E402
 from plan_authority import plan_payload, save_plan  # noqa: E402
 import workflow  # noqa: E402
-import zoho_sync  # noqa: E402
-from zoho_sync import resolve_new_item_type  # noqa: E402
+import pm_sync  # noqa: E402
+from pm_sync import resolve_new_item_type  # noqa: E402
 
 
 class FakeAPI:
@@ -329,7 +329,7 @@ class PmPolicyTests(unittest.TestCase):
             plan,
         )
         self.assertFalse(allowed)
-        self.assertIn("harness.py zoho authorize", reason)
+        self.assertIn("harness.py pm authorize", reason)
         self.assertIn("Do not revise the task plan", reason)
 
     def test_ZOHO_009_language_template_obeys_configured_language(self) -> None:
@@ -375,7 +375,7 @@ class PmLifecycleTests(unittest.TestCase):
         os.environ["ANDROID_HARNESS_ZOHO_LEDGER"] = str(self.ledger)
         self._prev_harness_repo = os.environ.get("HARNESS_REPO")
         os.environ["HARNESS_REPO"] = str(self.repo)
-        zoho_sync._SERVER_MODULE = server
+        pm_sync._SERVER_MODULE = server
 
     def tearDown(self):
         if self._prev_ledger is None:
@@ -421,7 +421,7 @@ class PmLifecycleTests(unittest.TestCase):
         plan = read_json(tdir / "plan.json")
         action = workflow.resolve_next_action(self.repo, tid, plan)
         self.assertEqual("SYNC_ZOHO_START", action.get("code"))
-        self.assertEqual(f"python .agents/scripts/zoho_sync.py start --repo . --task-id {tid}", action.get("command"))
+        self.assertEqual(f"python .agents/scripts/pm_sync.py start --repo . --task-id {tid}", action.get("command"))
         self.assertTrue(action.get("blocking"))
 
     def test_ZOHO_LIFE_002_unlinked_task_never_auto_mutates_zoho(self):
@@ -441,7 +441,7 @@ class PmLifecycleTests(unittest.TestCase):
         action_deliv = workflow.resolve_next_action(self.repo, tid, plan)
         self.assertEqual("TASK_DELIVERED", action_deliv.get("code"))
 
-        rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+        rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
 
     def test_ZOHO_LIFE_003_linked_but_unapproved_scope_denied(self):
@@ -456,7 +456,7 @@ class PmLifecycleTests(unittest.TestCase):
         action = workflow.resolve_next_action(self.repo, tid, plan)
         self.assertNotEqual("SYNC_ZOHO_START", action.get("code"))
 
-        rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+        rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
 
     def test_ZOHO_LIFE_004_start_sync_in_progress_only(self):
@@ -468,7 +468,7 @@ class PmLifecycleTests(unittest.TestCase):
         })
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         self.assertEqual(1, api.status_updates)
         self.assertEqual(0, len(api.comments))
@@ -487,7 +487,7 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "abc123456789",
         })
-        rc_prep = zoho_sync.main([
+        rc_prep = pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Fix login null crash", "--changes", "Added null safety check",
             "--impact-json", '["LoginScreen"]', "--tests-json", '["testLoginNull"]',
@@ -495,7 +495,7 @@ class PmLifecycleTests(unittest.TestCase):
         self.assertEqual(0, rc_prep)
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc_deliv = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc_deliv = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc_deliv)
         self.assertEqual(0, len(api.descriptions), "Bug description must NEVER be modified")
 
@@ -512,12 +512,12 @@ class PmLifecycleTests(unittest.TestCase):
         })
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
         self.assertIn(f"zoho prepare-report --task-id {tid} --objective", err.getvalue())
         self.assertIn('--impact "<impact area>" --tests "<test case>"', err.getvalue())
 
-        rc = zoho_sync.main([
+        rc = pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Fix login null crash", "--changes", "Added null safety check",
             "--impact", "LoginScreen", "--impact", "Session restore", "--tests", "testLoginNull",
@@ -528,7 +528,7 @@ class PmLifecycleTests(unittest.TestCase):
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            rc = zoho_sync.main(["prepare-report", "--repo", str(self.repo), "--task-id", tid,
+            rc = pm_sync.main(["prepare-report", "--repo", str(self.repo), "--task-id", tid,
                                  "--objective", "x", "--changes", "y", "--impact", "A"])
         self.assertEqual(1, rc)
         self.assertIn('give 1 to 30 --tests items, e.g. --tests "<first>"', err.getvalue())
@@ -542,14 +542,14 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "abc123456789",
         })
-        zoho_sync.main([
+        pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Fix login null crash", "--changes", "Added null safety check",
             "--impact-json", '["LoginScreen"]', "--tests-json", '["testLoginNull"]',
         ])
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         self.assertEqual(1, len(api.comments))
         self.assertIn("Fix login null crash", api.comments[0][2])
@@ -565,14 +565,14 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "fedcba987654",
         })
-        zoho_sync.main([
+        pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Clean up view models", "--changes", "Split ViewModel into components",
             "--impact-json", '["MainViewModel"]', "--tests-json", '["testVM"]',
         ])
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         self.assertEqual(1, len(api.descriptions))
         self.assertIn("Clean up view models", api.descriptions[0][2])
@@ -586,14 +586,14 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "112233445566",
         })
-        zoho_sync.main([
+        pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Implement dark mode", "--changes", "Added dark theme tokens",
             "--impact-json", '["Theme"]', "--tests-json", '["testTheme"]',
         ])
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         self.assertEqual(1, len(api.descriptions))
         self.assertIn("Implement dark mode", api.descriptions[0][2])
@@ -607,14 +607,14 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "a1b2c3d4e5f6",
         })
-        zoho_sync.main([
+        pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Add settings screen", "--changes", "Added settings screen composable",
             "--impact-json", '["Settings"]', "--tests-json", '["testSettings"]',
         ])
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         self.assertEqual(1, len(api.comments))
         self.assertEqual("Commit: a1b2c3d", api.comments[0][2])
@@ -628,14 +628,14 @@ class PmLifecycleTests(unittest.TestCase):
                 "external_writes": ["zoho_sprints"],
                 "delivery_commit_sha": "998877665544",
             })
-            zoho_sync.main([
+            pm_sync.main([
                 "prepare-report", "--repo", str(self.repo), "--task-id", tid,
                 "--objective", "Objective", "--changes", "Changes",
                 "--impact-json", '["Area"]', "--tests-json", '["test"]',
             ])
             api = FakeAPI()
             with mock.patch.object(server, "get_api", return_value=api):
-                rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+                rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
             self.assertEqual(0, rc)
             tdir = workflow.task_dir(self.repo, tid)
             sync_res = read_json(tdir / "zoho-delivery-sync.json")
@@ -661,7 +661,7 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": "",
         })
-        rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
 
         tdir = workflow.task_dir(self.repo, tid)
@@ -669,7 +669,7 @@ class PmLifecycleTests(unittest.TestCase):
         plan["status"] = "IMPLEMENTING"
         plan["delivery_commit_sha"] = "commit12345"
         atomic_write_json(tdir / "plan.json", plan)
-        rc2 = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+        rc2 = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc2)
 
     def test_ZOHO_LIFE_013_stable_operation_ids(self):
@@ -683,7 +683,7 @@ class PmLifecycleTests(unittest.TestCase):
             "external_writes": ["zoho_sprints"],
             "delivery_commit_sha": commit_sha,
         })
-        zoho_sync.main([
+        pm_sync.main([
             "prepare-report", "--repo", str(self.repo), "--task-id", tid,
             "--objective", "Test op ids", "--changes", "Changes",
             "--impact-json", '["Area"]', "--tests-json", '["test"]',
@@ -705,8 +705,8 @@ class PmLifecycleTests(unittest.TestCase):
         })
         api = FakeAPI()
         with mock.patch.object(server, "get_api", return_value=api):
-            rc1 = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
-            rc2 = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc1 = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc2 = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc1)
         self.assertEqual(0, rc2)
         self.assertEqual(1, api.status_updates, "Duplicate retry must not make a second API call")
@@ -728,17 +728,17 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stderr_buf = io.StringIO()
         with mock.patch("sys.stderr", stderr_buf):
-            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         output = stderr_buf.getvalue()
         self.assertEqual(1, rc)
-        self.assertIn("harness.py zoho authorize", output)
+        self.assertIn("harness.py pm authorize", output)
         self.assertNotIn("curl", output.lower())
         self.assertNotIn("python -c", output)
         self.assertNotIn("requests.", output)
 
-    def test_ZOHO_LIFE_016b_update_zoho_grants_writes_without_a_plan_revision(self):
+    def test_ZOHO_LIFE_016b_pm_confirmation_grants_writes_without_a_plan_revision(self):
         import io
-        import zoho_grant
+        import pm_grant
         from integrations.base import validate_external_write
         from integrations.zoho_sprints.integration import ZohoSprintsIntegration
         integ = ZohoSprintsIntegration()
@@ -754,31 +754,48 @@ class PmLifecycleTests(unittest.TestCase):
         write = {"status": "In progress", "operation_id": "op-873"}
         self.assertFalse(validate_external_write(integ, "zoho_update_task_status", write, plan)[0])
 
-        err = io.StringIO()
-        with mock.patch("sys.stderr", err):
-            self.assertEqual(1, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "ok go"]))
-        self.assertIn("update zoho", err.getvalue())
-        self.assertIsNone(zoho_grant.active_grant(self.repo))
-        out = io.StringIO()
-        with mock.patch("sys.stdout", out):
-            self.assertEqual(0, zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", "Update Zoho"]))
-        self.assertIn("ZOHO_WRITE_GRANTED", out.getvalue())
-        self.assertTrue(zoho_grant.is_update_zoho("حدث زوهو بتعديلات"))
-        self.assertTrue(zoho_grant.is_update_zoho("تحديث زوهو"))
-        self.assertFalse(zoho_grant.is_update_zoho("شوف زوهو"), "looking at Zoho is not an order to write")
-        self.assertFalse(zoho_grant.is_update_zoho("حدث الكود"), "updating the code is not a Zoho write")
-        grant = zoho_grant.active_grant(self.repo)
+        # Empty, 1-char, and unanswered question proofs must still be denied
+        for bad_proof in ("", "x", "هل احدث زوهو؟", "Should I update Zoho?"):
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err):
+                self.assertEqual(1, pm_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", bad_proof]), bad_proof)
+            self.assertIn("PM_GRANT_NEEDS_CONFIRMATION", err.getvalue())
+            self.assertIsNone(pm_grant.active_grant(self.repo))
+
+        # Natural Arabic and English confirmations (without magic words) work on the first try
+        for good_proof in (
+            "انقل الـ 10 باجز إلى Ready To ReTest على زوهو",
+            "Move the fixed bugs to Ready To ReTest",
+            "ok go",
+        ):
+            out = io.StringIO()
+            with mock.patch("sys.stdout", out):
+                self.assertEqual(0, pm_sync.main(["authorize", "--repo", str(self.repo), "--proof-reference", good_proof]), good_proof)
+            self.assertIn("PM_WRITE_GRANTED=true", out.getvalue())
+            self.assertIn("ZOHO_WRITE_GRANTED", out.getvalue())
+            self.assertIsNotNone(pm_grant.active_grant(self.repo))
+
+        grant = pm_grant.active_grant(self.repo)
         self.assertIsNotNone(grant)
         self.assertEqual((True, ""), validate_external_write(integ, "zoho_update_task_status", write, plan, grant=grant))
         self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "Done", "operation_id": "op"}, plan, grant=grant)[0])
         self.assertFalse(validate_external_write(integ, "zoho_update_task_status", {"status": "In progress"}, plan, grant=grant)[0])
         from mutation_guard import command_allowed
-        self.assertTrue(command_allowed(self.repo, 'python .agents/harness.py zoho authorize --proof-reference "update zoho"')[0])
-        path = zoho_grant._state(self.repo) / zoho_grant.GRANT_FILE
+        self.assertTrue(command_allowed(self.repo, 'python .agents/harness.py pm authorize --source conversation --proof-reference "نقل الـ 10 باجز"')[0])
+        path = pm_grant._state(self.repo) / pm_grant.GRANT_FILE
+        self.assertTrue(path.is_file())
         data = json.loads(path.read_text(encoding="utf-8"))
         data["expires_epoch"] = data["granted_epoch"] - 1
         path.write_text(json.dumps(data), encoding="utf-8")
-        self.assertIsNone(zoho_grant.active_grant(self.repo))
+        self.assertIsNone(pm_grant.active_grant(self.repo))
+
+        # Legacy zoho-write-grant.json read fallback works when pm-write-grant.json is absent
+        path.unlink()
+        legacy_path = pm_grant._state(self.repo) / pm_grant.LEGACY_GRANT_FILE
+        legacy_data = {**data, "expires_epoch": data["granted_epoch"] + pm_grant.GRANT_TTL_SECONDS}
+        legacy_path.write_text(json.dumps(legacy_data), encoding="utf-8")
+        self.assertIsNotNone(pm_grant.active_grant(self.repo))
+        legacy_path.unlink()
 
     def test_ZOHO_LIFE_017_language_mapping_preserved(self):
         from integrations.zoho_sprints.policy import ZohoPolicyResolver
@@ -817,7 +834,7 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         out = io.StringIO()
         with mock.patch.object(server, "handle_call_tool", side_effect=OSError("DNS failure")), contextlib.redirect_stdout(out):
-            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
         tdir = workflow.task_dir(self.repo, tid)
         sync_res = read_json(tdir / "zoho-start-sync.json")
@@ -879,7 +896,7 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stderr_buf = io.StringIO()
         with mock.patch("sys.stderr", stderr_buf):
-            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
         self.assertIn("TASK_NOT_IMPLEMENTING", stderr_buf.getvalue())
 
@@ -895,7 +912,7 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stderr_buf = io.StringIO()
         with mock.patch("sys.stderr", stderr_buf):
-            rc = zoho_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["start", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
         self.assertIn("EXECUTION_NONCE_MISMATCH", stderr_buf.getvalue())
 
@@ -922,7 +939,7 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stderr_buf = io.StringIO()
         with mock.patch("sys.stderr", stderr_buf):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
         self.assertIn("DELIVERY_REPORT_PLAN_MISMATCH", stderr_buf.getvalue())
 
@@ -950,7 +967,7 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stderr_buf = io.StringIO()
         with mock.patch("sys.stderr", stderr_buf):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(1, rc)
         self.assertIn("DELIVERY_REPORT_TAMPERED", stderr_buf.getvalue())
 
@@ -983,7 +1000,7 @@ class PmLifecycleTests(unittest.TestCase):
             return {"status": "success"}
 
         with mock.patch.object(server, "handle_call_tool", side_effect=fake_call_tool):
-            rc = zoho_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
+            rc = pm_sync.main(["delivery", "--repo", str(self.repo), "--task-id", tid])
         self.assertEqual(0, rc)
 
         tool_names = [t[0] for t in called_tools]
@@ -1027,9 +1044,9 @@ class PmLifecycleTests(unittest.TestCase):
         import io
         stdout_buf = io.StringIO()
         with mock.patch("sys.stdout", stdout_buf):
-            rc = zoho_sync.main(["authorize", "--repo", str(self.repo), "--proof", "حدث زوهو"])
+            rc = pm_sync.main(["authorize", "--repo", str(self.repo), "--proof", "حدث زوهو"])
         self.assertEqual(0, rc)
-        self.assertIn("MANDATORY ZOHO RULES FROM .agents/project-context/project-notes.md:", stdout_buf.getvalue())
+        self.assertIn("MANDATORY PM RULES FROM .agents/project-context/project-notes.md:", stdout_buf.getvalue())
         self.assertIn("No Code or File Artifacts", stdout_buf.getvalue())
 
         from integrations.zoho_sprints.integration import ZohoSprintsIntegration
@@ -1097,17 +1114,33 @@ class PmLifecycleTests(unittest.TestCase):
         self.assertTrue(ok_good, reason_good)
 
     def test_universal_pm_discovery_and_guardrails(self):
+        import io
+        import pm_discovery
         from pm_discovery import discover_installed_pm_mcps
         from integrations.universal_pm import UniversalPmIntegration
-        from zoho_grant import active_pm_grant, is_explicit_close_order, is_update_pm, record_pm_grant
+        from pm_grant import active_pm_grant, record_pm_grant
 
-        self.assertTrue(is_update_pm("update pm"))
-        self.assertTrue(is_update_pm("حدث التاسك على زوهو"))
-        self.assertTrue(is_update_pm("update jira"))
-        self.assertFalse(is_update_pm("please update all dependencies"), "Wildcard provider='all' must not match 'update all'")
-        self.assertTrue(is_explicit_close_order("update pm and close task"))
-        self.assertTrue(is_explicit_close_order("حدث التاسك واقفل التاسك"))
-        self.assertFalse(is_explicit_close_order("حدث التاسك"))
+        # Verify explicit provider scoping and explicit --allow-close (never inferred from prose keywords)
+        g_jira = record_pm_grant(self.repo, "Confirmed moving issue", provider="jira", source="conversation")
+        self.assertEqual(["jira"], g_jira["providers"])
+        self.assertFalse(g_jira["allow_close"])
+        self.assertIsNotNone(active_pm_grant(self.repo, provider="jira"))
+        self.assertIsNone(active_pm_grant(self.repo, provider="zoho_sprints"))
+
+        # Even if prose contains 'close task' / 'اقفل التاسك', allow_close stays False unless explicitly requested
+        g_prose = record_pm_grant(self.repo, "please close task and اقفل التاسك", source="conversation")
+        self.assertEqual(["all"], g_prose["providers"])
+        self.assertFalse(g_prose["allow_close"])
+
+        out_pm = io.StringIO()
+        with mock.patch("sys.stdout", out_pm):
+            rc_pm = pm_discovery.main([
+                "authorize", "--repo", str(self.repo), "--source", "conversation",
+                "--proof-reference", "نقل الـ 10 باجز فقط إلى Ready To ReTest",
+            ])
+        self.assertEqual(0, rc_pm)
+        self.assertIn("ALLOW_CLOSE=False", out_pm.getvalue())
+        self.assertFalse(active_pm_grant(self.repo).get("allow_close"))
 
         # Verify installation-chosen TRACKER_LANGUAGE in _product.py is respected across all PM providers
         from pm_discovery import resolve_configured_pm_language
@@ -1183,8 +1216,8 @@ class PmLifecycleTests(unittest.TestCase):
         self.assertIn("Terminal tracker states", reason_closed)
 
         import pre_tool_safety
-        import io
         hook_out = io.StringIO()
+        (self.repo / ".agents" / "state" / "pm-write-grant.json").unlink(missing_ok=True)
         (self.repo / ".agents" / "state" / "zoho-write-grant.json").unlink(missing_ok=True)
         unapproved_plan = {
             "status": "READY_FOR_DELIVERY",
@@ -1209,7 +1242,14 @@ class PmLifecycleTests(unittest.TestCase):
         self.assertIn("PM_PREVIEW_AND_APPROVAL_REQUIRED", hook_res["reason"])
         self.assertIn("present the exact preview of the tracker changes", hook_res["reason"])
 
-        record_pm_grant(self.repo, "conversation", "حدث التاسك واقفل التاسك", allow_close=True)
+        out_close = io.StringIO()
+        with mock.patch("sys.stdout", out_close):
+            rc_close = pm_discovery.main([
+                "authorize", "--repo", str(self.repo), "--source", "conversation",
+                "--proof-reference", "نعم اقفلها", "--allow-close",
+            ])
+        self.assertEqual(0, rc_close)
+        self.assertIn("ALLOW_CLOSE=True", out_close.getvalue())
         self.assertTrue(active_pm_grant(self.repo).get("allow_close"))
         ok_closed_explicit, reason_closed_explicit = upm.validate_mutation(
             "call_mcp_tool",

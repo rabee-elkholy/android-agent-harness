@@ -6,9 +6,9 @@ Asana, Trello, and any schema-discovered PM MCP in Antigravity):
 - Immediate read access for all query/get/list/search tools.
 - Bug/Issue description preservation (delivery reports must be posted as comments).
 - Terminal status protection (Done/Closed/Solved blocked unless the developer
-  explicitly ordered closing the task in their grant message).
-- Seamless authorization via `python .agents/harness.py pm authorize --proof-reference "..."`
-  (`update pm` / `حدث التاسك` / `update zoho` / `update jira` / etc.) or plan `external_writes`.
+  explicitly authorizes closing via `--allow-close`).
+- Seamless authorization via `python .agents/harness.py pm authorize --source conversation --proof-reference "..."`
+  or plan `external_writes`.
 """
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ class UniversalPmIntegration(ExternalIntegration):
                 repo_cand = None
         if repo_cand:
             from pathlib import Path
-            from zoho_grant import active_pm_grant
+            from pm_grant import active_pm_grant
             pid = self.resolve_provider_id(srv, tl)
             grant = active_pm_grant(Path(str(repo_cand)), provider=pid)
         return self.validate_pm_mutation(srv, tl, inner_args, plan, grant=grant)
@@ -157,7 +157,8 @@ class UniversalPmIntegration(ExternalIntegration):
                     False,
                     "PM_POLICY_VIOLATION: Terminal tracker states (Done/Closed/Solved/Resolved) are developer/QA-owned "
                     "and cannot be set automatically. Move the item to 'Ready To ReTest' / 'In Review' / 'Ready for Testing', "
-                    "or if the developer explicitly ordered closing the task, authorize with their message (`close task` / `اقفل التاسك`).",
+                    "or if the developer explicitly ordered closing the task, authorize with "
+                    '`python .agents/harness.py pm authorize --allow-close --source conversation --proof-reference "<developer confirmation>"`.',
                 )
 
         # 2. Bug / Issue Description Protection

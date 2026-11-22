@@ -203,7 +203,7 @@ def _next_implementation(repo, task_id, plan, host, identity, run_host, state, s
             return {
                 "code": "SYNC_ZOHO_START",
                 "kind": "HARNESS_COMMAND",
-                "command": f"python .agents/scripts/zoho_sync.py start --repo . --task-id {task_id}",
+                "command": f"python .agents/scripts/pm_sync.py start --repo . --task-id {task_id}",
                 "blocking": True,
                 "reason": "Sync In progress status to linked Zoho item for approved task.",
                 "inputs": {"repo": ".", "task_id": task_id},
@@ -820,7 +820,7 @@ def _next_delivered(repo, task_id, plan, host, identity, run_host, state, sessio
                     return {
                         "code": "ZOHO_ENV_BLOCKED",
                         "kind": "HARNESS_COMMAND",
-                        "command": f"python .agents/scripts/zoho_sync.py delivery --repo . --task-id {task_id}",
+                        "command": f"python .agents/scripts/pm_sync.py delivery --repo . --task-id {task_id}",
                         "blocking": False,
                         "reason": "Zoho delivery sync is blocked by external environment/credentials. Local code remains delivered.",
                         "inputs": {"repo": ".", "task_id": task_id},
@@ -831,7 +831,7 @@ def _next_delivered(repo, task_id, plan, host, identity, run_host, state, sessio
 
         report_file = tdir / "zoho-delivery-report.json"
         if not report_file.exists():
-            from zoho_sync import prepare_report_command
+            from pm_sync import prepare_report_command
 
             return {
                 "code": "PREPARE_ZOHO_DELIVERY_REPORT",
@@ -855,7 +855,7 @@ def _next_delivered(repo, task_id, plan, host, identity, run_host, state, sessio
         return {
             "code": "SYNC_ZOHO_DELIVERY",
             "kind": "HARNESS_COMMAND",
-            "command": f"python .agents/scripts/zoho_sync.py delivery --repo . --task-id {task_id}",
+            "command": f"python .agents/scripts/pm_sync.py delivery --repo . --task-id {task_id}",
             "blocking": True,
             "reason": "Sync verified delivery report and status to linked Zoho item.",
             "inputs": {"repo": ".", "task_id": task_id},

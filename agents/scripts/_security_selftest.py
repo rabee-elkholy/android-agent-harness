@@ -2942,9 +2942,9 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
 
     def test_v155_pass3_room_substring_rename_lines_symlinks_zoho_paths_and_cli_repo_equals(self):
         import change_classifier
+        import pm_sync
         import room_guard
         import verification_contract
-        import zoho_sync
         from _web_relay import engine as wr_engine
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -3044,7 +3044,7 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
                 wr_engine._norm_rel(c_repo, str(new_f)),
             )
 
-            # P3-08: zoho_sync quoted Windows / POSIX paths & AIza/sk- secrets + harness_cli task --repo=<path>
+            # P3-08: pm_sync quoted Windows / POSIX paths & AIza/sk- secrets + harness_cli task --repo=<path>
             (c_repo / ".agents/state/tasks/t-z").mkdir(parents=True)
             (c_repo / ".agents/state/tasks/t-z/plan.json").write_text(json.dumps({"task_id": "t-z", "plan_sha256": "a" * 64}), encoding="utf-8")
             for bad_obj in (
@@ -3052,11 +3052,11 @@ class SameModelAdaptiveReasoningContractTests(unittest.TestCase):
                 "Fixed `/opt/workspace/App.kt` crash",
                 "Key AIzaSyA123456789012345678901234567890123",
             ):
-                rc_bad = zoho_sync.main([
+                rc_bad = pm_sync.main([
                     "prepare-report", "--repo", str(c_repo), "--task-id", "t-z",
                     "--objective", bad_obj, "--changes", "Safe fix", "--impact", "Auth", "--tests", "AuthTest",
                 ])
-                self.assertEqual(1, rc_bad, f"Expected zoho_sync rejection for: {bad_obj}")
+                self.assertEqual(1, rc_bad, f"Expected pm_sync rejection for: {bad_obj}")
 
             (c_repo / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
             (c_repo / ".agents/scripts").mkdir(parents=True, exist_ok=True)

@@ -2033,7 +2033,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("web-relay", "web_relay.py", "Optional Manual Web-Relay Bridge (`pack`, `apply`, `status`)."),
         ("execution-mode", "execution_mode.py", "Interactive execution mode selector (`show`, `set`: normal vs web)."),
         ("pm", "pm_discovery.py", "Project management tracker discovery and read-only lookups."),
-        ("zoho", "zoho_sync.py", "Zoho Sprints report preparation, authorization, and sync recording."),
+        ("zoho", "pm_sync.py", "PM / Zoho Sprints report preparation, authorization, and sync recording."),
         ("e2e", "phone_e2e.py", "Physical/emulator end-to-end Android UI flow runner."),
         ("report-issue", "incident_reporter.py", "Inspect or submit sanitized harness incident reports."),
     ):

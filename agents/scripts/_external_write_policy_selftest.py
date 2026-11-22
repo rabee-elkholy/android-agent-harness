@@ -230,7 +230,7 @@ class ExternalWritePolicyTests(unittest.TestCase):
         )
 
     def test_v155_pass3_generic_mcp_camel_case_write_verbs_and_pm_secret_guards(self) -> None:
-        import zoho_grant
+        import pm_grant
 
         self.assertEqual(
             "deny",
@@ -252,7 +252,7 @@ class ExternalWritePolicyTests(unittest.TestCase):
             with self.subTest(tool_name=tool_name):
                 self.assertEqual("ask", self.mcp("custom-db", tool_name, {"id": "1"})["decision"])
 
-        zoho_grant.record_pm_grant(self.repo, "update jira", provider="jira", source="conversation")
+        pm_grant.record_pm_grant(self.repo, "update jira", provider="jira", source="conversation")
         malformed_jira = self._run(ENGINE, {"toolCall": {"name": "call_mcp_tool", "args": {
             "ServerName": "jira",
             "ToolName": "addCommentToJiraIssue",
@@ -260,7 +260,7 @@ class ExternalWritePolicyTests(unittest.TestCase):
         }}})
         self.assertEqual("deny", malformed_jira["decision"], malformed_jira)
 
-        zoho_grant.record_grant(self.repo, "update zoho", source="conversation")
+        pm_grant.record_grant(self.repo, "update zoho", source="conversation")
         # Safe developer prose mentioning `.env` / `local.properties` / `google-services.json` must NOT false-positive as credential upload
         zoho_safe_prose = self._run(ENGINE, {"toolCall": {"name": "zoho_add_comment", "args": {
             "item_id": "I-100",

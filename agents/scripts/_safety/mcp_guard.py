@@ -35,7 +35,7 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
             plan = {}
 
         if integration.name == "universal_pm":
-            from zoho_grant import active_pm_grant, pm_authorize_command
+            from pm_grant import active_pm_grant, pm_authorize_command
             provider_id = integration.resolve_provider_id(server, tool_name)
             display = integration.resolve_display_name(server, tool_name)
             grant = active_pm_grant(_engine.REPO, provider=provider_id)
@@ -65,9 +65,9 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
                 "deny",
                 f"PM_PREVIEW_AND_APPROVAL_REQUIRED: Before calling '{tool_name}' on {display}, you MUST: "
                 f"(1) present the exact preview of the tracker changes (target item ID, fields/status/comment to be written) "
-                f"to the developer in chat and ask for their approval; "
-                f"(2) once the developer confirms (e.g. 'update pm' / 'update tracker'), run "
-                f"`{pm_authorize_command(provider_id.replace('_projects', '').replace('_sprints', ''))}` with their exact message; "
+                f"to the developer in chat and ask for their confirmation; "
+                f"(2) once the developer confirms in chat, run "
+                f"`{pm_authorize_command(provider_id.replace('_projects', '').replace('_sprints', ''))}` with their exact confirmation message; "
                 f"then retry '{tool_name}'.",
                 tool=tool_name,
                 reason_code="PM_PREVIEW_AND_APPROVAL_REQUIRED",
@@ -76,7 +76,7 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
 
         grant = None
         if integration.name == "zoho_sprints":
-            from zoho_grant import active_grant
+            from pm_grant import active_grant
             grant = active_grant(_engine.REPO)
         if not plan and not grant:
             _engine.emit("deny", f"{integration.display_name} mutation is not included in the active approved plan.", tool=tool_name)
