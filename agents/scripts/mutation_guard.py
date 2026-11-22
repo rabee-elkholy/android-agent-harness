@@ -138,7 +138,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
                     trusted.add(jdk_exe)
         if candidate not in trusted:
             return "", []
-    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap"}:
+    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap", "tar"}:
         executable = executable[:-4]
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
         py_idx = 1
@@ -150,7 +150,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
             return "compileall", tokens[py_idx + 2:]
         path = tokens[py_idx].replace("\\", "/")
         name = path.rsplit("/", 1)[-1]
-        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "repair", "pm_sync", "web_relay"}
+        known = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "safe_file_ops", "workflow", "setup_wizard", "repair", "pm_sync", "web_relay"}
         if not _trusted_script(path, repo, name):
             return "", []
         if name in {"harness_cli.py", "harness.py"}:
@@ -158,7 +158,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[py_idx + 1:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap", "tar"}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -303,6 +303,62 @@ def _valid_context_targets(args: list[str]) -> bool:
     return 1 <= len(selectors) <= 8 and not any(arg.startswith("--out") for arg in args)
 
 
+def _is_read_only_tar(args: list[str]) -> bool:
+    """Allow strictly local read-only archive listing (`tar -tf <archive>`); block extract/create/exec."""
+    if not args:
+        return False
+    if args[0] in {"tf", "-tf", "tvf", "-tvf", "tzf", "-tzf", "tjf", "-tjf"}:
+        return len(args) == 2 and bool(args[1]) and not args[1].startswith("-")
+    saw_list = False
+    archive: str | None = None
+    i = 0
+    allowed_short = frozenset({"t", "v", "z", "j"})
+    while i < len(args):
+        arg = args[i]
+        if arg in {"-t", "--list"}:
+            saw_list = True
+            i += 1
+        elif arg in {"-v", "--verbose", "-z", "--gzip", "-j", "--bzip2"}:
+            i += 1
+        elif arg in {"-f", "--file"}:
+            if archive is not None or i + 1 >= len(args):
+                return False
+            cand = args[i + 1]
+            if not cand or cand.startswith("-"):
+                return False
+            archive = cand
+            i += 2
+        elif arg.startswith("--file="):
+            if archive is not None:
+                return False
+            cand = arg.split("=", 1)[1]
+            if not cand or cand.startswith("-"):
+                return False
+            archive = cand
+            i += 1
+        elif arg.startswith("-") and not arg.startswith("--") and len(arg) > 1:
+            flags = arg[1:]
+            if flags.endswith("f") and len(flags) >= 2 and all(ch in allowed_short for ch in flags[:-1]):
+                if "t" in flags[:-1]:
+                    saw_list = True
+                if archive is not None or i + 1 >= len(args):
+                    return False
+                cand = args[i + 1]
+                if not cand or cand.startswith("-"):
+                    return False
+                archive = cand
+                i += 2
+            elif all(ch in allowed_short for ch in flags):
+                if "t" in flags:
+                    saw_list = True
+                i += 1
+            else:
+                return False
+        else:
+            return False
+    return saw_list and archive is not None
+
+
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     if name == "review_models" and (not args or args[0] == "show"):
@@ -399,6 +455,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         if first_j in {"--list", "-t"} and len(args) in (2, 3):
             return not any(a.startswith(("-x", "-c", "-u", "--extract", "--create", "--update")) for a in args)
         return False
+    if name == "tar":
+        return _is_read_only_tar(args)
     if name == "javap":
         return bool(args) and not any(a.startswith("-J") for a in args)
     if name == "run_device" and args[:1] in (["status"], ["ios-status"]) and len(args) == 1:
@@ -1221,6 +1279,11 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         operator_text = GIT_REV_EXCLUSION.sub("", operator_text)
         operator_text = GIT_REV_PARENT_SUFFIX.sub("", operator_text)
     if SHELL_LAUNDERING.search(operator_text):
+        if '"' in normalized and "`" in operator_text and not SHELL_LAUNDERING.search(operator_text.replace("`", "")):
+            return False, (
+                "shell redirection, piping, or command substitution is outside the read-only boundary "
+                "(backticks inside double quotes trigger shell expansion/escaping; wrap the argument in single quotes '...' or omit Markdown backticks)"
+            )
         return False, "shell redirection, piping, or command substitution is outside the read-only boundary"
     if re.search(r"[(){}]", operator_text):
         return False, "shell expressions and script blocks are outside the audited command boundary; quote literal arguments"
@@ -1384,14 +1447,21 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
                 "For final verification, transition via 'python .agents/scripts/workflow.py prepare-verification' first."
             )
         if re.search(r"\b(?:del(?:\s+\/[a-z]+)*\s|rmdir\b|rm\s+-rf\b|powershell\b.*-file\b|bash\s+\S+\.sh\b)", normalized, re.I):
-            return False, "Destructive filesystem or external script commands are blocked during implementation."
+            return False, (
+                "Destructive filesystem or external script commands are blocked during implementation. "
+                "To delete an approved-scope file safely, use: python .agents/harness.py file delete <path>."
+            )
         if re.search(r"\b(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?\s+(?:-c|-m\s+(?!compileall\b))\b", normalized, re.I):
             return False, "Inline Python execution (-c/-m) is blocked; only audited harness scripts may run."
         if re.search(r"(?:^|[;&|\n]\s*)(?:\.\/?|[^\s]+[/\\])?(?:gradlew|gradle)(?:\.bat)?\s+", normalized, re.I):
             return False, "Raw Gradle execution is blocked; use the harness Gradle wrapper or test gate."
-        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "workflow", "setup_wizard", "web_relay", "harness_cli", "android-harness", "compileall"}
+        allowed_implementing_entries = INSPECTION_SCRIPTS | VERIFICATION_SCRIPTS | {"symbol_edit", "safe_file_ops", "workflow", "setup_wizard", "web_relay", "harness_cli", "android-harness", "compileall"}
         if entry not in allowed_implementing_entries:
-            return False, "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host file-edit tools where protected roots are enforced."
+            return False, (
+                "Arbitrary shell mutation commands are blocked during IMPLEMENTING. File modifications must use host "
+                "file-edit tools where protected roots are enforced. To delete an approved-scope file safely, use: "
+                "python .agents/harness.py file delete <path>."
+            )
         try:
             require_mutation(plan)
         except ValidationError as exc:

@@ -172,6 +172,41 @@ def cmd_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def _strip_backticks(value: str) -> str:
+    return value.replace("`", "")
+
+
+def _line_matches_note(stripped: str, raw_target: str, norm_target: str, *, strip_bt: bool = False) -> bool:
+    norm_line = stripped.lstrip("-* ").strip()
+    cmp_line = _strip_backticks(norm_line) if strip_bt else norm_line
+    cmp_target = _strip_backticks(norm_target) if strip_bt else norm_target
+    return (
+        (not strip_bt and stripped == raw_target)
+        or cmp_line == cmp_target
+        or (len(cmp_target) >= 8 and cmp_target in cmp_line)
+    )
+
+
+def _resolve_note_section(content: str, requested: str) -> str:
+    import re
+    if re.search(rf"^##\s+{re.escape(requested)}[^\n]*$", content, flags=re.MULTILINE):
+        return requested
+    req_nb = _strip_backticks(requested).strip()
+    headings = [m.strip() for m in re.findall(r"^##\s+([^\n]+)", content, flags=re.MULTILINE)]
+    for heading in headings:
+        if _strip_backticks(heading) == req_nb:
+            return heading
+    req_low = req_nb.lower()
+    for heading in headings:
+        if _strip_backticks(heading).lower() == req_low:
+            return heading
+    if len(req_low) >= 6:
+        for heading in headings:
+            if _strip_backticks(heading).lower().startswith(req_low):
+                return heading
+    return requested
+
+
 def cmd_note(args: argparse.Namespace) -> int:
     import re
     from _vnext_common import atomic_write_text
@@ -183,7 +218,24 @@ def cmd_note(args: argparse.Namespace) -> int:
     remove_target = (getattr(args, "remove", None) or "").strip()
     replace_target = (getattr(args, "replace", None) or "").strip()
     text = (getattr(args, "note", None) or getattr(args, "text", None) or "").strip()
+    note_file_arg = (getattr(args, "note_file", None) or "").strip()
     section = (getattr(args, "section", None) or "Domain Conventions & Context").strip()
+
+    if note_file_arg:
+        if text:
+            print("[ERROR] Cannot pass both inline note text and --note-file in the same note command.", file=sys.stderr)
+            return 1
+        nf_path = Path(note_file_arg).expanduser()
+        if not nf_path.is_absolute():
+            nf_path = repo / nf_path
+        if nf_path.is_symlink():
+            print(f"[ERROR] Refusing symlink --note-file: {note_file_arg}", file=sys.stderr)
+            return 1
+        nf_resolved = nf_path.resolve()
+        if nf_resolved.is_symlink() or not nf_resolved.is_file():
+            print(f"[ERROR] Note file does not exist or is not a regular file: {note_file_arg}", file=sys.stderr)
+            return 1
+        text = nf_resolved.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n").strip()
 
     if remove_target and replace_target:
         print("[ERROR] Cannot pass both --remove and --replace in the same note command.", file=sys.stderr)
@@ -198,17 +250,23 @@ def cmd_note(args: argparse.Namespace) -> int:
         new_lines = []
         removed_count = 0
         norm_target = remove_target.lstrip("-* ").strip()
-        for line in lines:
-            stripped = line.strip()
-            norm_line = stripped.lstrip("-* ").strip()
-            if stripped == remove_target or norm_line == norm_target or (len(norm_target) >= 8 and norm_target in norm_line):
-                removed_count += 1
-                continue
-            new_lines.append(line)
+        for strip_bt in (False, True):
+            new_lines = []
+            removed_count = 0
+            for line in lines:
+                if _line_matches_note(line.strip(), remove_target, norm_target, strip_bt=strip_bt):
+                    removed_count += 1
+                    continue
+                new_lines.append(line)
+            if removed_count > 0:
+                break
         if removed_count == 0:
             if remove_target in content:
                 updated = content.replace(remove_target, "").strip() + "\n"
                 removed_count = 1
+            elif _strip_backticks(remove_target) and _strip_backticks(remove_target) in _strip_backticks(content):
+                print(f"[ERROR] Target note spans multiple formatting blocks cleanly; narrow --remove text: {remove_target}", file=sys.stderr)
+                return 1
             else:
                 print(f"[ERROR] Target note text not found in {notes_file}: {remove_target}", file=sys.stderr)
                 return 1
@@ -234,15 +292,19 @@ def cmd_note(args: argparse.Namespace) -> int:
         replaced_count = 0
         norm_target = replace_target.lstrip("-* ").strip()
         clean_replacement = text.lstrip("-* ").strip()
-        for line in lines:
-            stripped = line.strip()
-            norm_line = stripped.lstrip("-* ").strip()
-            if replaced_count == 0 and (stripped == replace_target or norm_line == norm_target or (len(norm_target) >= 8 and norm_target in norm_line)):
-                prefix = "- " if stripped.startswith(("-", "*")) or not text.startswith(("#", "-", "*")) else ""
-                new_lines.append(f"{prefix}{clean_replacement if prefix else text}")
-                replaced_count += 1
-            else:
-                new_lines.append(line)
+        for strip_bt in (False, True):
+            new_lines = []
+            replaced_count = 0
+            for line in lines:
+                stripped = line.strip()
+                if replaced_count == 0 and _line_matches_note(stripped, replace_target, norm_target, strip_bt=strip_bt):
+                    prefix = "- " if stripped.startswith(("-", "*")) or not text.startswith(("#", "-", "*")) else ""
+                    new_lines.append(f"{prefix}{clean_replacement if prefix else text}")
+                    replaced_count += 1
+                else:
+                    new_lines.append(line)
+            if replaced_count > 0:
+                break
         if replaced_count == 0:
             if replace_target in content:
                 updated = content.replace(replace_target, text, 1)
@@ -262,6 +324,7 @@ def cmd_note(args: argparse.Namespace) -> int:
     if not text:
         print("[ERROR] Note text cannot be empty.")
         return 1
+    resolved_section = section
     if not notes_file.is_file():
         initial_content = [
             "# Human-Authored Project Architectural Notes",
@@ -276,9 +339,10 @@ def cmd_note(args: argparse.Namespace) -> int:
         atomic_write_text(notes_file, "\n".join(initial_content))
     else:
         content = notes_file.read_text(encoding="utf-8")
+        resolved_section = _resolve_note_section(content, section)
         norm_new = text.lstrip("-* ").strip()
         sec_block_match = re.search(
-            rf"(^##\s+{re.escape(section)}[^\n]*\n)(.*?)(?=^##\s+|\Z)",
+            rf"(^##\s+{re.escape(resolved_section)}[^\n]*\n)(.*?)(?=^##\s+|\Z)",
             content,
             flags=re.MULTILINE | re.DOTALL,
         )
@@ -288,23 +352,24 @@ def cmd_note(args: argparse.Namespace) -> int:
                 for ln in sec_block_match.group(2).splitlines()
                 if ln.strip().startswith(("-", "*"))
             }
-            if norm_new and norm_new in existing_bullets:
+            existing_nb = {_strip_backticks(b) for b in existing_bullets}
+            if norm_new and (norm_new in existing_bullets or _strip_backticks(norm_new) in existing_nb):
                 if getattr(args, "json", False):
-                    print(json.dumps({"status": "PASS", "action": "UNCHANGED_DUPLICATE", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
+                    print(json.dumps({"status": "PASS", "action": "UNCHANGED_DUPLICATE", "path": str(notes_file), "note": text, "section": resolved_section}, ensure_ascii=False))
                 else:
-                    print(f"[NOTE] Note already present in {notes_file} under section '{section}'")
+                    print(f"[NOTE] Note already present in {notes_file} under section '{resolved_section}'")
                 return 0
-        sec_pattern = rf"(##\s+{re.escape(section)}[^\n]*\n)"
+        sec_pattern = rf"(##\s+{re.escape(resolved_section)}[^\n]*\n)"
         if re.search(sec_pattern, content):
             updated = re.sub(sec_pattern, lambda m: f"{m.group(1)}- {norm_new}\n", content, count=1)
         else:
-            updated = content.rstrip() + f"\n\n## {section}\n- {norm_new}\n"
+            updated = content.rstrip() + f"\n\n## {resolved_section}\n- {norm_new}\n"
         atomic_write_text(notes_file, updated)
 
     if getattr(args, "json", False):
-        print(json.dumps({"status": "PASS", "action": "ADDED", "path": str(notes_file), "note": text, "section": section}, ensure_ascii=False))
+        print(json.dumps({"status": "PASS", "action": "ADDED", "path": str(notes_file), "note": text, "section": resolved_section}, ensure_ascii=False))
     else:
-        print(f"[NOTE] Added note to {notes_file} under section '{section}'")
+        print(f"[NOTE] Added note to {notes_file} under section '{resolved_section}'")
     return 0
 
 
@@ -742,6 +807,7 @@ def main(argv: list[str] | None = None) -> int:
     p_note = sub.add_parser("note")
     p_note.add_argument("text", nargs="?", default="", help="Note text to append or replace with")
     p_note.add_argument("--note", default="", help="Note text to append or replace with")
+    p_note.add_argument("--note-file", default="", help="UTF-8 file containing note text to append or replace with")
     p_note.add_argument("--replace", default="", help="Existing note text/bullet to replace in project-notes.md")
     p_note.add_argument("--remove", default="", help="Existing note text/bullet to delete from project-notes.md")
     p_note.add_argument("--section", default="Domain Conventions & Context", help="Section header to place note under")

@@ -150,6 +150,10 @@ def preview_reference(repo: Path, explicit: str | None) -> tuple[str, str]:
     if ":assemble" not in task:
         raise ValidationError("Cannot resolve an application preview target from the configured assemble task.")
     reference = explicit or task.rsplit(":assemble", 1)[0] or ":"
+    for gradle_prefix in ("gradle://.?", "gradle://?"):
+        if reference.startswith(gradle_prefix):
+            reference = reference[len(gradle_prefix):]
+            break
     if not re.fullmatch(r":(?:[A-Za-z_][A-Za-z0-9_-]*(?::[A-Za-z_][A-Za-z0-9_-]*)*)?", reference):
         raise ValidationError("Preview reference must be an exact local Gradle module, e.g. :mobile.")
     return reference, task
@@ -250,7 +254,12 @@ def preview(repo: Path, args, executable: str, caps: dict, plan: dict) -> dict:
                 pass
         directory = root / uuid.uuid4().hex
         directory.mkdir(parents=True)
-        command = ["preview", args.action, reference]
+        # Pin the build system explicitly to Gradle (`gradle://.?<module>`) so
+        # sibling Bazel markers (e.g. a drive-level `WORKSPACE` folder or
+        # case-insensitive `build/` on Windows) cannot trigger ambiguous
+        # multi-build-system errors in `android preview`.
+        cli_reference = f"gradle://.?{reference}"
+        command = ["preview", args.action, cli_reference]
         if args.action == "list" and include_dependencies:
             command.append("--all")
         if args.action == "render":

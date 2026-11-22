@@ -1072,6 +1072,125 @@ class HookTests(unittest.TestCase):
         for req in ("run_command", "write_to_file", "replace_file_content", "multi_replace_file_content", "invoke_subagent", "list_dir"):
             self.assertIn(req, ANTIGRAVITY_TOOLS)
 
+    def test_v1514_file_delete_backtick_notes_and_readonly_tar(self):
+        """v1.5.14: Safe file delete, backtick-safe context note & hints, and strictly read-only `tar -tf`."""
+        import shutil
+        import safe_file_ops
+        import generate_project_context
+        from _vnext_common import ValidationError
+
+        (self.repo / ".agents").mkdir(exist_ok=True)
+        shutil.copyfile(SCRIPTS.parent / "harness.py", self.repo / ".agents/harness.py")
+
+        doc_target = self.repo / "doc/PROJECT_RULES.md"
+        doc_target.parent.mkdir(parents=True, exist_ok=True)
+        doc_target.write_text("# Old Rules\n", encoding="utf-8")
+
+        # 1) `file delete` is blocked when Idle, AWAITING_DEVELOPER_APPROVAL, and VERIFYING
+        self.assertEqual("deny", self.call("run_command", {"CommandLine": "python .agents/harness.py file delete doc/PROJECT_RULES.md"})["decision"])
+        with self.assertRaises(ValidationError):
+            safe_file_ops.delete_files(self.repo, ["doc/PROJECT_RULES.md"])
+
+        for non_impl_status in ("AWAITING_DEVELOPER_APPROVAL", "VERIFYING"):
+            self.activate(
+                status=non_impl_status,
+                expected_files=["doc/PROJECT_RULES.md"],
+                expected_surfaces=["DOCS"],
+            )
+            self.assertEqual("deny", self.call("run_command", {"CommandLine": "python .agents/harness.py file delete doc/PROJECT_RULES.md"})["decision"])
+            with self.assertRaises(ValidationError):
+                safe_file_ops.delete_files(self.repo, ["doc/PROJECT_RULES.md"])
+
+        # 2) During IMPLEMENTING: Remove-Item denial includes `file delete` hint; protected/symlink/dir paths fail closed; approved target succeeds
+        self.activate(
+            status="IMPLEMENTING",
+            expected_files=["doc/PROJECT_RULES.md", ".agents/project-context/project-notes.md", "AGENTS.md"],
+            expected_surfaces=["DOCS"],
+        )
+        rm_res = self.call("run_command", {"CommandLine": "Remove-Item -Path doc/PROJECT_RULES.md"})
+        self.assertEqual("deny", rm_res["decision"])
+        self.assertIn("file delete", rm_res["reason"])
+
+        (self.repo / "AGENTS.md").write_text("# Adapter\n", encoding="utf-8")
+        notes_p = self.repo / ".agents/project-context/project-notes.md"
+        notes_p.parent.mkdir(parents=True, exist_ok=True)
+        notes_p.write_text("# Notes\n", encoding="utf-8")
+
+        outside_f = Path(self.temp.name).parent / "outside_delete_probe.md"
+        outside_f.write_text("outside", encoding="utf-8")
+        self.addCleanup(lambda: outside_f.unlink(missing_ok=True))
+
+        for bad_target in (".agents/project-context/project-notes.md", ".agents/harness.py", "AGENTS.md", "gradlew", "doc", str(outside_f)):
+            self.assertEqual("deny", self.call("run_command", {"CommandLine": f'python .agents/harness.py file delete "{bad_target}"'})["decision"], bad_target)
+            with self.assertRaises(ValidationError, msg=bad_target):
+                safe_file_ops.delete_files(self.repo, [bad_target])
+
+        ok_hook = self.call("run_command", {"CommandLine": "python .agents/harness.py file delete doc/PROJECT_RULES.md"})
+        self.assertEqual("allow", ok_hook["decision"], ok_hook)
+        res_del = safe_file_ops.delete_files(self.repo, ["doc/PROJECT_RULES.md"])
+        self.assertEqual("DELETED", res_del["status"])
+        self.assertFalse(doc_target.exists())
+
+        # 3) Backticks inside double quotes stay denied WITH single-quote hint; single-quoted backticks pass
+        bad_bt = 'python .agents/harness.py context note "Use `Kermit` logger" --section "4. Rules (`doc/PROJECT_RULES.md`)"'
+        res_bt_bad = self.call("run_command", {"CommandLine": bad_bt})
+        self.assertEqual("deny", res_bt_bad["decision"])
+        self.assertIn("single quotes", res_bt_bad["reason"])
+
+        ok_bt_sq = "python .agents/harness.py context note 'Use `Kermit` logger' --section '4. Rules (`doc/PROJECT_RULES.md`)'"
+        res_bt_ok = self.call("run_command", {"CommandLine": ok_bt_sq})
+        self.assertEqual("allow", res_bt_ok["decision"], res_bt_ok)
+
+        # Backtick-normalized `--section`, `--replace`, `--remove`, and `--note-file` in context note
+        notes_p.write_text(
+            "# Notes\n\n## 4. Architecture (`doc/PROJECT_RULES.md`)\n- Keep `Kermit` logs PII-free.\n",
+            encoding="utf-8",
+        )
+        import argparse
+        rc_add = generate_project_context.cmd_note(argparse.Namespace(
+            repo=str(self.repo), note="", text="Use Compose Preview.", note_file="",
+            replace="", remove="", section="4. Architecture (doc/PROJECT_RULES.md)", json=True,
+        ))
+        self.assertEqual(0, rc_add)
+        updated_notes = notes_p.read_text(encoding="utf-8")
+        self.assertEqual(1, updated_notes.count("## 4. Architecture"), updated_notes)
+        self.assertIn("- Use Compose Preview.", updated_notes)
+
+        rc_rem = generate_project_context.cmd_note(argparse.Namespace(
+            repo=str(self.repo), note="", text="", note_file="",
+            replace="", remove="Keep Kermit logs PII-free.", section="Domain", json=True,
+        ))
+        self.assertEqual(0, rc_rem)
+        self.assertNotIn("PII-free", notes_p.read_text(encoding="utf-8"))
+
+        note_f = self.repo / "note_payload.txt"
+        note_f.write_text("Loaded from `UTF-8` note file.", encoding="utf-8")
+        rc_file = generate_project_context.cmd_note(argparse.Namespace(
+            repo=str(self.repo), note="", text="", note_file="note_payload.txt",
+            replace="", remove="", section="4. Architecture (doc/PROJECT_RULES.md)", json=True,
+        ))
+        self.assertEqual(0, rc_file)
+        self.assertIn("- Loaded from `UTF-8` note file.", notes_p.read_text(encoding="utf-8"))
+
+        # 4) Strictly read-only `tar -tf` allowed even during IMPLEMENTING; extract/create/exec flags denied
+        for ok_tar in (
+            'tar -tf "C:/Users/dev/upload.zip"',
+            'tar tf archive.tar',
+            'tar --list -f archive.zip',
+            'tar --list --file=archive.tar.gz',
+        ):
+            res_t = self.call("run_command", {"CommandLine": ok_tar})
+            self.assertEqual("allow", res_t["decision"], (ok_tar, res_t))
+
+        for bad_tar in (
+            'tar -xf archive.zip',
+            'tar -cf out.tar .',
+            'tar -tf archive.tar --to-command=sh',
+            'tar -tf archive.tar --checkpoint-action=exec=sh',
+            'tar -tf -',
+        ):
+            res_tb = self.call("run_command", {"CommandLine": bad_tar})
+            self.assertEqual("deny", res_tb["decision"], (bad_tar, res_tb))
 
 
 class GenericMCPTests(unittest.TestCase):

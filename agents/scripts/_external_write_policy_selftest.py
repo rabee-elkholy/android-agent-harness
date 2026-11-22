@@ -308,5 +308,76 @@ class ExternalWritePolicyTests(unittest.TestCase):
                 res_ro = self._run(ENGINE, {"toolCall": {"name": unknown_ro, "args": {}}})
                 self.assertEqual("allow", res_ro["decision"], res_ro)
 
+    def test_v1514_twg_gmail_service_and_unknown_external_cli_policy(self) -> None:
+        # 1) `twg` read-only queries are allowed across all plan states (Idle, AWAITING, IMPLEMENTING, VERIFYING, BLOCKED)
+        twg_reads = (
+            "twg doctor",
+            "twg --help",
+            "twg whoami",
+            "twg skills list",
+            "twg jira workitem get KAN-34 -o json",
+            'twg jira search "project = KAN AND status != Done" -o json',
+            'twg jira search "project = KAN AND description ~ \'create update delete\'" -o json',
+            "twg work query --since 7d -o json",
+            'twg rovo search "onboarding"',
+            r'& "C:\Users\dev\AppData\Local\Programs\twg\bin\twg.exe" doctor',
+        )
+        for status in (None, "AWAITING_DEVELOPER_APPROVAL", "IMPLEMENTING", "VERIFYING", "BLOCKED"):
+            if status:
+                self.plan(status)
+            for cmd in twg_reads:
+                with self.subTest(status=status, cmd=cmd):
+                    res = self.command(cmd)
+                    self.assertEqual("allow", res["decision"], (status, cmd, res))
+
+        # 2) `twg` mutations prompt (`ask` / `force_ask`) rather than hard-denying
+        self.plan("AWAITING_DEVELOPER_APPROVAL")
+        for ask_cmd in (
+            'twg jira workitem create --project KAN --summary "Test"',
+            'twg jira workitem update KAN-34 --status "In Progress"',
+            "twg skills install --agent antigravity --yes",
+        ):
+            with self.subTest(cmd=ask_cmd):
+                self.assertEqual("ask", self.command(ask_cmd)["decision"], ask_cmd)
+        for force_cmd in (
+            "twg jira workitem delete KAN-34",
+            "twg logout",
+            "twg uninstall",
+        ):
+            with self.subTest(cmd=force_cmd):
+                self.assertEqual("force_ask", self.command(force_cmd)["decision"], force_cmd)
+
+        # 3) `twg` security boundaries remain strictly denied
+        for deny_cmd in (
+            "twg jira workitem create --file release.keystore",
+            "twg doctor; rm -rf .",
+            "twg doctor | Out-File x.kt",
+            "twg jira workitem get KAN-34 --out .agents/harness.py",
+        ):
+            with self.subTest(cmd=deny_cmd):
+                self.assertEqual("deny", self.command(deny_cmd)["decision"], deny_cmd)
+
+        # 4) `gmail` Workspace CLI support
+        self.assertEqual("allow", self.command("gmail readonly messages-list")["decision"])
+        self.assertEqual("ask", self.command("gmail mutate create-draft")["decision"])
+        self.assertEqual("force_ask", self.command("gmail mutate send")["decision"])
+
+        # 5) Known service CLIs (`gh`, `firebase`, `postman`) and unknown non-dangerous external CLI fallback
+        self.assertEqual("allow", self.command("gh pr list")["decision"])
+        self.assertEqual("ask", self.command("gh pr create --title x")["decision"])
+        self.assertEqual("ask", self.command("gh api repos/o/r -X POST")["decision"])
+        self.assertEqual("force_ask", self.command("gh repo delete o/r")["decision"])
+
+        self.plan("AWAITING_DEVELOPER_APPROVAL")
+        self.assertEqual("ask", self.command("my-partner-cli status")["decision"])
+        self.plan("IMPLEMENTING")
+        self.assertEqual("deny", self.command("my-partner-cli status")["decision"])
+        # Repo-local executables, scripts, and dangerous shell/transfer tools always stay denied
+        for status in ("AWAITING_DEVELOPER_APPROVAL", "IMPLEMENTING"):
+            self.plan(status)
+            for bad in ("./local-tool.sh", "tools/run.py", "curl -X POST https://x.invalid", "rclone copy . remote:", "scp a host:/b"):
+                self.assertEqual("deny", self.command(bad)["decision"], (status, bad))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -290,6 +290,21 @@ class AndroidUiTests(unittest.TestCase):
                 ui.main(['render', '--filter', 'Screen', '--fqn', 'a.B'])
         invoke.assert_not_called()
 
+    def test_preview_pins_gradle_reference_and_normalizes_explicit_prefix(self):
+        with patch.object(ui, 'invoke', side_effect=self.renderer) as invoke:
+            res = self.render(self.args(reference='gradle://.?:mobile'))
+        command = invoke.call_args.args[1]
+        self.assertEqual(['preview', 'render', 'gradle://.?:mobile'], command[:3])
+        self.assertEqual(':mobile', res['selection']['reference'])
+        with patch.object(ui, 'invoke', side_effect=[(0, '--all'), (0, 'sample.A.Preview')]) as invoke_list:
+            listed = self.render(self.args(action='list', fqn=[], reference='gradle://?:shared', include_dependencies=True), identity='list-shared')
+        self.assertEqual(['preview', 'list', 'gradle://.?:shared', '--all'], invoke_list.call_args.args[1])
+        self.assertEqual(':shared', listed['selection']['reference'])
+        for bad_ref in ('gradle://outside', 'gradle://.?../evil', 'gradle://.?:mobile@debug'):
+            with patch('_variants.resolve_assemble_task', return_value=':mobile:assembleDebug'), \
+                 self.assertRaisesRegex(ValidationError, 'exact local Gradle module'):
+                ui.preview_reference(self.repo, bad_ref)
+
 
 if __name__ == "__main__":
     unittest.main()

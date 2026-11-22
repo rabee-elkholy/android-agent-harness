@@ -329,6 +329,89 @@ class EcosystemUpgradesSelftest(unittest.TestCase):
         self.assertIn("`roborazzi_ui`", joined)
         self.assertIn("swap_meal_btn", joined)
 
+    def test_3b_roborazzi_ignores_hidden_viewstub_and_deduplicates_intermediates(self) -> None:
+        import roborazzi_gate as rg
+
+        inter_dir = self.repo / "androidApp/build/intermediates/roborazzi"
+        out_dir = self.repo / "androidApp/build/outputs/roborazzi"
+        inter_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Both intermediates and outputs exist for `gallery.uitree.json`; only outputs should be scanned.
+        # Plus an intermediates-only file (`inter_only.uitree.json`) MUST still be retained.
+        clean_tree = {
+            "schemaVersion": 1,
+            "capture": {"imageWidth": 412, "imageHeight": 915, "scale": 1.0},
+            "root": {
+                "type": "view",
+                "className": "com.android.internal.policy.DecorView",
+                "bounds": [0, 0, 412, 915],
+                "children": [
+                    {
+                        "type": "view",
+                        "className": "android.widget.LinearLayout",
+                        "bounds": [0, 0, 412, 915],
+                        "children": [
+                            {
+                                "type": "view",
+                                "className": "android.view.ViewStub",
+                                "id": "android:id/action_mode_bar_stub",
+                                "bounds": [0, 0, 0, 0],
+                                "visibility": "gone",
+                            },
+                            {
+                                "type": "view",
+                                "id": "android:id/navigationBarBackground",
+                                "bounds": [0, 0, 0, 0],
+                                "visibility": "invisible",
+                            },
+                            {
+                                "type": "compose",
+                                "testTag": "primary_cta",
+                                "bounds": [16, 100, 396, 156],
+                                "actions": ["OnClick"],
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+        (inter_dir / "gallery.uitree.json").write_text(json.dumps(clean_tree), encoding="utf-8")
+        (out_dir / "gallery.uitree.json").write_text(json.dumps(clean_tree), encoding="utf-8")
+        (inter_dir / "inter_only.uitree.json").write_text(json.dumps(clean_tree), encoding="utf-8")
+
+        caps = rg.detect_roborazzi(self.repo)
+        self.assertEqual(
+            [
+                "androidApp/build/intermediates/roborazzi/inter_only.uitree.json",
+                "androidApp/build/outputs/roborazzi/gallery.uitree.json",
+            ],
+            caps["uitree_files"],
+        )
+
+        audit = rg.inspect_uitree_files(self.repo)
+        self.assertEqual("PASS", audit["status"], audit)
+        self.assertEqual(2, audit["scanned_files"])
+        self.assertEqual([], audit["issues"])
+
+        # Visible zero-dimension node MUST still fail!
+        bad_visible = out_dir / "visible_zero.uitree.json"
+        bad_visible.write_text(json.dumps({
+            "schemaVersion": 1,
+            "capture": {"imageWidth": 412, "imageHeight": 915, "scale": 1.0},
+            "root": {
+                "type": "view",
+                "bounds": [0, 0, 412, 915],
+                "children": [
+                    {"n": 7, "type": "compose", "testTag": "broken_cta", "bounds": [20, 20, 20, 60], "visibility": "visible"},
+                ],
+            },
+        }), encoding="utf-8")
+        audit_fail = rg.inspect_uitree_files(self.repo, [bad_visible])
+        self.assertEqual("FAIL", audit_fail["status"])
+        self.assertEqual("ZERO_DIMENSION_NODE", audit_fail["issues"][0]["code"])
+        self.assertEqual("broken_cta", audit_fail["issues"][0]["node"])
+
     def test_4_maestro_destructive_guard_and_phone_e2e_yaml_exporter(self) -> None:
         import maestro_bridge as mb
         from _vnext_common import ValidationError, state_root

@@ -29,6 +29,7 @@ CORE_SCRIPTS = (
     "dep_inspect.py",
     "maestro_bridge.py",
     "roborazzi_gate.py",
+    "safe_file_ops.py",
     "session_forensics.py",
     "static_health_bridge.py",
     "symbol_edit.py",

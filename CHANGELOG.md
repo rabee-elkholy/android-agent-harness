@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.14] - 2026-11-22
+
+### Roborazzi ViewStub Fix, Gradle Preview Pin, Safe File Delete & Backtick/Archive DX
+
+- **Roborazzi `.uitree.json` ViewStub Exemption & Deduplication (`roborazzi_gate.py`, `_ecosystem_upgrades_selftest.py`)**: Updated `_flatten_nodes()` with `_is_hidden_or_stub_node()` so `visibility="gone"` / `"invisible"` nodes, `android.view.ViewStub`, and hidden framework decor IDs (`android:id/action_mode_bar_stub`, `statusBarBackground`, `navigationBarBackground`) no longer trigger false-positive `ZERO_DIMENSION_NODE` or sibling collision failures while preserving strict checks for visible Compose/View nodes, and added `_discover_uitree_files()` to deduplicate `build/intermediates/` sidecars against matching `build/outputs/` sidecars.
+- **Explicit Gradle Reference Pinning for `android-ui` (`android_ui.py`, `_android_ui_selftest.py`)**: Updated `preview()` to invoke `android preview list/render` with `gradle://.?<module>` so sibling Bazel markers or Windows case-insensitive `build/` directories cannot trigger `Multiple build systems detected: gradle, bazel`, and updated `preview_reference()` to accept/normalize explicit `gradle://.?` / `gradle://?` prefixes while still rejecting external or variant-suffixed targets.
+- **Safe Plan-Scoped File Deletion (`safe_file_ops.py`, `agents/harness.py`, `harness_cli.py`, `mutation_guard.py`, `_safety/command_policy.py`, `_public_commands.py`, `doctor/models.py`)**: Added `python .agents/harness.py file delete <path...>` enforcing active `IMPLEMENTING` task authority, protected-root/symlink/directory/immutable-file checks, and `file_mutation_allowed` scope drift guards (registered in `CORE_SCRIPTS` and `PUBLIC_COMMANDS`), and added `file delete` guidance to shell mutation/deletion denial messages.
+- **Backtick-Resilient `context note` & Actionable Hook Hint (`generate_project_context.py`, `harness_cli.py`, `mutation_guard.py`)**: Added `--note-file` and backtick-normalized fallback matching for `--section`, `--remove`, `--replace`, and duplicate detection in `context note`, and clarified the fail-closed `SHELL_LAUNDERING` message when Markdown backticks appear inside double quotes to suggest single quotes `'...'`.
+- **Read-Only Archive Listing (`mutation_guard.py`, `_hook_selftest.py`)**: Allowed strictly read-only `tar -tf` / `tar --list -f` archive inspection via `_is_read_only_tar()` while keeping extraction (`-x`), creation (`-c`), `--to-command`, and `--checkpoint-action` blocked.
+- **External & Plugin CLI Policy (`integrations/external_write_policy.py`, `_safety/command_policy.py`, `_external_write_policy_selftest.py`)**: Added `gmail` to `WORKSPACE_CLIS`, first-class `twg` (Atlassian Teamwork Graph CLI) and known/installed plugin CLI classification (`allow` for read-only/diagnostic calls such as `twg doctor` / `twg jira search` / `twg work query` across all task states, `ask`/`force_ask` for external writes, hard `deny` for secrets and protected output paths), and safe `ask` prompting for non-dangerous unknown external CLIs outside `IMPLEMENTING` instead of blanket `deny`.
+
 ## [1.5.13] - 2026-11-22
 
 ### Room KMP RoomDatabaseConstructor Expect/Actual Exemption & Release Script Fixes

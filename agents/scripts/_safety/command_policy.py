@@ -607,6 +607,72 @@ def _contains_windows_start_process(command: str) -> bool:
     return False
 
 
+def _extract_single_file_delete_targets(segment: str) -> tuple[bool, list[str]]:
+    from mutation_guard import _entry, _strip_workflow_top_flags
+    name, args = _entry(segment, _engine.REPO)
+    if name in {"harness_cli", "android-harness"}:
+        clean = _strip_workflow_top_flags(args)
+        if clean[:1] != ["file"]:
+            return False, []
+        sub_args = clean[1:]
+    elif name == "safe_file_ops":
+        sub_args = _strip_workflow_top_flags(args)
+    else:
+        return False, []
+    if any(tok in {"-h", "--help"} for tok in sub_args):
+        return False, []
+    sub_clean = _strip_workflow_top_flags(sub_args)
+    if sub_clean[:1] != ["delete"]:
+        return True, []
+    rest = sub_clean[1:]
+    targets: list[str] = []
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        if tok == "--json":
+            idx += 1
+        elif tok in {"--repo", "--kit", "--task-id", "--task"} and idx + 1 < len(rest):
+            idx += 2
+        elif any(tok.startswith(f + "=") for f in ("--repo", "--kit", "--task-id", "--task")):
+            idx += 1
+        elif tok.startswith("-"):
+            return True, []
+        else:
+            targets.append(tok)
+            idx += 1
+    return (True, targets) if targets else (True, [])
+
+
+def _extract_file_delete_targets(command: str) -> tuple[bool, list[str]]:
+    cmd = str(command or "").strip()
+    if not cmd:
+        return False, []
+    low = cmd.lower()
+    if not _engine.re.search(
+        r"(?:harness(?:\.py)?|harness_cli(?:\.py)?|android-harness)\s+(?:--\S+\s+)*file\s+(?:--\S+\s+)*delete\b|safe_file_ops(?:\.py)?\b",
+        low,
+    ):
+        return False, []
+    from mutation_guard import _split_safe_and_chain
+    segments = _split_safe_and_chain(cmd, max_segments=8)
+    if not segments:
+        return True, []
+    any_del = False
+    all_targets: list[str] = []
+    for seg in segments:
+        seg_del, seg_targets = _extract_single_file_delete_targets(seg)
+        if seg_del:
+            if not seg_targets:
+                return True, []
+            any_del = True
+            for t in seg_targets:
+                if t not in all_targets:
+                    all_targets.append(t)
+    if not any_del:
+        return False, []
+    return True, all_targets
+
+
 def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '') -> None:
     from mutation_guard import _is_read_only, _split_segments, _tokens
     from platform_quirks import is_quirk_enabled
@@ -659,9 +725,11 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                         _engine._deny_engine_read("run_command", command)
                         return
     active_tid = ""
+    active_status = ""
     try:
         p = _engine.active_plan(_engine.REPO)
         active_tid = str(p.get("task_id") or "")
+        active_status = str(p.get("status") or "")
     except (OSError, ValueError, _engine.ValidationError):
         pass
     violated = _engine._developer_authority_violation(command)
@@ -676,6 +744,8 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
     if _engine._pending_cancel(active_tid) and any(sub in ("resume", "revise", "change-decision") for sub, _ in _engine._lifecycle_calls(command)):
         _engine.emit("deny", _engine._cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
         return
+    from integrations.external_write_policy import classify_external_cli, external_cli_tokens
+    ext_cli = external_cli_tokens(command, repo=_engine.REPO)
     for code, pattern in _engine.DANGEROUS:
         if pattern.search(command):
             if code == "agy_headless_loop_tos_guard" and not (
@@ -683,6 +753,8 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             ):
                 continue
             if code in ("tracker_write", "git_mutation", "raw_adb", "agy_headless_loop_tos_guard") and _engine._audited_harness_command(command):
+                continue
+            if code == "tracker_write" and ext_cli is not None and ext_cli[0] in {"workspace", "twg", "service"}:
                 continue
             if code == "tracker_write" and _is_read_only(command, _engine.REPO):
                 continue
@@ -741,15 +813,16 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 task_id=active_tid,
             )
             return
-    # Google Workspace skill CLIs (gdrive, gdocs, gsheets, ...) are external integrations, not project
-    # mutations: their readonly namespace is allowed and their mutate namespace asks the developer,
-    # whatever state the code task plan is in. Chained or redirected commands are never recognized.
-    from integrations.external_write_policy import classify_workspace_cli, workspace_cli_tokens
-    workspace_tokens = workspace_cli_tokens(command)
-    if workspace_tokens:
-        decision, reason, code = classify_workspace_cli(workspace_tokens)
-        _engine.emit(decision, reason, tool="run_command", command=command, reason_code=code, task_id=active_tid)
-        return
+    # External/plugin CLIs (Google Workspace, `twg`, `gh`, `firebase`, `gcloud`, etc.):
+    # read-only queries are allowed, writes ask for confirmation, secret/protected paths stay denied,
+    # and unknown non-dangerous external CLIs prompt outside IMPLEMENTING instead of hard-blocking.
+    if ext_cli is not None:
+        ext_kind, ext_toks = ext_cli
+        classified = classify_external_cli(ext_kind, ext_toks, plan_status=active_status)
+        if classified is not None:
+            decision, reason, code = classified
+            _engine.emit(decision, reason, tool="run_command", command=command, reason_code=code, task_id=active_tid)
+            return
     try:
         from delegation_policy import extract_symbol_write_targets
         is_sym_write, sym_write_targets = extract_symbol_write_targets(command)
@@ -776,6 +849,58 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 sym_allowed, sym_reason, sym_code = w_sym_ok, w_sym_reason, w_sym_code
         if not sym_allowed:
             _engine.emit("deny", sym_reason, tool="run_command", command=command, reason_code=sym_code, task_id=active_tid)
+            return
+        if conversation:
+            try:
+                from delegation_policy import mark_lead_edit_or_transition
+                mark_lead_edit_or_transition(_engine.REPO, conversation)
+            except (ImportError, OSError, ValueError):
+                pass
+    try:
+        is_file_delete, file_delete_targets = _extract_file_delete_targets(command)
+    except (ImportError, OSError, ValueError):
+        is_file_delete, file_delete_targets = False, []
+    if is_file_delete:
+        if not file_delete_targets:
+            _engine.emit("deny", "Malformed or chained `file delete` command; pass explicit repository file path(s).", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+            return
+        from safe_file_ops import _has_symlink_component, _is_unconditionally_protected
+        repo_root = _engine.REPO.resolve()
+        for ft in file_delete_targets:
+            if _has_symlink_component(repo_root, ft):
+                _engine.emit("deny", f"Refusing symlink target deletion: '{ft}'.", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+                return
+            safe_ft, detail_ft, is_ext_ft = _engine._safe_target(ft)
+            if not safe_ft or is_ext_ft:
+                _engine.emit("deny", detail_ft if not safe_ft else f"Target path '{ft}' is outside the repository boundary.", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+                return
+            cand_ft = Path(ft).expanduser()
+            resolved_ft = cand_ft.resolve() if cand_ft.is_absolute() else (repo_root / cand_ft).resolve()
+            if resolved_ft.is_dir():
+                _engine.emit("deny", f"Refusing directory deletion: '{ft}'.", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+                return
+            if resolved_ft.is_relative_to(repo_root) and _is_unconditionally_protected(resolved_ft.relative_to(repo_root).as_posix()):
+                _engine.emit("deny", f"Cannot delete protected harness, Git, wrapper, or adapter file '{ft}'.", tool="run_command", command=command, reason_code="PROTECTED_PATH", task_id=active_tid)
+                return
+        if _engine._pending_cancel(active_tid):
+            _engine.emit("deny", _engine._cancel_pending_message(active_tid), tool="run_command", command=command, reason_code="CANCEL_PENDING", task_id=active_tid)
+            return
+        try:
+            from plan_authority import require_mutation
+            del_plan = _engine.active_plan(_engine.REPO)
+            require_mutation(del_plan)
+        except _engine.ValidationError as exc:
+            _engine.emit("deny", str(exc), tool="run_command", command=command, reason_code="FILE_MUTATION_GUARD", task_id=active_tid)
+            return
+        del_allowed, del_reason, del_code = _engine.file_mutation_allowed(_engine.REPO, targets=file_delete_targets)
+        if del_allowed:
+            w_del_ok, w_del_reason, w_del_code = _engine._check_web_mode_direct_write_guard(
+                _engine.REPO, file_delete_targets, conversation=conversation, transcript_hint=transcript_hint,
+            )
+            if not w_del_ok:
+                del_allowed, del_reason, del_code = w_del_ok, w_del_reason, w_del_code
+        if not del_allowed:
+            _engine.emit("deny", del_reason, tool="run_command", command=command, reason_code=del_code, task_id=active_tid)
             return
         if conversation:
             try:
@@ -912,7 +1037,7 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             "or inline `python -c` in `run_command` on Antigravity — they force Windows PowerShell out of Turbo Mode into manual approval stalls; "
             "run standalone single-line `python .agents/harness.py` commands or native `view_file`/`grep_search` tools instead.]"
         )
-    if allowed and conversation and not is_sym_write:
+    if allowed and conversation and not (is_sym_write or is_file_delete):
         try:
             from delegation_policy import check_and_record_lead_post_subagent_read, check_post_reviewer_reread_guard
             ok_pr, reason_pr, code_pr = check_post_reviewer_reread_guard(

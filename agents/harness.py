@@ -370,11 +370,13 @@ def _main(argv: list[str] | None = None) -> int:
     if not args or args[0] in {"-h", "--help", "help"}:
         print(
             "Usage: python .agents/harness.py "
-            "<context|task-context|graph|symbol|dep-inspect|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
+            "<context|task-context|graph|symbol|file|dep-inspect|task|doctor|repair|diagnose-session|health|policy|delegate-plan|execution-mode|web-relay|web-pack|web-apply|verify-steps|preflight|test|roborazzi|compile|assemble|review|phase-review|device|debug|android-ui|android-inspect|journey|e2e|maestro|verify|pm|zoho|report-issue|version|update-info|commands> [args...]"
         )
         return 0
 
     command = args.pop(0)
+    if command == "file":
+        return _run("safe_file_ops.py", _with_repo_arg(args))
     if command == "debug":
         return _run("debug_instrumentation.py", args)
     if command == "android-inspect":

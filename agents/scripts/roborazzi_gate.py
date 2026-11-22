@@ -56,6 +56,53 @@ INCLUDE_ANDROID_RESOURCES_RE = re.compile(
     r"\b(?:isIncludeAndroidResources|includeAndroidResources)\s*=\s*true\b"
 )
 APPLY_FALSE_RE = re.compile(r"\bapply\s+false\b", re.I)
+_HIDDEN_VISIBILITIES = frozenset({"gone", "invisible"})
+_FRAMEWORK_DECOR_IDS = frozenset({
+    "android:id/action_mode_bar_stub",
+    "android:id/statusBarBackground",
+    "android:id/navigationBarBackground",
+})
+_BUILD_BUCKET_RE = re.compile(
+    r"^(?:(?P<mod>.+?)/)?build/(?P<bucket>outputs|intermediates)/(?P<tail>.+)$"
+)
+
+
+def _discover_uitree_files(repo: Path) -> list[Path]:
+    """Find `.uitree.json` sidecars, preferring `build/outputs` over duplicate `build/intermediates`."""
+    candidates = [p for p in sorted(repo_glob(repo, "**/*.uitree.json")) if p.is_file()]
+    output_keys: set[tuple[str, str]] = set()
+    parsed: list[tuple[Path, str, str, str]] = []
+    for path in candidates:
+        rel = path.relative_to(repo).as_posix() if path.is_relative_to(repo) else path.as_posix()
+        match = _BUILD_BUCKET_RE.match(rel)
+        if match:
+            mod = match.group("mod") or ""
+            bucket = match.group("bucket")
+            tail = match.group("tail")
+            if bucket == "outputs":
+                output_keys.add((mod, tail))
+            parsed.append((path, mod, bucket, tail))
+        else:
+            parsed.append((path, "", "", ""))
+    deduped: list[Path] = []
+    for path, mod, bucket, tail in parsed:
+        if bucket == "intermediates" and (mod, tail) in output_keys:
+            continue
+        deduped.append(path)
+    return deduped
+
+
+def _is_hidden_or_stub_node(node: dict[str, Any]) -> bool:
+    vis = str(node.get("visibility") or "").strip().lower()
+    if vis in _HIDDEN_VISIBILITIES:
+        return True
+    cls = str(node.get("className") or "").strip()
+    if cls == "android.view.ViewStub" or cls.endswith(".ViewStub"):
+        return True
+    nid = str(node.get("id") or node.get("resourceId") or "").strip()
+    if nid in _FRAMEWORK_DECOR_IDS or nid.endswith("action_mode_bar_stub"):
+        return True
+    return False
 
 
 def _norm_bounds(raw: Any) -> list[float] | None:
@@ -146,8 +193,7 @@ def detect_roborazzi(repo: Path) -> dict[str, Any]:
 
     uitree_files = [
         p.relative_to(repo).as_posix()
-        for p in sorted(repo_glob(repo, "**/*.uitree.json"))
-        if p.is_file()
+        for p in _discover_uitree_files(repo)
     ]
     return {
         "installed": bool(modules_with_roborazzi or in_catalog),
@@ -168,7 +214,7 @@ def _flatten_nodes(
     *,
     parent_children_siblings: list[dict[str, Any]] | None = None,
 ) -> None:
-    if not isinstance(node, dict):
+    if not isinstance(node, dict) or _is_hidden_or_stub_node(node):
         return
     bounds = _norm_bounds(node.get("bounds"))
     props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
@@ -189,7 +235,10 @@ def _flatten_nodes(
     }
     if entry["label"] or entry["n"] is not None or bounds is not None:
         out.append(entry)
-    children = [c for c in (node.get("children") or []) if isinstance(c, dict)]
+    children = [
+        c for c in (node.get("children") or [])
+        if isinstance(c, dict) and not _is_hidden_or_stub_node(c)
+    ]
     if parent_children_siblings is not None and len(children) >= 2:
         parent_children_siblings.append({"children": children})
     for child in children:
@@ -212,7 +261,7 @@ def _overlap_ratio(b1: list[int | float], b2: list[int | float]) -> float:
 def inspect_uitree_files(repo: Path, uitree_paths: list[Path] | None = None) -> dict[str, Any]:
     """Audit Roborazzi `.uitree.json` sidecars for deterministic bounds & clipping defects."""
     if uitree_paths is None:
-        uitree_paths = [p for p in sorted(repo_glob(repo, "**/*.uitree.json")) if p.is_file()]
+        uitree_paths = _discover_uitree_files(repo)
 
     issues: list[dict[str, Any]] = []
     digests: list[str] = []

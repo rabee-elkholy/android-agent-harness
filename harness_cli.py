@@ -768,6 +768,8 @@ def cmd_context(args: argparse.Namespace) -> int:
         text = getattr(args, "note", None) or getattr(args, "note_text", None)
         if text:
             cli_args.append(text)
+        if getattr(args, "note_file", None):
+            cli_args.extend(["--note-file", args.note_file])
         if getattr(args, "replace", None):
             cli_args.extend(["--replace", args.replace])
         if getattr(args, "remove", None):
@@ -1983,6 +1985,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("subaction", choices=("preview", "generate", "status", "refresh", "note", "instruct", "drift-report"), help="Context action.")
     sp.add_argument("note_text", nargs="?", default="", help="Note or instruction text.")
     sp.add_argument("--note", default="", help="Note text to append or replace with.")
+    sp.add_argument("--note-file", default="", help="UTF-8 file containing note text to append or replace with.")
     sp.add_argument("--instruction", default="", help="Instruction text.")
     sp.add_argument("--replace", default="", help="Existing note text/bullet to replace in project notes.")
     sp.add_argument("--remove", default="", help="Existing note text or instruction ID to remove.")
@@ -2025,6 +2028,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for sub_name, script_file, help_txt in (
         ("symbol", "symbol_edit.py", "Semantic symbol outline, read, replace-body, and insert-after surgery."),
+        ("file", "safe_file_ops.py", "Safely delete approved-scope repository files during IMPLEMENTING."),
         ("dep-inspect", "dep_inspect.py", "Inspect third-party library Kotlin/Java sources (-sources.jar auto-fetch) or clean public signatures."),
         ("health", "static_health_bridge.py", "Task-scoped SARIF, Gradle BuildHealth, and LeakCanary inspection."),
         ("roborazzi", "roborazzi_gate.py", "Roborazzi headless JVM UI verification and .uitree.json bounds audit."),
