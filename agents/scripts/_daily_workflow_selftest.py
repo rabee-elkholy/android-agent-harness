@@ -9859,6 +9859,55 @@ class PlanningRecoveryTests(unittest.TestCase):
         saved = read_json(task_dir(self.repo, "phase-recovery") / "plan.json")
         self.assertEqual(["p1", "p2"], [p["id"] for p in saved["phases"]])
 
+    def test_expected_surface_aliases_and_comma_safe_phases_draft_and_revise(self) -> None:
+        files = ",".join(f"app/src/main/kotlin/com/example/Screen{i}.kt" for i in range(9))
+        # 1. Surface aliases (MANIFEST, SENSITIVE, UI) + commas inside phase titles in --phases
+        with mock.patch("sys.stdout"):
+            ret1 = workflow.main([
+                "draft", "--repo", str(self.repo), "--task-id", "alias-comma-1",
+                "--outcome", "Harden auth, secrets, and UI",
+                "--expected-files", files,
+                "--expected-surfaces", "MANIFEST,SENSITIVE,UI",
+                "--phases", "p1:Replace hardcoded tokens, pre-encoded ApiConfig secrets, and cleartext traffic,p2:Harden AndroidManifest and UI",
+            ])
+        self.assertEqual(0, ret1)
+        plan1 = read_json(task_dir(self.repo, "alias-comma-1") / "plan.json")
+        self.assertEqual(["p1", "p2"], [p["id"] for p in plan1["phases"]])
+        self.assertIn("pre-encoded ApiConfig secrets", plan1["phases"][0]["title"])
+        for surf in ("MANIFEST_PERMISSION", "SENSITIVE_DATA", "COMPOSE_UI", "XML_UI", "RESOURCE_UI"):
+            self.assertIn(surf, plan1["expected_surfaces"])
+
+        # 2. Repeatable --phase on revise replaces phases cleanly and preserves internal commas
+        with mock.patch("sys.stdout"):
+            ret2 = workflow.main([
+                "revise", "--repo", str(self.repo), "--task-id", "alias-comma-1",
+                "--phase", "phase_a:Core, auth & storage",
+                "--phase", "phase_b:Manifest, strings & UI",
+            ])
+        self.assertEqual(0, ret2)
+        plan2 = read_json(task_dir(self.repo, "alias-comma-1") / "plan.json")
+        self.assertEqual(["phase_a", "phase_b"], [p["id"] for p in plan2["phases"]])
+        self.assertEqual("Core, auth & storage", plan2["phases"][0]["title"])
+
+        # 3. Semicolon-separated --phases also works cleanly
+        with mock.patch("sys.stdout"):
+            ret3 = workflow.main([
+                "revise", "--repo", str(self.repo), "--task-id", "alias-comma-1",
+                "--phases", "p_x:One, two; p_y:Three, four",
+            ])
+        self.assertEqual(0, ret3)
+        plan3 = read_json(task_dir(self.repo, "alias-comma-1") / "plan.json")
+        self.assertEqual(["p_x", "p_y"], [p["id"] for p in plan3["phases"]])
+        self.assertEqual("One, two", plan3["phases"][0]["title"])
+
+        # 4. Mixing --phase and --phases is rejected cleanly
+        with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            ret4 = workflow.main([
+                "revise", "--repo", str(self.repo), "--task-id", "alias-comma-1",
+                "--phase", "p1:One", "--phases", "p2:Two",
+            ])
+        self.assertNotEqual(0, ret4)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

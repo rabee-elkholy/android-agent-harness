@@ -329,6 +329,28 @@ def _collect_csv_or_multi_flag(rest: list[str], flag_names: tuple[str, ...]) -> 
     return out
 
 
+def _collect_repeated_flag(rest: list[str], flag_name: str) -> list[str]:
+    """Collect repeated `--flag value` or `--flag=value` occurrences without splitting on commas."""
+    out: list[str] = []
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        if tok.startswith(flag_name + "="):
+            val = tok.split("=", 1)[1].strip(";&|").strip().strip("\"'")
+            if val:
+                out.append(val)
+            idx += 1
+            continue
+        if tok == flag_name and idx + 1 < len(rest):
+            val = rest[idx + 1].strip(";&|").strip().strip("\"'")
+            if val and val not in {"&&", "||", ";", "|"} and not val.startswith("-"):
+                out.append(val)
+                idx += 2
+                continue
+        idx += 1
+    return out
+
+
 def _estimate_cli_phases_count(repo: Path, raw_phases: str) -> int:
     s = str(raw_phases or "").strip().strip("\"'")
     if not s:
@@ -353,6 +375,10 @@ def _estimate_cli_phases_count(repo: Path, raw_phases: str) -> int:
         except ValueError:
             pass
     if not s.startswith(("[", "{")):
+        if ";" in s:
+            return len([p.strip() for p in s.split(";") if p.strip()])
+        if _engine.re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*\s*:", s):
+            return len([p.strip() for p in _engine.re.split(r",\s*(?=[A-Za-z0-9][A-Za-z0-9_-]*\s*:)", s) if p.strip()])
         return len([p.strip() for p in s.split(",") if p.strip()])
     return 0
 
@@ -405,7 +431,10 @@ def _extract_execution_mode_kickoff_details(command: str, repo: Path | None = No
                 files = _collect_csv_or_multi_flag(rest, ("--expected-files", "--files", "--file"))
                 modules = _collect_csv_or_multi_flag(rest, ("--expected-modules", "--modules", "--module"))
                 surfaces = [s.upper() for s in _collect_csv_or_multi_flag(rest, ("--expected-surfaces", "--surfaces", "--surface"))]
-                phases_count = _estimate_cli_phases_count(eff_repo, _engine._flag(rest, "--phases"))
+                phases_count = max(
+                    _estimate_cli_phases_count(eff_repo, _engine._flag(rest, "--phases")),
+                    len(_collect_repeated_flag(rest, "--phase")),
+                )
                 return {
                     "kind": sub_k,
                     "task_id": tid,
@@ -796,7 +825,9 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
                 opts_summary = " | ".join(f"`{o['id']}` ({o['label']})" for o in prompt_c["options"])
                 _engine.emit(
                     "deny",
-                    f"SELECT_EXECUTION_MODE_REQUIRED: Before running `{kickoff_kind}`, ask the developer via `ask_question` "
+                    f"SELECT_EXECUTION_MODE_REQUIRED: Expected heavy-task execution-mode prompt before `{kickoff_kind}` "
+                    "(tip: run `python .agents/harness.py execution-mode show --files <csv> [--surfaces <csv>] [--phases <N>] --json` "
+                    "before `task draft` so you can ask first without hitting this hook). Ask the developer via `ask_question` "
                     f"({prompt_c['question']}) with the 3 options: {opts_summary}. "
                     f"Translate the question (stating the approximate quota savings) and options professionally into the active conversation language, "
                     f"then record their choice via `{prompt_c['command_template']}` and continue.",

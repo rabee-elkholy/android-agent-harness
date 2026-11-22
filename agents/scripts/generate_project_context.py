@@ -308,116 +308,210 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_instruct(args: argparse.Namespace) -> int:
-    import hashlib
-    import time
-    from _vnext_common import atomic_write_json
-    repo = Path(args.repo).resolve()
-    context_dir = repo / ".agents" / "project-context"
-    inst_file = context_dir / "developer-instructions.json"
-    if not context_dir.is_dir():
-        context_dir.mkdir(parents=True, exist_ok=True)
+_VALID_INSTRUCTION_SCOPE_KINDS = (
+    "GLOBAL",
+    "MODULE",
+    "SOURCE_SET",
+    "PACKAGE",
+    "FEATURE",
+    "ARCH_FAMILY",
+    "PATH",
+)
 
-    remove_id = (getattr(args, "remove", None) or "").strip()
-    text = (getattr(args, "instruction", None) or getattr(args, "text", None) or "").strip()
 
-    source = getattr(args, "source", None)
-    proof_ref = getattr(args, "proof_reference", None)
-    if not source or source not in ("conversation", "developer_terminal", "host_native"):
-        print("[ERROR] Mandatory --source must be one of: conversation, developer_terminal, host_native.", file=sys.stderr)
-        return 1
-    if not proof_ref or not str(proof_ref).strip():
-        print("[ERROR] Mandatory --proof-reference cannot be empty.", file=sys.stderr)
-        return 1
-
-    existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
-    if inst_file.is_file():
-        try:
-            loaded = json.loads(inst_file.read_text(encoding="utf-8-sig"))
-            if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
-                existing_store = loaded
-        except (OSError, ValueError):
-            pass
-
-    if remove_id:
-        found = None
-        for old_inst in existing_store["instructions"]:
-            if old_inst.get("id") == remove_id or (len(remove_id) >= 8 and remove_id.lower() in str(old_inst.get("text") or "").lower()):
-                old_inst["status"] = "REMOVED"
-                old_inst["removed_at"] = time.time()
-                old_inst["removed_source"] = source
-                old_inst["removed_proof_reference"] = str(proof_ref)
-                found = old_inst.get("id")
-        if not found:
-            print(f"[ERROR] Instruction '{remove_id}' not found in {inst_file}", file=sys.stderr)
-            return 1
-        atomic_write_json(inst_file, existing_store)
-        ret_payload = {"status": "PASS", "action": "REMOVED", "id": found, "path": str(inst_file)}
-        if getattr(args, "json", False):
-            print(json.dumps(ret_payload, ensure_ascii=False))
-        else:
-            print(f"[INSTRUCT] Removed persistent instruction '{found}'")
-        return ret_payload
-
-    if not text:
-        print("[ERROR] Instruction text cannot be empty.", file=sys.stderr)
-        return 1
-
-    raw_scope = (getattr(args, "scope", None) or "GLOBAL").strip()
-    scope_val_arg = getattr(args, "scope_value", None)
-    if scope_val_arg:
-        scope_kind = raw_scope
+def _parse_instruction_scope(raw_scope: str, scope_val_arg: str | None = None) -> tuple[str, str]:
+    """Parse scope string and optional explicit value into canonical `(scope_kind, scope_value)`."""
+    raw = str(raw_scope or "GLOBAL").strip() or "GLOBAL"
+    if scope_val_arg is not None and str(scope_val_arg).strip():
+        scope_kind = raw
         scope_val = str(scope_val_arg).strip()
-    elif "::" in raw_scope:
-        scope_kind, scope_val = raw_scope.split("::", 1)
-    elif ":" in raw_scope and not raw_scope.startswith(":"):
-        scope_kind, scope_val = raw_scope.split(":", 1)
-    elif raw_scope.startswith(":"):
+    elif "::" in raw:
+        scope_kind, scope_val = raw.split("::", 1)
+    elif ":" in raw and not raw.startswith(":"):
+        scope_kind, scope_val = raw.split(":", 1)
+    elif raw.startswith(":"):
         scope_kind = "MODULE"
-        scope_val = raw_scope
-    elif raw_scope.upper() in ("GLOBAL", "*"):
+        scope_val = raw
+    elif raw.upper() in ("GLOBAL", "*"):
         scope_kind = "GLOBAL"
         scope_val = "*"
-    elif raw_scope.upper() in ("MODULE", "PACKAGE", "FEATURE", "SOURCE_SET", "ARCH_FAMILY", "PATH"):
-        scope_kind = raw_scope.upper()
+    elif raw.upper() in ("MODULE", "PACKAGE", "FEATURE", "SOURCE_SET", "ARCH_FAMILY", "PATH"):
+        scope_kind = raw.upper()
         scope_val = "*"
     else:
         scope_kind = "GLOBAL"
-        scope_val = raw_scope
+        scope_val = raw
 
-    scope_kind = scope_kind.upper()
+    scope_kind = scope_kind.strip().upper()
+    scope_val = scope_val.strip()
     if scope_kind == "MODULE" and scope_val != "*" and not scope_val.startswith(":"):
         scope_val = f":{scope_val}"
+    if scope_kind not in _VALID_INSTRUCTION_SCOPE_KINDS:
+        raise ValueError(f"Unsupported scope kind: {scope_kind}")
+    return scope_kind, scope_val
 
-    if scope_kind not in ("GLOBAL", "MODULE", "SOURCE_SET", "PACKAGE", "FEATURE", "ARCH_FAMILY", "PATH"):
-        print(f"[ERROR] Unsupported scope kind: {scope_kind}", file=sys.stderr)
-        return 1
 
-    strength = (getattr(args, "strength", None) or "REQUIREMENT").strip().upper()
-    if strength not in ("REQUIREMENT", "PREFERENCE"):
-        strength = "REQUIREMENT"
+def _looks_like_scope_prefix(candidate: str) -> bool:
+    """True when `candidate` starts with a recognized instruction scope prefix."""
+    c = str(candidate or "").strip()
+    if not c:
+        return False
+    up = c.upper()
+    if up in ("GLOBAL", "*") or c.startswith(":"):
+        return True
+    if "::" in c:
+        head = c.split("::", 1)[0].strip().upper()
+        return head in _VALID_INSTRUCTION_SCOPE_KINDS
+    if ":" in c:
+        head = c.split(":", 1)[0].strip().upper()
+        return head in _VALID_INSTRUCTION_SCOPE_KINDS
+    return up in _VALID_INSTRUCTION_SCOPE_KINDS
 
-    applies_to_raw = getattr(args, "applies_to", None) or "ANY"
-    if isinstance(applies_to_raw, str):
-        applies_to = [s.strip().upper() for s in applies_to_raw.split(",") if s.strip()]
-    else:
-        applies_to = list(applies_to_raw)
-    if not applies_to:
-        applies_to = ["ANY"]
 
-    supersedes_id = getattr(args, "supersedes", None)
+def _parse_batch_entry_string(raw: str, default_scope: str, default_scope_val: str | None) -> dict[str, Any]:
+    """Parse `'SCOPE :: rule text'` or plain `'rule text'` into a normalized instruction dict."""
+    s = str(raw or "").strip()
+    if " :: " in s:
+        left, right = s.split(" :: ", 1)
+        if _looks_like_scope_prefix(left):
+            return {"text": right.strip(), "scope": left.strip(), "scope_value": None}
+    return {"text": s, "scope": default_scope, "scope_value": default_scope_val}
 
-    if supersedes_id:
-        for old_inst in existing_store["instructions"]:
-            if old_inst.get("id") == supersedes_id:
-                old_inst["status"] = "SUPERSEDED"
+
+def _decode_batch_json_text(raw_json: str) -> Any:
+    """Decode a JSON array or `{instructions: [...]}` string with PowerShell quote recovery."""
+    s = str(raw_json or "").strip()
+    for candidate in (
+        s,
+        (s[1:-1].strip() if ((s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"'))) else s),
+    ):
+        for attempt in (candidate, candidate.replace(r'\"', '"')):
+            try:
+                return json.loads(attempt)
+            except ValueError:
+                continue
+    raise ValueError("Invalid JSON passed to --batch-json.")
+
+
+def _load_batch_instructions(repo: Path, args: argparse.Namespace) -> list[dict[str, Any]] | None:
+    """Load and normalize batch instruction specs from `--entry`, `--batch-json`, or `--batch-file`."""
+    from _vnext_common import ValidationError, validate_repo_path_containment
+
+    raw_entries = list(getattr(args, "entry", None) or [])
+    raw_json = str(getattr(args, "batch_json", None) or "").strip()
+    raw_file = str(getattr(args, "batch_file", None) or "").strip()
+    if not raw_entries and not raw_json and not raw_file:
+        return None
+
+    default_scope = (getattr(args, "scope", None) or "GLOBAL").strip()
+    default_scope_val = getattr(args, "scope_value", None)
+    default_strength = (getattr(args, "strength", None) or "REQUIREMENT").strip().upper()
+    default_applies_to = getattr(args, "applies_to", None) or "ANY"
+
+    items: list[Any] = []
+    for raw_e in raw_entries:
+        items.append(_parse_batch_entry_string(raw_e, default_scope, default_scope_val))
+
+    for label, payload in (("--batch-json", raw_json), ("--batch-file", raw_file)):
+        if not payload:
+            continue
+        if label == "--batch-json":
+            loaded = _decode_batch_json_text(payload)
+        else:
+            try:
+                rel_posix = validate_repo_path_containment(repo, payload)
+            except ValidationError as exc:
+                raise ValueError(str(exc)) from exc
+            bf_path = repo / rel_posix
+            if not bf_path.is_file():
+                raise ValueError(f"Batch instructions file not found: {payload}")
+            try:
+                loaded = json.loads(bf_path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"Failed reading {payload}: {exc}") from exc
+        if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
+            loaded = loaded["instructions"]
+        if not isinstance(loaded, list):
+            raise ValueError(f"{label} must be a JSON array or an object containing an 'instructions' array.")
+        items.extend(loaded)
+
+    if not items:
+        raise ValueError("Batch instruction input cannot be empty.")
+
+    normalized: list[dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        if isinstance(item, str):
+            spec = _parse_batch_entry_string(item, default_scope, default_scope_val)
+        elif isinstance(item, dict):
+            spec = dict(item)
+        else:
+            raise ValueError(f"Batch entry #{idx} must be a string or JSON object.")
+
+        item_text = str(spec.get("text") or spec.get("instruction") or "").strip()
+        if not item_text:
+            raise ValueError(f"Batch entry #{idx} has empty instruction text.")
+
+        has_explicit_scope = "scope" in spec and spec.get("scope") is not None and str(spec.get("scope")).strip() != ""
+        raw_item_scope = str(spec.get("scope") or default_scope).strip()
+        if "scope_value" in spec:
+            item_scope_val = spec.get("scope_value")
+        elif has_explicit_scope:
+            item_scope_val = None
+        else:
+            item_scope_val = default_scope_val
+
+        try:
+            scope_kind, scope_val = _parse_instruction_scope(raw_item_scope, item_scope_val)
+        except ValueError as exc:
+            raise ValueError(f"Batch entry #{idx}: {exc}") from exc
+
+        strength = str(spec.get("strength") or default_strength).strip().upper()
+        if strength not in ("REQUIREMENT", "PREFERENCE"):
+            strength = "REQUIREMENT"
+
+        applies_raw = spec.get("applies_to", default_applies_to)
+        if isinstance(applies_raw, str):
+            applies_to = [s.strip().upper() for s in applies_raw.split(",") if s.strip()]
+        elif isinstance(applies_raw, list):
+            applies_to = [str(s).strip().upper() for s in applies_raw if str(s).strip()]
+        else:
+            applies_to = ["ANY"]
+        if not applies_to:
+            applies_to = ["ANY"]
+
+        normalized.append({
+            "text": item_text,
+            "scope_kind": scope_kind,
+            "scope_val": scope_val,
+            "strength": strength,
+            "applies_to": applies_to,
+            "supersedes": str(spec.get("supersedes") or "").strip() or None,
+            "rationale": str(spec.get("rationale") or "").strip(),
+            "alternatives_rejected": str(spec.get("alternatives_rejected") or "").strip(),
+        })
+    return normalized
+
+
+def _build_instruction_record(
+    *,
+    text: str,
+    scope_kind: str,
+    scope_val: str,
+    strength: str,
+    applies_to: list[str],
+    source: str,
+    proof_ref: str,
+    created_at: float,
+    rationale: str = "",
+    alternatives_rejected: str = "",
+) -> dict[str, Any]:
+    import hashlib
 
     content_material = f"{scope_kind}:{scope_val}:{strength}:{','.join(sorted(applies_to))}:{text}"
     content_sha = hashlib.sha256(content_material.encode("utf-8")).hexdigest()
     inst_id = f"pi-{content_sha[:8]}"
     proof_sha = hashlib.sha256(str(proof_ref).encode("utf-8")).hexdigest()
-
-    new_inst = {
+    rec: dict[str, Any] = {
         "id": inst_id,
         "text": text,
         "scope": {
@@ -430,27 +524,176 @@ def cmd_instruct(args: argparse.Namespace) -> int:
         "proof_reference": str(proof_ref),
         "proof_reference_sha256": proof_sha,
         "sha256": content_sha,
-        "created_at": time.time(),
+        "created_at": created_at,
         "status": "ACTIVE",
     }
-    rationale = str(getattr(args, "rationale", None) or "").strip()
     if rationale:
-        new_inst["rationale"] = rationale
-    alternatives_rejected = str(getattr(args, "alternatives_rejected", None) or "").strip()
+        rec["rationale"] = rationale
     if alternatives_rejected:
-        new_inst["alternatives_rejected"] = alternatives_rejected
+        rec["alternatives_rejected"] = alternatives_rejected
+    return rec
 
-    instructions = [i for i in existing_store["instructions"] if i.get("id") != inst_id]
-    instructions.append(new_inst)
-    existing_store["instructions"] = instructions
 
-    atomic_write_json(inst_file, existing_store)
+def cmd_instruct(args: argparse.Namespace) -> int | dict[str, Any]:
+    import time
+    from _vnext_common import atomic_write_json
+    from evidence_store import StateLock
 
+    repo = Path(args.repo).resolve()
+    context_dir = repo / ".agents" / "project-context"
+    inst_file = context_dir / "developer-instructions.json"
+    if not context_dir.is_dir():
+        context_dir.mkdir(parents=True, exist_ok=True)
+
+    remove_id = (getattr(args, "remove", None) or "").strip()
+    text = (getattr(args, "instruction", None) or getattr(args, "text", None) or "").strip()
+    has_batch_flags = bool(
+        getattr(args, "entry", None)
+        or (getattr(args, "batch_json", None) or "").strip()
+        or (getattr(args, "batch_file", None) or "").strip()
+    )
+
+    source = getattr(args, "source", None)
+    proof_ref = getattr(args, "proof_reference", None)
+    if not source or source not in ("conversation", "developer_terminal", "host_native"):
+        print("[ERROR] Mandatory --source must be one of: conversation, developer_terminal, host_native.", file=sys.stderr)
+        return 1
+    if not proof_ref or not str(proof_ref).strip():
+        print("[ERROR] Mandatory --proof-reference cannot be empty.", file=sys.stderr)
+        return 1
+
+    if has_batch_flags and remove_id:
+        print("[ERROR] Cannot combine --remove with batch flags (--entry, --batch-json, --batch-file).", file=sys.stderr)
+        return 1
+    if has_batch_flags and text:
+        print("[ERROR] Cannot combine single instruction text with batch flags (--entry, --batch-json, --batch-file).", file=sys.stderr)
+        return 1
+
+    batch_specs: list[dict[str, Any]] | None = None
+    if has_batch_flags:
+        try:
+            batch_specs = _load_batch_instructions(repo, args)
+        except ValueError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 1
+
+    single_spec: dict[str, Any] | None = None
+    if not remove_id and not batch_specs:
+        if not text:
+            print("[ERROR] Instruction text cannot be empty.", file=sys.stderr)
+            return 1
+        try:
+            scope_kind, scope_val = _parse_instruction_scope(
+                getattr(args, "scope", None) or "GLOBAL",
+                getattr(args, "scope_value", None),
+            )
+        except ValueError as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 1
+        strength = (getattr(args, "strength", None) or "REQUIREMENT").strip().upper()
+        if strength not in ("REQUIREMENT", "PREFERENCE"):
+            strength = "REQUIREMENT"
+        applies_to_raw = getattr(args, "applies_to", None) or "ANY"
+        if isinstance(applies_to_raw, str):
+            applies_to = [s.strip().upper() for s in applies_to_raw.split(",") if s.strip()]
+        else:
+            applies_to = list(applies_to_raw)
+        if not applies_to:
+            applies_to = ["ANY"]
+        single_spec = {
+            "text": text,
+            "scope_kind": scope_kind,
+            "scope_val": scope_val,
+            "strength": strength,
+            "applies_to": applies_to,
+            "supersedes": getattr(args, "supersedes", None),
+            "rationale": str(getattr(args, "rationale", None) or "").strip(),
+            "alternatives_rejected": str(getattr(args, "alternatives_rejected", None) or "").strip(),
+        }
+
+    with StateLock(context_dir / "developer-instructions"):
+        existing_store: dict[str, Any] = {"schema_version": 1, "instructions": []}
+        if inst_file.is_file():
+            try:
+                loaded = json.loads(inst_file.read_text(encoding="utf-8-sig"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("instructions"), list):
+                    existing_store = loaded
+            except (OSError, ValueError):
+                pass
+
+        if remove_id:
+            found = None
+            for old_inst in existing_store["instructions"]:
+                if old_inst.get("id") == remove_id or (len(remove_id) >= 8 and remove_id.lower() in str(old_inst.get("text") or "").lower()):
+                    old_inst["status"] = "REMOVED"
+                    old_inst["removed_at"] = time.time()
+                    old_inst["removed_source"] = source
+                    old_inst["removed_proof_reference"] = str(proof_ref)
+                    found = old_inst.get("id")
+            if not found:
+                print(f"[ERROR] Instruction '{remove_id}' not found in {inst_file}", file=sys.stderr)
+                return 1
+            atomic_write_json(inst_file, existing_store)
+            ret_payload = {"status": "PASS", "action": "REMOVED", "id": found, "path": str(inst_file)}
+            if getattr(args, "json", False):
+                print(json.dumps(ret_payload, ensure_ascii=False))
+            else:
+                print(f"[INSTRUCT] Removed persistent instruction '{found}'")
+            return ret_payload
+
+        specs_to_write = batch_specs if batch_specs is not None else ([single_spec] if single_spec else [])
+        now_ts = time.time()
+        recorded: list[dict[str, Any]] = []
+        instructions = list(existing_store["instructions"])
+        for spec in specs_to_write:
+            supersedes_id = spec.get("supersedes")
+            if supersedes_id:
+                for old_inst in instructions:
+                    if old_inst.get("id") == supersedes_id:
+                        old_inst["status"] = "SUPERSEDED"
+            new_inst = _build_instruction_record(
+                text=spec["text"],
+                scope_kind=spec["scope_kind"],
+                scope_val=spec["scope_val"],
+                strength=spec["strength"],
+                applies_to=spec["applies_to"],
+                source=source,
+                proof_ref=str(proof_ref),
+                created_at=now_ts,
+                rationale=spec.get("rationale", ""),
+                alternatives_rejected=spec.get("alternatives_rejected", ""),
+            )
+            inst_id = new_inst["id"]
+            instructions = [i for i in instructions if i.get("id") != inst_id]
+            instructions.append(new_inst)
+            recorded.append(new_inst)
+
+        existing_store["instructions"] = instructions
+        atomic_write_json(inst_file, existing_store)
+
+    if batch_specs is not None:
+        ids = [r["id"] for r in recorded]
+        ret_payload = {
+            "status": "PASS",
+            "action": "BATCH_ADDED",
+            "count": len(recorded),
+            "ids": ids,
+            "instructions": recorded,
+            "path": str(inst_file),
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(ret_payload, ensure_ascii=False))
+        else:
+            print(f"[INSTRUCT] Recorded {len(recorded)} persistent instruction(s) in {inst_file}: {', '.join(ids)}")
+        return ret_payload
+
+    new_inst = recorded[0]
+    inst_id = new_inst["id"]
     ret_payload = {"status": "PASS", "id": inst_id, "instruction": new_inst, "path": str(inst_file)}
     if getattr(args, "json", False):
         print(json.dumps(ret_payload, ensure_ascii=False))
     else:
-        print(f"[INSTRUCT] Recorded persistent instruction '{inst_id}' for scope {scope_kind}:{scope_val}")
+        print(f"[INSTRUCT] Recorded persistent instruction '{inst_id}' for scope {new_inst['scope']['kind']}:{new_inst['scope']['value']}")
     return ret_payload
 
 
@@ -506,10 +749,30 @@ def main(argv: list[str] | None = None) -> int:
     p_note.add_argument("--json", action="store_true")
 
     p_inst = sub.add_parser("instruct")
-    p_inst.add_argument("text", nargs="?", default="", help="Instruction text")
-    p_inst.add_argument("--instruction", default="", help="Instruction text")
-    p_inst.add_argument("--scope", default="GLOBAL", help="Instruction scope (e.g. module::payments, package:com.example, global)")
-    p_inst.add_argument("--scope-value", default=None, help="Instruction scope value")
+    p_inst.add_argument("text", nargs="?", default="", help="Single instruction text")
+    p_inst.add_argument("--instruction", default="", help="Single instruction text (alias for positional text)")
+    p_inst.add_argument(
+        "--entry",
+        action="append",
+        default=None,
+        help="Repeatable batch instruction: 'SCOPE :: Rule text' (e.g. --entry 'GLOBAL:* :: Rule 1' --entry 'MODULE::shared :: Rule 2')",
+    )
+    p_inst.add_argument(
+        "--batch-json",
+        default="",
+        help="Batch JSON array of strings or {text, scope?, scope_value?, strength?, applies_to?, supersedes?, rationale?} objects",
+    )
+    p_inst.add_argument(
+        "--batch-file",
+        default="",
+        help="Repo-relative JSON file containing a batch array (or {instructions: [...]})",
+    )
+    p_inst.add_argument(
+        "--scope",
+        default="GLOBAL",
+        help="Instruction scope kind/value: GLOBAL:* | MODULE::name | PACKAGE:pkg | FEATURE:name | PATH:rel | SOURCE_SET:name | ARCH_FAMILY:id",
+    )
+    p_inst.add_argument("--scope-value", default=None, help="Instruction scope value (optional when encoded in --scope)")
     p_inst.add_argument("--source", choices=("conversation", "developer_terminal", "host_native"), default=None, help="Explicit developer authority source")
     p_inst.add_argument("--proof-reference", default="", help="Message or command reference proving developer request")
     p_inst.add_argument("--strength", choices=("REQUIREMENT", "PREFERENCE"), default="REQUIREMENT")

@@ -348,6 +348,19 @@ class ChatInstallationDocsTests(unittest.TestCase):
         self.assertIn(f"> **Kit version**: `v{current_version}`", prompt_text)
         self.assertNotIn("&& python", prompt_text)
 
+    def test_cli_ergonomics_documented_across_templates(self) -> None:
+        gemini_tpl = (KIT / "agents/tool-adapters/GEMINI.md.template").read_text(encoding="utf-8")
+        rules_md = (KIT / "agents/rules/harness-rules.md").read_text(encoding="utf-8")
+        contract_md = (KIT / "agents/skills/android-harness/references/command-contract.md").read_text(encoding="utf-8")
+        for doc_name, txt in (("GEMINI.md.template", gemini_tpl), ("harness-rules.md", rules_md), ("command-contract.md", contract_md)):
+            self.assertIn("MANIFEST_PERMISSION", txt, doc_name)
+            self.assertIn("COMPOSE_UI", txt, doc_name)
+            self.assertIn("context instruct", txt, doc_name)
+            self.assertIn("--entry", txt, doc_name)
+            self.assertIn("--phase", txt, doc_name)
+            self.assertIn("execution-mode show", txt, doc_name)
+            self.assertIn("--retry-failure", txt, doc_name)
+
 
 class ChatInstallationLifecycleTests(RepoCase):
     def test_harness_cli_init_with_answers_json(self) -> None:

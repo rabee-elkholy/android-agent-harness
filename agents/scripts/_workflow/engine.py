@@ -190,7 +190,11 @@ def validate_phases(repo: Path, phases: Any) -> list[dict]:
             raise ValidationError(f"phase at index {idx} missing required 'id' field")
         phase_id = str(raw_id).strip()
         if not PHASE_ID_PATTERN.match(phase_id):
-            raise ValidationError(f"invalid phase id '{phase_id}': must contain only alphanumeric characters, underscores, or dashes")
+            raise ValidationError(
+                f"invalid phase id '{phase_id}': must contain only alphanumeric characters, underscores, or dashes "
+                "(when passing --phases 'p1:Title,p2:Title', commas separate phases; "
+                "use semicolons ';' or repeatable --phase 'p1:Title' if titles contain commas)"
+            )
         if phase_id in seen_ids:
             raise ValidationError(f"duplicate phase id '{phase_id}' in phases list")
         seen_ids.add(phase_id)
@@ -1057,7 +1061,7 @@ def _revision_args(repo: Path, args: argparse.Namespace, old_plan: dict) -> argp
         merged.risks = joined(old_plan["risks"])
     if not given("external_write") and old_plan.get("external_writes"):
         merged.external_write = list(old_plan["external_writes"])
-    if not (given("phases") or given("phases_file")) and old_plan.get("phases"):
+    if not (given("phases") or given("phases_file") or given("phase")) and old_plan.get("phases"):
         merged.phases = list(old_plan["phases"])
     if getattr(args, "scoped_phase_review", None) is None and getattr(args, "scoped_phase_review_enabled", None) is None \
             and old_plan.get("scoped_phase_review_enabled") is not None:
@@ -2592,7 +2596,12 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
         nargs="+",
         action="extend",
         default=None,
-        help="Expected surfaces (comma- or space-separated, or repeatable)",
+        help=(
+            "Optional expected surfaces (comma- or space-separated, or repeatable; auto-inferred from --expected-files when omitted). "
+            "Canonical values: ANALYTICS, AUTH, BILLING, BUILD_CONFIG, BUSINESS_LOGIC, COMPOSE_UI, COROUTINES, CRYPTO, "
+            "DEVICE_API, DOCS, HARNESS_CONFIG, LOCALIZATION, MANIFEST_PERMISSION, NATIVE_CODE, NAVIGATION, NETWORK, "
+            "PERSISTENCE, PUBLIC_API, RESOURCE_UI, ROOM_SCHEMA, SECURITY, SENSITIVE_DATA, TEST_ONLY, XML_UI"
+        ),
     )
     command.add_argument(
         "--expected-modules",
@@ -2634,7 +2643,19 @@ def _add_plan_arguments(command: argparse.ArgumentParser, *, is_revision: bool =
         default=None,
         help="Expected target files (comma- or space-separated, or repeatable)",
     )
-    command.add_argument("--phases", help="Optional JSON string or file path defining task phases")
+    command.add_argument(
+        "--phases",
+        help=(
+            "Optional phases: compact 'p1:Title,p2:Title' (commas separate phases; use ';' or repeatable --phase when titles contain commas), "
+            "JSON array, or repo-relative JSON file path"
+        ),
+    )
+    command.add_argument(
+        "--phase",
+        action="append",
+        default=None,
+        help="Repeatable phase spec 'id:Title' (commas inside Title are safe; e.g. --phase 'p1:Core, auth & storage' --phase 'p2:UI wiring')",
+    )
     command.add_argument("--verification-contract", help="Repository-relative JSON file or inline JSON with optional approved criteria and journeys")
     command.add_argument("--task-context-id", default=None, help="Explicit Task Context ID for collision-safe scope binding")
     command.add_argument("--force", action="store_true", help="Bypass active task collision barriers")

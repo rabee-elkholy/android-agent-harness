@@ -400,7 +400,8 @@ def build_execution_mode_prompt(
             "Once answered, run "
             '`python .agents/harness.py execution-mode set ... --source conversation --proof-reference "<answer>"`: '
             "if `normal-task` or `normal-project` was chosen, proceed locally with `task draft`; if `web-task` was chosen, "
-            'scope target files and run `python .agents/harness.py web-pack --files <csv> --prompt "<goal>"` directly.'
+            'proceed with `task draft` and `python .agents/harness.py web-pack --task-id <id>` '
+            '(or cold-start `python .agents/harness.py web-pack --file <paths...> --prompt "<goal>"`).'
         ),
     }
 

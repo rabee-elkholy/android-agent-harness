@@ -297,7 +297,12 @@ def _build_and_save_plan(
     activate: bool = True,
 ) -> dict:
     raw_phases = getattr(args, "phases", None) or getattr(args, "phases_file", None)
-    parsed_phases = _parse_plan_phases(repo, raw_phases)
+    raw_phase_list = [str(p).strip() for p in (getattr(args, "phase", None) or []) if str(p).strip()]
+    if raw_phases and raw_phase_list:
+        raise _engine.ValidationError(
+            "cannot combine --phase with --phases; use repeatable --phase 'id:Title' or a single --phases value"
+        )
+    parsed_phases = _parse_plan_phases(repo, raw_phase_list if raw_phase_list else raw_phases)
 
     resolved_kind = _engine.normalize_task_kind(
         getattr(args, "kind", None),
@@ -438,9 +443,10 @@ def _build_and_save_plan(
             "PHASE_PLAN_REQUIRED: Task scope exceeds single-phase threshold "
             f"({len(impl_files)} implementation files, {len(impl_modules)} module(s), "
             f"arch_intent={arch_intent}, layer groups: {', '.join(sorted(spanned_layer_groups)) or 'none'}). "
-            'Define semantic phases, for example --phases "p1:Introduce shared API,p2:Migrate feature callers". '
+            'Define semantic phases, for example --phases "p1:Introduce shared API,p2:Migrate feature callers" '
+            '(or repeatable --phase "p1:Introduce shared API" --phase "p2:Migrate feature callers", or ";" when titles contain commas). '
             "Replace the example titles with the task's semantic boundaries. "
-            "Prefer this compact comma-separated 'id:Title' syntax on CLI shells (especially Windows PowerShell/cmd) "
+            "Prefer this compact comma-separated 'id:Title' syntax (or repeatable --phase 'id:Title') on CLI shells (especially Windows PowerShell/cmd) "
             "to avoid nested JSON quote-escaping errors; a JSON list is only needed programmatically; "
             "no helper file or shell redirection is needed."
         )
@@ -750,11 +756,41 @@ def _build_and_save_plan(
     )
 
 
+def _phase_specs_to_dicts(parts: list[str]) -> list[dict[str, str]]:
+    """Convert compact `'id:Title'` or `'id'` phase items into `{id, description}` dicts."""
+    items: list[dict[str, str]] = []
+    for part in parts:
+        cleaned = str(part or "").strip()
+        if not cleaned:
+            continue
+        if ":" in cleaned:
+            pid, pdesc = cleaned.split(":", 1)
+            items.append({"id": pid.strip(), "description": pdesc.strip()})
+        else:
+            items.append({"id": cleaned, "description": f"Phase {cleaned}"})
+    return items
+
+
+def _split_compact_phases(raw: str) -> list[str]:
+    """Split a compact phases string on `;` or `id:`-prefixed commas while preserving commas inside titles."""
+    s = str(raw or "").strip()
+    if not s:
+        return []
+    if ";" in s:
+        return [p.strip() for p in s.split(";") if p.strip()]
+    if _engine.re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]*\s*:", s):
+        return [p.strip() for p in _engine.re.split(r",\s*(?=[A-Za-z0-9][A-Za-z0-9_-]*\s*:)", s) if p.strip()]
+    return [p.strip() for p in s.split(",") if p.strip()]
+
+
 def _parse_plan_phases(repo, raw_phases):
     parsed_phases = None
     if raw_phases:
         if isinstance(raw_phases, list):
-            parsed_phases = raw_phases
+            if all(isinstance(item, str) for item in raw_phases):
+                parsed_phases = _phase_specs_to_dicts(raw_phases)
+            else:
+                parsed_phases = raw_phases
         elif isinstance(raw_phases, str):
             s = raw_phases.strip()
             if not s.startswith(("[", "{")) and (s.endswith(".json") or (repo / s).is_file() or _engine.Path(s).is_file() or ".." in s or _engine.Path(s).is_absolute()):
@@ -790,22 +826,16 @@ def _parse_plan_phases(repo, raw_phases):
                         loaded = ast.literal_eval(cleaned if "cleaned" in locals() else s)
                     except (OSError, ValueError, SyntaxError, _engine.ValidationError):
                         pass
-                # Tier 4: comma-separated list like "p1:Setup, p2:Implementation" or "p1, p2"
+                # Tier 4: compact list like "p1:Setup; p2:Implementation", "p1:Setup, p2:Implementation", or "p1, p2"
                 if loaded is None and not s.startswith(("[", "{")):
-                    parts = [p.strip() for p in s.split(",") if p.strip()]
+                    parts = _split_compact_phases(s)
                     if parts:
-                        loaded = []
-                        for part in parts:
-                            if ":" in part:
-                                pid, pdesc = part.split(":", 1)
-                                loaded.append({"id": pid.strip(), "description": pdesc.strip()})
-                            else:
-                                loaded.append({"id": part, "description": f"Phase {part}"})
+                        loaded = _phase_specs_to_dicts(parts)
                 if loaded is None:
                     raise _engine.ValidationError(
-                        "invalid --phases parameter: use a JSON list with an id and title for each phase, "
-                        'or --phases "p1:Introduce shared API,p2:Migrate feature callers". '
-                        "Use semantic phase titles for this task; no helper file or shell redirection is needed."
+                        "invalid --phases parameter: use repeatable --phase \"p1:Title\" --phase \"p2:Title\", "
+                        'a compact string --phases "p1:Title 1;p2:Title 2" (or comma-separated when titles lack commas), '
+                        "or a JSON list with an id and title for each phase; no helper file or shell redirection is needed."
                     )
             if isinstance(loaded, list):
                 parsed_phases = loaded

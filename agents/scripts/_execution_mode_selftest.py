@@ -901,5 +901,51 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         )
         self.assertEqual((allow_explicit_wp.get("hookSpecificOutput") or {}).get("permissionDecision") or allow_explicit_wp.get("decision"), "allow")
 
+    def test_10_repeatable_phase_and_comma_title_kickoff_detection(self) -> None:
+        from _safety.command_policy import _extract_execution_mode_kickoff_details
+
+        # Single phase containing commas in title must NOT overcount as 2+ phases
+        single_p = _extract_execution_mode_kickoff_details(
+            'python .agents/harness.py task draft --task-id t1 --outcome "Fix" --expected-files app/A.kt --phases "p1:Replace tokens, secrets, and cleartext"',
+            repo=self.base_repo,
+        )
+        self.assertEqual(1, single_p["phases_count"])
+
+        # Two phases separated by `id:` commas or semicolons -> 2 phases
+        two_p = _extract_execution_mode_kickoff_details(
+            'python .agents/harness.py task draft --task-id t2 --outcome "Fix" --expected-files app/A.kt --phases "p1:Replace tokens, secrets, and cleartext,p2:Harden UI"',
+            repo=self.base_repo,
+        )
+        self.assertEqual(2, two_p["phases_count"])
+
+        # Repeatable `--phase` -> 2 phases and triggers heavy-task prompt on unset repo
+        rep_p = _extract_execution_mode_kickoff_details(
+            'python .agents/harness.py task draft --task-id t3 --outcome "Fix" --expected-files app/A.kt --phase "p1:Core, auth" --phase "p2:UI"',
+            repo=self.base_repo,
+        )
+        self.assertEqual(2, rep_p["phases_count"])
+
+        repo, brain, cid = self._fresh_repo("ec10_phase")
+        deny_rep = _run_pre_tool_hook(
+            repo,
+            {
+                "conversationId": cid,
+                "toolName": "run_command",
+                "toolArgs": {
+                    "CommandLine": (
+                        'python .agents/harness.py task draft --repo . --task-id rep-p2 --outcome "Two-phase rollout" '
+                        '--expected-files app/src/main/java/com/example/sample/CartViewModel.kt '
+                        '--phase "p1:Core, auth" --phase "p2:UI"'
+                    )
+                },
+            },
+            brain_root=brain,
+        )
+        dec = (deny_rep.get("hookSpecificOutput") or {}).get("permissionDecision") or deny_rep.get("decision")
+        rsn = str((deny_rep.get("hookSpecificOutput") or {}).get("permissionDecisionReason") or deny_rep.get("reason") or "")
+        self.assertEqual(dec, "deny")
+        self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", rsn)
+        self.assertIn("execution-mode show", rsn)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

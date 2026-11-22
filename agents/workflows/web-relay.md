@@ -4,7 +4,7 @@ description: Optional stateless Manual Web-Relay Mode (`web-pack` / `web-apply`)
 
 # Optional Manual Web-Relay Workflow (`web-pack` -> External AI Chat -> `web-apply`)
 
-**Execution Mode Integration (`normal-*` vs `web-*`)**: Ordinary tasks run locally in Antigravity by default without prompting. When a heavy task (`10+` files, `80+ KB` code mass, `2+` phases, substantial multi-module scope, or non-trivial `T5` scope) warrants external Web-Relay and no project lock is set, the harness asks the developer via `ask_question` stating the approximate quota savings (`~60%-85%`) with 3 choices (`normal-task`, `web-task`, `normal-project`), recorded via `python .agents/harness.py execution-mode set --choice <normal-task|web-task|normal-project|web-project|ask-every-task> --source conversation --proof-reference "<words>"`. Single-task overrides (`normal-task` / `web-task`) apply to one task without altering any saved project lock, and `CONFLICT` tasks always resolve locally while preserving `web-project`.
+**Execution Mode Integration (`normal-*` vs `web-*`)**: Ordinary tasks run locally in Antigravity by default without prompting. When a heavy task (`10+` files, `80+ KB` code mass, `2+` phases, substantial multi-module scope, or non-trivial `T5` scope) warrants external Web-Relay and no project lock is set, run `python .agents/harness.py execution-mode show --files <csv> [--surfaces <csv>] [--phases <N>] --json` BEFORE `task draft` (or on `SELECT_EXECUTION_MODE_REQUIRED`) and ask the developer via `ask_question` stating the approximate quota savings (`~60%-85%`) with 3 choices (`normal-task`, `web-task`, `normal-project`), recorded via `python .agents/harness.py execution-mode set --choice <normal-task|web-task|normal-project|web-project|ask-every-task> --source conversation --proof-reference "<words>"`. Single-task overrides (`normal-task` / `web-task`) apply to one task without altering any saved project lock, and `CONFLICT` tasks always resolve locally while preserving `web-project`.
 
 ## When to use `Mode 2: Manual Web-Relay`
 
@@ -14,17 +14,19 @@ Use when `execution-mode` is set to `web-task` / `web-project`, when the develop
 
 ```bash
 # Cold-start (from IDLE — auto-discovers AST scope, open Git dirty edits, neighbor signatures & R.drawable/R.font IDs)
-python .agents/harness.py web-pack --prompt "<goal or bug description>" [--feature <FeatureOrSymbol>] [--dirty]
+python .agents/harness.py web-pack --prompt "<goal or bug description>" [--feature <FeatureOrSymbol>] [--file <paths...>] [--dirty]
 
 # Active-task pack (packs up to 40 editable files in 1 pack; auto-shards 41–250 files in DAG order)
 python .agents/harness.py web-pack --task-id <id> --prompt "<optional refinement>"
 
-# Explicit batch sizing or single-bundle override for large refactors
+# Expand existing pack with additional files or adjust batching for large refactors
+python .agents/harness.py web-pack --task-id <id> --add-files <paths...>
 python .agents/harness.py web-pack --task-id <id> --batch-size 40
 python .agents/harness.py web-pack --task-id <id> --all-in-one
 
-# Retry delta pack (sends compact JUnit / Gradle / preflight failure diagnostics)
+# Retry delta packs (send compact JUnit / Gradle / preflight failure diagnostics to the SAME external chat)
 python .agents/harness.py web-pack --task-id <id> --retry
+python .agents/harness.py web-pack --task-id <id> --retry-failure
 ```
 
 What `web-pack` guarantees automatically:

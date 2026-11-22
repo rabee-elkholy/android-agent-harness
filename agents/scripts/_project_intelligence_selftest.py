@@ -533,6 +533,94 @@ class ProjectIntelligenceTests(unittest.TestCase):
         res = resolve_task_context(self.repo, file="feature/profile/src/main/java/com/example/profile/ProfilePresenter.java")
         self.assertEqual("DEVELOPER_INSTRUCTION_CONFLICT", res.get("status"))
 
+    def test_PROJECT_INST_008_batch_instruct_entry_json_file_and_atomic_failure(self) -> None:
+        """PROJECT_INST_008: context instruct supports repeatable --entry, --batch-json, and --batch-file atomically."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from generate_project_context import main as ctx_main
+
+        self.mixed_project()
+        inst_p = self.repo / ".agents" / "project-context" / "developer-instructions.json"
+
+        # 1. Repeatable --entry across GLOBAL, MODULE, and PACKAGE scopes in a single call
+        out_buf = io.StringIO()
+        with redirect_stdout(out_buf):
+            rc = ctx_main([
+                "instruct", "--repo", str(self.repo),
+                "--entry", "GLOBAL:* :: Always validate server responses via sealed Result.",
+                "--entry", "MODULE::feature:profile :: Profile presenters must remain pure Java.",
+                "--entry", "PACKAGE:com.example.home :: HomeScreen uses immutable UiState.",
+                "--source", "conversation", "--proof-reference", "Project rules confirmation",
+                "--json",
+            ])
+        self.assertEqual(0, rc)
+        payload = json.loads(out_buf.getvalue())
+        self.assertEqual("PASS", payload["status"])
+        self.assertEqual("BATCH_ADDED", payload["action"])
+        self.assertEqual(3, payload["count"])
+        self.assertEqual(3, len(payload["ids"]))
+
+        ctx_profile = resolve_task_context(
+            self.repo, file="feature/profile/src/main/java/com/example/profile/ProfilePresenter.java",
+        )
+        prof_texts = {i["text"] for i in ctx_profile.get("developer_instructions", [])}
+        self.assertIn("Always validate server responses via sealed Result.", prof_texts)
+        self.assertIn("Profile presenters must remain pure Java.", prof_texts)
+        self.assertNotIn("HomeScreen uses immutable UiState.", prof_texts)
+
+        # 2. --batch-json with PowerShell-escaped quotes & mixed string/object entries
+        ps_escaped_json = r'[{\"text\":\"Use explicit Dispatchers.IO\",\"scope\":\"GLOBAL:*\"},\"FEATURE:home :: Keep state hoisted\"]'
+        out_buf2 = io.StringIO()
+        with redirect_stdout(out_buf2):
+            rc2 = ctx_main([
+                "instruct", "--repo", str(self.repo),
+                "--batch-json", ps_escaped_json,
+                "--source", "conversation", "--proof-reference", "Batch JSON rules",
+                "--json",
+            ])
+        self.assertEqual(0, rc2)
+        self.assertEqual(2, json.loads(out_buf2.getvalue())["count"])
+
+        # 3. --batch-file support
+        batch_file = self.repo / ".agents" / "tmp-batch-rules.json"
+        batch_file.parent.mkdir(parents=True, exist_ok=True)
+        batch_file.write_text(
+            json.dumps({"instructions": [{"text": "Avoid GlobalScope", "scope": "GLOBAL:*", "strength": "PREFERENCE"}]}),
+            encoding="utf-8",
+        )
+        with redirect_stdout(io.StringIO()):
+            rc3 = ctx_main([
+                "instruct", "--repo", str(self.repo),
+                "--batch-file", ".agents/tmp-batch-rules.json",
+                "--source", "conversation", "--proof-reference", "Batch file rules",
+            ])
+        self.assertEqual(0, rc3)
+
+        # 4. Atomic failure: invalid scope in entry #2 leaves developer-instructions.json completely untouched
+        before_bytes = inst_p.read_bytes()
+        with redirect_stderr(io.StringIO()):
+            rc_bad = ctx_main([
+                "instruct", "--repo", str(self.repo),
+                "--batch-json", json.dumps([
+                    {"text": "Valid rule #1", "scope": "GLOBAL:*"},
+                    {"text": "Invalid scope rule #2", "scope": "UNKNOWN_KIND:foo"},
+                ]),
+                "--source", "conversation", "--proof-reference", "Bad batch",
+            ])
+        self.assertNotEqual(0, rc_bad)
+        self.assertEqual(before_bytes, inst_p.read_bytes())
+
+        # 5. Mixing batch flags with --remove or positional text fails cleanly
+        with redirect_stderr(io.StringIO()):
+            rc_mix = ctx_main([
+                "instruct", "--repo", str(self.repo),
+                "Single rule text",
+                "--entry", "GLOBAL:* :: Batch rule",
+                "--source", "conversation", "--proof-reference", "Mix test",
+            ])
+        self.assertNotEqual(0, rc_mix)
+        self.assertEqual(before_bytes, inst_p.read_bytes())
+
     def test_PROJECT_INST_007_plan_binds_applicable_instruction_ids_and_hashes(self) -> None:
         """PROJECT_INST_007: plan binds applicable instruction IDs and hashes."""
         import argparse

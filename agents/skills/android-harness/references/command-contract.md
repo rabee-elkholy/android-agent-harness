@@ -93,9 +93,12 @@ python .agents/harness.py task draft \
   --architecture-intent <EXISTING_CHANGE|NEW_SCREEN|NEW_FEATURE|REFACTOR|MIGRATION> \
   --architecture-target-scope "<target scope when applicable>" \
   --architecture-target-family "<target family id when applicable>" \
-  --phases "p1:Introduce shared API,p2:Migrate callers and validate integration"
+  --phase "p1:Introduce shared API" \
+  --phase "p2:Migrate callers and validate integration"
 ```
 
+> `--expected-surfaces`: Optional (auto-inferred from `--expected-files` when omitted). Canonical values: `ANALYTICS, AUTH, BILLING, BUILD_CONFIG, BUSINESS_LOGIC, COMPOSE_UI, COROUTINES, CRYPTO, DEVICE_API, DOCS, HARNESS_CONFIG, LOCALIZATION, MANIFEST_PERMISSION, NATIVE_CODE, NAVIGATION, NETWORK, PERSISTENCE, PUBLIC_API, RESOURCE_UI, ROOM_SCHEMA, SECURITY, SENSITIVE_DATA, TEST_ONLY, XML_UI` (natural aliases such as `MANIFEST`, `UI`, `SENSITIVE`, `PERMISSIONS`, `STRINGS`, `DB` are normalized automatically).
+> `--phase` / `--phases`: Prefer repeatable `--phase "p1:Title"` when titles contain commas, or use `;` in `--phases "p1:Title 1;p2:Title 2"` (in `--phases`, commas split phases unless followed by `id:`, and any invalid phase id triggers an error).
 > `--planning-depth`: `BOUNDED` for normal scoped tasks (default); `ARCHITECTURAL` for explicit architecture migration or broad structural architectural work.
 > `--external-write`: Append `--external-write zoho_sprints` for Zoho mutation, `mcp:<server>` for generic MCP write operations, or `mcp:<server>:high-impact` for sensitive MCP mutations (deploy, drop, delete).
 > `--zoho-*`: Optional flags to bind the task to an existing Zoho Sprints item. When the developer wants the item's status or a comment updated, also pass `--external-write zoho_sprints` (draft prints `ZOHO_WRITE_NOT_PLANNED=` when it is missing).
@@ -352,10 +355,27 @@ python .agents/harness.py update-info   # newer release? prints exactly how the 
 ```
 When the developer asks to update the harness, run `update-info` and follow what it prints; never look for another way (package managers, the web, copying files). A task that is still open blocks an update; cancelling it is the developer's.
 
-### Project context
+### Project context & scoped developer instructions
 ```bash
-python .agents/harness.py context status    # freshness of the derived project context
-python .agents/harness.py context refresh   # refresh it when doctor reports it stale
+python .agents/harness.py context status        # freshness of derived project context
+python .agents/harness.py context refresh       # refresh when doctor reports it stale
+python .agents/harness.py context drift-report  # audit notes/instructions for stale file/module refs
+
+# Add, replace, or remove a project note in project-notes.md
+python .agents/harness.py context note "<structured-english-note>" [--section "<hdr>"] [--replace "<old>" | --remove "<old>"]
+
+# Record one scoped persistent developer instruction
+python .agents/harness.py context instruct "<structured-english-rule>" \
+  --scope <GLOBAL:*|MODULE::name|PACKAGE:pkg|FEATURE:name|PATH:rel|SOURCE_SET:name|ARCH_FAMILY:id> \
+  --source conversation --proof-reference "<developer confirmation>" \
+  [--strength REQUIREMENT|PREFERENCE] [--applies-to ANY|PRESERVE|NEW|REFACTOR|MIGRATION] [--supersedes <id> | --remove <id>]
+
+# Batch multiple persistent instructions atomically in ONE call
+python .agents/harness.py context instruct \
+  --entry "GLOBAL:* :: <rule 1>" \
+  --entry "MODULE::shared :: <rule 2>" \
+  --source conversation --proof-reference "<developer confirmation>"
+# Or pass --batch-json '<json array>' / --batch-file <repo-relative.json>
 ```
 
 ### Expected Output
@@ -442,13 +462,20 @@ When an exception occurs:
 | **Approve** | `python .agents/harness.py task approve --repo . --task-id <id> --source conversation --proof-reference "<reply>" --enforcement-tier RULE_ENFORCED --plan-hash <hash>` | Record the developer's approval of the shown plan |
 | **Next Action** | `python .agents/harness.py task status --task-id <id> --next --json` | The router: the single next step and why |
 | **Cancel Task** | `python .agents/harness.py task cancel --repo . --task-id <id> --source conversation --proof-reference "<developer's words>"` | Only when the developer asks in chat; files stay as they are |
-| **Context Note** | `python .agents/harness.py context note "<structured-english-note>"` (`--replace "<old>"` / `--remove "<old>"`) | Add, replace, or remove a structured English architectural convention/note |
+| **Context Note** | `python .agents/harness.py context note "<structured-english-note>"` (`--section "<hdr>"` / `--replace "<old>"` / `--remove "<old>"`) | Add, replace, or remove a structured English architectural convention/note |
+| **Context Instruct** | `python .agents/harness.py context instruct "<rule>" --scope <GLOBAL:*\|MODULE::name\|PACKAGE:pkg\|FEATURE:name\|PATH:rel> --source conversation --proof-reference "<phrase>"` (`--entry "SCOPE :: rule"` / `--batch-json` / `--batch-file`) | Record one or a batch of scoped persistent developer instructions atomically |
+| **Exec Mode** | `python .agents/harness.py execution-mode show --files <csv> [--surfaces <csv>] [--phases <N>] --json` / `execution-mode set --choice <normal-task\|web-task\|normal-project\|web-project\|ask-every-task> --source conversation --proof-reference "<phrase>"` | Check heavy-task Web-Relay eligibility before `task draft`, or record developer execution mode |
+| **Review Budget** | `python .agents/harness.py task review-budget --task-id <id> [--limit 12..100] [--round-limit 3..100] --source conversation --proof-reference "<phrase>"` | Record explicit developer reviewer spending/round cap extension |
+| **Sensitive Approval** | `python .agents/harness.py task approve-sensitive --task-id <id> --source conversation --proof-reference "<phrase>" --enforcement-tier RULE_ENFORCED` | Record explicit developer approval for sensitive T5 surfaces during verification |
+| **Change Decision** | `python .agents/harness.py task change-decision --task-id <id> --mode <extend-scope\|accept-edits\|review-edits> --file <path> --reason "<why>" [--apply --expect-preview <sha> --source <conversation\|approved-plan> --proof-reference "<words>"]` | Preview or apply developer edit acceptance or same-goal file reservation |
+| **Command Catalog** | `python .agents/harness.py commands [--filter <keyword>]` | Print machine-readable JSON catalog of public harness commands |
 | **Zoho Start Sync**| `python .agents/harness.py zoho start-sync --task-id <id>` | Sync In progress status to linked Zoho item; on `ENV`, tell the developer |
 | **Preflight Gate** | `python .agents/harness.py preflight` (engine: `preflight.py` / `preflight_check.py`) | Deterministic check: room, fast ktlint, string parity |
 | **Record Start** | `python .agents/harness.py test --record-start` | Before the first edit: record the tests that already fail |
 | **Unit Tests** | `python .agents/harness.py test` (engine: `run_tests_gate.py`) | Run unit tests gate (GREEN phase) |
 | **Capture RED** | `python .agents/harness.py test --capture-red` (engine: `run_tests_gate.py --capture-red`) | Capture executable test failure proof for BUG tasks |
-| **Checkpoint Phase** | `python .agents/harness.py task checkpoint-phase --repo . --task-id <id>` | Advance multi-phase plan checkpoint autonomously |
+| **Checkpoint Phase** | `python .agents/harness.py task checkpoint-phase --repo . --task-id <id> [--phase-id <id>] [--advance-all-ready] [--defer-gradle-to-final]` | Advance multi-phase plan checkpoint autonomously |
+| **Symbol Surgery** | `python .agents/harness.py symbol <outline\|read\|replace-body\|insert-after> --file <path> [--symbol <Name>] [--expected-sha256 <sha>] [--body "<code >" \| --replacement-file <tmp>]` | AST-safe inspection and body surgery on large files (`>350` lines) |
 | **Strings Check** | `python .agents/scripts/check_strings.py` | Standalone strings parity across locales |
 | **Fast Lint** | `python .agents/scripts/fast_kt_lint.py` | Standalone fast Kotlin AST linter |
 | **Room Guard** | `python .agents/scripts/room_guard.py` | Standalone Room schema & migration check |
@@ -457,7 +484,9 @@ When an exception occurs:
 | **Compile** | `python .agents/harness.py compile [gradle task]` | Compile the configured variant without tests or packaging (assemble task mapped to `compile<Variant>Sources`); run it before prepare-verification. Exits 3 with `COMPILE_TASK_UNKNOWN` or `ASSEMBLE_TASK_RESOLUTION_FAILED` when no compile task can be derived: pass the task explicitly or skip the check |
 | **Prepare Verification** | `python .agents/harness.py task prepare-verification --repo . --task-id <id> --host <host>` | Freeze the change and start the verification run |
 | **Review Package** | `python .agents/harness.py review package --task-id <id>` (engine: `review_package.py`) | Generate immutable review package markdown |
-| **Review Complete**| `python .agents/harness.py review complete --task <id> --reviewer <role> --execution-id <convId>` | Record trusted reviewer completion |
+| **Review Complete**| `python .agents/harness.py review complete-all --task <id>` (or `review complete --task <id> --reviewer <role> --execution-id <convId>`; phase: `phase-review complete-all --task-id <id> --phase-id <p>`) | Record trusted reviewer completion and finalize when all complete |
+| **Review Models** | `python .agents/harness.py review models show` / `review models set --choice <id> --source conversation --proof-reference "<phrase>" [--task <id>]` | Inspect or record developer-owned reviewer model selection |
+| **Validate Finding** | `python .agents/harness.py task validate-finding --task-id <id> --finding-id <fid> --status <CONFIRMED\|FALSE_POSITIVE\|NEEDS_CONTEXT\|NOT_REPRODUCIBLE> [--reason "<why>"]` | Adjudicate a reviewer finding |
 | **Review Finalize**| `python .agents/harness.py review finalize --task <id>` | Aggregate review evidence once all reviewers complete |
 | **Resume Task** | `python .agents/harness.py task resume --repo . --task-id <id>` | Resume task from BLOCKED or VERIFYING back to implementation; add `--reopen` at READY_FOR_DELIVERY when the developer requests changes |
 | **Assemble** | `python .agents/harness.py assemble` | Build application debug artifact (derived assemble task) |
@@ -492,8 +521,9 @@ Identity is confirmed only for matching installed APK hashes. Diagnostic evidenc
 Stateless on-demand bridge for developers who choose to run heavy planning/coding in an external AI chat while keeping 100% local safety, Gradle, ADB, and default Antigravity mode (`hydrogen-dynamic-project`) unchanged:
 
 ```bash
-python .agents/harness.py web-pack [--task-id <id>] [--prompt "<goal>"] [--feature <Name>] [--file <path>] [--retry]
-python .agents/harness.py web-apply --source conversation --proof-reference "<developer confirmation>" [--staged-phase]
+python .agents/harness.py execution-mode show --files <csv> [--surfaces <csv>] [--phases <N>] --json
+python .agents/harness.py web-pack [--task-id <id>] [--prompt "<goal>"] [--feature <Name>] [--symbol <Sym>] [--file <paths...>] [--dirty] [--add-files <paths...>] [--retry | --retry-failure] [--batch-size <N> | --all-in-one] [--no-clipboard]
+python .agents/harness.py web-apply --source conversation --proof-reference "<developer confirmation>" [--task-id <id>] [--dry-run] [--staged-phase] [--approve-sensitive] [--allow-reapply] [--file <path>]
 python .agents/harness.py web-relay status --json
 ```
 
