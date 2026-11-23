@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.17] - 2026-11-23
+
+### Carried-Over Reviewer Model Evidence & Draft Scope Fixes
+
+- **Carried-Over Reviewer Model Evidence Validation Across Peer Tier Escalations (`review_models.py`, `review_orchestrator.py`, `final_verifier.py`, `_antigravity_stability_selftest.py`)**: Extended `validate_model_evidence()` with optional `carried_from_run_id` and `carried_settings_sha256` parameters so reviewers carried over from an earlier round (`PASS`) are accepted when another reviewer's tier escalation changes the aggregate `review_models.sha256`, while keeping strict verification of `requested_model`, `resolved_model`, `thinking_level`, `NATIVE_METADATA_OBSERVED`, `native_metadata_sha256`, `execution_id`, and `_matches_antigravity_native_model()`. Updated `carry_over_completed_reviewers()` to verify dispatch receipt integrity (`receipt_sha256`) and refuse carryover if the carried reviewer's own model/tier changed, and updated `final_verifier.py` (`_verified_carried_settings_sha()`) to accept only cryptographically verified carried/ancestor V2 dispatch receipts bound to the current task, run, snapshot, and change set.
+- **Draft Architecture Scope Source-File & Existing-File Preference (`_workflow/planning.py`, `_antigravity_stability_selftest.py`)**: Updated `_resolve_plan_architecture()` to prefer source files (`.kt`, `.java`, `.swift`) over non-code resources (`strings.xml`) before selecting existing files on disk (`EXISTING_CHANGE`/`PRESERVE`/`REFACTOR`) and prioritizing filename UI tokens ahead of directory tokens, preventing newly created helper files in `views/` directories from shadowing existing targets in hybrid codebases while preserving architecture-neutral mixed-resource checks.
+
 ## [1.5.16] - 2026-11-23
 
 ### New-File Kotlin Size & Modularity Guard
