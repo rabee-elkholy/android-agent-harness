@@ -166,6 +166,38 @@ def init_ledger(
     return ledger
 
 
+def _resolve_source_dispatch_receipt(
+    task_directory: Path,
+    start_run_id: str,
+    current_run_id: str,
+    rev: str,
+    prev_entry: dict[str, Any],
+    prev_res: dict[str, Any],
+) -> Path | None:
+    """Resolve the dispatch receipt for a carried reviewer across prior run hops."""
+    prev_disp_p = dispatch_receipt_file(task_directory, start_run_id, rev)
+    if prev_disp_p.is_file():
+        return prev_disp_p
+    hop_run = str(prev_entry.get("carried_from_run_id") or prev_res.get("carried_from_run_id") or "").strip()
+    seen_hops = {start_run_id, current_run_id}
+    for _ in range(8):
+        if not hop_run or hop_run in seen_hops:
+            break
+        seen_hops.add(hop_run)
+        cand_disp = dispatch_receipt_file(task_directory, hop_run, rev)
+        if cand_disp.is_file():
+            return cand_disp
+        hop_ledger_p = ledger_file(task_directory, hop_run)
+        if not hop_ledger_p.is_file():
+            break
+        try:
+            hop_l = read_json(hop_ledger_p)
+            hop_run = str(((hop_l.get("reviewers") or {}).get(rev) or {}).get("carried_from_run_id") or "").strip()
+        except (OSError, ValueError, KeyError, ValidationError):
+            break
+    return None
+
+
 def carry_over_completed_reviewers(
     task_directory: Path,
     task_id: str,
@@ -179,6 +211,7 @@ def carry_over_completed_reviewers(
     if not review_package_sha256:
         return None
     current_path = task_directory / "current-run.json"
+    current_run: dict[str, Any] = {}
     if current_path.is_file():
         current_run = read_json(current_path)
         if current_run.get("supersedes_run_id"):
@@ -188,7 +221,7 @@ def carry_over_completed_reviewers(
     roots = task_directory / "review-execution"
     if not roots.is_dir():
         return None
-    carried: dict[str, tuple[str, dict[str, Any], dict[str, Any]]] = {}
+    carried: dict[str, tuple[str, dict[str, Any], dict[str, Any], Path | None, dict[str, Any]]] = {}
     for prev_l_path in sorted(roots.glob("*/ledger.json")):
         prev_run_id = prev_l_path.parent.name
         if prev_run_id == run_id or (task_directory / "host-history" / f"{prev_run_id}.json").is_file():
@@ -225,15 +258,35 @@ def carry_over_completed_reviewers(
                 or prev_body.get("findings")
             ):
                 continue
-            prev_disp_p = dispatch_receipt_file(task_directory, prev_run_id, rev)
-            if prev_disp_p.is_file() and review_host:
+            prev_disp_p = _resolve_source_dispatch_receipt(
+                task_directory, prev_run_id, run_id, rev, prev_entry, prev_res
+            )
+            prev_disp: dict[str, Any] = {}
+            if prev_disp_p is not None and prev_disp_p.is_file():
                 try:
                     prev_disp = read_json(prev_disp_p)
-                    if str(prev_disp.get("host") or "").strip().lower() != review_host:
-                        continue
                 except (OSError, ValueError, ValidationError):
                     continue
-            carried[rev] = (prev_run_id, prev_entry, prev_res)
+                if "receipt_sha256" in prev_disp:
+                    exp_rc_sha = canonical_sha256({k: v for k, v in prev_disp.items() if k != "receipt_sha256"})
+                    if prev_disp.get("receipt_sha256") != exp_rc_sha:
+                        continue
+                if review_host and str(prev_disp.get("host") or "").strip().lower() != review_host:
+                    continue
+            if current_run and current_run.get("run_id") == run_id and current_run.get("review_models"):
+                from review_models import validate_model_evidence
+                carried_settings_sha = str(prev_disp.get("review_models_sha256") or "").strip() or None
+                try:
+                    validate_model_evidence(
+                        current_run,
+                        rev,
+                        prev_res.get("model_selection"),
+                        carried_from_run_id=prev_run_id,
+                        carried_settings_sha256=carried_settings_sha,
+                    )
+                except ValidationError:
+                    continue
+            carried[rev] = (prev_run_id, prev_entry, prev_res, prev_disp_p, prev_disp)
     if not carried or len(carried) >= len(required_reviewers):
         return None
     ledger = init_ledger(
@@ -246,7 +299,7 @@ def carry_over_completed_reviewers(
         required_reviewers,
     )
     changed = False
-    for rev, (prev_run_id, prev_entry, prev_res) in carried.items():
+    for rev, (prev_run_id, prev_entry, prev_res, prev_disp_p, prev_disp) in carried.items():
         cur_entry = ledger["reviewers"].get(rev) or {}
         if cur_entry.get("state") != REVIEW_NOT_DISPATCHED:
             continue
@@ -266,30 +319,9 @@ def carry_over_completed_reviewers(
         res_p = result_file(task_directory, run_id, rev)
         res_p.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_json(res_p, new_res_payload)
-        prev_disp_p = dispatch_receipt_file(task_directory, prev_run_id, rev)
-        if not prev_disp_p.is_file():
-            hop_run = str(prev_entry.get("carried_from_run_id") or prev_res.get("carried_from_run_id") or "").strip()
-            seen_hops = {prev_run_id, run_id}
-            for _ in range(8):
-                if not hop_run or hop_run in seen_hops:
-                    break
-                seen_hops.add(hop_run)
-                cand_disp = dispatch_receipt_file(task_directory, hop_run, rev)
-                if cand_disp.is_file():
-                    prev_disp_p = cand_disp
-                    break
-                hop_ledger_p = ledger_file(task_directory, hop_run)
-                if not hop_ledger_p.is_file():
-                    break
-                try:
-                    hop_l = read_json(hop_ledger_p)
-                    hop_run = str(((hop_l.get("reviewers") or {}).get(rev) or {}).get("carried_from_run_id") or "").strip()
-                except (OSError, ValueError, KeyError):
-                    break
         cur_disp_p = dispatch_receipt_file(task_directory, run_id, rev)
-        if prev_disp_p.is_file() and not cur_disp_p.is_file():
+        if prev_disp_p is not None and prev_disp_p.is_file() and not cur_disp_p.is_file():
             try:
-                prev_disp = read_json(prev_disp_p)
                 carried_rc = {
                     "schema_version": 2,
                     "task_id": task_id,

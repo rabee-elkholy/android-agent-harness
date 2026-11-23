@@ -910,6 +910,57 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
             evidence = review_record.get("evidence") or {}
             from review_models import frozen_models, validate_model_evidence
             model_run_file = plan_path.parent / "current-run.json"
+            _m_exec_root = task_directory / "review-execution" / str(run_id)
+            _m_ledger_data: dict = {}
+            if (_m_exec_root / "ledger.json").is_file():
+                try:
+                    _m_ledger_data = read_json(_m_exec_root / "ledger.json")
+                except Exception:
+                    _m_ledger_data = {}
+
+            def _verified_carried_settings_sha(role_name: str, carried_from: str) -> str | None:
+                candidates: list[tuple[Path, str]] = []
+                cur_rc = _m_exec_root / "dispatch" / f"{role_name}.json"
+                if cur_rc.is_file():
+                    candidates.append((cur_rc, str(run_id)))
+                hop_r = carried_from
+                seen_hops: set[str] = {str(run_id)}
+                for _ in range(8):
+                    if not hop_r or hop_r in seen_hops:
+                        break
+                    seen_hops.add(hop_r)
+                    cand_rc = _m_exec_root.parent / hop_r / "dispatch" / f"{role_name}.json"
+                    if cand_rc.is_file():
+                        candidates.append((cand_rc, hop_r))
+                    hop_ledger_p = _m_exec_root.parent / hop_r / "ledger.json"
+                    hop_next = ""
+                    if hop_ledger_p.is_file():
+                        try:
+                            hop_l = read_json(hop_ledger_p)
+                            hop_next = str((((hop_l.get("reviewers") or {}).get(role_name) or {}).get("carried_from_run_id")) or "").strip()
+                        except Exception:
+                            hop_next = ""
+                    hop_r = hop_next
+                for cand, expected_rc_run in candidates:
+                    try:
+                        rc = read_json(cand)
+                        exp_sha = canonical_sha256({k: v for k, v in rc.items() if k != "receipt_sha256"})
+                        if (
+                            rc.get("schema_version") == 2
+                            and rc.get("reviewer") == role_name
+                            and rc.get("task_id") == plan.get("task_id")
+                            and rc.get("run_id") == expected_rc_run
+                            and rc.get("delivery_snapshot_sha256") == snapshot
+                            and rc.get("change_set_sha256") == change_set
+                            and rc.get("receipt_sha256") == exp_sha
+                            and rc.get("review_models_sha256")
+                        ):
+                            return str(rc["review_models_sha256"])
+                        return None
+                    except Exception:
+                        return None
+                return None
+
             try:
                 model_run = read_json(model_run_file) if model_run_file.is_file() else {}
                 selections = frozen_models(model_run)
@@ -917,7 +968,17 @@ def verify(repo: Path, *, plan_path: Path, policy_path: Path, manifest_path: Pat
                     raise ValidationError("frozen reviewer model run mismatch")
                 model_reports = {rep.get("reviewer"): rep for rep in evidence.get("reports") or [] if isinstance(rep, dict)}
                 for role in reviewers:
-                    validate_model_evidence(model_run, role, model_reports.get(role, {}).get("model_selection"))
+                    rep = model_reports.get(role) or {}
+                    ledger_rev = (_m_ledger_data.get("reviewers") or {}).get(role) or {}
+                    carried_from = str(rep.get("carried_from_run_id") or ledger_rev.get("carried_from_run_id") or "").strip() or None
+                    carried_settings_sha = _verified_carried_settings_sha(role, carried_from) if carried_from else None
+                    validate_model_evidence(
+                        model_run,
+                        role,
+                        rep.get("model_selection"),
+                        carried_from_run_id=carried_from,
+                        carried_settings_sha256=carried_settings_sha,
+                    )
             except (ValidationError, OSError, ValueError) as exc:
                 reasons.append(str(exc))
                 checks[-1]["status"] = "FAIL"

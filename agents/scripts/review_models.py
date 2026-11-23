@@ -1617,14 +1617,24 @@ def _matches_antigravity_native_model(
     return True
 
 
-def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
+def validate_model_evidence(
+    run: dict,
+    role: str,
+    evidence: object,
+    *,
+    carried_from_run_id: str | None = None,
+    carried_settings_sha256: str | None = None,
+) -> None:
     selection = frozen_models(run).get(role)
     if not selection or selection["requested_model"] == "inherit" or selection.get("resolved_model") == "inherit":
         return
+    allowed_settings_shas = {run["review_models"]["sha256"]}
+    if carried_from_run_id and carried_settings_sha256:
+        allowed_settings_shas.add(str(carried_settings_sha256))
     host_norm = str(run.get("review_host") or "").strip().lower()
     if host_norm == "antigravity":
         if not isinstance(evidence, dict) or (
-            evidence.get("settings_sha256") != run["review_models"]["sha256"]
+            evidence.get("settings_sha256") not in allowed_settings_shas
             or evidence.get("requested_model") != selection["requested_model"]
             or evidence.get("resolved_model") != selection.get("resolved_model")
             or evidence.get("thinking_level") != selection.get("thinking_level")
@@ -1648,7 +1658,7 @@ def validate_model_evidence(run: dict, role: str, evidence: object) -> None:
         return
 
     if not isinstance(evidence, dict) or (
-        evidence.get("settings_sha256") != run["review_models"]["sha256"]
+        evidence.get("settings_sha256") not in allowed_settings_shas
         or evidence.get("requested_model") != selection["requested_model"]
         or selection["requested_model"] != "inherit"
     ):

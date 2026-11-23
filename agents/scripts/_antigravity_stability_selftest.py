@@ -12335,5 +12335,367 @@ class TestV1516FileSizeAndModularityGuard(unittest.TestCase):
         self.assertLessEqual(len(kernel) + len(adapter) + len(gemini), 36_000)
 
 
+class TestV1517CarriedReviewerModelEvidenceAndDraftScope(unittest.TestCase):
+    """v1.5.17: Carried-over reviewer model evidence across tier escalations and existing-file draft scope."""
+
+    @staticmethod
+    def _init_git_repo(repo: Path, files: dict[str, str]) -> None:
+        for rel, content in files.items():
+            fp = repo / rel
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            fp.write_text(content, encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo, check=True)
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+    def test_01_carried_reviewer_survives_peer_model_escalation_and_rejects_self_escalation(self) -> None:
+        import argparse
+        import hashlib
+        import final_verifier
+        import review_models
+        import review_orchestrator
+        import review_package
+        import workflow
+        from evidence_store import EvidenceStore
+        from review_orchestrator import carry_over_completed_reviewers, complete_review, record_dispatch_batch
+        from workflow import (
+            ValidationError,
+            atomic_write_json,
+            canonical_sha256,
+            read_json,
+            sha256_file,
+            state_root,
+            task_dir,
+        )
+
+        feature_rel = "app/src/main/kotlin/com/demo/Feature.kt"
+        with tempfile.TemporaryDirectory() as td:
+            repo = (Path(td) / "apprepo").resolve()
+            self._init_git_repo(repo, {
+                "settings.gradle.kts": 'include(":app")\n',
+                "app/build.gradle.kts": 'plugins { id("com.android.application") }\nandroid { applicationId = "com.demo"\n namespace = "com.demo" }\n',
+                feature_rel: "package com.demo\nclass Feature {\n    fun run(x: Int): Int = x\n}\n",
+            })
+            (repo / ".agents" / "scripts").mkdir(parents=True)
+            (repo / ".agents" / "scripts" / "_product.py").write_text("PROJECT_KIND = 'application'\n", encoding="utf-8")
+            (repo / ".agents" / "VERSION").write_text("1.5.17\n", encoding="utf-8")
+            shutil.copytree(REPO_ROOT / "agents" / "skills", repo / ".agents" / "skills")
+            (repo / ".agents" / "hooks" / "state" / "transcripts").mkdir(parents=True, exist_ok=True)
+            review_models.set_policy(
+                repo,
+                {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+                task_id=None,
+                host="antigravity",
+                source="conversation",
+                proof_reference="Enable hydrogen-dynamic review policy",
+            )
+
+            def _fake_native_meta(transcript_path: Path) -> dict:
+                eid = transcript_path.stem
+                base = {
+                    "execution_id": eid,
+                    "host_configured_model": "gemini-4-hydrogen-tiered-high",
+                    "host_reported_models": ["gemini-4-hydrogen-tiered-high"],
+                    "native_metadata_source": "antigravity_execution_database",
+                }
+                return {**base, "native_metadata_sha256": canonical_sha256(base)}
+
+            mock_transcripts: dict[str, Path] = {}
+            with (
+                unittest.mock.patch.dict(os.environ, {"HARNESS_HOOK_STATE": str(repo / ".agents" / "state" / "hook-state.json")}),
+                unittest.mock.patch("review_orchestrator.resolve_trusted_review_source", side_effect=lambda _host, eid: mock_transcripts.get(eid)),
+                unittest.mock.patch("antigravity_runtime.native_model_metadata", side_effect=_fake_native_meta),
+            ):
+                plan = workflow.draft(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="carried-model-fix",
+                    outcome="Update Feature logic safely",
+                    kind="FEATURE",
+                    expected_surfaces=["BUSINESS_LOGIC"],
+                    expected_modules=[":app"],
+                    expected_files=[feature_rel],
+                    phases=None,
+                    phase=None,
+                    force=True,
+                    planning_depth="BOUNDED",
+                    architecture_intent="EXISTING_CHANGE",
+                    architecture_target_scope=None,
+                    architecture_target_family=None,
+                    quick_edit=False,
+                    interactive=False,
+                    verification_contract=None,
+                ))
+                workflow.record_approval(argparse.Namespace(
+                    repo=str(repo),
+                    task_id="carried-model-fix",
+                    plan_sha256=plan["plan_sha256"],
+                    source="conversation",
+                    proof_reference="approved",
+                    enforcement_tier="RULE_ENFORCED",
+                ))
+                workflow.begin_task(argparse.Namespace(repo=str(repo), task_id="carried-model-fix", approve=False))
+
+                # Edit Feature.kt
+                (repo / feature_rel).write_text(
+                    "package com.demo\nclass Feature {\n    fun run(x: Int): Int = if (x > 0) x + 1 else 0\n}\n",
+                    encoding="utf-8",
+                )
+
+                # Round 1: both arch-regression and bug-test execute on NORMAL (gemini-4-hydrogen-medium)
+                cur1 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="carried-model-fix", host="antigravity"))
+                run1_id = cur1["run_id"]
+                pol1 = read_json(Path(cur1["policy"]))
+                self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol1["reviewers"])
+                cur1_path = task_dir(repo, "carried-model-fix") / "current-run.json"
+                cur1_doc = read_json(cur1_path)
+                cur1_doc["review_models"] = review_models._resolve_policy(
+                    {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+                    "project",
+                    "antigravity",
+                    pol1["reviewers"],
+                    efforts_by_role={
+                        "arch-regression-reviewer-agent": "NORMAL",
+                        "bug-test-reviewer-agent": "NORMAL",
+                    },
+                    complexity_tier="COMPLEX",
+                )
+                atomic_write_json(cur1_path, cur1_doc)
+                sha1 = cur1_doc["review_models"]["sha256"]
+
+                pkg1_path, _ = review_package.build_package(repo, "carried-model-fix")
+                pkg1_sha = sha256_file(pkg1_path)
+                record_dispatch_batch(repo, "carried-model-fix", pol1["reviewers"])
+                for idx, (rev, verdict, findings) in enumerate([
+                    ("arch-regression-reviewer-agent", "PASS", []),
+                    ("bug-test-reviewer-agent", "FINDINGS", [{"severity": "HIGH", "file": feature_rel, "line": 3, "message": "Missing edge test"}]),
+                ]):
+                    eid = f"r1-eid-{idx}"
+                    tf = repo / ".agents" / "hooks" / "state" / "transcripts" / f"{eid}.jsonl"
+                    tf.write_text(json.dumps({
+                        "source": "MODEL",
+                        "content": json.dumps({
+                            "schema_version": 2,
+                            "task_id": "carried-model-fix",
+                            "run_id": run1_id,
+                            "reviewer": rev,
+                            "review_package_sha256": pkg1_sha,
+                            "verdict": verdict,
+                            "findings": findings,
+                        }),
+                    }) + "\n", encoding="utf-8")
+                    mock_transcripts[eid] = tf
+                    complete_review(repo, "carried-model-fix", rev, eid)
+
+                # Round 2: resume & prepare on same snapshot, escalating peer bug-test-reviewer-agent to DEEP (high)
+                workflow.resume(argparse.Namespace(repo=str(repo), task_id="carried-model-fix"))
+                cur2 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="carried-model-fix", host="antigravity"))
+                run2_id = cur2["run_id"]
+                pol2 = read_json(Path(cur2["policy"]))
+                man2 = read_json(Path(cur2["manifest"]))
+                cur2_path = task_dir(repo, "carried-model-fix") / "current-run.json"
+                cur2_doc = read_json(cur2_path)
+                cur2_doc["review_models"] = review_models._resolve_policy(
+                    {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+                    "project",
+                    "antigravity",
+                    pol2["reviewers"],
+                    efforts_by_role={
+                        "arch-regression-reviewer-agent": "NORMAL",
+                        "bug-test-reviewer-agent": "DEEP",
+                    },
+                    complexity_tier="COMPLEX",
+                )
+                atomic_write_json(cur2_path, cur2_doc)
+                sha2 = cur2_doc["review_models"]["sha256"]
+                self.assertNotEqual(sha1, sha2)
+
+                pkg2_path, _ = review_package.build_package(repo, "carried-model-fix")
+                pkg2_sha = sha256_file(pkg2_path)
+
+                # Carried arch-regression-reviewer-agent must preserve dispatch receipt with sha1 and COMPLETED state
+                ledger2 = read_json(task_dir(repo, "carried-model-fix") / "review-execution" / run2_id / "ledger.json")
+                self.assertEqual("COMPLETED", ledger2["reviewers"]["arch-regression-reviewer-agent"]["state"])
+                self.assertEqual(run1_id, ledger2["reviewers"]["arch-regression-reviewer-agent"]["carried_from_run_id"])
+                carried_rc = read_json(task_dir(repo, "carried-model-fix") / "review-execution" / run2_id / "dispatch" / "arch-regression-reviewer-agent.json")
+                self.assertEqual(sha1, carried_rc["review_models_sha256"])
+
+                # Complete bug-test-reviewer-agent on Round 2 with PASS -> finalizes reviews evidence
+                record_dispatch_batch(repo, "carried-model-fix", ["bug-test-reviewer-agent"], allow_single=True)
+                eid2 = "r2-eid-bug"
+                tf2 = repo / ".agents" / "hooks" / "state" / "transcripts" / f"{eid2}.jsonl"
+                tf2.write_text(json.dumps({
+                    "source": "MODEL",
+                    "content": json.dumps({
+                        "schema_version": 2,
+                        "task_id": "carried-model-fix",
+                        "run_id": run2_id,
+                        "reviewer": "bug-test-reviewer-agent",
+                        "review_package_sha256": pkg2_sha,
+                        "verdict": "PASS",
+                        "findings": [],
+                    }),
+                }) + "\n", encoding="utf-8")
+                mock_transcripts[eid2] = tf2
+                complete_review(repo, "carried-model-fix", "bug-test-reviewer-agent", eid2)
+
+                # Direct validate_model_evidence checks: requires valid carried receipt sha; rejects missing or forged
+                carried_res_doc = read_json(task_dir(repo, "carried-model-fix") / "review-execution" / run2_id / "results" / "arch-regression-reviewer-agent.json")
+                carried_msel = carried_res_doc["model_selection"]
+                with self.assertRaisesRegex(ValidationError, "REVIEW_MODEL_UNVERIFIED"):
+                    review_models.validate_model_evidence(cur2_doc, "arch-regression-reviewer-agent", carried_msel)
+                with self.assertRaisesRegex(ValidationError, "REVIEW_MODEL_UNVERIFIED"):
+                    review_models.validate_model_evidence(
+                        cur2_doc,
+                        "arch-regression-reviewer-agent",
+                        carried_msel,
+                        carried_from_run_id=run1_id,
+                        carried_settings_sha256="forged_sha",
+                    )
+                review_models.validate_model_evidence(
+                    cur2_doc,
+                    "arch-regression-reviewer-agent",
+                    carried_msel,
+                    carried_from_run_id=run1_id,
+                    carried_settings_sha256=sha1,
+                )
+
+                # Record required gates for run2 and run full final_verifier.verify() -> PASS, no REVIEW_MODEL_UNVERIFIED
+                store = EvidenceStore(state_root(repo))
+                snap2 = man2["delivery_snapshot_sha256"]
+                cs2 = man2["change_set_sha256"]
+                producer_map = {
+                    "preflight": "preflight_check",
+                    "unit_tests": "run_tests_gate",
+                    "assemble": "run_gradle_task",
+                    "localization": "check_strings",
+                    "room": "room_guard",
+                }
+                for gate in pol2.get("gates") or []:
+                    if gate in ("manifest", "device", "reviews"):
+                        continue
+                    ev_body = {"executed_tests": ["com.demo.FeatureTest.ok"]} if gate == "unit_tests" else {}
+                    store.write(
+                        snapshot=snap2,
+                        run_id=run2_id,
+                        name=gate,
+                        producer=producer_map[gate],
+                        harness_version="1.5.17",
+                        change_set=cs2,
+                        status="PASS",
+                        evidence=ev_body,
+                        lock=False,
+                    )
+                verify_res = final_verifier.verify_task(repo, "carried-model-fix")
+                self.assertEqual("APPROVED", verify_res["status"], f"Expected APPROVED, got {verify_res}")
+
+                # Self-escalation case: if arch-regression ITSELF escalates to DEEP (high) in run3, carry_over refuses!
+                run3_id = "run-self-escalated"
+                cur3_doc = {
+                    **cur2_doc,
+                    "run_id": run3_id,
+                    "review_models": review_models._resolve_policy(
+                        {"schema_version": 1, "default": "hydrogen-dynamic", "overrides": {}},
+                        "project",
+                        "antigravity",
+                        ["arch-regression-reviewer-agent", "bug-test-reviewer-agent"],
+                        efforts_by_role={
+                            "arch-regression-reviewer-agent": "DEEP",
+                            "bug-test-reviewer-agent": "DEEP",
+                        },
+                        complexity_tier="COMPLEX",
+                    ),
+                }
+                atomic_write_json(cur2_path, cur3_doc)
+                res3 = carry_over_completed_reviewers(
+                    task_dir(repo, "carried-model-fix"),
+                    "carried-model-fix",
+                    run3_id,
+                    snap2,
+                    cs2,
+                    hashlib.sha256(b"pkg3").hexdigest(),
+                    ["arch-regression-reviewer-agent", "bug-test-reviewer-agent"],
+                    review_host="antigravity",
+                )
+                if res3 is not None:
+                    self.assertNotEqual("COMPLETED", res3["reviewers"]["arch-regression-reviewer-agent"]["state"])
+
+    def test_02_draft_architecture_scope_prefers_existing_file_over_new_helper_in_views_dir(self) -> None:
+        import argparse
+        from project_context import compute_source_fingerprint
+        from _workflow.planning import _resolve_plan_architecture
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = (Path(td) / "hybrid").resolve()
+            existing_frag = "app/src/main/java/com/demo/views/ExistingFragment.kt"
+            new_helper = "app/src/main/java/com/demo/views/OfferPaywallCustomVariables.kt"
+            compose_home = "app/src/main/java/com/demo/compose/HomeScreen.kt"
+            self._init_git_repo(repo, {
+                "settings.gradle.kts": 'include(":app")\n',
+                "app/build.gradle.kts": 'plugins { id("com.android.application") }\n',
+                existing_frag: "package com.demo.views\nclass ExistingFragment\n",
+                compose_home: "package com.demo.compose\nfun HomeScreen() {}\n",
+            })
+            fp_sha = compute_source_fingerprint(repo)["source_fingerprint_sha256"]
+            ctx_dir = repo / ".agents" / "project-context"
+            ctx_dir.mkdir(parents=True)
+            (ctx_dir / "project-facts.json").write_text(json.dumps({
+                "schema_version": 2,
+                "source_fingerprint_sha256": fp_sha,
+                "facts": {
+                    "architecture": {
+                        "families": [
+                            {
+                                "id": "af-fragment",
+                                "label": "legacy-fragment",
+                                "exemplars": [existing_frag],
+                                "scopes": ["app/src/main/java/com/demo/views/"],
+                                "dimensions": {},
+                                "signature_sha256": "sig-frag",
+                            },
+                            {
+                                "id": "af-compose",
+                                "label": "compose-mvi",
+                                "exemplars": [compose_home],
+                                "scopes": ["app/src/main/java/com/demo/compose/"],
+                                "dimensions": {},
+                                "signature_sha256": "sig-comp",
+                            },
+                        ],
+                    },
+                },
+            }), encoding="utf-8")
+
+            args = argparse.Namespace(
+                repo=str(repo),
+                architecture_intent="EXISTING_CHANGE",
+                architecture_target_scope=None,
+                architecture_target_family=None,
+                planning_depth="BOUNDED",
+                expected_modules=[":app"],
+            )
+            norm_expected = [new_helper, existing_frag]
+            classification = {"changed_files": 0, "details": {}, "surfaces": ["BUSINESS_LOGIC"]}
+            prelim_pol = {"surfaces": ["BUSINESS_LOGIC"]}
+            _intent, _files, inferred_scope, arch_contract, _brief = _resolve_plan_architecture(
+                repo,
+                args,
+                False,
+                norm_expected,
+                [],
+                {},
+                norm_expected,
+                classification,
+                None,
+                prelim_pol,
+                "FEATURE",
+            )
+            self.assertEqual(existing_frag, inferred_scope)
+            self.assertIsNotNone(arch_contract)
+            self.assertEqual("af-fragment", arch_contract.get("target_family_id"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -879,13 +879,29 @@ def _resolve_plan_architecture(repo, args, is_revision, norm_expected_files, par
                 and not is_kmp_or_android_test_path(p)
             ]
             eval_files = impl_candidates or norm_expected_files
-            if len(eval_files) == 1:
-                inferred_target_scope = eval_files[0]
+            code_candidates = [
+                p for p in eval_files
+                if Path(p).suffix.lower() in {".kt", ".java", ".swift"}
+            ]
+            scope_base = code_candidates or eval_files
+            if len(scope_base) == 1:
+                inferred_target_scope = scope_base[0]
             else:
+                scope_pool = scope_base
+                if arch_intent in ("EXISTING_CHANGE", "PRESERVE", "REFACTOR"):
+                    existing_eval = [p for p in scope_base if (repo / p).is_file()]
+                    if existing_eval:
+                        scope_pool = existing_eval
+                ui_tokens = ("view", "fragment", "screen", "activity", "composable")
                 primary = next(
-                    (p for p in eval_files if any(k in p.lower() for k in ("view", "fragment", "screen", "activity", "composable"))),
-                    eval_files[0]
+                    (p for p in scope_pool if any(k in Path(p).name.lower() for k in ui_tokens)),
+                    None,
                 )
+                if primary is None:
+                    primary = next(
+                        (p for p in scope_pool if any(k in p.lower() for k in ui_tokens)),
+                        scope_pool[0],
+                    )
                 inferred_target_scope = primary
         elif classification.get("changed_files", 0) >= 1:
             all_files = sorted(set(p for info in (classification.get("details") or {}).values() for p in info.get("files") or []))
