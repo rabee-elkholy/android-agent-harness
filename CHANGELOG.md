@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.16] - 2026-11-23
+
+### New-File Kotlin Size & Modularity Guard
+
+- **New-File-Only Kotlin File Size Guard (`fast_kt_lint.py`, `_workflow/phase_checkpoints.py`, `_antigravity_stability_selftest.py`)**: Added `check_file_size()` and `_baseline_line_count()` enforcing a non-blocking `[LARGE-FILE-ADVISORY]` target (`<= 450` lines) when files grow or are newly created, and a hard `[GOD_FILE]` error (`> 650` lines) scoped strictly to newly created production Kotlin files (`baseline_line_count is None`), while never blocking edits to pre-existing files (including legacy large files). Exempted test source sets (`is_kmp_or_android_test_path`), generated `build`/`ksp`/`kapt`/`buildconfig` paths, active `@file:Suppress("LARGE_FILE"|"GOD_FILE"|"FileLength"|"MaxFileLength")`, and full-repository `--all` scans (advisory-only). Integrated `check_file_size()` into `new_kotlin_lint_issues()` for `checkpoint-phase`.
+- **Proactive File Modularity Guidance (`agents/rules/harness-rules.md`, `agents/skills/compose-inspector/SKILL.md`)**: Documented the new-file modularity target (`<= 450` lines target, `650`-line hard limit for newly created files, non-blocking advisories for existing files) and proactive sibling-file splitting (`components/`, reducers/helpers) within ADR-009 context limits.
+
 ## [1.5.15] - 2026-11-22
 
 ### KMP Project Kind Parity, Smart Post-PASS Delta Carryover & Classifier/Lint False-Positive Fixes
