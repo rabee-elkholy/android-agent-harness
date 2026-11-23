@@ -193,29 +193,35 @@ def check_phase_compile(repo: Path, modules: list[str], phase_changes: list[Any]
     return True, "PASS"
 def new_kotlin_lint_issues(repo: Path, task_id: str, source: Path, base_head: str | None) -> list[dict]:
     """Report only lint findings introduced since this task's original baseline."""
-    from fast_kt_lint import lint_file
+    from fast_kt_lint import check_file_size, lint_file
 
     current = lint_file(source)
-    if not current:
-        return []
     relative = source.relative_to(repo).as_posix()
     saved_base = _engine.task_dir(repo, task_id) / "baseline-files" / relative
+    original: bytes | None = None
     if saved_base.is_file():
         original = saved_base.read_bytes()
     else:
         try:
             original = _engine.git(repo, "show", f"{base_head or 'HEAD'}:{relative}")
         except Exception:
-            return current  # A newly created file has no pre-task lint debt.
+            original = None
+
+    if original is None:
+        size_blocks, _ = check_file_size(source, baseline_line_count=None, is_all_mode=False)
+        return [*current, *size_blocks]  # A newly created file has no pre-task lint debt.
+
+    if not current:
+        return []
+
+    current_lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
+    before_lines = original.decode("utf-8", errors="replace").splitlines()
 
     with _engine.tempfile.TemporaryDirectory(prefix="harness-lint-") as temp:
         baseline_file = Path(temp) / relative
         baseline_file.parent.mkdir(parents=True, exist_ok=True)
         baseline_file.write_bytes(original)
         before = lint_file(baseline_file)
-        before_lines = original.decode("utf-8", errors="replace").splitlines()
-
-    current_lines = source.read_text(encoding="utf-8", errors="replace").splitlines()
 
     def signature(issue: dict, lines: list[str]) -> tuple[str, str, str]:
         line_no = int(issue.get("line") or 0)

@@ -12205,5 +12205,135 @@ class TestV1515AuditFixesAndDeltaCarryover(unittest.TestCase):
                 self.assertFalse((pol4.get("fix_delta") or {}).get("bounded_post_pass_polish", False))
 
 
+class TestV1516FileSizeAndModularityGuard(unittest.TestCase):
+    """Regression suite for v1.5.16 baseline-scoped Kotlin file-size & modularity guard."""
+
+    def _make_kt_lines(self, count: int) -> list[str]:
+        body = [f"private const val K_{i} = {i}" for i in range(max(0, count - 2))]
+        return ["package com.demo", *body, "internal val MARKER = 1"][:count]
+
+    def test_01_check_file_size_thresholds_exemptions_and_legacy_growth(self) -> None:
+        import fast_kt_lint as fkl
+
+        prod_p = Path("app/src/main/kotlin/com/demo/FeatureScreen.kt")
+        # 440 lines new file -> clean
+        self.assertEqual(([], []), fkl.check_file_size(prod_p, self._make_kt_lines(440), baseline_line_count=None))
+
+        # 500 lines new file -> LARGE_FILE_ADVISORY (non-blocking)
+        blk, adv = fkl.check_file_size(prod_p, self._make_kt_lines(500), baseline_line_count=None)
+        self.assertEqual([], blk)
+        self.assertEqual(["LARGE_FILE_ADVISORY"], [i["type"] for i in adv])
+
+        # 680 lines new file -> GOD_FILE (hard block)
+        blk, adv = fkl.check_file_size(prod_p, self._make_kt_lines(680), baseline_line_count=None)
+        self.assertEqual(["GOD_FILE"], [i["type"] for i in blk])
+        self.assertEqual([], adv)
+
+        # Existing <=650 file crossing 650 during task -> LARGE_FILE_ADVISORY only (never blocks existing files)
+        blk, adv = fkl.check_file_size(prod_p, self._make_kt_lines(660), baseline_line_count=600)
+        self.assertEqual([], blk)
+        self.assertEqual(["LARGE_FILE_ADVISORY"], [i["type"] for i in adv])
+
+        # Legacy >650 file with small edit -> LARGE_FILE_ADVISORY only (never blocks)
+        blk, adv = fkl.check_file_size(prod_p, self._make_kt_lines(820), baseline_line_count=800)
+        self.assertEqual([], blk)
+        self.assertEqual(["LARGE_FILE_ADVISORY"], [i["type"] for i in adv])
+
+        # Legacy >650 file bloated by >150 lines -> LARGE_FILE_ADVISORY only (never blocks existing files)
+        blk, adv = fkl.check_file_size(prod_p, self._make_kt_lines(960), baseline_line_count=800)
+        self.assertEqual([], blk)
+        self.assertEqual(["LARGE_FILE_ADVISORY"], [i["type"] for i in adv])
+
+        # Test source sets & *Test.kt exempt even at 900 lines
+        self.assertEqual(([], []), fkl.check_file_size(Path("shared/src/commonTest/kotlin/com/demo/BigTest.kt"), self._make_kt_lines(900)))
+        self.assertEqual(([], []), fkl.check_file_size(Path("app/src/main/kotlin/com/demo/FooTest.kt"), self._make_kt_lines(900)))
+
+        # Generated build/ directories exempt
+        self.assertEqual(([], []), fkl.check_file_size(Path("shared/build/generated/ksp/Foo.kt"), self._make_kt_lines(900)))
+
+        # Explicit @file:Suppress("LARGE_FILE") exempt; commented suppress is NOT exempt
+        suppressed = ['@file:Suppress("LARGE_FILE")', *self._make_kt_lines(800)]
+        self.assertEqual(([], []), fkl.check_file_size(prod_p, suppressed))
+        commented = ['// @file:Suppress("LARGE_FILE")', *self._make_kt_lines(800)]
+        blk_c, _ = fkl.check_file_size(prod_p, commented)
+        self.assertEqual(["GOD_FILE"], [i["type"] for i in blk_c])
+
+        # is_all_mode=True emits advisory only, never hard block
+        blk_all, adv_all = fkl.check_file_size(prod_p, self._make_kt_lines(800), is_all_mode=True)
+        self.assertEqual([], blk_all)
+        self.assertEqual(["LARGE_FILE_ADVISORY"], [i["type"] for i in adv_all])
+
+    def test_02_fast_kt_lint_cli_and_checkpoint_phase_enforce_god_file_baseline_scoped(self) -> None:
+        import contextlib
+        import io
+        import fast_kt_lint as fkl
+        from _workflow import phase_checkpoints
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = (Path(td) / "repo").resolve()
+            legacy_rel = "app/src/main/kotlin/com/demo/LegacyScreen.kt"
+            small_rel = "app/src/main/kotlin/com/demo/SmallHelper.kt"
+            giant_rel = "app/src/main/kotlin/com/demo/GiantScreen.kt"
+            (repo / ".agents" / "state").mkdir(parents=True)
+            (repo / legacy_rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / legacy_rel).write_text("\n".join(self._make_kt_lines(750)) + "\n", encoding="utf-8")
+            (repo / small_rel).write_text("\n".join(self._make_kt_lines(600)) + "\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo, check=True)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+            # Edit Legacy.kt by +10 lines -> exits 0 with [LARGE-FILE-ADVISORY]
+            (repo / legacy_rel).write_text("\n".join(self._make_kt_lines(760)) + "\n", encoding="utf-8")
+            buf_leg = io.StringIO()
+            with contextlib.redirect_stdout(buf_leg):
+                rc_leg = fkl.main([str(repo / legacy_rel)], repo_override=repo)
+            self.assertEqual(0, rc_leg)
+            self.assertIn("[LARGE-FILE-ADVISORY]", buf_leg.getvalue())
+            self.assertEqual([], phase_checkpoints.new_kotlin_lint_issues(repo, "t1", repo / legacy_rel, "HEAD"))
+
+            # Existing SmallHelper.kt grows from 600 to 670 -> advisory only, never blocks!
+            (repo / small_rel).write_text("\n".join(self._make_kt_lines(670)) + "\n", encoding="utf-8")
+            buf_sm = io.StringIO()
+            with contextlib.redirect_stdout(buf_sm):
+                rc_sm = fkl.main([str(repo / small_rel)], repo_override=repo)
+            self.assertEqual(0, rc_sm)
+            self.assertIn("[LARGE-FILE-ADVISORY]", buf_sm.getvalue())
+            self.assertNotIn("[GOD_FILE]", buf_sm.getvalue())
+            self.assertEqual([], phase_checkpoints.new_kotlin_lint_issues(repo, "t1", repo / small_rel, "HEAD"))
+
+            # Newly created GiantScreen.kt (680 lines) -> exits 1 with [GOD_FILE]; --all exits 0 with [LARGE-FILE-ADVISORY]
+            (repo / giant_rel).write_text("\n".join(self._make_kt_lines(680)) + "\n", encoding="utf-8")
+            buf_giant = io.StringIO()
+            with contextlib.redirect_stdout(buf_giant):
+                rc_giant = fkl.main([str(repo / giant_rel)], repo_override=repo)
+            self.assertEqual(1, rc_giant)
+            self.assertIn("[GOD_FILE]", buf_giant.getvalue())
+
+            buf_all = io.StringIO()
+            with contextlib.redirect_stdout(buf_all):
+                rc_all = fkl.main(["--all", str(repo / giant_rel)], repo_override=repo)
+            self.assertEqual(0, rc_all)
+            self.assertIn("[LARGE-FILE-ADVISORY]", buf_all.getvalue())
+
+            # checkpoint-phase helper new_kotlin_lint_issues catches GOD_FILE even when lint_file() is clean
+            cp_issues = phase_checkpoints.new_kotlin_lint_issues(repo, "t1", repo / giant_rel, "HEAD")
+            self.assertIn("GOD_FILE", [i["type"] for i in cp_issues])
+
+    def test_03_rules_and_compose_skill_document_modularity_guard_within_adr009(self) -> None:
+        kernel = (REPO_ROOT / "agents" / "rules" / "harness-rules.md").read_text(encoding="utf-8")
+        adapter = (REPO_ROOT / "agents" / "tool-adapters" / "AGENTS.md.template").read_text(encoding="utf-8")
+        gemini = (REPO_ROOT / "agents" / "tool-adapters" / "GEMINI.md.template").read_text(encoding="utf-8")
+        compose_skill = (REPO_ROOT / "agents" / "skills" / "compose-inspector" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("GOD_FILE", kernel)
+        self.assertIn("650", kernel)
+        self.assertIn("Component Modularity", compose_skill)
+        self.assertIn("650", compose_skill)
+        self.assertLessEqual(len(kernel) + len(adapter) + len(gemini), 36_000)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

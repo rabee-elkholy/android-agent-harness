@@ -19,6 +19,7 @@ batch representative previews. Optional diagnostics never replace routed gates.
 - **Fast-Changing State**: Use `derivedStateOf` when the derived result changes less often than its inputs (for example, a scroll threshold). It adds overhead and does not help when the UI needs every input update.
 - **Lazy Lists**: Every `LazyColumn` / `LazyRow` must specify explicit `key` lambdas using unique, stable IDs (e.g., `key = { it.id }`).
 - **State Hoisting**: Pass only immutable State and lambda callbacks down to leaf composables. Never pass `ViewModel` instances into reusable child components.
+- **Component Modularity**: Split complex screens and component libraries into cohesive sibling files (target `<= 450` lines, hard limit `650` lines; e.g., `components/` per visual group) instead of monolithic UI files.
 
 ---
 

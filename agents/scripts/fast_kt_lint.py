@@ -69,6 +69,14 @@ GENERIC_CATCH_DECL_RE = re.compile(
     r"\bcatch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:kotlin\.|java\.lang\.)?(?:Exception|Throwable)\s*\)\s*\{"
 )
 
+FILE_SIZE_ADVISORY_LINES = 450
+FILE_SIZE_HARD_LIMIT = 650
+_FILE_SIZE_SUPPRESS_RE = re.compile(
+    r'@file:Suppress\s*\([^)]*"(?:LARGE_FILE|GOD_FILE|FileLength|MaxFileLength)"',
+    re.IGNORECASE,
+)
+_GENERATED_PATH_PARTS = frozenset({"build", "generated", "ksp", "kapt", "buildconfig"})
+
 
 def _strip_kotlin_comments_preserve_lines(text: str) -> str:
     """Mask comments and string/raw-string literals (including `${...}` nested quotes and nested `/* */`) preserving exact newlines."""
@@ -1931,6 +1939,90 @@ def find_unreferenced_new_declarations(
     return findings
 
 
+def check_file_size(
+    file_path: Path,
+    lines: list[str] | None = None,
+    *,
+    baseline_line_count: int | None = None,
+    is_all_mode: bool = False,
+) -> tuple[list[dict], list[dict]]:
+    """Enforce baseline-scoped production Kotlin file modularity limits (450 advisory / 650 hard cap)."""
+    from _modules import is_kmp_or_android_test_path
+
+    posix = file_path.as_posix()
+    if is_kmp_or_android_test_path(posix):
+        return [], []
+    if any(part.lower() in _GENERATED_PATH_PARTS for part in file_path.parts):
+        return [], []
+    if lines is None:
+        try:
+            lines = file_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return [], []
+    head_code = _strip_kotlin_comments_preserve_lines("\n".join(lines[:40]))
+    if _FILE_SIZE_SUPPRESS_RE.search("\n".join(lines[:40])) and "@file:Suppress" in head_code:
+        return [], []
+    line_count = len(lines)
+    if line_count <= FILE_SIZE_ADVISORY_LINES:
+        return [], []
+    fname = file_path.name
+    adv_msg = (
+        f"'{fname}' has {line_count} lines (target <= {FILE_SIZE_ADVISORY_LINES}, hard cap {FILE_SIZE_HARD_LIMIT}). "
+        "Split cohesive sub-components/helpers into sibling files before it becomes a god file."
+    )
+    if is_all_mode:
+        return [], [{"file": str(file_path), "line": 1, "type": "LARGE_FILE_ADVISORY", "msg": adv_msg}]
+    if baseline_line_count is None:
+        if line_count > FILE_SIZE_HARD_LIMIT:
+            return [{
+                "file": str(file_path),
+                "line": 1,
+                "type": "GOD_FILE",
+                "msg": (
+                    f"'{fname}' has {line_count} lines (hard cap {FILE_SIZE_HARD_LIMIT}; "
+                    "newly created file exceeds limit). "
+                    "Decompose into focused sibling files (e.g., components/ or helper/reducer files)."
+                ),
+            }], []
+        return [], [{"file": str(file_path), "line": 1, "type": "LARGE_FILE_ADVISORY", "msg": adv_msg}]
+    if line_count > baseline_line_count:
+        return [], [{"file": str(file_path), "line": 1, "type": "LARGE_FILE_ADVISORY", "msg": adv_msg}]
+    return [], []
+
+
+def _baseline_line_count(
+    repo: Path,
+    file_path: Path,
+    baseline_dir: Path | None,
+    base_head: str | None = None,
+) -> int | None:
+    """Return pre-task/HEAD line count for `file_path`, or None when newly created."""
+    try:
+        rel = file_path.resolve().relative_to(repo.resolve()).as_posix()
+    except ValueError:
+        return None
+    if baseline_dir is not None:
+        b_file = baseline_dir / rel
+        if b_file.is_file():
+            try:
+                return len(b_file.read_text(encoding="utf-8", errors="replace").splitlines())
+            except OSError:
+                pass
+    if (repo / ".git").exists():
+        proc = subprocess.run(
+            ["git", "show", f"{base_head or 'HEAD'}:{rel}"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if proc.returncode == 0:
+            return len(proc.stdout.splitlines())
+    return None
+
+
 def main(argv: list[str] | None = None, *, repo_override: Path | None = None) -> int:
     global REPO
     _saved_repo = REPO
@@ -1949,6 +2041,7 @@ def _main_impl(argv: list[str] | None = None) -> int:
     parser.add_argument("--strict-unused", action="store_true", help="Treat unreferenced newly added public/internal classes and functions as blocking lint errors")
     parser.add_argument("files", nargs="*", help="Optional explicit file path(s) to scan")
     args = parser.parse_args(argv)
+    baseline_dir: Path | None = None
 
     if args.files:
         cwd_root = Path.cwd().resolve()
@@ -2104,14 +2197,18 @@ def _main_impl(argv: list[str] | None = None) -> int:
     all_issues = []
     kdoc_advisories = []
     unused_advisories = []
+    size_advisories = []
     strict_kdoc = bool(args.strict_kdoc or os.environ.get("HARNESS_STRICT_KDOC") == "1")
     strict_unused = bool(args.strict_unused or os.environ.get("HARNESS_STRICT_UNUSED") == "1")
+    eff_scan_repo = eff_repo if args.files else REPO
     for path in target_files:
         mod_set = modified_lines_map.get(path)
         all_issues.extend(lint_file(path, modified_lines=mod_set))
+        kt_lines: list[str] | None = None
         if strict_kdoc or (mod_set is not None and len(mod_set) > 0):
             try:
                 kt_raw = path.read_text(encoding="utf-8", errors="replace")
+                kt_lines = kt_raw.splitlines()
                 found_kdoc = find_missing_architectural_kdoc(path, kt_raw, mod_set)
                 if strict_kdoc:
                     all_issues.extend(found_kdoc)
@@ -2119,8 +2216,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
                     kdoc_advisories.extend(found_kdoc)
             except OSError:
                 pass
+        base_lines = None if args.all else _baseline_line_count(eff_scan_repo, path, baseline_dir)
+        sz_blocks, sz_advs = check_file_size(
+            path,
+            kt_lines,
+            baseline_line_count=base_lines,
+            is_all_mode=args.all,
+        )
+        all_issues.extend(sz_blocks)
+        size_advisories.extend(sz_advs)
     if target_files and not args.all:
-        eff_scan_repo = eff_repo if args.files else REPO
         found_unused_decls = find_unreferenced_new_declarations(eff_scan_repo, target_files, modified_lines_map)
         if strict_unused:
             all_issues.extend(found_unused_decls)
@@ -2145,6 +2250,9 @@ def _main_impl(argv: list[str] | None = None) -> int:
     for u_adv in unused_advisories[:20]:
         rel_u = _safe_rel(u_adv["file"]).replace("\\", "/")
         print(f"[UNUSED-ADVISORY] {rel_u}:{u_adv['line']} -> {u_adv['msg']}")
+    for s_adv in size_advisories[:20]:
+        rel_s = _safe_rel(s_adv["file"]).replace("\\", "/")
+        print(f"[LARGE-FILE-ADVISORY] {rel_s}:{s_adv['line']} -> {s_adv['msg']}")
 
     if not all_issues:
         print("[SUCCESS] Fast Kotlin Lint passed! 0 syntax/architectural violations detected.")
