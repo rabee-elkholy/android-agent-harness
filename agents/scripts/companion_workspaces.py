@@ -140,15 +140,18 @@ def _validate_companion_candidate(repo: Path, raw_path: str) -> Path:
                 f"COMPANION_WORKSPACE_INVALID: Companion workspace '{resolved}' cannot overlap protected root '{pr}'."
             )
 
-    # Refuse OS/system directories
+    # Refuse OS/system directories (exempting subdirectories inside active tmp_root / Linux `/dev/shm/` tmpfs)
     posix_low = resolved.as_posix().lower()
     # Strip Windows drive letter (e.g. `c:/windows` -> `/windows`) for uniform matching
     no_drive = re.sub(r"^[a-z]:", "", posix_low)
-    for seg in _FORBIDDEN_SYSTEM_SEGMENTS:
-        if no_drive == seg or no_drive.startswith(seg + "/"):
-            raise ValidationError(
-                f"COMPANION_WORKSPACE_INVALID: System directory '{resolved}' cannot be registered as a companion workspace."
-            )
+    in_dev_shm_subdir = no_drive.startswith("/dev/shm/") and no_drive != "/dev/shm/"
+    in_tmp_subdir = resolved != tmp_root and resolved.is_relative_to(tmp_root)
+    if not (in_dev_shm_subdir or in_tmp_subdir):
+        for seg in _FORBIDDEN_SYSTEM_SEGMENTS:
+            if no_drive == seg or no_drive.startswith(seg + "/"):
+                raise ValidationError(
+                    f"COMPANION_WORKSPACE_INVALID: System directory '{resolved}' cannot be registered as a companion workspace."
+                )
 
     # Refuse primary repo itself, any parent of primary repo, or any subdirectory inside primary repo
     repo_root = repo.resolve()

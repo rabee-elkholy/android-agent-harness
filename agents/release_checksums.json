@@ -113,7 +113,7 @@
     "agents/scripts/change_decision.py": "b69861b66f4e8b14a92ae63aba449b348a23e064bec55b752c36dea3215eb998",
     "agents/scripts/check_kit_update.py": "17fb761c280ca8f839c39e49f11c34e613008c60007300515750140cb77cdf19",
     "agents/scripts/check_strings.py": "9b4af0f8efa8ac6ebbe5531141bd73dcb0e805f1cfeb365a23f04464ef95bdee",
-    "agents/scripts/companion_workspaces.py": "1fa0a515a15a981fcb1c0394c3622528e7bdf0a520a98900974b10c931d685c7",
+    "agents/scripts/companion_workspaces.py": "aab87650c88c49ad11f8db0e6ad908c66b6d746291668be2a1d558e4af9aa22a",
     "agents/scripts/context_presentation.py": "a77917fd549b7b9a26fb1e3d5e3147a85237aba8e7b8c16b99281eb10b117555",
     "agents/scripts/debug_device.py": "65b4f6c0c3ad5a22c2be00755d0aee29929df7a3e291791ce876ac988083619d",
     "agents/scripts/debug_instrumentation.py": "66bab83bb00683b6820028e7b25306222b85f0a4fcfbb5f15cf562f5e85fd44a",
