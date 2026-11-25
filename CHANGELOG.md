@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.20] - 2026-11-25
+
+### Developer-Authorized Companion Workspaces for Multi-Root IDE Projects
+
+- **Tamper-Evident Companion Workspaces (`companion_workspaces.py`, `agents/harness.py`, `_safety/engine.py`, `_safety/path_and_read_guard.py`, `_safety/command_policy.py`, `mutation_guard.py`, `doctor/models.py`, `_public_commands.py`, `agents/rules/harness-rules.md`, `agents/tool-adapters/GEMINI.md.template`, `_public_cli_selftest.py`)**: Added `python .agents/harness.py workspace <list|add|remove>` backed by SHA-256 signed `.agents/project-context/companion-workspaces.json` (immutable to model file tools and preserved across `harness update`). In multi-root Antigravity projects (e.g. Android/KMP app + backend/server repo), files, searches (`list_dir`, `grep_search`, `find_by_name`), edits, and non-destructive dev/server commands cleanly scoped to an authorized companion workspace pass through smoothly while keeping the primary Android repository 100% governed, rejecting overlapping/system/symlink paths, blocking companion `.git/` and reviewer mutations, enforcing anti-smuggling checks against primary-repo/secret references and `..` traversals, and failing closed on tampering.
+
 ## [1.5.19] - 2026-11-25
 
 ### Speed & Friction Cut: One-Shot Closing, Fail-Fast Tests, Lean Defaults & Pure-Code File Size Guard
