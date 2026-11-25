@@ -11,7 +11,7 @@ from _vnext_common import ValidationError, read_json
 from plan_authority import require_mutation
 
 
-INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge", "dep_inspect"}
+INSPECTION_SCRIPTS = {"android_inspect", "project_graph", "task_context", "harness_doctor", "change_classifier", "review_policy", "delegation_policy", "delivery_manifest", "review_execution", "task_metrics", "incident_reporter", "pm_discovery", "logcat_doctor", "session_forensics", "static_health_bridge", "dep_inspect", "companion_workspaces"}
 VERIFICATION_SCRIPTS = {
     "run_gradle_task", "run_tests_gate", "preflight", "preflight_check", "review_package",
     "record_review", "final_verifier", "final_verdict", "check_strings",
@@ -1348,6 +1348,15 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         if _opt_value(model_args, "--source").lower() == "conversation" and _opt_value(model_args, "--proof-reference").strip():
             return True, "explicit developer execution-mode decision; command validates tamper-evident state"
         return False, "execution-mode changes require `--source conversation` and a non-empty `--proof-reference`"
+    if entry in {"harness_cli", "android-harness"} and model_args_clean[:1] == ["workspace"]:
+        entry, model_args_clean = "companion_workspaces", _strip_top_opts(model_args_clean[1:])
+    if entry == "companion_workspaces":
+        if is_help_request or not model_args_clean or model_args_clean[:1] in (["list"], ["status"]):
+            return True, "read-only companion workspace listing"
+        if model_args_clean[:1] in (["add"], ["remove"]):
+            if _opt_value(model_args, "--source").lower() == "conversation" and _opt_value(model_args, "--proof-reference").strip():
+                return True, "explicit developer companion-workspace registration; command validates tamper-evident boundary"
+            return False, "companion-workspace changes require `--source conversation` and a non-empty `--proof-reference`"
     if entry in {"harness_cli", "android-harness"} and model_args_clean[:2] == ["review", "models"]:
         entry, model_args_clean = "review_models", _strip_top_opts(model_args_clean[2:])
     if not is_help_request and entry == "review_models" and model_args_clean[:1] == ["set"]:

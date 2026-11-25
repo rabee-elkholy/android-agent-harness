@@ -488,6 +488,18 @@ def _main(argv: list[str] | None = None) -> int:
         if not {"-h", "--help"} & set(forwarded_em) and "--repo" not in forwarded_em and not any(a.startswith("--repo=") for a in forwarded_em):
             forwarded_em = ["--repo", str(REPO_ROOT), *forwarded_em]
         return _run("execution_mode.py", ["show", *forwarded_em])
+    if command == "workspace":
+        if not args:
+            return _run("companion_workspaces.py", ["list", "--repo", str(REPO_ROOT)])
+        if args[0] in {"-h", "--help", "help"}:
+            return _run("companion_workspaces.py", ["--help"])
+        ws_sub = "list" if args[0] == "status" else args[0]
+        ws_rest = list(args[1:]) if args[0] in {"list", "status", "add", "remove"} else list(args)
+        if args[0] not in {"list", "status", "add", "remove"}:
+            ws_sub = "list"
+        if not {"-h", "--help"} & set(ws_rest) and "--repo" not in ws_rest and not any(a.startswith("--repo=") for a in ws_rest):
+            ws_rest = ["--repo", str(REPO_ROOT), *ws_rest]
+        return _run("companion_workspaces.py", [ws_sub, *ws_rest])
     if command == "symbol":
         return _run("symbol_edit.py", _with_repo_arg(args))
     if command == "dep-inspect":

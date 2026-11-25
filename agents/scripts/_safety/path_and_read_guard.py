@@ -90,12 +90,22 @@ def _safe_target(raw_target: str, repo: Path | None = None) -> tuple[bool, str, 
             return True, str(resolved), True
         if _engine._is_ide_artifact(resolved) or _engine._is_external_user_doc(raw, resolved):
             return True, str(resolved), True
+        try:
+            from companion_workspaces import match_companion_target
+            ok_comp, comp_root, comp_detail = match_companion_target(root, raw)
+            if comp_root is not None:
+                if ok_comp:
+                    return True, comp_detail, True
+                return False, comp_detail, False
+        except (ImportError, OSError, ValueError):
+            pass
         return False, f"Target path '{raw_target}' is outside the repository boundary.", False
     rel_lower = relative.lower()
     if (
         rel_lower == ".agents/project-context/project-notes.md"
         or rel_lower == ".agents/project-context/developer-instructions.json"
         or rel_lower == ".agents/project-context/architecture-policy.json"
+        or rel_lower == ".agents/project-context/companion-workspaces.json"
         or rel_lower == ".agents/project-context/quirks.json"
         or rel_lower == "agents/project-context/quirks.json"
         or rel_lower.startswith(".agents/project-context/legacy-overrides/")
@@ -327,6 +337,17 @@ def _handle_list_dir(name: str, args: dict, *, conversation: str = "", is_utilit
 
     dir_target = str(args.get("DirectoryPath") or args.get("directoryPath") or args.get("path") or ".")
     if not _engine._is_within_repo(_engine.REPO, dir_target):
+        try:
+            from companion_workspaces import match_companion_target
+            ok_comp, comp_root, comp_detail = match_companion_target(_engine.REPO, dir_target)
+            if comp_root is not None:
+                if ok_comp:
+                    _engine.emit("allow", f"Directory listing permitted inside authorized companion workspace '{comp_root.name}'.", tool=name, reason_code="COMPANION_WORKSPACE_ALLOWED")
+                    return
+                _engine.emit("deny", comp_detail, tool=name, reason_code="PROTECTED_PATH")
+                return
+        except (ImportError, OSError, ValueError):
+            pass
         _engine.emit("deny", "Directory target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
         return
 
@@ -417,6 +438,17 @@ def _handle_search(name: str, args: dict, *, conversation: str = "", is_utility_
         query = str(args.get("Pattern") or args.get("pattern") or "")
 
     if target and not _engine._is_within_repo(_engine.REPO, target):
+        try:
+            from companion_workspaces import match_companion_target
+            ok_comp, comp_root, comp_detail = match_companion_target(_engine.REPO, target)
+            if comp_root is not None:
+                if ok_comp:
+                    _engine.emit("allow", f"Search permitted inside authorized companion workspace '{comp_root.name}'.", tool=name, reason_code="COMPANION_WORKSPACE_ALLOWED")
+                    return
+                _engine.emit("deny", comp_detail, tool=name, reason_code="PROTECTED_PATH")
+                return
+        except (ImportError, OSError, ValueError):
+            pass
         _engine.emit("deny", "Search target is outside the repository root.", tool=name, reason_code="PROTECTED_PATH")
         return
 

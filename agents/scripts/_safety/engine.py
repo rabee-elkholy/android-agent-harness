@@ -623,8 +623,10 @@ def _main() -> None:
                 targets = [""]
             all_safe = True
             all_temp = True
+            any_companion = False
             first_detail = ""
             resolved_details: list[str] = []
+            repo_targets: list[str] = []
             for t in targets:
                 safe, detail, is_temp = _self._safe_target(t)
                 if not safe:
@@ -632,12 +634,29 @@ def _main() -> None:
                     first_detail = detail
                     break
                 resolved_details.append(str(detail).replace("\\", "/").lower())
-                if not is_temp:
+                if is_temp:
+                    try:
+                        from companion_workspaces import match_companion_target
+                        ok_c, c_root, _ = match_companion_target(REPO, t)
+                        if ok_c and c_root is not None:
+                            any_companion = True
+                    except (ImportError, OSError, ValueError):
+                        pass
+                else:
                     all_temp = False
+                    repo_targets.append(t)
             if not all_safe:
                 _self.emit("deny", first_detail, tool=name, reason_code="PROTECTED_PATH")
                 return
             if all_temp:
+                if reviewer and any_companion:
+                    _self.emit(
+                        "deny",
+                        "Reviewer agents are strictly read-only and may not mutate files inside companion workspaces.",
+                        tool=name,
+                        reason_code="REVIEWER_MUTATION_FORBIDDEN",
+                    )
+                    return
                 if reviewer and any(
                     "/.agents/cache/" in ("/" + d.lstrip("/")) for d in resolved_details
                 ):
@@ -660,7 +679,16 @@ def _main() -> None:
                     return
                 if name in {"edit_file", "replace_file_content", "multi_replace_file_content", "apply_patch", "edit", "multiedit"}:
                     _self._normalize_crlf_for_edit(REPO, targets, args)
-                _self.emit("allow", "Temporary setup answers, IDE artifact, or external user document write is allowed.", tool=name, reason_code="TEMP_WRITE_ALLOWED")
+                _self.emit(
+                    "allow",
+                    (
+                        "Companion workspace file edit is allowed."
+                        if any_companion
+                        else "Temporary setup answers, IDE artifact, or external user document write is allowed."
+                    ),
+                    tool=name,
+                    reason_code="COMPANION_WORKSPACE_WRITE_ALLOWED" if any_companion else "TEMP_WRITE_ALLOWED",
+                )
                 return
             try:
                 pending_tid = str(active_plan(REPO).get("task_id") or "")
@@ -669,7 +697,7 @@ def _main() -> None:
             if _pending_cancel(pending_tid):
                 _self.emit("deny", _cancel_pending_message(pending_tid), tool=name, reason_code="CANCEL_PENDING")
                 return
-            allowed, reason, code = file_mutation_allowed(REPO, targets=targets)
+            allowed, reason, code = file_mutation_allowed(REPO, targets=repo_targets or targets)
             if allowed and not reviewer:
                 w_ok, w_reason, w_code = _self._check_web_mode_direct_write_guard(
                     REPO, targets, conversation=conversation, transcript_hint=transcript_hint,
@@ -695,7 +723,15 @@ def _main() -> None:
                 pass
         if name == "run_command":
             command = str(args.get("CommandLine") or args.get("commandLine") or args.get("command") or "")
-            _self._handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint)
+            raw_cwd = (
+                args.get("Cwd")
+                or args.get("cwd")
+                or args.get("WorkingDirectory")
+                or args.get("workingDirectory")
+                or args.get("working_directory")
+            )
+            hook_cwd = _resolve_hook_cwd(raw_cwd) if raw_cwd else None
+            _self._handle_command(command, conversation=lead_conv, transcript_hint=transcript_hint, cwd=hook_cwd)
             return
         if name in SUBAGENT_TOOLS or name.startswith("schedules:"):
             _self._handle_subagent(name, args, parent_conversation_id=conversation)

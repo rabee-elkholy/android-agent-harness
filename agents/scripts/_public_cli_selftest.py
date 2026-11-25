@@ -3824,5 +3824,219 @@ class TestV1519SpeedAndFrictionCut(unittest.TestCase):
         self.assertEqual([], adv)
 
 
+class TestV1520CompanionWorkspaces(unittest.TestCase):
+    """Comprehensive security and edge-case tests for developer-authorized Companion Workspaces."""
+
+    def _run_hook(self, repo: Path, payload: dict) -> dict:
+        hook_script = KIT / "agents" / "scripts" / "pre_tool_safety.py"
+        env = {
+            **os.environ,
+            "HARNESS_REPO": str(repo),
+            "HARNESS_HOOK_STATE": str(repo / ".agents/state/hook-state.json"),
+        }
+        proc = subprocess.run(
+            [sys.executable, str(hook_script)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(0, proc.returncode, proc.stderr + proc.stdout)
+        out = json.loads(proc.stdout)
+        return out
+
+    def _decision(self, out: dict) -> str:
+        return str((out.get("hookSpecificOutput") or {}).get("permissionDecision") or out.get("decision") or "")
+
+    def test_companion_workspace_lifecycle_security_and_hook_passthrough(self) -> None:
+        import companion_workspaces as cw
+        import mutation_guard
+        from _safety import command_policy
+        from _vnext_common import ValidationError, read_json
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            android_repo = base / "CuraFit"
+            backend_repo = base / "Egypt_Nutrition_Local"
+            other_dir = base / "OtherRandomRepo"
+            for d in (android_repo, backend_repo, other_dir):
+                d.mkdir(parents=True, exist_ok=True)
+            (android_repo / ".agents/project-context").mkdir(parents=True, exist_ok=True)
+            (android_repo / "app/src/main/kotlin").mkdir(parents=True, exist_ok=True)
+            (android_repo / "app/src/main/kotlin/App.kt").write_text("class App\n", encoding="utf-8")
+            (backend_repo / "server.py").write_text("print('ok')\n", encoding="utf-8")
+            (backend_repo / ".git").mkdir(parents=True, exist_ok=True)
+            (backend_repo / ".git/config").write_text("[core]\n", encoding="utf-8")
+            (other_dir / "service.py").write_text("print('nope')\n", encoding="utf-8")
+
+            # 1. Authority enforcement in hook + CLI
+            self.assertEqual(
+                "workspace",
+                command_policy._developer_authority_violation(
+                    f"python .agents/harness.py workspace add {backend_repo}"
+                ),
+            )
+            self.assertEqual(
+                "",
+                command_policy._developer_authority_violation(
+                    f'python .agents/harness.py workspace add "{backend_repo}" --source conversation --proof-reference "Allow backend"'
+                ),
+            )
+            ok_add, rsn_add = mutation_guard.command_allowed(
+                android_repo,
+                f'python .agents/harness.py workspace add "{backend_repo}" --source conversation --proof-reference "Allow backend"',
+            )
+            self.assertTrue(ok_add, rsn_add)
+            ok_list, rsn_list = mutation_guard.command_allowed(
+                android_repo, "python .agents/harness.py workspace list"
+            )
+            self.assertTrue(ok_list, rsn_list)
+
+            # 2. Validation rejects overlapping/system/root/question-proof paths
+            for bad in (android_repo, base, android_repo / "app", Path.home(), base / "DoesNotExist"):
+                with self.assertRaises(ValidationError):
+                    cw.add_companion_workspace(
+                        android_repo, str(bad), source="conversation", proof_reference="Allow"
+                    )
+            with self.assertRaises(ValidationError):
+                cw.add_companion_workspace(
+                    android_repo, str(backend_repo), source="conversation", proof_reference="Allow?"
+                )
+
+            # 3. Before registration: write/list/search/run_command on backend are DENIED
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(backend_repo / "server.py")}})),
+            )
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "list_dir", "toolArgs": {"DirectoryPath": str(backend_repo)}})),
+            )
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "grep_search", "toolArgs": {"SearchPath": str(backend_repo), "Query": "ok"}})),
+            )
+
+            # 4. Register companion workspace cleanly
+            added = cw.add_companion_workspace(
+                android_repo,
+                str(backend_repo),
+                source="conversation",
+                proof_reference="Allow Egypt_Nutrition_Local companion folder",
+            )
+            self.assertEqual("COMPANION_WORKSPACE_ADDED", added["status"])
+            self.assertEqual(1, len(cw.load_companion_workspaces(android_repo)))
+
+            # 5. Model file tools CANNOT tamper with companion-workspaces.json directly
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "write_to_file",
+                    "toolArgs": {"TargetFile": str(android_repo / ".agents/project-context/companion-workspaces.json")},
+                })),
+            )
+
+            # 6. Registered companion workspace allows writes, list_dir, grep_search, and backend commands (even with NO Android task!)
+            self.assertEqual(
+                "allow",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(backend_repo / "server.py")}})),
+            )
+            self.assertEqual(
+                "allow",
+                self._decision(self._run_hook(android_repo, {"toolName": "list_dir", "toolArgs": {"DirectoryPath": str(backend_repo)}})),
+            )
+            self.assertEqual(
+                "allow",
+                self._decision(self._run_hook(android_repo, {"toolName": "grep_search", "toolArgs": {"SearchPath": str(backend_repo), "Query": "ok"}})),
+            )
+            self.assertEqual(
+                "allow",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "run_command",
+                    "toolArgs": {"CommandLine": "python -m pytest", "Cwd": str(backend_repo)},
+                })),
+            )
+            self.assertEqual(
+                "allow",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "run_command",
+                    "toolArgs": {"CommandLine": f'Set-Location "{backend_repo}"; uvicorn app:app --reload'},
+                })),
+            )
+
+            # 7. Strict boundaries STILL hold:
+            # - Unregistered outside folder still denied
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(other_dir / "service.py")}})),
+            )
+            # - Companion `.git/config` still denied
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(backend_repo / ".git/config")}})),
+            )
+            # - Primary Android repo write with no active task still denied
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(android_repo / "app/src/main/kotlin/App.kt")}})),
+            )
+            # - Mixed move_file from Android repo -> companion still denied (no active Android task!)
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "move_file",
+                    "toolArgs": {"source": str(android_repo / "app/src/main/kotlin/App.kt"), "destination": str(backend_repo / "App.kt")},
+                })),
+            )
+            # - Companion command smuggling primary Android repo path or `git push` or `..` traversal -> DENIED!
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "run_command",
+                    "toolArgs": {"CommandLine": f'python -c "open(r\'{android_repo}/app/src/main/kotlin/App.kt\')"', "Cwd": str(backend_repo)},
+                })),
+            )
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "run_command",
+                    "toolArgs": {"CommandLine": "git push origin main", "Cwd": str(backend_repo)},
+                })),
+            )
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {
+                    "toolName": "run_command",
+                    "toolArgs": {"CommandLine": "cat ../CuraFit/app/src/main/kotlin/App.kt", "Cwd": str(backend_repo)},
+                })),
+            )
+
+            # 8. Tampering with companion-workspaces.json fails CLOSED!
+            cw_file = cw.companion_workspaces_file(android_repo)
+            tampered = read_json(cw_file)
+            tampered["workspaces"].append({"path": str(other_dir), "label": "Tampered"})
+            cw_file.write_text(json.dumps(tampered), encoding="utf-8")
+            self.assertEqual([], cw.load_companion_workspaces(android_repo))
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(backend_repo / "server.py")}})),
+            )
+
+            # 9. Re-add and remove cleanly
+            cw.add_companion_workspace(
+                android_repo, str(backend_repo), source="conversation", proof_reference="Re-allow backend"
+            )
+            rem = cw.remove_companion_workspace(
+                android_repo, str(backend_repo), source="conversation", proof_reference="Remove backend"
+            )
+            self.assertEqual(1, rem["removed_count"])
+            self.assertEqual(0, rem["remaining_count"])
+            self.assertEqual(
+                "deny",
+                self._decision(self._run_hook(android_repo, {"toolName": "write_to_file", "toolArgs": {"TargetFile": str(backend_repo / "server.py")}})),
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

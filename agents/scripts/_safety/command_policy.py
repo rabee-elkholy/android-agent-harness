@@ -112,6 +112,15 @@ def _developer_authority_violation(command: str) -> str:
             if sub_rest[:1] == ["set"] and not any(flag in rest for flag in ("-h", "--help")):
                 if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                     return "execution-mode"
+        is_workspace_cmd = (
+            name == "companion_workspaces.py"
+            or (name in _engine.TASK_ENTRYPOINTS and rest[:1] == ["workspace"])
+        )
+        if is_workspace_cmd:
+            ws_rest = _strip_leading_cli_flags(rest[1:] if name in _engine.TASK_ENTRYPOINTS else rest)
+            if ws_rest[:1] in (["add"], ["remove"]) and not any(flag in rest for flag in ("-h", "--help")):
+                if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                    return "workspace"
         is_web_apply = (
             (name == "web_relay.py" and rest[:1] == ["apply"])
             or (name in _engine.TASK_ENTRYPOINTS and (rest[:1] == ["web-apply"] or rest[:2] == ["web-relay", "apply"]))
@@ -676,7 +685,7 @@ def _extract_file_delete_targets(command: str) -> tuple[bool, list[str]]:
     return True, all_targets
 
 
-def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '') -> None:
+def _handle_command(command: str, *, conversation: str = '', transcript_hint: str = '', cwd: Path | None = None) -> None:
     from mutation_guard import _is_read_only, _split_segments, _tokens
     from platform_quirks import is_quirk_enabled
     read_commands = {
@@ -770,6 +779,43 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
             hint = f" {_engine.DENY_HINTS[code]}" if code in _engine.DENY_HINTS else ""
             _engine.emit("deny", f"Denied by local safety boundary: {code}.{hint}", tool="run_command", command=command, reason_code=code.upper(), task_id=active_tid)
             return
+    if is_quirk_enabled("200632", repo=_engine.REPO) and _contains_windows_start_process(command):
+        _engine.emit(
+            "deny",
+            "WINDOWS_START_PROCESS_PIPE_HANG (#1718 / #200632): Direct `Start-Process` / `saps` invocations inside `run_command` on Windows "
+            "let spawned GUI/background child processes inherit parent stdout/stderr pipe handles, causing Antigravity's background task runner "
+            "to hang indefinitely at `Empty log` waiting for pipe EOF. Use bounded headless `python .agents/harness.py <subcommand>` calls instead.",
+            tool="run_command",
+            command=command,
+            reason_code="COMMAND_MUTATION_GUARD",
+            task_id=active_tid,
+        )
+        return
+    try:
+        from companion_workspaces import evaluate_companion_command
+        comp_ok, comp_root, comp_reason = evaluate_companion_command(_engine.REPO, command, cwd=cwd)
+        if comp_root is not None:
+            if comp_ok:
+                _engine.emit(
+                    "allow",
+                    comp_reason,
+                    tool="run_command",
+                    command=command,
+                    reason_code="COMPANION_WORKSPACE_COMMAND_ALLOWED",
+                    task_id=active_tid,
+                )
+                return
+            _engine.emit(
+                "deny",
+                comp_reason,
+                tool="run_command",
+                command=command,
+                reason_code="PROTECTED_PATH",
+                task_id=active_tid,
+            )
+            return
+    except (ImportError, OSError, ValueError):
+        pass
     if _engine.RAW_GRADLE.search(command):
         _engine.emit("deny", "Raw Gradle execution is blocked; use the harness Gradle/test gate.", tool="run_command", command=command, reason_code="RAW_GRADLE", task_id=active_tid)
         return
