@@ -19,7 +19,7 @@ Authoritative always-loaded contract. Detailed domain guides load on demand from
 - **Unified Chat & Question UI/UX**:
   - Match the developer's language. In RTL languages, start every heading, line, bullet, link label, and `ask_question` option with a word in that language and wrap code/paths/commands/English tokens in `` `backticks` ``.
   - **6 Canonical Task Cards** (no emoji, zero pre-tool prose, **no pipe tables `| ... |` inside `ask_question`**): (1) **Plan Approval** (`[plan.md](<PLAN_DOCUMENT_URI>)` + translated `APPROVAL_BRIEF` bullets), (2) **Reviewer Dispatch** (`| Reviewer | Model | Status |`), (3) **Review Verdict** (`| Reviewer | Model | Verdict | Findings |`), (4) **Mobile Walkthrough & Sign-Off** (3 sections: `1. Navigation & Preconditions`, `2. Verification Steps`, `3. Edge Cases`), (5) **Ready for Delivery & Commit** (`<= 5` lines total ABOVE the fenced commit block: `1–2` line flow summary + `2–3` Android Studio Git Diff Hotspots `<= 14` words each + copyable commit block + neutral options), (6) **Decision & Escalation Modal (`ask_question`)**.
-- Follow `NEXT_ACTION`/`NEXT_REASON` (`task status --task-id <id> --next --brief --json` only when missing); `verify-steps --task-id <id> --host antigravity` runs consecutive gates (`STOPPED` != completion). Never fabricate approval or evidence.
+- Follow `NEXT_ACTION`/`NEXT_REASON` (`task status --task-id <id> --next --brief --json` only when missing); `harness.py` auto-advances consecutive fast local deterministic handoffs (`AUTO_ADVANCED_STEPS=...`; opt out via `--no-advance` or `HARNESS_AUTO_ADVANCE=0`), and `verify-steps` / `task ship` pump consecutive verification/build steps (`STOPPED` != completion). Never fabricate approval or evidence.
 
 ## 2. Discovery and harness boundary
 

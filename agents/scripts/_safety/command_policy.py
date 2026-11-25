@@ -54,7 +54,7 @@ def _strip_leading_cli_flags(tokens: list[str]) -> list[str]:
     while idx < len(tokens):
         tok = tokens[idx]
         low = tok.lower()
-        if low == "--json":
+        if low in {"--json", "--no-advance"}:
             idx += 1
             continue
         if low in value_flags and idx + 1 < len(tokens):
@@ -793,9 +793,9 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         )
         return
     if not _engine.re.search(r"(?:^|\s)(?:-h|--help)(?:\s|$)", command) and _engine.re.search(
-        r"(?:harness(?:\.py)?\s+(?:--\S+\s+)*(?:verify-steps|test|compile|assemble|review\s+package|task\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase))|"
+        r"(?:harness(?:\.py)?\s+(?:--\S+\s+)*(?:verify-steps|test|compile|assemble|review\s+package|task\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase|ship))|"
         r"(?:verification_steps|run_tests_gate|run_gradle_task|review_package)\.py|"
-        r"workflow(?:\.py)?\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase))\b",
+        r"workflow(?:\.py)?\s+(?:--\S+\s+)*(?:prepare-verification|checkpoint-phase|ship))\b",
         command,
         _engine.re.I,
     ):

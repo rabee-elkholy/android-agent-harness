@@ -263,11 +263,11 @@ PUBLIC_COMMANDS: list[dict[str, Any]] = [
     {
         "command": "task ship",
         "read_only": False,
-        "valid_states": ["IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY", "DELIVERED"],
+        "valid_states": ["APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY", "DELIVERED"],
         "required_inputs": [],
         "model_facing": True,
-        "description": "Compound verification-to-commit-card pipeline: runs verify-steps (including assemble when required), seals task complete into READY_FOR_DELIVERY with suggested_commit_block when all gates pass, or stops safely at any review/device/human checkpoint.",
-        "when_to_use": "Implementation edits are complete and ready to verify and prepare the Commit & Delivery Card in a single turn (or seal delivery after git commit).",
+        "description": "Unified deterministic pump: advances all consecutive deterministic steps (verify-steps, assemble, fast review/phase/complete/deliver handoffs, and optional --with-device when unattended install is configured) until a real review, device, model, human, or terminal boundary.",
+        "when_to_use": "Implementation edits or review/device checkpoints are ready to advance through all consecutive deterministic steps in a single turn (or seal delivery after git commit).",
         "example": "python .agents/harness.py task ship --task-id <id> --host antigravity",
     },
     {

@@ -133,17 +133,43 @@ def _run(script: str, args: list[str]) -> int:
     return proc.returncode
 
 
-# Commands after which the agent needs the next step. A real delivery called `task status --next --json`
-# after each of them (six times from review finalize to ready), one extra model turn each.
+# Commands after which the agent needs fast deterministic handoff + next step.
 # `verify` prints a JSON report and is left out so its output stays parseable.
 NEXT_STEP_COMMANDS = frozenset({"preflight", "test", "assemble", "device", "review", "phase-review"})
-NEXT_STEP_TASK_ACTIONS = frozenset({"prepare-verification", "approve-sensitive", "complete", "resume"})
+NEXT_STEP_TASK_ACTIONS = frozenset({
+    "approve",
+    "prepare-verification",
+    "approve-sensitive",
+    "complete",
+    "resume",
+    "checkpoint-phase",
+    "begin-next-phase",
+    "change-decision",
+    "reconcile-delivery",
+    "heal",
+})
 
 
-def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) -> None:
-    """Print the active task's next action as NEXT_ACTION= / NEXT_REASON= (best effort, never fails)."""
-    import contextlib
-    import io
+def _strip_global_no_advance(raw_args: list[str]) -> tuple[list[str], bool]:
+    """Extract optional `--no-advance` flag before `--` without mutating subcommand positional args."""
+    if "--no-advance" not in raw_args:
+        return raw_args, False
+    out: list[str] = []
+    disabled = False
+    after_sep = False
+    for tok in raw_args:
+        if tok == "--":
+            after_sep = True
+            out.append(tok)
+        elif not after_sep and tok == "--no-advance":
+            disabled = True
+        else:
+            out.append(tok)
+    return out, disabled
+
+
+def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0, auto_advance: bool = True) -> None:
+    """Run fast local deterministic handoffs (when exit_code == 0) and print NEXT_ACTION= / NEXT_REASON=."""
     import json
 
     if step_args and step_args[:2] == ["review", "dynamic-workflow"]:
@@ -159,17 +185,12 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
 
         plan = active_plan(REPO_ROOT) or {}
         task_id = str(plan.get("task_id") or "")
-        if not task_id or str(plan.get("status") or "") in ("", "DELIVERED", "CANCELLED"):
+        initial_status = str(plan.get("status") or "")
+        if not task_id or initial_status in ("", "DELIVERED", "CANCELLED"):
             return
-        from workflow import _compact_for_host, resolve_next_action
+        from workflow import _compact_for_host
+        from verification_steps import advance_fast_steps
 
-        is_verify_gate_step = bool(
-            step_args
-            and (
-                step_args[0] in ("preflight", "test")
-                or (len(step_args) > 1 and step_args[0] == "task" and step_args[1] == "prepare-verification")
-            )
-        )
         step_host = os.environ.get("HARNESS_HOST", "").strip().lower() or None
         if step_args:
             for idx_arg, tok_arg in enumerate(step_args):
@@ -190,23 +211,50 @@ def _print_next_step(*, step_args: list[str] | None = None, exit_code: int = 0) 
                             break
                     except (OSError, ValueError):
                         continue
-        host_kw = {"host": step_host} if step_host else {}
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            action = resolve_next_action(REPO_ROOT, task_id, plan, **host_kw)
-            if (
-                exit_code == 0
-                and is_verify_gate_step
-                and isinstance(action, dict)
-                and action.get("code") == "BUILD_REVIEW_PACKAGE"
-            ):
-                try:
-                    from review_package import build_package
-                    build_package(REPO_ROOT, task_id)
-                    action = resolve_next_action(REPO_ROOT, task_id, plan, **host_kw)
-                except (OSError, ValueError, ImportError):
-                    pass
+
+        pump = advance_fast_steps(
+            REPO_ROOT,
+            task_id,
+            host=step_host,
+            enabled=bool(auto_advance and exit_code == 0),
+        )
+        completed_steps = list(pump.get("completed_steps") or [])
+        action = pump.get("action")
+        final_plan = pump.get("plan") if isinstance(pump.get("plan"), dict) else plan
+        stopped_error = str(pump.get("stopped_error") or "")
+        finalized_reviews = list(pump.get("finalized_reviews") or [])
     except Exception:
         return
+
+    # Commands that already print their own guidance (`task approve`, `task checkpoint-phase --advance-all-ready`)
+    # stay silent when zero fast handoff steps were needed so output has no duplicate NEXT_ACTION lines.
+    if (
+        not completed_steps
+        and not stopped_error
+        and step_args
+        and len(step_args) >= 2
+        and step_args[0] == "task"
+        and (
+            step_args[1] == "approve"
+            or (step_args[1] == "checkpoint-phase" and "--advance-all-ready" in step_args)
+        )
+    ):
+        return
+
+    for fin_res in finalized_reviews:
+        try:
+            from review_orchestrator import _print_finalized_review_summary
+            _print_finalized_review_summary(fin_res)
+        except (ImportError, OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"[WARN] Could not render finalized review summary: {exc}", file=sys.stderr, flush=True)
+    if completed_steps:
+        print("AUTO_ADVANCED_STEPS=" + ",".join(completed_steps), flush=True)
+        final_status = str(final_plan.get("status") or "")
+        if final_status and final_status != initial_status:
+            print(f"TASK_STATUS={final_status}", flush=True)
+    if stopped_error:
+        print(f"AUTO_ADVANCE_STOPPED={stopped_error}", file=sys.stderr, flush=True)
+
     if not isinstance(action, dict):
         return
     code = str(action.get("code") or "")
@@ -295,7 +343,9 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(SCRIPTS))
     from _vnext_common import configure_utf8_output
     configure_utf8_output()
-    args = _normalize_leading_global_flags(list(argv if argv is not None else sys.argv[1:]))
+    raw_argv = list(argv if argv is not None else sys.argv[1:])
+    stripped_argv, no_advance = _strip_global_no_advance(raw_argv)
+    args = _normalize_leading_global_flags(stripped_argv)
     import os
     import time
     started = time.time()
@@ -358,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
     step = step or (len(args) > 1 and args[0] == "task" and args[1] in NEXT_STEP_TASK_ACTIONS)
     if step and not {"--json", "-h", "--help"} & set(args):
         try:
-            _print_next_step(step_args=args, exit_code=code)
+            _print_next_step(step_args=args, exit_code=code, auto_advance=not no_advance)
         except (OSError, UnicodeError, ValueError):
             # Advisory printing cannot change the completed operation's exit code.
             pass

@@ -10012,7 +10012,8 @@ class TestV154Antigravity1512AndIssue1649Hardening(unittest.TestCase):
 
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("#1649"))
         self.assertEqual("AGY_1649_201731_WIN_HYDROGEN_MEDIUM_ZERO_THINKING", pq.resolve_quirk_id("201731"))
-        self.assertEqual("1.5.14", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
+        self.assertEqual("2.35.1", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["app_version"])
+        self.assertEqual("1.5.16", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["cli_version"])
         self.assertEqual("2.8.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["ide_version"])
         self.assertEqual("1.13.0", agr.LATEST_KNOWN_ANTIGRAVITY_VERSIONS["vscode_extension_version"])
         vers = agr.detect_antigravity_versions({"ANTIGRAVITY_CLI_VERSION": "1.5.12", "ANTIGRAVITY_VSCODE_VERSION": "1.13.0"})
@@ -12695,6 +12696,69 @@ class TestV1517CarriedReviewerModelEvidenceAndDraftScope(unittest.TestCase):
             self.assertEqual(existing_frag, inferred_scope)
             self.assertIsNotNone(arch_contract)
             self.assertEqual("af-fragment", arch_contract.get("target_family_id"))
+
+    def test_v2351_macos_symlink_pwd_guard_and_mcp_file_uri_image_normalization(self) -> None:
+        from unittest import mock
+        import antigravity_runtime as agr
+        import pre_tool_safety as pts
+        from _safety import path_and_read_guard as prg
+        from doctor.engine import HarnessDoctor
+
+        # 1. macOS symlink PWD mismatch (#1831)
+        win_rep = agr.inspect_macos_symlink_pwd_risk(
+            env={"HARNESS_SIMULATE_PLATFORM": "win32", "PWD": "/tmp/link", "HARNESS_SIMULATE_REAL_PWD": "/private/tmp/link"}
+        )
+        self.assertFalse(win_rep["applicable"])
+        self.assertFalse(win_rep["at_risk"])
+
+        mac_ok = agr.inspect_macos_symlink_pwd_risk(
+            env={"HARNESS_SIMULATE_PLATFORM": "darwin", "PWD": "/private/tmp/app", "HARNESS_SIMULATE_REAL_PWD": "/private/tmp/app"}
+        )
+        self.assertTrue(mac_ok["applicable"])
+        self.assertFalse(mac_ok["at_risk"])
+
+        mac_risk = agr.inspect_macos_symlink_pwd_risk(
+            env={"HARNESS_SIMULATE_PLATFORM": "darwin", "PWD": "/tmp/app", "HARNESS_SIMULATE_REAL_PWD": "/private/tmp/app"}
+        )
+        self.assertTrue(mac_risk["applicable"])
+        self.assertTrue(mac_risk["at_risk"])
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td).resolve()
+            (repo / ".agents").mkdir(parents=True)
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "HARNESS_SIMULATE_PLATFORM": "darwin",
+                    "PWD": "/tmp/app-link",
+                    "HARNESS_SIMULATE_REAL_PWD": "/private/tmp/app-real",
+                },
+                clear=False,
+            ):
+                doc = HarnessDoctor(repo, run_selftest=False, live_stream=False)
+                doc._check_antigravity_runtime_hazards("Antigravity Runtime", is_ag=True)
+            sym_checks = [r for r in doc.results if r.name == "macOS Sandbox Symlink PWD Guard"]
+            self.assertEqual(1, len(sym_checks))
+            self.assertEqual("WARN", sym_checks[0].status)
+            self.assertIn("#1831", sym_checks[0].message)
+
+            # 2. MCP offloaded `file:///` image URIs (#1828 / #1691 / #1667)
+            bad_jpg = repo / "media_0.jpg"
+            bad_jpg.write_bytes(b"not-a-jpeg")
+            bad_uri = bad_jpg.as_uri() + "?v=1"
+            with mock.patch.object(pts, "REPO", repo):
+                ok_jpg, msg_jpg = prg._check_jpeg_integrity(bad_uri)
+            self.assertFalse(ok_jpg)
+            self.assertIn("CORRUPT_JPEG_IMAGE_BLOCKED", msg_jpg)
+
+            self.assertTrue(prg._normalize_image_read_target("file:///tmp/mcp/media_0.webp?ts=1").endswith("/tmp/mcp/media_0.webp"))
+            emitted: list[tuple[str, str]] = []
+            with mock.patch.object(pts, "REPO", repo), \
+                 mock.patch.object(pts, "emit", side_effect=lambda dec, rsn, **_kw: emitted.append((dec, _kw.get("reason_code", "")))):
+                for idx in range(pts.IMAGE_READ_MAX_PARALLEL_CALLS):
+                    self.assertFalse(prg._enforce_image_read_parallel_cap(f"file:///tmp/mcp/media_{idx}.webp", "conv-mcp-img"))
+                self.assertTrue(prg._enforce_image_read_parallel_cap("file:///tmp/mcp/media_extra.webp", "conv-mcp-img"))
+            self.assertEqual([("deny", "IMAGE_READ_PARALLEL_CAP_REACHED")], emitted)
 
 
 if __name__ == "__main__":

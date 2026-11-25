@@ -450,11 +450,47 @@ def _parse_semver_prefix(raw: str) -> tuple[int, int, int] | None:
 
 
 LATEST_KNOWN_ANTIGRAVITY_VERSIONS: dict[str, str] = {
-    "app_version": "2.33.0",
+    "app_version": "2.35.1",
     "ide_version": "2.8.0",
-    "cli_version": "1.5.14",
+    "cli_version": "1.5.16",
     "vscode_extension_version": "1.13.0",
 }
+
+
+def inspect_macos_symlink_pwd_risk(
+    repo: Path | None = None,
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Detect macOS symlink PWD mismatch that causes agy Seatbelt sandbox-exec EPERM writes (#1831)."""
+    import sys as _sys
+
+    environ = env if env is not None else os.environ
+    sim_plat = str(environ.get("HARNESS_SIMULATE_PLATFORM") or "").strip().lower()
+    is_darwin = sim_plat == "darwin" or (not sim_plat and _sys.platform == "darwin")
+    if not is_darwin:
+        return {"applicable": False, "at_risk": False, "pwd": "", "real_pwd": ""}
+
+    raw_pwd = str(environ.get("PWD") or "").strip()
+    if not raw_pwd:
+        return {"applicable": True, "at_risk": False, "pwd": "", "real_pwd": ""}
+    norm_pwd = os.path.normpath(raw_pwd)
+    real_override = str(environ.get("HARNESS_SIMULATE_REAL_PWD") or "").strip()
+    if real_override:
+        real_pwd = os.path.normpath(real_override)
+    else:
+        try:
+            real_pwd = os.path.normpath(str(Path(raw_pwd).resolve()))
+        except OSError:
+            real_pwd = norm_pwd
+    at_risk = bool(norm_pwd and real_pwd and norm_pwd != real_pwd)
+    return {
+        "applicable": True,
+        "at_risk": at_risk,
+        "pwd": norm_pwd,
+        "real_pwd": real_pwd,
+        "repo": str(repo) if repo is not None else "",
+    }
 
 
 def detect_antigravity_versions(env: dict[str, str] | None = None) -> dict[str, str]:

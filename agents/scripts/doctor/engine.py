@@ -2085,6 +2085,34 @@ class HarnessDoctor:
         except Exception as exc:
             self.log(category, "CLI Model Steering Guard", "WARN", f"Could not inspect CLI modelSteering setting: {exc}")
 
+        # 9l. macOS Seatbelt Sandbox Symlink PWD Guard (#1831)
+        try:
+            from antigravity_runtime import inspect_macos_symlink_pwd_risk
+            sym_rep = inspect_macos_symlink_pwd_risk(self.repo)
+            if sym_rep.get("applicable"):
+                if sym_rep.get("at_risk"):
+                    self.log(
+                        category,
+                        "macOS Sandbox Symlink PWD Guard",
+                        "WARN",
+                        (
+                            f"Shell PWD ({sym_rep.get('pwd')}) differs from realpath ({sym_rep.get('real_pwd')}) on macOS (#1831 — "
+                            "agy CLI builds Seatbelt sandbox-exec rules from the unresolved symlink path, causing EPERM Operation not permitted on repository writes even after --resume)."
+                        ),
+                        [
+                            'Start a fresh agy session from the resolved physical path: `cd "$(pwd -P)" && agy`.',
+                        ],
+                    )
+                else:
+                    self.log(
+                        category,
+                        "macOS Sandbox Symlink PWD Guard",
+                        "PASS",
+                        "macOS PWD matches its resolved realpath (#1831 safe).",
+                    )
+        except Exception as exc:
+            self.log(category, "macOS Sandbox Symlink PWD Guard", "WARN", f"Could not inspect macOS symlink PWD state: {exc}")
+
     def check_update_journal(self) -> None:
         """An interrupted or rolled-back update must not pass as a healthy install (short certification O59)."""
         try:

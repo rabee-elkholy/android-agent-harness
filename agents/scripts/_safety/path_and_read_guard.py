@@ -701,9 +701,24 @@ _IMAGE_READ_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 _JPEG_READ_SUFFIXES = (".jpg", ".jpeg")
 
 
+def _normalize_image_read_target(raw_target: str) -> str:
+    """Normalize local paths and `file://` URIs (including MCP-offloaded `media_*.webp` paths #1828)."""
+    norm = str(raw_target or "").strip().strip('"').strip("'")
+    if not norm:
+        return ""
+    if norm.lower().startswith("file://"):
+        from urllib.parse import unquote, urlparse
+        parsed = urlparse(norm)
+        path_part = unquote(parsed.path or "")
+        if len(path_part) >= 3 and path_part[0] == "/" and path_part[2] == ":" and path_part[1].isalpha():
+            path_part = path_part[1:]
+        return path_part
+    return norm.split("?", 1)[0].split("#", 1)[0]
+
+
 def _check_jpeg_integrity(raw_target: str) -> tuple[bool, str]:
     """Validate JPEG SOI (FFD8) and EOI (FFD9) markers before host image reads (#1667 400 INVALID_ARGUMENT)."""
-    norm = str(raw_target or "").strip().strip('"').strip("'")
+    norm = _normalize_image_read_target(raw_target)
     if not norm or not norm.lower().endswith(_JPEG_READ_SUFFIXES):
         return True, ""
     try:
@@ -743,8 +758,8 @@ def _check_jpeg_integrity(raw_target: str) -> tuple[bool, str]:
 
 
 def _enforce_image_read_parallel_cap(raw_target: str, conv_key: str) -> bool:
-    """Cap parallel image reads at <=6 per burst window (#1691 silent copyright/recitation filter hang)."""
-    norm = str(raw_target or "").strip().strip('"').strip("'")
+    """Cap parallel image reads at <=6 per burst window (#1691 silent copyright/recitation filter hang, including MCP-offloaded media_*.webp #1828)."""
+    norm = _normalize_image_read_target(raw_target)
     if not norm or not norm.lower().endswith(_IMAGE_READ_SUFFIXES):
         return False
     try:

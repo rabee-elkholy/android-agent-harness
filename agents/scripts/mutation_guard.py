@@ -566,7 +566,7 @@ def _strip_workflow_top_flags(seq: list[str]) -> list[str]:
     idx = 0
     while idx < len(seq):
         low = seq[idx].lower()
-        if low == "--json":
+        if low in {"--json", "--no-advance"}:
             idx += 1
         elif low in {"--repo", "--task-id", "--task", "--kit"} and idx + 1 < len(seq):
             idx += 2

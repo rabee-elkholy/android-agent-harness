@@ -3182,5 +3182,286 @@ class CommandEfficiencySelftest(unittest.TestCase):
             self.assertEqual([], fails, f"Unexpected doctor failures after upgrade: {fails}")
 
 
+class DeterministicAutoAdvanceSelftest(unittest.TestCase):
+    """Contract and safety tests for the unified deterministic auto-advance engine."""
+
+    def _entry(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("installed_harness_auto_advance_test", KIT / "agents/harness.py")
+        assert spec and spec.loader
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        return entry
+
+    def test_allowlist_and_denylist_disjoint_and_never_executes_boundaries(self) -> None:
+        from unittest import mock
+        import verification_steps as vs
+
+        self.assertTrue(vs.FAST_AUTO_ADVANCE_CODES.isdisjoint(vs.NEVER_AUTO_ADVANCE_CODES))
+        forbidden_actions = [
+            *({"code": c, "kind": "HARNESS_COMMAND", "command": f"python .agents/harness.py {c.lower()}"} for c in sorted(vs.NEVER_AUTO_ADVANCE_CODES)),
+            {"code": "DEVICE_INSTALL", "kind": "HARNESS_COMMAND", "command": "python .agents/harness.py device install-start"},
+            {"code": "RUN_UNIT_TESTS", "kind": "HARNESS_COMMAND", "command": "python .agents/harness.py test"},
+            {"code": "ASSEMBLE", "kind": "HARNESS_COMMAND", "command": "python .agents/harness.py assemble"},
+            {"code": "APPROVE_PLAN", "kind": "DEVELOPER_ACTION", "command": ""},
+            {"code": "SENSITIVE_APPROVAL", "kind": "DEVELOPER_ACTION", "command": ""},
+            {"code": "DEVICE_SIGNOFF_REQUIRED", "kind": "DEVELOPER_ACTION", "tool": "ask_question", "command": ""},
+            {"code": "DEVELOPER_GIT_COMMIT_REQUIRED", "kind": "DEVELOPER_ACTION", "command": ""},
+            {"code": "DISPATCH_REVIEWERS", "kind": "HOST_ACTION", "command": ""},
+            {"code": "IMPLEMENT_APPROVED_SCOPE", "kind": "MODEL_ACTION", "command": ""},
+            # Legacy V1 review ingest (not V2 `review finalize`) must stay explicit.
+            {"code": "INGEST_REVIEW_RESULT", "kind": "HARNESS_COMMAND", "command": "python .agents/harness.py review ingest --task t1"},
+        ]
+        plan = {"task_id": "t-guard", "status": "VERIFYING"}
+        for act in forbidden_actions:
+            with self.subTest(code=act["code"], command=act.get("command")):
+                with mock.patch("mutation_guard.active_plan", return_value=plan), \
+                     mock.patch("workflow.resolve_next_action", return_value=act), \
+                     mock.patch.object(vs, "_execute_fast_step", wraps=vs._execute_fast_step) as exec_spy:
+                    res = vs.advance_fast_steps(KIT, "t-guard", host="antigravity", hold_lease=False)
+                self.assertEqual([], res["completed_steps"])
+                self.assertEqual(act["code"], res["action"]["code"])
+                if act["code"] != "INGEST_REVIEW_RESULT":
+                    exec_spy.assert_not_called()
+
+    def test_multi_step_fast_chain_review_finalize_to_complete_and_phase_chain(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+
+        entry = self._entry()
+        state = {"status": "VERIFYING", "step": 0}
+
+        def fake_active_plan(_repo):
+            return {"task_id": "t-chain", "status": state["status"]}
+
+        def fake_resolve(_repo, _tid, _plan, **_kw):
+            idx = state["step"]
+            if idx == 0:
+                return {
+                    "code": "INGEST_REVIEW_RESULT",
+                    "kind": "HARNESS_COMMAND",
+                    "command": "python .agents/harness.py review finalize --task t-chain",
+                    "reason": "Finalize completed V2 reviews.",
+                }
+            if idx == 1:
+                return {
+                    "code": "COMPLETE_TASK",
+                    "kind": "HARNESS_COMMAND",
+                    "command": "python .agents/scripts/workflow.py complete --repo . --task-id t-chain",
+                    "reason": "Seal task to READY_FOR_DELIVERY.",
+                }
+            return {
+                "code": "DEVELOPER_GIT_COMMIT_REQUIRED",
+                "kind": "DEVELOPER_ACTION",
+                "command": "",
+                "reason": "Ready for developer git commit.",
+                "suggested_commit": "feat(ui): ship chain",
+            }
+
+        def fake_finalize(_repo, tid):
+            state["step"] = 1
+            return {"task_id": tid, "reports": [{"reviewer": "bug-test-reviewer-agent", "verdict": "PASS"}], "findings": [], "blocking_findings": []}
+
+        def fake_complete(_ns):
+            state["step"] = 2
+            state["status"] = "READY_FOR_DELIVERY"
+            return {"task_id": "t-chain", "status": "READY_FOR_DELIVERY"}
+
+        out = io.StringIO()
+        with mock.patch.object(entry, "_run", return_value=0), \
+             mock.patch("mutation_guard.active_plan", side_effect=fake_active_plan), \
+             mock.patch("workflow.resolve_next_action", side_effect=fake_resolve), \
+             mock.patch("review_orchestrator.finalize_review_execution", side_effect=fake_finalize), \
+             mock.patch("workflow.complete", side_effect=fake_complete), \
+             contextlib.redirect_stdout(out):
+            rc = entry.main(["review", "complete", "--task", "t-chain"])
+        text = out.getvalue()
+        self.assertEqual(0, rc)
+        self.assertIn("REVIEW_SUMMARY_TABLE_BEGIN", text)
+        self.assertIn("AUTO_ADVANCED_STEPS=INGEST_REVIEW_RESULT,COMPLETE_TASK", text)
+        self.assertIn("TASK_STATUS=READY_FOR_DELIVERY", text)
+        self.assertIn("SUGGESTED_COMMIT=feat(ui): ship chain", text)
+        self.assertIn("NEXT_ACTION=DEVELOPER_GIT_COMMIT_REQUIRED:", text)
+
+        # Phase chain: FINALIZE_PHASE_REVIEW -> BEGIN_NEXT_PHASE -> stops at IMPLEMENT_APPROVED_SCOPE
+        p_state = {"step": 0}
+
+        def fake_phase_resolve(_repo, _tid, _plan, **_kw):
+            if p_state["step"] == 0:
+                return {
+                    "code": "FINALIZE_PHASE_REVIEW",
+                    "kind": "HARNESS_COMMAND",
+                    "command": "python .agents/harness.py phase-review finalize --task-id t-phase --phase-id p1",
+                    "inputs": {"task_id": "t-phase", "phase_id": "p1"},
+                }
+            if p_state["step"] == 1:
+                return {
+                    "code": "BEGIN_NEXT_PHASE",
+                    "kind": "HARNESS_COMMAND",
+                    "command": "python .agents/harness.py task begin-next-phase --task-id t-phase",
+                    "inputs": {"task_id": "t-phase", "next_phase_id": "p2"},
+                }
+            return {
+                "code": "IMPLEMENT_APPROVED_SCOPE",
+                "kind": "MODEL_ACTION",
+                "command": "",
+                "reason": "Implement phase p2.",
+            }
+
+        def fake_phase_fin(_repo, _tid, pid):
+            self.assertEqual("p1", pid)
+            p_state["step"] = 1
+            return {"status": "PASS"}
+
+        def fake_begin_next(_ns):
+            p_state["step"] = 2
+            return {"status": "IMPLEMENTING"}
+
+        out_p = io.StringIO()
+        with mock.patch.object(entry, "_run", return_value=0), \
+             mock.patch("mutation_guard.active_plan", return_value={"task_id": "t-phase", "status": "IMPLEMENTING"}), \
+             mock.patch("workflow.resolve_next_action", side_effect=fake_phase_resolve), \
+             mock.patch("phase_review.finalize_phase_review", side_effect=fake_phase_fin), \
+             mock.patch("workflow.begin_next_phase", side_effect=fake_begin_next), \
+             contextlib.redirect_stdout(out_p):
+            rc_p = entry.main(["phase-review", "complete", "--task-id", "t-phase", "--phase-id", "p1"])
+        text_p = out_p.getvalue()
+        self.assertEqual(0, rc_p)
+        self.assertIn("AUTO_ADVANCED_STEPS=FINALIZE_PHASE_REVIEW,BEGIN_NEXT_PHASE", text_p)
+        self.assertIn("NEXT_ACTION=IMPLEMENT_APPROVED_SCOPE:", text_p)
+
+    def test_opt_out_flags_kill_switch_cycle_guard_and_fail_closed_error(self) -> None:
+        import contextlib
+        import io
+        from unittest import mock
+        from _vnext_common import ValidationError
+        import mutation_guard
+        import verification_steps as vs
+
+        entry = self._entry()
+        plan = {"task_id": "t-ctrl", "status": "VERIFYING"}
+        complete_act = {"code": "COMPLETE_TASK", "kind": "HARNESS_COMMAND", "command": "python .agents/scripts/workflow.py complete --repo . --task-id t-ctrl"}
+
+        # 1. `--no-advance` CLI flag disables auto-advance and is accepted by mutation_guard
+        self.assertEqual(["device", "signoff"], mutation_guard._strip_workflow_top_flags(["--no-advance", "device", "signoff"]))
+        out_no_adv = io.StringIO()
+        with mock.patch.object(entry, "_run", return_value=0) as run_spy, \
+             mock.patch("mutation_guard.active_plan", return_value=plan), \
+             mock.patch("workflow.resolve_next_action", return_value=complete_act), \
+             mock.patch("workflow.complete", side_effect=AssertionError("must not auto-advance with --no-advance")), \
+             contextlib.redirect_stdout(out_no_adv):
+            rc = entry.main(["--no-advance", "device", "signoff", "--task-id", "t-ctrl", "--verdict", "PASS"])
+        self.assertEqual(0, rc)
+        # Ensure `--no-advance` was stripped before forwarding to run_device.py
+        self.assertNotIn("--no-advance", run_spy.call_args[0][1])
+        self.assertIn("NEXT_ACTION=COMPLETE_TASK:", out_no_adv.getvalue())
+        self.assertNotIn("AUTO_ADVANCED_STEPS=", out_no_adv.getvalue())
+
+        # 2. `HARNESS_AUTO_ADVANCE=0` env kill-switch disables auto-advance
+        with mock.patch.dict(os.environ, {"HARNESS_AUTO_ADVANCE": "0"}), \
+             mock.patch("mutation_guard.active_plan", return_value=plan), \
+             mock.patch("workflow.resolve_next_action", return_value=complete_act), \
+             mock.patch("workflow.complete", side_effect=AssertionError("must not auto-advance when env kill-switch is 0")):
+            res_env = vs.advance_fast_steps(KIT, "t-ctrl", hold_lease=False)
+        self.assertEqual([], res_env["completed_steps"])
+        self.assertEqual("COMPLETE_TASK", res_env["action"]["code"])
+
+        # 3. Cycle guard prevents repeated execution of the same code
+        complete_calls = []
+        with mock.patch("mutation_guard.active_plan", return_value=plan), \
+             mock.patch("workflow.resolve_next_action", return_value=complete_act), \
+             mock.patch("workflow.complete", side_effect=lambda _ns: complete_calls.append(1)):
+            res_cyc = vs.advance_fast_steps(KIT, "t-ctrl", hold_lease=False)
+        self.assertEqual(1, len(complete_calls))
+        self.assertEqual(["COMPLETE_TASK"], res_cyc["completed_steps"])
+
+        # 4. Fail-closed on step error: surfaces AUTO_ADVANCE_STOPPED on stderr and does not advance further
+        out_err = io.StringIO()
+        err_buf = io.StringIO()
+        with mock.patch.object(entry, "_run", return_value=0), \
+             mock.patch("mutation_guard.active_plan", return_value=plan), \
+             mock.patch("workflow.resolve_next_action", return_value=complete_act), \
+             mock.patch("workflow.complete", side_effect=ValidationError("stale snapshot")), \
+             contextlib.redirect_stdout(out_err), \
+             contextlib.redirect_stderr(err_buf):
+            rc_err = entry.main(["task", "approve-sensitive", "--task-id", "t-ctrl"])
+        self.assertEqual(0, rc_err)
+        self.assertIn("AUTO_ADVANCE_STOPPED=COMPLETE_TASK: stale snapshot", err_buf.getvalue())
+        self.assertIn("NEXT_ACTION=COMPLETE_TASK:", out_err.getvalue())
+
+    def test_unified_run_steps_fast_tail_and_optional_device_install(self) -> None:
+        from unittest import mock
+        import verification_steps as vs
+
+        # With `include_fast_tail=True, include_assemble=True, include_device=True`,
+        # `run_steps` pumps through BEGIN_IMPLEMENTATION -> PREPARE_VERIFICATION -> ASSEMBLE -> DEVICE_INSTALL -> COMPLETE_TASK -> DELIVER!
+        steps_seq = [
+            ("APPROVED", {"code": "BEGIN_IMPLEMENTATION", "kind": "HARNESS_COMMAND"}),
+            ("IMPLEMENTING", {"code": "PREPARE_VERIFICATION", "kind": "HARNESS_COMMAND"}),
+            ("VERIFYING", {"code": "ASSEMBLE", "kind": "HARNESS_COMMAND", "inputs": {"assemble_task": ":app:assembleDebug"}}),
+            ("VERIFYING", {"code": "DEVICE_INSTALL", "kind": "HARNESS_COMMAND"}),
+            ("VERIFYING", {"code": "COMPLETE_TASK", "kind": "HARNESS_COMMAND"}),
+            ("READY_FOR_DELIVERY", {"code": "DELIVER", "kind": "HARNESS_COMMAND"}),
+            ("DELIVERED", {"code": "TASK_DELIVERED", "kind": "TASK_STATE"}),
+        ]
+        cursor = {"i": 0}
+        dispatched: list[tuple[str, list[str]]] = []
+        fast_ran: list[str] = []
+
+        def fake_plan(_repo):
+            st, _ = steps_seq[min(cursor["i"], len(steps_seq) - 1)]
+            return {"task_id": "t-pump", "status": st}
+
+        def fake_load_plan(_repo, _tid):
+            return {"task_id": "t-pump", "status": "DELIVERED"}
+
+        def fake_resolve(_repo, _tid, _plan, **_kw):
+            _, act = steps_seq[min(cursor["i"], len(steps_seq) - 1)]
+            return dict(act)
+
+        def fake_dispatch(_repo, script, arguments, **_kw):
+            dispatched.append((script, list(arguments)))
+            cursor["i"] += 1
+            return 0
+
+        def fake_fast(_repo, _tid, action, **_kw):
+            fast_ran.append(str(action["code"]))
+            cursor["i"] += 1
+            return True, {}
+
+        with mock.patch("mutation_guard.active_plan", side_effect=fake_plan), \
+             mock.patch("workflow._load_plan", side_effect=fake_load_plan), \
+             mock.patch("workflow.resolve_next_action", side_effect=fake_resolve), \
+             mock.patch("host_continuation.assert_execution_session"), \
+             mock.patch.object(vs, "_dispatch", side_effect=fake_dispatch), \
+             mock.patch.object(vs, "_execute_fast_step", side_effect=fake_fast):
+            rc, summary = vs.run_steps(
+                KIT,
+                "t-pump",
+                host="antigravity",
+                json_only=True,
+                include_assemble=True,
+                include_fast_tail=True,
+                include_device=True,
+            )
+        self.assertEqual(0, rc, summary)
+        self.assertEqual(["BEGIN_IMPLEMENTATION", "COMPLETE_TASK", "DELIVER"], fast_ran)
+        self.assertEqual(
+            [
+                ("workflow.py", ["prepare-verification", "--repo", str(KIT), "--task-id", "t-pump", "--host", "antigravity"]),
+                ("run_gradle_task.py", [":app:assembleDebug"]),
+                ("run_device.py", ["install-start"]),
+            ],
+            dispatched,
+        )
+        self.assertEqual(
+            ["BEGIN_IMPLEMENTATION", "PREPARE_VERIFICATION", "ASSEMBLE", "DEVICE_INSTALL", "COMPLETE_TASK", "DELIVER"],
+            summary["completed_steps"],
+        )
+        self.assertEqual("TASK_DELIVERED", summary["next_action"]["code"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -2200,7 +2200,7 @@ def complete(args: argparse.Namespace) -> dict:
 
 
 def ship_task(args: argparse.Namespace) -> dict:
-    """Compound verification-to-commit-card pipeline: runs verify-steps (including assemble), seals complete when ready, or stops safely at any review/human checkpoint."""
+    """Unified deterministic pump (`task ship`): advances all consecutive deterministic steps (including assemble and fast tail steps) until a real human, reviewer, model, or terminal boundary."""
     import contextlib
     import io
 
@@ -2215,65 +2215,68 @@ def ship_task(args: argparse.Namespace) -> dict:
     args.task_id = tid
     host = getattr(args, "host", None)
     want_json = bool(getattr(args, "json", False))
+    include_device = bool(getattr(args, "with_device", False))
 
     plan = _load_plan(repo, tid)
     cur_status = str(plan.get("status") or "")
     if cur_status == "DELIVERED":
         return {"status": "DELIVERED", "ship_outcome": "ALREADY_DELIVERED", "task_id": tid}
-    if cur_status not in {"IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"}:
+    if cur_status not in {"APPROVED", "IMPLEMENTING", "VERIFYING", "READY_FOR_DELIVERY"}:
         raise ValidationError(
-            f"TASK_SHIP_INVALID_STATE: `task ship` requires IMPLEMENTING, VERIFYING, or READY_FOR_DELIVERY (current status: {cur_status})."
+            f"TASK_SHIP_INVALID_STATE: `task ship` requires APPROVED, IMPLEMENTING, VERIFYING, or READY_FOR_DELIVERY (current status: {cur_status})."
         )
 
-    steps_report: dict[str, Any] = {}
-    if cur_status in {"IMPLEMENTING", "VERIFYING"}:
-        from verification_steps import run_steps
-        buf = io.StringIO()
-        if want_json:
-            with contextlib.redirect_stdout(buf):
-                rc, steps_report = run_steps(repo, tid, host=host, json_only=True, include_assemble=True)
-        else:
-            rc, steps_report = run_steps(repo, tid, host=host, json_only=False, include_assemble=True)
-        if rc != 0:
-            plan_after = _load_plan(repo, tid)
-            try:
-                fail_act = resolve_next_action(repo, tid, plan_after, host=host)
-            except Exception:
-                fail_act = {}
-            return {
-                "status": "BLOCKED",
-                "ship_outcome": "VERIFICATION_STEP_FAILED",
-                "exit_code": rc,
-                "task_id": tid,
-                "task_state": plan_after.get("status"),
-                "verification_steps": steps_report,
-                "next_action": _compact_for_host(fail_act) if isinstance(fail_act, dict) and fail_act else {},
-            }
+    from verification_steps import run_steps
+    buf = io.StringIO()
+    if want_json:
+        with contextlib.redirect_stdout(buf):
+            rc, steps_report = run_steps(
+                repo,
+                tid,
+                host=host,
+                json_only=True,
+                include_assemble=True,
+                include_fast_tail=True,
+                include_device=include_device,
+            )
+    else:
+        rc, steps_report = run_steps(
+            repo,
+            tid,
+            host=host,
+            json_only=False,
+            include_assemble=True,
+            include_fast_tail=True,
+            include_device=include_device,
+        )
+    if rc != 0:
+        plan_after = _load_plan(repo, tid)
+        try:
+            fail_act = resolve_next_action(repo, tid, plan_after, host=host)
+        except Exception:
+            fail_act = {}
+        return {
+            "status": "BLOCKED",
+            "ship_outcome": "VERIFICATION_STEP_FAILED",
+            "exit_code": rc,
+            "task_id": tid,
+            "task_state": plan_after.get("status"),
+            "verification_steps": steps_report,
+            "next_action": _compact_for_host(fail_act) if isinstance(fail_act, dict) and fail_act else {},
+        }
 
     plan = _load_plan(repo, tid)
-    act = resolve_next_action(repo, tid, plan, host=host)
-    if plan.get("status") == "VERIFYING" and act.get("code") in {"COMPLETE_TASK", "FINAL_VERIFY"}:
-        complete(argparse.Namespace(repo=str(repo), task_id=tid))
-        plan = _load_plan(repo, tid)
-        act = resolve_next_action(repo, tid, plan, host=host)
+    if plan.get("status") == "DELIVERED":
+        return {
+            "status": "DELIVERED",
+            "ship_outcome": "DELIVERED",
+            "task_id": tid,
+            "delivery_commit_sha": plan.get("delivery_commit_sha"),
+            "verification_steps": steps_report or None,
+        }
 
+    act = resolve_next_action(repo, tid, plan, host=host)
     if plan.get("status") == "READY_FOR_DELIVERY":
-        if act.get("code") == "DELIVER":
-            delivered_plan = deliver_task(
-                argparse.Namespace(
-                    repo=str(repo),
-                    task_id=tid,
-                    allow_dirty_tree=False,
-                    developer_allow_dirty_tree=False,
-                    source=None,
-                )
-            )
-            return {
-                "status": "DELIVERED",
-                "ship_outcome": "DELIVERED",
-                "task_id": tid,
-                "delivery_commit_sha": delivered_plan.get("delivery_commit_sha"),
-            }
         return {
             "status": "READY_FOR_DELIVERY",
             "ship_outcome": "AWAITING_GIT_COMMIT",
@@ -2941,6 +2944,7 @@ def build_parser() -> argparse.ArgumentParser:
     ship_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
     ship_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to focused active task if omitted)")
     ship_cmd.add_argument("--host", default=None, help="Host environment for reviewer/router resolution")
+    ship_cmd.add_argument("--with-device", action="store_true", help="Also run unattended `device install-start` when router emits DEVICE_INSTALL")
     ship_cmd.set_defaults(handler=ship_task)
     command = sub.add_parser("deliver", parents=[common])
     command.add_argument("--allow-dirty-tree", action="store_true", help="Explicit developer override to deliver while verified task files remain uncommitted")
