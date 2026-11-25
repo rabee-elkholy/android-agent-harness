@@ -2,7 +2,7 @@
   "algorithm": "sha256",
   "files": {
     "agents/.gitignore": "8a0eaa7cc8e55d17da96f31f6863b5e9b5aba15bb03fd6e8fb07a8cb89e5715c",
-    "agents/VERSION": "c030c5ddf315ba6ece3a541654d033cd5ab8e7e49667601238f279fc58eda1a0",
+    "agents/VERSION": "603309e6d3314072b622553037cbbf1922cb4d4daec64a3f57c04d906756a69d",
     "agents/harness.py": "6cb48e8e8a88fd537102c0484e684a94a8e3b369e2e4a486f110204fa46b04fe",
     "agents/harness_shared/__init__.py": "123d7a509cad95f35619ff1849fcfc990205aca7e77fcdc2460a27acb029118c",
     "agents/harness_shared/commands.py": "5c15e62d270ea1e083fe86bd71f81487badd7167083309c0ca5982c4f32a32a8",
