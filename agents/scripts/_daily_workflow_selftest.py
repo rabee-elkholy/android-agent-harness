@@ -2597,14 +2597,18 @@ class AnalyticsAndSixTierTests(DailyWorkflowSelftest):
         self.assertIn("assemble", p1["gates"])
         self.assertEqual("T1_LOW_RISK", canonical_risk_tier("T1_LOW_RISK"))
 
-        # T2_FEATURE: Business Logic / ViewModel
+        # T2_FEATURE: Business Logic / ViewModel (lean default: 1 reviewer, skips redundant APK assemble when unit_tests covers compilation)
         c2 = {"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 2, "changed_lines": 50}
         p2 = decide(c2, KIT / "agents" / "skills", project_kind="application")
         self.assertEqual("T2_FEATURE", p2["risk_tier"])
         self.assertEqual("STANDARD", p2["risk_lane"])
-        self.assertEqual(2, len(p2["reviewers"]))
+        self.assertEqual(1, len(p2["reviewers"]))
+        self.assertEqual(["bug-test-reviewer-agent"], p2["reviewers"])
         self.assertIn("unit_tests", p2["gates"])
-        self.assertIn("assemble", p2["gates"])
+        self.assertNotIn("assemble", p2["gates"])
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            p2_std = decide(c2, KIT / "agents" / "skills", project_kind="application")
+            self.assertEqual(2, len(p2_std["reviewers"]))
 
         # T3_SUBSYSTEM: Multi-module / Architectural
         c3 = {"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 5, "changed_lines": 100}
@@ -3712,17 +3716,22 @@ class NextActionEngineTests(DailyWorkflowSelftest):
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
 
-        act = resolve_next_action(self.repo, task_id, plan)
-        self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
-        self.assertEqual("HARNESS_COMMAND", act["kind"])
-        self.assertIn("--capture-red", act["command"])
-        # O64: the reproduction test is itself a task edit, so the old failures are recorded first.
-        self.assertIn("Before writing the reproduction test, run `python .agents/harness.py test --record-start`", act["reason"])
-        self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
-        write_file(self.repo / "app/src/test/kotlin/com/example/MainActivityTest.kt", "class MainActivityTest\n")
-        act = resolve_next_action(self.repo, task_id, plan)
-        self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
-        self.assertNotIn("before_first_edit", act, "after the first edit nothing can be recorded as older")
+        # Clean repo with no baseline debt does NOT force a slow pre-edit `--record-start` run:
+        act_clean = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("CAPTURE_RED_EVIDENCE", act_clean["code"])
+        self.assertNotIn("before_first_edit", act_clean)
+        # O64: when baseline debt exists (or HARNESS_PRE_EDIT_TEST_RECORD=1), old failures are recorded first.
+        with mock.patch.dict(os.environ, {"HARNESS_PRE_EDIT_TEST_RECORD": "1"}):
+            act = resolve_next_action(self.repo, task_id, plan)
+            self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
+            self.assertEqual("HARNESS_COMMAND", act["kind"])
+            self.assertIn("--capture-red", act["command"])
+            self.assertIn("Before writing the reproduction test, run `python .agents/harness.py test --record-start`", act["reason"])
+            self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
+            write_file(self.repo / "app/src/test/kotlin/com/example/MainActivityTest.kt", "class MainActivityTest\n")
+            act = resolve_next_action(self.repo, task_id, plan)
+            self.assertEqual("CAPTURE_RED_EVIDENCE", act["code"])
+            self.assertNotIn("before_first_edit", act, "after the first edit nothing can be recorded as older")
         # Once production code has already been edited, the router must not demand CAPTURE_RED_EVIDENCE
         # retroactively (which caused models to revert their own production edits in a loop).
         write_file(self.repo / "app/src/main/kotlin/com/example/MainActivity.kt", "package com.example\nclass MainActivity { val fixed = true }\n")
@@ -8910,15 +8919,20 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
         record_approval(argparse.Namespace(repo=str(self.repo), task_id=task_id, source="conversation", proof_reference="ok", enforcement_tier="RULE_ENFORCED"))
         begin_task(argparse.Namespace(repo=str(self.repo), task_id=task_id))
         plan = read_json(task_dir(self.repo, task_id) / "plan.json")
-        act = resolve_next_action(self.repo, task_id, plan)
-        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
-        self.assertIn("Before the first edit, run `python .agents/harness.py test --record-start` once", act["reason"])
-        self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
+        # Clean repo skips pre-edit `--record-start` delay; baseline debt (or HARNESS_PRE_EDIT_TEST_RECORD=1) enables it.
+        act_clean = resolve_next_action(self.repo, task_id, plan)
+        self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act_clean["code"])
+        self.assertNotIn("before_first_edit", act_clean)
+        with mock.patch.dict(os.environ, {"HARNESS_PRE_EDIT_TEST_RECORD": "1"}):
+            act = resolve_next_action(self.repo, task_id, plan)
+            self.assertEqual("IMPLEMENT_APPROVED_SCOPE", act["code"])
+            self.assertIn("Before the first edit, run `python .agents/harness.py test --record-start` once", act["reason"])
+            self.assertEqual("RECORD_TASK_START_FAILURES", act["before_first_edit"]["code"])
 
-        write_file(task_dir(self.repo, task_id) / "task-start-failures.json", json.dumps({"task_id": task_id, "failures": []}))
-        act = resolve_next_action(self.repo, task_id, plan)
-        self.assertNotIn("--record-start", act["reason"], "recorded once, never asked again")
-        self.assertNotIn("before_first_edit", act)
+            write_file(task_dir(self.repo, task_id) / "task-start-failures.json", json.dumps({"task_id": task_id, "failures": []}))
+            act = resolve_next_action(self.repo, task_id, plan)
+            self.assertNotIn("--record-start", act["reason"], "recorded once, never asked again")
+            self.assertNotIn("before_first_edit", act)
 
     def test_fix_delta_names_only_the_files_changed_since_the_review(self) -> None:
         from workflow import _fix_delta
@@ -9005,7 +9019,7 @@ class RouterCompletionAndResumeRecoveryTests(DailyWorkflowSelftest):
             phases=None, force=True,
         ))
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with mock.patch.dict(os.environ, {"HARNESS_PRE_EDIT_TEST_RECORD": "1"}), contextlib.redirect_stdout(out):
             ret = workflow_main(["approve", "--repo", str(self.repo), "--task-id", "approve-next", "--source", "conversation",
                                  "--proof-reference", "ok", "--enforcement-tier", "RULE_ENFORCED",
                                  "--plan-hash", plan["plan_sha256"][:12]])

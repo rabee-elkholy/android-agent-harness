@@ -150,13 +150,18 @@ def finalize_ready_delivery(
     *,
     require_clean_tree: bool = False,
     live_manifest: dict | None = None,
+    accept_committed: bool = False,
+    authority_source: str | None = None,
+    proof_reference: str = "",
 ) -> tuple[dict, bool]:
     """Centralized delivery finalizer.
 
     Validates:
     1. Task is in READY_FOR_DELIVERY.
     2. If require_clean_tree is True, no verified task files remain dirty/uncommitted in the working tree.
-    3. If ready_delivery_snapshot_sha256 is present, the current repository delivery snapshot must match.
+    3. If ready_delivery_snapshot_sha256 is present, the current repository delivery snapshot must match
+       (unless the developer explicitly authorizes `--accept-committed` on a clean committed tree, which
+       records honest `developer_committed_acceptance` provenance without fabricating AI review).
 
     Only then marks plan DELIVERED and clears active-task.json.
     """
@@ -166,6 +171,23 @@ def finalize_ready_delivery(
         return plan, False
     if plan.get("status") != "READY_FOR_DELIVERY":
         raise _engine.ValidationError(f"task '{task_id}' is in status '{plan.get('status')}', not READY_FOR_DELIVERY")
+
+    norm_proof = str(proof_reference or "").strip()
+    if accept_committed:
+        if not require_clean_tree:
+            raise _engine.ValidationError(
+                "--accept-committed cannot be combined with dirty-tree delivery overrides; commit verified files first."
+            )
+        if authority_source not in ("conversation", "developer_terminal") or len(norm_proof) < 2:
+            raise _engine.ValidationError(
+                "DEVELOPER_AUTHORITY_REQUIRED: `--accept-committed` requires `--source conversation` (or `developer_terminal`) "
+                "and a non-empty `--proof-reference \"<developer confirmation>\"`."
+            )
+        if norm_proof.rstrip().endswith(("?", "\u061f")):
+            raise _engine.ValidationError(
+                "DEVELOPER_AUTHORITY_REQUIRED: `--proof-reference` appears to be an unanswered developer question. "
+                "Wait for explicit developer confirmation before closing with `--accept-committed`."
+            )
 
     ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
     manifest = live_manifest if live_manifest is not None else (_engine.build_manifest(repo) if (require_clean_tree or ready_snapshot) else None)
@@ -182,21 +204,41 @@ def finalize_ready_delivery(
         if approved_value and live_identity.get(field) != approved_value:
             raise _engine.ValidationError(f"delivery repository identity mismatch: {field}")
     if ready_snapshot and manifest is not None:
+        external_inputs_changed = False
         if plan.get("ready_run_id"):
             from delivery_equivalence import _ready_manifest
             _, frozen, _ = _ready_manifest(repo, task_id, plan)
             if frozen.get("external_inputs_sha256") != manifest.get("external_inputs_sha256"):
-                raise _engine.ValidationError("delivery external inputs changed after verification")
+                external_inputs_changed = True
+                if not accept_committed:
+                    raise _engine.ValidationError("delivery external inputs changed after verification")
         current_snapshot = manifest["delivery_snapshot_sha256"]
-        if current_snapshot != ready_snapshot:
-            from delivery_equivalence import evaluate_post_ready_changes
-            eval_res = evaluate_post_ready_changes(repo, task_id, plan, manifest)
-            if eval_res.get("is_benign"):
+        if current_snapshot != ready_snapshot or external_inputs_changed:
+            eval_res: dict[str, Any] = {}
+            if not external_inputs_changed:
+                from delivery_equivalence import evaluate_post_ready_changes
+                eval_res = evaluate_post_ready_changes(repo, task_id, plan, manifest)
+            if not external_inputs_changed and eval_res.get("is_benign"):
                 plan["post_ready_normalization"] = {
                     "accepted_at": _engine.utc_now(),
                     "ready_delivery_snapshot_sha256": ready_snapshot,
                     "live_delivery_snapshot_sha256": current_snapshot,
                     "normalized_files": eval_res.get("normalized_files") or [],
+                }
+            elif accept_committed:
+                changed = _engine.changed_since_verification(repo, task_id, plan, manifest)
+                plan["developer_committed_acceptance"] = {
+                    "accepted_at": _engine.utc_now(),
+                    "source": authority_source,
+                    "proof_reference": str(_engine.redact(norm_proof))[:500],
+                    "ready_delivery_snapshot_sha256": ready_snapshot,
+                    "live_delivery_snapshot_sha256": current_snapshot,
+                    "changed_files": changed,
+                    "external_inputs_changed": external_inputs_changed,
+                    "note": (
+                        "Developer explicitly accepted committed post-verification edits; prior AI review proof "
+                        "remains bound to ready_delivery_snapshot_sha256 and was not re-run or fabricated."
+                    ),
                 }
             else:
                 changed = _engine.changed_since_verification(repo, task_id, plan, manifest)
@@ -206,8 +248,8 @@ def finalize_ready_delivery(
                     f"delivery snapshot mismatch: current repository ({current_snapshot[:12]}) "
                     f"differs from verified ready snapshot ({ready_snapshot[:12]}). Content was modified after verification.{named}{diff_detail}\n"
                     "Git attributes normalize line endings when configured; unproven content differences still require verification.\n"
-                    "Do not resume on your own: ask the developer whether to verify these changes (their own edits "
-                    "before the commit count too)."
+                    "Do not resume on your own: ask the developer whether to verify these changes, or close immediately with "
+                    f"`python .agents/harness.py task deliver --task-id {task_id} --accept-committed --source conversation --proof-reference \"<developer confirmation>\"`."
                 )
 
     try:
@@ -215,10 +257,23 @@ def finalize_ready_delivery(
     except Exception:
         delivery_commit_sha = ""
     if plan.get("ready_run_id") and delivery_commit_sha:
-        from task_git_lineage import accept_requested_delivery_commit, is_valid_task_lineage
+        from task_git_lineage import (
+            accept_developer_confirmed_lineage,
+            accept_requested_delivery_commit,
+            is_valid_task_lineage,
+        )
         accept_requested_delivery_commit(repo, task_id, plan)
         # Validate against the persisted plan plus a freshly validated delivery receipt.
         valid_lineage, reason = is_valid_task_lineage(repo, task_id, delivery_commit_sha)
+        if not valid_lineage and accept_committed:
+            accept_developer_confirmed_lineage(
+                repo,
+                task_id,
+                plan,
+                source=str(authority_source or "conversation"),
+                proof_reference=norm_proof,
+            )
+            valid_lineage, reason = is_valid_task_lineage(repo, task_id, delivery_commit_sha)
         if not valid_lineage:
             raise _engine.ValidationError(
                 f"{reason}. If the developer committed verified changes across multiple commits or alongside pre-existing files without modifying verified file contents, "
@@ -240,38 +295,70 @@ def finalize_ready_delivery(
     from discovery_receipt import clear_latest_discovery_receipt
     clear_latest_discovery_receipt(repo)
     return plan, True
-def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | None, str]:
-    """Reconcile READY_FOR_DELIVERY task against clean committed repository state."""
-    _engine.assert_single_live_task(repo, allowed_task_id=task_id)
-    tid = task_id
-    if not tid:
-        tid = _engine._focused_task_id(repo)
-    if not tid:
-        return None, "NOOP"
+def _reconcile_single_ready_task(repo: Path, tid: str, manifest: dict | None = None) -> tuple[dict | None, str]:
     plan_p = _engine._plan_path(repo, tid)
     if not plan_p.is_file():
         return None, "NOOP"
     try:
         plan = _engine.read_json(plan_p)
-    except Exception:
+    except (OSError, ValueError, _engine.ValidationError):
         return None, "NOOP"
     status_val = str(plan.get("status") or "")
     if status_val == "DELIVERED":
         return plan, "DELIVERED"
     if status_val != "READY_FOR_DELIVERY":
         return plan, status_val
-    manifest = _engine.build_manifest(repo)
-    dirty = _engine._find_uncommitted_task_files(repo, tid, plan, live_manifest=manifest)
+    live_m = manifest if manifest is not None else _engine.build_manifest(repo)
+    dirty = _engine._find_uncommitted_task_files(repo, tid, plan, live_manifest=live_m)
     if dirty:
         return plan, "DIRTY_UNCOMMITTED"
     ready_snapshot = str(plan.get("ready_delivery_snapshot_sha256") or "")
-    if ready_snapshot and manifest.get("delivery_snapshot_sha256") != ready_snapshot:
+    if ready_snapshot and live_m.get("delivery_snapshot_sha256") != ready_snapshot:
         from delivery_equivalence import evaluate_post_ready_changes
-        eval_res = evaluate_post_ready_changes(repo, tid, plan, manifest)
+        eval_res = evaluate_post_ready_changes(repo, tid, plan, live_m)
         if not eval_res.get("is_benign"):
             return plan, "SNAPSHOT_MISMATCH"
-    plan, _ = _engine.finalize_ready_delivery(repo, tid, plan, require_clean_tree=True, live_manifest=manifest)
+    plan, _ = _engine.finalize_ready_delivery(repo, tid, plan, require_clean_tree=True, live_manifest=live_m)
     return plan, "DELIVERED"
+
+
+def reconcile_delivery(repo: Path, task_id: str | None = None) -> tuple[dict | None, str]:
+    """Reconcile READY_FOR_DELIVERY task(s) against clean committed repository state."""
+    _engine.assert_single_live_task(repo, allowed_task_id=task_id)
+    if task_id:
+        return _reconcile_single_ready_task(repo, task_id)
+
+    focused_tid = _engine._focused_task_id(repo)
+    live = _engine._find_live_tasks(repo)
+    ready_ids = [tid for tid, st, _, _ in live if st == "READY_FOR_DELIVERY"]
+    if not ready_ids:
+        if not focused_tid:
+            return None, "NOOP"
+        return _reconcile_single_ready_task(repo, focused_tid)
+
+    manifest = _engine.build_manifest(repo)
+    focused_result: tuple[dict | None, str] | None = None
+    last_reconciled: dict | None = None
+    for rid in ready_ids:
+        if rid == focused_tid:
+            focused_result = _reconcile_single_ready_task(repo, rid, manifest=manifest)
+            if focused_result[1] == "DELIVERED" and focused_result[0] is not None:
+                last_reconciled = focused_result[0]
+        else:
+            try:
+                r_plan, r_status = _reconcile_single_ready_task(repo, rid, manifest=manifest)
+                if r_status == "DELIVERED" and r_plan is not None:
+                    last_reconciled = r_plan
+            except _engine.ValidationError:
+                continue
+
+    if focused_result is not None:
+        return focused_result
+    if focused_tid:
+        return _reconcile_single_ready_task(repo, focused_tid, manifest=manifest)
+    if last_reconciled is not None:
+        return last_reconciled, "DELIVERED"
+    return _reconcile_single_ready_task(repo, ready_ids[0], manifest=manifest)
 def cmd_reconcile_delivery(args: _engine.argparse.Namespace) -> dict:
     repo = Path(args.repo).resolve()
     task_id = getattr(args, "task_id", None) or None
@@ -282,9 +369,27 @@ def cmd_reconcile_delivery(args: _engine.argparse.Namespace) -> dict:
     if status_code == "DELIVERED":
         return {"status": "PASS", "task_id": tid, "reconciled": True, "task_state": "DELIVERED"}
     elif status_code == "DIRTY_UNCOMMITTED":
-        return {"status": "BLOCKED", "task_id": tid, "reconciled": False, "reason": "uncommitted_changes", "task_state": plan.get("status")}
+        return {
+            "status": "BLOCKED",
+            "task_id": tid,
+            "reconciled": False,
+            "reason": "uncommitted_changes",
+            "task_state": plan.get("status"),
+            "next_action": f"Commit the verified task files, then run `python .agents/harness.py task deliver --task-id {tid}`.",
+        }
     elif status_code == "SNAPSHOT_MISMATCH":
-        return {"status": "FAIL", "task_id": tid, "reconciled": False, "reason": "snapshot_mismatch", "task_state": plan.get("status")}
+        return {
+            "status": "FAIL",
+            "task_id": tid,
+            "reconciled": False,
+            "reason": "snapshot_mismatch",
+            "task_state": plan.get("status"),
+            "next_action": (
+                f"Ask the developer whether to close with their committed edits via "
+                f"`python .agents/harness.py task deliver --task-id {tid} --accept-committed --source conversation --proof-reference \"<developer confirmation>\"` "
+                f"or re-verify via `python .agents/harness.py task resume --task-id {tid}`."
+            ),
+        }
     return {"status": "PASS", "task_id": tid, "task_state": plan.get("status")}
 def cmd_heal_task(args: _engine.argparse.Namespace) -> dict:
     from self_heal import heal_task_state
@@ -498,13 +603,17 @@ def deliver_task(
     *,
     allow_dirty_tree: bool = False,
     require_clean_tree: bool | None = None,
+    accept_committed: bool = False,
     source: str | None = None,
+    proof_reference: str = "",
 ) -> dict:
     if isinstance(args_or_repo, (str, Path)):
         repo = Path(args_or_repo).resolve()
         tid = str(task_id or "")
         auth_source = source or _engine.os.environ.get("HARNESS_AUTHORITY_SOURCE")
         is_dirty_override = bool(allow_dirty_tree)
+        is_accept_committed = bool(accept_committed)
+        proof_ref = str(proof_reference or "").strip()
         if is_dirty_override and auth_source != "developer_terminal":
             raise _engine.ValidationError(
                 "Dirty-tree delivery override requires explicit developer terminal authority via '--source developer_terminal'."
@@ -516,12 +625,21 @@ def deliver_task(
         tid = str(args.task_id)
         auth_source = getattr(args, "source", None) or _engine.os.environ.get("HARNESS_AUTHORITY_SOURCE")
         is_dirty_override = bool(getattr(args, "allow_dirty_tree", False) or getattr(args, "developer_allow_dirty_tree", False))
+        is_accept_committed = bool(getattr(args, "accept_committed", False))
+        proof_ref = str(getattr(args, "proof_reference", "") or "").strip()
         if is_dirty_override and auth_source != "developer_terminal":
             raise _engine.ValidationError(
                 "Dirty-tree delivery override requires explicit developer terminal authority via '--source developer_terminal'."
             )
         clean = require_clean_tree if require_clean_tree is not None else (not is_dirty_override)
-    plan, _ = _engine.finalize_ready_delivery(repo, tid, require_clean_tree=clean)
+    plan, _ = _engine.finalize_ready_delivery(
+        repo,
+        tid,
+        require_clean_tree=clean,
+        accept_committed=is_accept_committed,
+        authority_source=auth_source,
+        proof_reference=proof_ref,
+    )
     return plan
 def plan_summary(plan: dict, plan_document: Path | None = None) -> str:
     """Canonical, reviewable text of the registered plan; the agent presents it verbatim for approval.
@@ -617,13 +735,15 @@ def _drift_causes(repo: Path, manifest: dict, drift: list, plan: dict) -> dict[s
             causes[str(item)] = sorted(p for p, s in per_file.items() if s & unplanned)
     return {k: v[:5] for k, v in causes.items() if v}
 def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
-    """A code task whose pre-edit test failures are not recorded yet (task-start or RED run)."""
+    """True when a pre-edit test-start record is warranted (baseline debt exists or explicitly enabled via env)."""
     from plan_authority import CODE_SURFACES
 
     if str(plan.get("task_kind") or "").upper() in _engine._CONFLICT_KIND_ALIASES:
         return False
     tdir = _engine.task_dir(repo, task_id)
     if (tdir / "task-start-failures.json").is_file() or (tdir / "red-evidence.json").is_file():
+        return False
+    if not (set(plan.get("expected_surfaces") or []) & set(CODE_SURFACES)):
         return False
     try:
         base = _engine.load_task_baseline(repo, task_id) or {}
@@ -633,7 +753,16 @@ def _should_record_task_start(repo: Path, task_id: str, plan: dict) -> bool:
             return False
     except (OSError, ValueError, _engine.ValidationError):
         pass
-    return bool(set(plan.get("expected_surfaces") or []) & set(CODE_SURFACES))
+    if _engine.os.environ.get("HARNESS_PRE_EDIT_TEST_RECORD", "").strip() == "1":
+        return True
+    try:
+        from baseline_capture import load_baseline
+        test_baseline = load_baseline(repo)
+        if isinstance(test_baseline, dict) and bool(test_baseline.get("failures")):
+            return True
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        pass
+    return False
 def _compile_check_hint(repo: Path, task_changes) -> str:
     """P7: ask for a compile-only build before prepare-verification when source files changed.
 

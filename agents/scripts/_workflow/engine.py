@@ -2896,7 +2896,7 @@ def build_parser() -> argparse.ArgumentParser:
     command = sub.add_parser("approve", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
-    command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
+    command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), default="RULE_ENFORCED")
     command.add_argument("--plan-hash", default=None, help="Plan hash shown in the approved PLAN_SUMMARY (at least 12 hex characters)")
     command.add_argument(
         "--with-delegation",
@@ -2907,7 +2907,7 @@ def build_parser() -> argparse.ArgumentParser:
     command = sub.add_parser("approve-sensitive", parents=[common])
     command.add_argument("--source", choices=("host_native", "conversation", "developer_terminal"), required=True)
     command.add_argument("--proof-reference", required=True)
-    command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), required=True)
+    command.add_argument("--enforcement-tier", choices=("HARD_ENFORCED", "RULE_ENFORCED"), default="RULE_ENFORCED")
     command.set_defaults(handler=record_sensitive_approval)
     from review_budget import record_review_budget
     from change_decision import register_parser
@@ -2949,7 +2949,13 @@ def build_parser() -> argparse.ArgumentParser:
     command = sub.add_parser("deliver", parents=[common])
     command.add_argument("--allow-dirty-tree", action="store_true", help="Explicit developer override to deliver while verified task files remain uncommitted")
     command.add_argument("--developer-allow-dirty-tree", action="store_true", help="Explicit developer-terminal override to deliver while verified task files remain uncommitted")
-    command.add_argument("--source", choices=("developer_terminal", "host_native", "conversation"), default=None, help="Authority source for delivery override")
+    command.add_argument(
+        "--accept-committed",
+        action="store_true",
+        help="Explicit developer acceptance of committed post-verification edits on a READY_FOR_DELIVERY task (seals DELIVERED with honest developer_committed_acceptance provenance)",
+    )
+    command.add_argument("--source", choices=("developer_terminal", "host_native", "conversation"), default=None, help="Authority source for delivery override or committed acceptance")
+    command.add_argument("--proof-reference", default="", help="Developer's explicit words confirming committed delivery acceptance (required with --accept-committed)")
     command.set_defaults(handler=deliver_task)
     cancel_cmd = sub.add_parser("cancel", parents=[common])
     cancel_cmd.add_argument("--source", choices=["conversation", "developer_terminal"], default="developer_terminal")
@@ -2960,7 +2966,9 @@ def build_parser() -> argparse.ArgumentParser:
     resume_cmd.set_defaults(handler=resume)
     sub.add_parser("handoff", parents=[common]).set_defaults(handler=cmd_task_handoff)
     sub.add_parser("reconcile-handoff", parents=[common]).set_defaults(handler=cmd_task_reconcile_handoff)
-    reconcile_cmd = sub.add_parser("reconcile-delivery", parents=[common])
+    reconcile_cmd = sub.add_parser("reconcile-delivery")
+    reconcile_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
+    reconcile_cmd.add_argument("--task-id", "--task", dest="task_id", default="", help="Task ID (defaults to active / all cleanly committed READY_FOR_DELIVERY tasks)")
     reconcile_cmd.set_defaults(handler=cmd_reconcile_delivery)
     status_cmd = sub.add_parser("status")
     status_cmd.add_argument("--repo", default=".", help="Repository root (defaults to current directory)")
@@ -3116,13 +3124,17 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     args = parser.parse_args(argv)
     try:
-        if args.action == "ship" and not getattr(args, "task_id", ""):
+        if args.action in {"ship", "reconcile-delivery"} and not getattr(args, "task_id", ""):
             act_f = state_root(Path(args.repo).resolve()) / "active-task.json"
             if act_f.is_file():
-                args.task_id = str(read_json(act_f).get("task_id") or "").strip()
+                try:
+                    args.task_id = str(read_json(act_f).get("task_id") or "").strip()
+                except (OSError, ValueError, ValidationError):
+                    args.task_id = ""
         if args.action not in {"continue", "bridge", "status", "coverage", "metrics", "draft", "quick-start", "recover-stale", "merge", "heal", "plan-check"}:
-            from host_continuation import assert_execution_session
-            assert_execution_session(Path(args.repo).resolve(), args.task_id)
+            if not (args.action == "reconcile-delivery" and not getattr(args, "task_id", "")):
+                from host_continuation import assert_execution_session
+                assert_execution_session(Path(args.repo).resolve(), args.task_id)
         if args.action in {"continue", "merge", "bridge", "prepare-verification", "quick-start"} and args.json:
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
@@ -3305,8 +3317,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if result.get("reconciled"):
                 print(f"RECONCILED={result.get('task_id')} -> DELIVERED")
+                for extra_tid in (result.get("reconciled_tasks") or []):
+                    if extra_tid and extra_tid != result.get("task_id"):
+                        print(f"RECONCILED={extra_tid} -> DELIVERED")
             else:
                 print(f"TASK_STATUS={result.get('status', 'READY')}")
+                if result.get("reason"):
+                    print(f"RECONCILE_REASON={result['reason']}")
+                if result.get("next_action"):
+                    print(f"NEXT_ACTION={result['next_action']}")
     elif args.action == "continue" and not args.json:
         print("TASK_STATUS=CONTINUED")
         print(f"HOST_EXECUTOR={result['host']} SESSION={result['session_id']} ENFORCEMENT={result['enforcement_tier']}")

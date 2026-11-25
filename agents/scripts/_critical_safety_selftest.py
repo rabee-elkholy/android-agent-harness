@@ -1705,9 +1705,11 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         from doctor.engine import HarnessDoctor
 
         skills_root = fixtures.KIT / "agents" / "skills"
-        # 1. Default REVIEW_PROFILE is standard
+        # 1. Default REVIEW_PROFILE is lean (explicit standard still supported)
         vals_default = product_values(fixtures.KIT, {})
-        self.assertEqual("standard", vals_default["REVIEW_PROFILE"])
+        self.assertEqual("lean", vals_default["REVIEW_PROFILE"])
+        vals_std = product_values(fixtures.KIT, {"review_profile": "standard"})
+        self.assertEqual("standard", vals_std["REVIEW_PROFILE"])
         vals_lean = product_values(fixtures.KIT, {"review_profile": "lean"})
         self.assertEqual("lean", vals_lean["REVIEW_PROFILE"])
 
@@ -1731,7 +1733,7 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         self.assertEqual(["bug-test-reviewer-agent"], pol_lean["reviewers"])
         self.assertIn("LEAN_PROFILE_CONSOLIDATED", pol_lean["explanation"]["reviewers"]["bug-test-reviewer-agent"])
 
-        # 3. Widened _micro_eligible for small (<=2 files, <=40 lines) single-module BUSINESS_LOGIC in lean mode
+        # 3. Default `lean` keeps 1 reviewer (never drops to 0 silently); opt-in HARNESS_LEAN_MICRO=1 enables micro-lean
         small_logic_cls = {
             "surfaces": ["BUSINESS_LOGIC"],
             "severity": "MEDIUM",
@@ -1742,6 +1744,12 @@ class AntigravityAuditRegressionTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
             self.assertFalse(review_policy._micro_eligible(small_logic_cls))
         with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean"}):
+            self.assertFalse(review_policy._micro_eligible(small_logic_cls))
+            pol_lean_small = review_policy.decide(small_logic_cls, skills_root)
+            self.assertEqual(["bug-test-reviewer-agent"], pol_lean_small["reviewers"])
+            self.assertIn("unit_tests", pol_lean_small["gates"])
+            self.assertNotIn("assemble", pol_lean_small["gates"])
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "lean", "HARNESS_LEAN_MICRO": "1"}):
             self.assertTrue(review_policy._micro_eligible(small_logic_cls))
             pol_micro = review_policy.decide(small_logic_cls, skills_root)
             self.assertTrue(pol_micro["micro_eligible"])

@@ -141,8 +141,12 @@ class AndroidScenariosSelftest(unittest.TestCase):
         self.assertNotIn("ROOM_SCHEMA", classification["surfaces"])
 
         policy = decide(classification, self.skills_root, project_kind="application")
-        self.assertIn("bug-test-reviewer-agent", policy["reviewers"])
-        self.assertIn("arch-regression-reviewer-agent", policy["reviewers"])
+        self.assertEqual(["bug-test-reviewer-agent"], policy["reviewers"])
+        from unittest import mock as _mock
+        with _mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            policy_std = decide(classification, self.skills_root, project_kind="application")
+            self.assertIn("bug-test-reviewer-agent", policy_std["reviewers"])
+            self.assertIn("arch-regression-reviewer-agent", policy_std["reviewers"])
         # Must not require physical device for pure logic
         self.assertFalse(policy["device_required"])
         self.assertNotIn("device", policy["gates"])

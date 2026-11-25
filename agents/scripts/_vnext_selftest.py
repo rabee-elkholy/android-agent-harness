@@ -2298,6 +2298,7 @@ class EndToEndWorkflowTests(RepoCase):
             "unit_test_task": ":app:testDebugUnitTest",
             "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
             "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "review_profile": "standard",
         }))
         install(self.repo, KIT)
         task_id = "e2e-review-cli"
@@ -2313,7 +2314,8 @@ class EndToEndWorkflowTests(RepoCase):
         ))
         begin_task(Namespace(**common))
         write(self.repo / "app/src/main/kotlin/A.kt", "internal class ChangedReview\n")
-        current = prepare_verification(Namespace(**common))
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            current = prepare_verification(Namespace(**common))
         current["review_protocol_version"] = 1
         current_run_path = self.repo / ".agents" / "state" / "tasks" / task_id / "current-run.json"
         current_run_path.write_text(json.dumps(current), encoding="utf-8")
@@ -2779,6 +2781,7 @@ class EndToEndWorkflowTests(RepoCase):
             "launcher": "com.example.fixture/.MainActivity", "assemble": ":app:assembleDebug",
             "unit_test_task": ":app:testDebugUnitTest", "apk_path": "app/build/outputs/apk/debug/app-debug.apk",
             "tools": ["generic"], "pm_provider": "none", "zoho_mcp": "disable", "backup": True,
+            "review_profile": "standard",
         }))
         install(self.repo, KIT)
 
@@ -2795,7 +2798,8 @@ class EndToEndWorkflowTests(RepoCase):
         ))
         begin_task(Namespace(**common))
         write(self.repo / "app/src/main/kotlin/Worker.kt", "package com.fixture\nclass Worker {}\n")
-        current = prepare_verification(Namespace(**common))
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            current = prepare_verification(Namespace(**common))
 
         from workflow import record_finding_validation
         with self.assertRaises(ValidationError) as ctx:
@@ -3914,7 +3918,7 @@ class CleanInstallV2SpecificationTests(RepoCase):
 
     def test_REVIEW_SETUP_002_budget_exhausted_requires_decision(self) -> None:
         import review_policy
-        with mock.patch("review_policy._configured_model_call_budget", return_value=1):
+        with mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}), mock.patch("review_policy._configured_model_call_budget", return_value=1):
             res = review_policy.decide(
                 {"tier": "T2_FEATURE", "surfaces": ["BUSINESS_LOGIC"], "classified_files": []},
                 KIT / "agents" / "skills",

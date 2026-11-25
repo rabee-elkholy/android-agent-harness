@@ -212,9 +212,35 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
             decision = (res.get("hookSpecificOutput") or {}).get("permissionDecision") or res.get("decision")
             self.assertEqual(decision, "allow", f"Compact or read-only call unexpectedly blocked: {ro_payload} -> {res}")
 
-        # Edge Case 2: Heavy `task draft` (10+ files or multi-phase) and cold-start `web-pack` are hard-blocked
-        # with SELECT_EXECUTION_MODE_REQUIRED + approximate quota savings + 3 choices when unset!
+        # Edge Case 2: On a fresh unset repo, Web-Relay prompting is OPT-IN so heavy `task draft` runs locally
+        # without interrupting the developer, while cold-start `web-pack` still prompts.
+        # Once `ask-every-task` is enabled (opt-in), heavy `task draft` (10+ files or multi-phase) prompts with 3 choices!
         files_11 = ",".join(f"app/src/main/java/com/example/sample/Screen{i}.kt" for i in range(1, 12))
+        for heavy_draft_cmd in (
+            f'python .agents/harness.py task draft --repo . --task-id heavy-11 --outcome "Refactor screens" --kind REFACTOR --expected-files {files_11}',
+            'python .agents/harness.py task draft --repo . --task-id mp-2 --outcome "Two-phase rollout" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt --phases "p1:Core,p2:UI"',
+        ):
+            res_opt = _run_pre_tool_hook(
+                repo,
+                {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": heavy_draft_cmd}},
+                brain_root=brain,
+            )
+            dec_opt = (res_opt.get("hookSpecificOutput") or {}).get("permissionDecision") or res_opt.get("decision")
+            self.assertEqual(dec_opt, "allow", f"Unset opt-in default should allow heavy draft locally: {res_opt}")
+
+        # Cold-start `web-pack` still prompts on unset repo:
+        res_wp_cold = _run_pre_tool_hook(
+            repo,
+            {"conversationId": cid, "toolName": "run_command", "toolArgs": {"CommandLine": 'python .agents/harness.py web-pack --files app/src/main/java/com/example/sample/CartViewModel.kt --prompt "Add discount"'}},
+            brain_root=brain,
+        )
+        self.assertEqual((res_wp_cold.get("hookSpecificOutput") or {}).get("permissionDecision") or res_wp_cold.get("decision"), "deny")
+        self.assertIn("SELECT_EXECUTION_MODE_REQUIRED", str(res_wp_cold))
+
+        # Opt-in via `ask-every-task` -> heavy `task draft` and cold-start `web-pack` prompt with 3 choices!
+        execution_mode.set_execution_mode(
+            repo, choice="ask-every-task", source="conversation", proof_reference="Prompt me on heavy tasks"
+        )
         for ko_cmd in (
             f'python .agents/harness.py task draft --repo . --task-id heavy-11 --outcome "Refactor screens" --kind REFACTOR --expected-files {files_11}',
             'python .agents/harness.py task draft --repo . --task-id mp-2 --outcome "Two-phase rollout" --kind FEATURE --expected-files app/src/main/java/com/example/sample/CartViewModel.kt --phases "p1:Core,p2:UI"',
@@ -527,7 +553,10 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         dec_compact = (verdict_compact.get("hookSpecificOutput") or {}).get("permissionDecision") or verdict_compact.get("decision")
         self.assertEqual(dec_compact, "allow")
 
-        # 2b) Heavy multi-phase `task draft` using Windows backslash launcher `.agents\harness.py` IS caught & asks the 3-choice prompt!
+        # 2b) When `ask-every-task` opt-in is enabled, heavy multi-phase `task draft` using Windows backslash launcher `.agents\harness.py` IS caught & asks the 3-choice prompt!
+        execution_mode.set_execution_mode(
+            repo, choice="ask-every-task", source="conversation", proof_reference="Prompt on heavy tasks"
+        )
         verdict_win = _run_pre_tool_hook(
             repo,
             {
@@ -926,6 +955,9 @@ class ExecutionModeSelectorSelftest(unittest.TestCase):
         self.assertEqual(2, rep_p["phases_count"])
 
         repo, brain, cid = self._fresh_repo("ec10_phase")
+        execution_mode.set_execution_mode(
+            repo, choice="ask-every-task", source="conversation", proof_reference="Prompt on heavy tasks"
+        )
         deny_rep = _run_pre_tool_hook(
             repo,
             {

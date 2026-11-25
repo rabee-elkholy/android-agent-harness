@@ -91,8 +91,8 @@ def _configured_review_profile() -> str:
         from _product import REVIEW_PROFILE
         profile = str(REVIEW_PROFILE or "").strip().lower()
     except (ImportError, TypeError, ValueError, AttributeError):
-        profile = "standard"
-    return "lean" if profile == "lean" else "standard"
+        profile = "lean"
+    return "standard" if profile == "standard" else "lean"
 
 
 def _is_visual_compose(classification: dict) -> bool:
@@ -257,8 +257,10 @@ def _micro_eligible(classification: dict, plan: dict | None = None, task_kind: s
                 return False
             return True
 
-    # Tier 1 (Lean Profile): Small single-module low-risk business/UI logic edit with unit tests
-    if _configured_review_profile() == "lean" and effective_kind != "BUG":
+    # Tier 1 (Opt-in Micro-Lean): Only when explicitly enabled via HARNESS_LEAN_MICRO=1
+    # Default `lean` profile consolidates T1/T2 single-module reviews from 2 -> 1 reviewer
+    # WITHOUT dropping AI review to 0 or suppressing device verification on UI/logic edits.
+    if _configured_review_profile() == "lean" and os.environ.get("HARNESS_LEAN_MICRO", "").strip() == "1" and effective_kind != "BUG":
         if surfaces <= {"DOCS", "LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI", "BUSINESS_LOGIC"}:
             severity = str(classification.get("severity") or "").upper()
             if severity not in ("CRITICAL", "HIGH"):
@@ -358,8 +360,24 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         planning_depth, arch_intent = "BOUNDED", "EXISTING_CHANGE"
         changed_modules_count = int(classification.get("delta_modules_count") or 1)
     else:
-        changed_modules = (plan or {}).get("changed_modules") or []
-        changed_modules_count = len(changed_modules) if isinstance(changed_modules, list) else int((plan or {}).get("changed_modules_count") or 1)
+        raw_changed_modules = (plan or {}).get("changed_modules")
+        if isinstance(raw_changed_modules, list) and raw_changed_modules:
+            changed_modules_count = len(raw_changed_modules)
+        elif (plan or {}).get("changed_modules_count"):
+            changed_modules_count = int((plan or {}).get("changed_modules_count") or 1)
+        else:
+            inferred_mods: set[str] = set()
+            for info in (classification.get("details") or {}).values():
+                if isinstance(info, dict):
+                    for fp in info.get("files") or []:
+                        fp_s = str(fp or "").replace("\\", "/")
+                        if "/src/" in fp_s:
+                            inferred_mods.add(fp_s.split("/src/", 1)[0].strip("/") or "root")
+            if inferred_mods:
+                changed_modules_count = len(inferred_mods)
+            else:
+                exp_mods = (plan or {}).get("expected_modules") or []
+                changed_modules_count = len(exp_mods) if isinstance(exp_mods, list) and exp_mods else 1
 
     if micro:
         tier_reason = "BOUNDED_MICRO_CHANGE"
@@ -439,6 +457,18 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
     if micro or is_conflict_task:
         reviewers.clear()
     elif (
+        risk_tier == "T2_FEATURE"
+        and planning_depth != "ARCHITECTURAL"
+        and arch_intent not in ("MIGRATION", "NEW_SUBSYSTEM")
+        and changed_modules_count <= 1
+        and "UNKNOWN" not in surfaces
+        and _is_isolated_private_logic_delta(classification, surfaces)
+        and reviewers == {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"}
+    ):
+        reviewers.discard("arch-regression-reviewer-agent")
+        merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
+        reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"ISOLATED_PRIVATE_DELTA_CONSOLIDATED"})
+    elif (
         _configured_review_profile() == "lean"
         and risk_tier in ("T1_LOW_RISK", "T2_FEATURE")
         and planning_depth != "ARCHITECTURAL"
@@ -453,18 +483,6 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
         reviewers.discard("arch-regression-reviewer-agent")
         merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
         reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"LEAN_PROFILE_CONSOLIDATED"})
-    elif (
-        risk_tier == "T2_FEATURE"
-        and planning_depth != "ARCHITECTURAL"
-        and arch_intent not in ("MIGRATION", "NEW_SUBSYSTEM")
-        and changed_modules_count <= 1
-        and "UNKNOWN" not in surfaces
-        and _is_isolated_private_logic_delta(classification, surfaces)
-        and reviewers == {"bug-test-reviewer-agent", "arch-regression-reviewer-agent"}
-    ):
-        reviewers.discard("arch-regression-reviewer-agent")
-        merged_reasons = reviewer_reasons.pop("arch-regression-reviewer-agent", set())
-        reviewer_reasons.setdefault("bug-test-reviewer-agent", set()).update(merged_reasons | {"ISOLATED_PRIVATE_DELTA_CONSOLIDATED"})
     if "UNKNOWN" in surfaces and not is_conflict_task:
         reviewers.clear()
         if unknown_resolved:
@@ -509,9 +527,28 @@ def decide(classification: dict, skills_root: Path, *, project_kind: str = "appl
             require_gate("localization", surfaces & {"LOCALIZATION", "RESOURCE_UI", "COMPOSE_UI", "XML_UI"})
         if "ROOM_SCHEMA" in surfaces:
             require_gate("room", {"ROOM_SCHEMA"})
+        assemble_required_surfaces = CRITICAL_SURFACES | {
+            "COMPOSE_UI",
+            "XML_UI",
+            "RESOURCE_UI",
+            "LOCALIZATION",
+            "NAVIGATION",
+            "MANIFEST_PERMISSION",
+            "BUILD_CONFIG",
+            "NATIVE_CODE",
+            "DEVICE_API",
+            "ROOM_SCHEMA",
+        }
+        needs_assemble = (
+            device_required
+            or "unit_tests" not in gates
+            or risk_tier in ("T3_SUBSYSTEM", "T4_DATA_DEVICE", "T5_CRITICAL")
+            or bool(surfaces & assemble_required_surfaces)
+        )
         if (
             risk_tier != "T0_TRIVIAL"
             and (surfaces - {"DOCS"})
+            and needs_assemble
             and not (bool((plan or {}).get("express_track")) and surfaces <= {"DOCS", "TEST_ONLY"} and not device_required)
         ):
             require_gate("assemble", {"NONTRIVIAL_DELIVERY_CHANGE"})

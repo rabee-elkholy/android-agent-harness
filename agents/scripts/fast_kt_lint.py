@@ -1939,6 +1939,120 @@ def find_unreferenced_new_declarations(
     return findings
 
 
+def count_code_lines(lines: list[str]) -> int:
+    """Count pure non-blank Kotlin code lines, excluding KDoc (`/** ... */`), block (`/* ... */`, nested), and `//` comments.
+
+    String literals (`"..."`, `'...'`, and multi-line raw strings `\"\"\"...\"\"\"`) are preserved so
+    `//` or `/*` inside strings are never treated as comments.
+    """
+    text = "\n".join(lines)
+    n = len(text)
+    i = 0
+    block_depth = 0
+    in_line_comment = False
+    in_string = False
+    in_triple = False
+    in_char = False
+    has_code = False
+    code_lines = 0
+
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            if has_code:
+                code_lines += 1
+            has_code = False
+            in_line_comment = False
+            i += 1
+            continue
+
+        if in_line_comment:
+            i += 1
+            continue
+
+        if block_depth > 0:
+            if ch == "/" and i + 1 < n and text[i + 1] == "*":
+                block_depth += 1
+                i += 2
+            elif ch == "*" and i + 1 < n and text[i + 1] == "/":
+                block_depth -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+
+        if in_triple:
+            if ch == '"' and text[i:i + 3] == '"""':
+                # Consume trailing quotes in e.g. `""""` so the last 3 close the raw string.
+                j = i + 3
+                while j < n and text[j] == '"':
+                    j += 1
+                has_code = True
+                in_triple = False
+                i = j
+            else:
+                if not ch.isspace():
+                    has_code = True
+                i += 1
+            continue
+
+        if in_string:
+            if not ch.isspace():
+                has_code = True
+            if ch == "\\" and i + 1 < n:
+                i += 2
+            elif ch == '"':
+                in_string = False
+                i += 1
+            else:
+                i += 1
+            continue
+
+        if in_char:
+            if not ch.isspace():
+                has_code = True
+            if ch == "\\" and i + 1 < n:
+                i += 2
+            elif ch == "'":
+                in_char = False
+                i += 1
+            else:
+                i += 1
+            continue
+
+        # Normal code state
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            block_depth = 1
+            i += 2
+            continue
+        if ch == '"' and text[i:i + 3] == '"""':
+            has_code = True
+            in_triple = True
+            i += 3
+            continue
+        if ch == '"':
+            has_code = True
+            in_string = True
+            i += 1
+            continue
+        if ch == "'":
+            has_code = True
+            in_char = True
+            i += 1
+            continue
+        if not ch.isspace():
+            has_code = True
+        i += 1
+
+    if has_code:
+        code_lines += 1
+    return code_lines
+
+
 def check_file_size(
     file_path: Path,
     lines: list[str] | None = None,
@@ -1946,7 +2060,7 @@ def check_file_size(
     baseline_line_count: int | None = None,
     is_all_mode: bool = False,
 ) -> tuple[list[dict], list[dict]]:
-    """Enforce baseline-scoped production Kotlin file modularity limits (450 advisory / 650 hard cap)."""
+    """Enforce baseline-scoped production Kotlin file modularity limits (450 advisory / 650 hard cap, pure code lines only)."""
     from _modules import is_kmp_or_android_test_path
 
     posix = file_path.as_posix()
@@ -1962,12 +2076,13 @@ def check_file_size(
     head_code = _strip_kotlin_comments_preserve_lines("\n".join(lines[:40]))
     if _FILE_SIZE_SUPPRESS_RE.search("\n".join(lines[:40])) and "@file:Suppress" in head_code:
         return [], []
-    line_count = len(lines)
+    line_count = count_code_lines(lines)
     if line_count <= FILE_SIZE_ADVISORY_LINES:
         return [], []
     fname = file_path.name
     adv_msg = (
-        f"'{fname}' has {line_count} lines (target <= {FILE_SIZE_ADVISORY_LINES}, hard cap {FILE_SIZE_HARD_LIMIT}). "
+        f"'{fname}' has {line_count} code lines (target <= {FILE_SIZE_ADVISORY_LINES}, hard cap {FILE_SIZE_HARD_LIMIT}; "
+        "comments/KDoc/blank lines excluded). "
         "Split cohesive sub-components/helpers into sibling files before it becomes a god file."
     )
     if is_all_mode:
@@ -1979,7 +2094,7 @@ def check_file_size(
                 "line": 1,
                 "type": "GOD_FILE",
                 "msg": (
-                    f"'{fname}' has {line_count} lines (hard cap {FILE_SIZE_HARD_LIMIT}; "
+                    f"'{fname}' has {line_count} code lines (hard cap {FILE_SIZE_HARD_LIMIT}, comments/KDoc/blank lines excluded; "
                     "newly created file exceeds limit). "
                     "Decompose into focused sibling files (e.g., components/ or helper/reducer files)."
                 ),
@@ -1996,7 +2111,7 @@ def _baseline_line_count(
     baseline_dir: Path | None,
     base_head: str | None = None,
 ) -> int | None:
-    """Return pre-task/HEAD line count for `file_path`, or None when newly created."""
+    """Return pre-task/HEAD pure code line count for `file_path`, or None when newly created."""
     try:
         rel = file_path.resolve().relative_to(repo.resolve()).as_posix()
     except ValueError:
@@ -2005,7 +2120,7 @@ def _baseline_line_count(
         b_file = baseline_dir / rel
         if b_file.is_file():
             try:
-                return len(b_file.read_text(encoding="utf-8", errors="replace").splitlines())
+                return count_code_lines(b_file.read_text(encoding="utf-8", errors="replace").splitlines())
             except OSError:
                 pass
     if (repo / ".git").exists():
@@ -2019,7 +2134,7 @@ def _baseline_line_count(
             check=False,
         )
         if proc.returncode == 0:
-            return len(proc.stdout.splitlines())
+            return count_code_lines(proc.stdout.splitlines())
     return None
 
 

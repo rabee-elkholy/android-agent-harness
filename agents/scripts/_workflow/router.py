@@ -632,6 +632,12 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
             if equivalence.get("diff_summary"):
                 diff_detail = f" Detected differences: {equivalence['diff_summary']}."
 
+        accept_committed_hint = (
+            f" Or if the developer already committed their intentional final tweaks and wants to close the task now, "
+            f"run `python .agents/harness.py task deliver --task-id {task_id} --accept-committed --source conversation --proof-reference \"<developer confirmation>\"`."
+            if not dirty
+            else ""
+        )
         return {
             "code": "DELIVERY_STALE_AFTER_COMMIT",
             "kind": "DEVELOPER_ACTION",
@@ -646,7 +652,7 @@ def _next_delivery(repo, task_id, plan, host, identity, run_host, state, session
                 "or verify the affected changes. Preview task change-decision --mode accept-edits or review-edits "
                 "--file <changed-file> --reason <explanation>; apply its --expect-preview <hash> with "
                 "--source conversation --proof-reference <answer>. Keep this task and prior review coverage. "
-                "Tests/build/device evidence must still match the new source. Cancel only on an explicit cancellation request."
+                f"Tests/build/device evidence must still match the new source.{accept_committed_hint} Cancel only on an explicit cancellation request."
             ),
             "changed_files": changed,
             "inputs": {

@@ -1476,26 +1476,36 @@ def check_and_record_lead_post_subagent_read(
             if not cand.exists():
                 return (True, "", "")
             if cand.is_file() and cand.suffix.lower() in {".kt", ".kts", ".java", ".swift", ".xml"}:
-                total_lines = cand.read_text(encoding="utf-8", errors="replace").count("\n") + 1
-                if total_lines > _engine.LARGE_SOURCE_FILE_LINE_THRESHOLD:
-                    start_ln = args.get("StartLine") or args.get("startLine") or args.get("offset")
-                    end_ln = args.get("EndLine") or args.get("endLine")
-                    limit_ln = args.get("limit")
-                    span = total_lines
-                    if start_ln is not None and end_ln is not None:
-                        span = max(1, int(end_ln) - int(start_ln) + 1)
-                    elif limit_ln is not None:
-                        span = max(1, int(limit_ln))
-                    if span > _engine.MAX_POST_SUBAGENT_VIEW_LINES:
-                        rel_disp = _engine._normalize_repo_rel(repo, str(cand))
-                        return (
-                            False,
-                            f"POST_SUBAGENT_FULL_FILE_READ_BLOCKED: `{rel_disp}` has {total_lines} lines (requested {span} lines) "
-                            f"after `{sample.get('role') or a_type}` already analyzed this scope. "
-                            "Do NOT re-read large files in 250+ line chunks on the Lead Model — trust and synthesize the subagent's digest directly, "
-                            f"or inspect one specific declaration via `python .agents/harness.py symbol outline --file {rel_disp}` / `symbol read` (or `view_file` <=150 lines).",
-                            "POST_SUBAGENT_FULL_FILE_READ_BLOCKED",
-                        )
+                rel_disp = _engine._normalize_repo_rel(repo, str(cand))
+                rel_low = rel_disp.replace("\\", "/").lower()
+                is_exempt_res_xml = (
+                    cand.suffix.lower() == ".xml"
+                    and (
+                        rel_low.rsplit("/", 1)[-1]
+                        in {"strings.xml", "plurals.xml", "arrays.xml", "colors.xml", "dimens.xml", "themes.xml", "styles.xml", "attrs.xml"}
+                        or bool(_engine.re.search(r"/(?:res|composeresources)/values(?:-[^/]+)?/", "/" + rel_low.lstrip("/")))
+                    )
+                )
+                if not is_exempt_res_xml:
+                    total_lines = cand.read_text(encoding="utf-8", errors="replace").count("\n") + 1
+                    if total_lines > _engine.LARGE_SOURCE_FILE_LINE_THRESHOLD:
+                        start_ln = args.get("StartLine") or args.get("startLine") or args.get("offset")
+                        end_ln = args.get("EndLine") or args.get("endLine")
+                        limit_ln = args.get("limit")
+                        span = total_lines
+                        if start_ln is not None and end_ln is not None:
+                            span = max(1, int(end_ln) - int(start_ln) + 1)
+                        elif limit_ln is not None:
+                            span = max(1, int(limit_ln))
+                        if span > _engine.MAX_POST_SUBAGENT_VIEW_LINES:
+                            return (
+                                False,
+                                f"POST_SUBAGENT_FULL_FILE_READ_BLOCKED: `{rel_disp}` has {total_lines} lines (requested {span} lines) "
+                                f"after `{sample.get('role') or a_type}` already analyzed this scope. "
+                                "Do NOT re-read large files in 250+ line chunks on the Lead Model — trust and synthesize the subagent's digest directly, "
+                                f"or inspect one specific declaration via `python .agents/harness.py symbol outline --file {rel_disp}` / `symbol read` (or `view_file` <=150 lines).",
+                                "POST_SUBAGENT_FULL_FILE_READ_BLOCKED",
+                            )
         except (OSError, ValueError, TypeError):
             pass
 

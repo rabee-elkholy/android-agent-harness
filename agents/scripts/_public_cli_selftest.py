@@ -670,7 +670,11 @@ class PhaseBLeanWorkflowSelftest(unittest.TestCase):
         self.assertEqual("STANDARD", pol_click["risk_lane"])
         self.assertEqual("UI_BEHAVIOR", pol_click["ui_verification_class"])
         self.assertTrue(pol_click["device_required"])
-        self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_click["reviewers"])
+        self.assertEqual(["bug-test-reviewer-agent"], pol_click["reviewers"])
+        from unittest import mock as _mock
+        with _mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            pol_click_std = review_policy.decide(cls_click, self.skills_root, project_kind="application")
+            self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_click_std["reviewers"])
         self.assertNotIn("security-perf-reviewer-agent", pol_click["reviewers"])
         self.assertIn("unit_tests", pol_click["gates"])
         self.assertIn("device", pol_click["gates"])
@@ -3461,6 +3465,363 @@ class DeterministicAutoAdvanceSelftest(unittest.TestCase):
             summary["completed_steps"],
         )
         self.assertEqual("TASK_DELIVERED", summary["next_action"]["code"])
+
+
+class TestV1519SpeedAndFrictionCut(unittest.TestCase):
+    """End-to-end deterministic regression tests for the v1.5.19 Speed & Friction Cut."""
+
+    def _init_git_repo(self, root: Path) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "app/src/main/kotlin/com/demo").mkdir(parents=True, exist_ok=True)
+        (root / "app/src/main/kotlin/com/demo/Demo.kt").write_text(
+            "package com.demo\nclass Demo { fun v() = 1 }\n", encoding="utf-8"
+        )
+        (root / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+        (root / "settings.gradle.kts").write_text('include(":app")\n', encoding="utf-8")
+        for cmd in (
+            ["git", "init", "-q"],
+            ["git", "config", "user.email", "test@example.com"],
+            ["git", "config", "user.name", "Test"],
+            ["git", "add", "."],
+            ["git", "commit", "-qm", "init"],
+        ):
+            subprocess.run(cmd, cwd=str(root), check=True, capture_output=True)
+
+    def test_01_pm_find_item_and_authorized_task_cancel_without_active_pointer(self) -> None:
+        import mutation_guard
+        from _safety import command_policy
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_git_repo(repo)
+            # pm find-item allowed in both public and script forms
+            ok_pub, rsn_pub = mutation_guard.command_allowed(
+                repo, "python .agents/harness.py pm find-item --item I1342 --file dump.json"
+            )
+            self.assertTrue(ok_pub, rsn_pub)
+            ok_scr, rsn_scr = mutation_guard.command_allowed(
+                repo, "python .agents/scripts/pm_discovery.py find-item --item I1342 --file dump.json"
+            )
+            self.assertTrue(ok_scr, rsn_scr)
+
+            # task cancel with conversation proof allowed even when active-task.json is missing!
+            ok_can, rsn_can = mutation_guard.command_allowed(
+                repo,
+                'python .agents/harness.py task cancel --task-id old-ready --source conversation --proof-reference "cancel old task"',
+            )
+            self.assertTrue(ok_can, rsn_can)
+
+            # Bare task cancel without proof still violates developer authority
+            self.assertEqual(
+                "cancel",
+                command_policy._developer_authority_violation(
+                    "python .agents/harness.py task cancel --task-id old-ready"
+                ),
+            )
+
+    def test_02_deliver_accept_committed_authority_guard_and_one_shot_closing(self) -> None:
+        from _safety import command_policy
+        from _vnext_common import ValidationError, atomic_write_json, read_json
+        from delivery_manifest import build_manifest
+        from workflow import build_parser, deliver_task, reconcile_delivery
+
+        # Hook developer-authority guard blocks --accept-committed without conversation proof
+        self.assertEqual(
+            "deliver-accept-committed",
+            command_policy._developer_authority_violation(
+                "python .agents/harness.py task deliver --task-id t1 --accept-committed"
+            ),
+        )
+        self.assertEqual(
+            "",
+            command_policy._developer_authority_violation(
+                'python .agents/harness.py task deliver --task-id t1 --accept-committed --source conversation --proof-reference "close the task"'
+            ),
+        )
+
+        # Approve & approve-sensitive default --enforcement-tier to RULE_ENFORCED
+        wf_parser = build_parser()
+        ns_app = wf_parser.parse_args(
+            ["approve", "--task-id", "t1", "--source", "conversation", "--proof-reference", "approved"]
+        )
+        self.assertEqual("RULE_ENFORCED", ns_app.enforcement_tier)
+        ns_sens = wf_parser.parse_args(
+            ["approve-sensitive", "--task-id", "t1", "--source", "conversation", "--proof-reference", "approved"]
+        )
+        self.assertEqual("RULE_ENFORCED", ns_sens.enforcement_tier)
+        # reconcile-delivery allows omitting --task-id
+        ns_rec = wf_parser.parse_args(["reconcile-delivery", "--repo", "."])
+        self.assertEqual("", ns_rec.task_id)
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_git_repo(repo)
+            m0 = build_manifest(repo)
+            tdir = repo / ".agents/state/tasks/t-close"
+            tdir.mkdir(parents=True, exist_ok=True)
+            plan = {
+                "task_id": "t-close",
+                "status": "READY_FOR_DELIVERY",
+                "expected_files": ["app/src/main/kotlin/com/demo/Demo.kt"],
+                "repository": m0["repository"],
+                "ready_delivery_snapshot_sha256": m0["delivery_snapshot_sha256"],
+            }
+            atomic_write_json(tdir / "plan.json", plan)
+            atomic_write_json(
+                repo / ".agents/state/active-task.json",
+                {"task_id": "t-close", "plan_path": str(tdir / "plan.json")},
+            )
+
+            # Developer makes a post-verification tweak and leaves it uncommitted -> refused even with --accept-committed
+            (repo / "app/src/main/kotlin/com/demo/Demo.kt").write_text(
+                "package com.demo\nclass Demo { fun v() = 2 }\n", encoding="utf-8"
+            )
+            with self.assertRaises(ValidationError):
+                deliver_task(
+                    repo,
+                    "t-close",
+                    accept_committed=True,
+                    source="conversation",
+                    proof_reference="close it",
+                )
+
+            # Developer commits the tweak -> plain deliver fails on snapshot mismatch, --accept-committed succeeds cleanly!
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-qm", "dev polish"], cwd=str(repo), check=True, capture_output=True)
+            with self.assertRaisesRegex(ValidationError, "--accept-committed"):
+                deliver_task(repo, "t-close")
+            with self.assertRaises(ValidationError):
+                deliver_task(
+                    repo, "t-close", accept_committed=True, source="conversation", proof_reference="close it?"
+                )
+            delivered = deliver_task(
+                repo, "t-close", accept_committed=True, source="conversation", proof_reference="Yes close the task"
+            )
+            self.assertEqual("DELIVERED", delivered["status"])
+            acc = delivered.get("developer_committed_acceptance") or {}
+            self.assertEqual("conversation", acc.get("source"))
+            self.assertEqual(m0["delivery_snapshot_sha256"], acc.get("ready_delivery_snapshot_sha256"))
+            self.assertFalse((repo / ".agents/state/active-task.json").exists())
+
+            # Unfocused cleanly committed READY_FOR_DELIVERY task reconciles automatically on reconcile_delivery(repo)
+            m1 = build_manifest(repo)
+            tdir2 = repo / ".agents/state/tasks/t-unfocused"
+            tdir2.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(
+                tdir2 / "plan.json",
+                {
+                    "task_id": "t-unfocused",
+                    "status": "READY_FOR_DELIVERY",
+                    "expected_files": ["app/src/main/kotlin/com/demo/Demo.kt"],
+                    "repository": m1["repository"],
+                    "ready_delivery_snapshot_sha256": m1["delivery_snapshot_sha256"],
+                },
+            )
+            rec_plan, rec_code = reconcile_delivery(repo)
+            self.assertEqual("DELIVERED", rec_code)
+            self.assertEqual("t-unfocused", (rec_plan or {}).get("task_id"))
+            self.assertEqual("DELIVERED", read_json(tdir2 / "plan.json")["status"])
+
+    def test_03_execution_mode_ready_task_pending_fix_and_opt_in_default(self) -> None:
+        import execution_mode
+        from _vnext_common import atomic_write_json
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_git_repo(repo)
+            # Fresh unset repo: heavy 12-file scope runs locally without prompting (`selection_required == False`)
+            files_12 = [f"app/src/main/kotlin/com/demo/F{i}.kt" for i in range(12)]
+            eff_unset = execution_mode.resolve_effective_execution_mode(repo, candidate_files=files_12)
+            self.assertEqual("normal", eff_unset["mode"])
+            self.assertFalse(eff_unset["selection_required"])
+            self.assertTrue(eff_unset["web_recommended"])
+
+            # Existing READY_FOR_DELIVERY task focused: `execution-mode set --choice normal-task` writes pending file
+            # instead of binding to the finished task!
+            tdir = repo / ".agents/state/tasks/t-old-ready"
+            tdir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(tdir / "plan.json", {"task_id": "t-old-ready", "status": "READY_FOR_DELIVERY"})
+            atomic_write_json(
+                repo / ".agents/state/active-task.json",
+                {"task_id": "t-old-ready", "plan_path": str(tdir / "plan.json")},
+            )
+            res = execution_mode.set_execution_mode(
+                repo, choice="normal-task", source="conversation", proof_reference="Run next task locally"
+            )
+            self.assertEqual("EXECUTION_MODE_PENDING_FOR_NEXT_TASK", res["status"])
+            self.assertTrue(execution_mode.pending_task_mode_file(repo).is_file())
+            self.assertFalse(execution_mode.task_mode_file(repo, "t-old-ready").is_file())
+
+            # Pending choice resolves cleanly even when old READY_FOR_DELIVERY task is still focused
+            eff_next = execution_mode.resolve_effective_execution_mode(
+                repo, candidate_files=files_12, kickoff_kind="draft"
+            )
+            self.assertEqual("normal", eff_next["mode"])
+            self.assertEqual("pending_task", eff_next["effective_scope"])
+            self.assertFalse(eff_next["selection_required"])
+
+    def test_04_capture_red_with_tests_filter_and_multi_module_fail_fast(self) -> None:
+        import run_tests_gate as rtg
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_git_repo(repo)
+            (repo / "core/src/main/kotlin/com/demo").mkdir(parents=True, exist_ok=True)
+            (repo / "core/src/main/kotlin/com/demo/Core.kt").write_text(
+                "package com.demo\nclass Core { fun x() = 2 }\n", encoding="utf-8"
+            )
+
+            # Fail-fast pre-check on multi-module run stops after changed module failure without running :app!
+            calls: list[list[str]] = []
+
+            def fake_run(tasks_arg, extra_arg):
+                calls.append(list(tasks_arg))
+                return 1, {"test_failure_only": False, "first_error": "Core.kt:2 unresolved reference"}
+
+            with mock.patch.object(rtg, "resolve_target_tasks", return_value=[":app:testDebugUnitTest", ":core:testDebugUnitTest"]), \
+                 mock.patch.object(rtg, "resolve_impacted_test_patterns", return_value=[]), \
+                 mock.patch.object(rtg, "run_test_tasks", side_effect=fake_run), \
+                 mock.patch.object(rtg, "write_gate_result") as w_gate, \
+                 mock.patch("mutation_guard.active_plan", return_value={}):
+                rc = rtg.main(["--repo", str(repo)])
+            self.assertEqual(1, rc)
+            self.assertEqual([[":core:testDebugUnitTest"]], calls)
+            self.assertTrue(w_gate.called)
+            self.assertTrue(w_gate.call_args[0][1].get("fail_fast_precheck"))
+
+            # `--tests` + `--capture-red` is no longer rejected by argument validation
+            def fake_red_run(tasks_arg, extra_arg):
+                self.assertIn("--tests", extra_arg)
+                return 0, {"test_failure_only": False}
+
+            with mock.patch.object(rtg, "resolve_target_tasks", return_value=[":app:testDebugUnitTest"]), \
+                 mock.patch.object(rtg, "run_test_tasks", side_effect=fake_red_run), \
+                 mock.patch.object(rtg, "collect_task_failures", return_value=[]), \
+                 mock.patch("mutation_guard.active_plan", return_value={}):
+                rc_red = rtg.main(["--repo", str(repo), "--capture-red", "--tests", "DemoTest"])
+            # Exits 1 because no failing tests (NOT argument validation error)
+            self.assertEqual(1, rc_red)
+
+    def test_05_xml_resource_post_subagent_read_exemption_and_smart_assemble(self) -> None:
+        import time
+        import delegation_policy
+        import review_policy
+        from _vnext_common import atomic_write_json
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_git_repo(repo)
+            strings_ar = repo / "app/src/main/res/values-ar/strings.xml"
+            strings_ar.parent.mkdir(parents=True, exist_ok=True)
+            strings_ar.write_text(
+                "<resources>\n" + "".join(f'  <string name="k{i}">v{i}</string>\n' for i in range(600)) + "</resources>\n",
+                encoding="utf-8",
+            )
+            big_kt = repo / "app/src/main/kotlin/com/demo/Big.kt"
+            big_kt.write_text("package com.demo\n" + "".join(f"val x{i} = {i}\n" for i in range(600)), encoding="utf-8")
+
+            ledger_path = repo / ".agents/state/utility-subagents.json"
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(
+                ledger_path,
+                {
+                    "schema_version": 2,
+                    "entries": [
+                        {
+                            "wave_id": "w1",
+                            "parent_conversation_id": "conv-xml",
+                            "agent_type": delegation_policy.SCOUT_AGENT,
+                            "role": "harness-scout-agent",
+                            "task_status": "IDLE",
+                            "wave_completed": True,
+                            "dispatched_epoch": time.time(),
+                            "status": "COMPLETED",
+                            "inspected_files": ["app/src/main/res/values-ar/strings.xml", "app/src/main/kotlin/com/demo/Big.kt"],
+                            "lead_post_reads": 0,
+                        }
+                    ],
+                },
+            )
+            # Large values-ar/strings.xml is exempt from POST_SUBAGENT_FULL_FILE_READ_BLOCKED
+            ok_xml, msg_xml, code_xml = delegation_policy.check_and_record_lead_post_subagent_read(
+                repo, "conv-xml", tool_name="view_file", args={"AbsolutePath": str(strings_ar)}
+            )
+            self.assertTrue(ok_xml, f"{code_xml}: {msg_xml}")
+
+            # Large Kotlin file is STILL blocked from full-file re-read!
+            ok_kt, _msg_kt, code_kt = delegation_policy.check_and_record_lead_post_subagent_read(
+                repo, "conv-xml", tool_name="view_file", args={"AbsolutePath": str(big_kt)}
+            )
+            self.assertFalse(ok_kt)
+            self.assertEqual("POST_SUBAGENT_FULL_FILE_READ_BLOCKED", code_kt)
+
+        # Smart assemble & multi-module T3 review policy checks
+        skills_root = KIT / "agents" / "skills"
+        pol_logic = review_policy.decide(
+            {"surfaces": ["BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 2, "changed_lines": 50},
+            skills_root,
+        )
+        self.assertNotIn("assemble", pol_logic["gates"])
+        self.assertEqual(["bug-test-reviewer-agent"], pol_logic["reviewers"])
+
+        pol_ui = review_policy.decide(
+            {"surfaces": ["COMPOSE_UI", "BUSINESS_LOGIC"], "severity": "MEDIUM", "changed_files": 2, "changed_lines": 50, "details": {"COMPOSE_UI": {"reasons": ["BEHAVIOR"]}}},
+            skills_root,
+        )
+        self.assertIn("assemble", pol_ui["gates"])
+        self.assertTrue(pol_ui["device_required"])
+
+        pol_multi = review_policy.decide(
+            {
+                "surfaces": ["BUSINESS_LOGIC"],
+                "severity": "MEDIUM",
+                "changed_files": 2,
+                "changed_lines": 50,
+                "details": {"BUSINESS_LOGIC": {"files": ["app/src/main/A.kt", "shared/src/commonMain/B.kt"]}},
+            },
+            skills_root,
+        )
+        self.assertEqual("T3_SUBSYSTEM", pol_multi["risk_tier"])
+        self.assertIn("arch-regression-reviewer-agent", pol_multi["reviewers"])
+        self.assertIn("assemble", pol_multi["gates"])
+
+    def test_06_file_size_counts_pure_code_lines_excluding_kdoc_comments_and_blanks(self) -> None:
+        import fast_kt_lint as fkl
+
+        prod_p = Path("app/src/main/kotlin/com/demo/DocumentedScreen.kt")
+        # 420 pure code lines + 200 KDoc lines + 80 single-line comments + 40 nested block comments + 60 blank lines = 800 raw lines
+        lines = ["package com.demo"]
+        lines.extend(["/**", " * Rich Architectural KDoc.", " * @param state UI state", " */"] * 50)
+        lines.extend(["// explanatory comment"] * 80)
+        lines.extend(["/* outer", " * /* nested comment */", " * still comment", " */"] * 10)
+        lines.extend(["", "   "] * 30)
+        lines.extend([f"val item{i} = {i} // trailing comment still counts as 1 code line" for i in range(419)])
+        self.assertEqual(800, len(lines))
+        self.assertEqual(420, fkl.count_code_lines(lines))
+        # Must emit ZERO blocks and ZERO advisories despite 800 raw lines!
+        self.assertEqual(([], []), fkl.check_file_size(prod_p, lines, baseline_line_count=None))
+
+        # Adding pure KDoc/comments to a 500-code-line legacy file does NOT count as growth
+        legacy_lines = [f"val v{i} = {i}" for i in range(500)] + ["/**", " * Added KDoc", " */"] * 40
+        self.assertEqual(500, fkl.count_code_lines(legacy_lines))
+        self.assertEqual(([], []), fkl.check_file_size(prod_p, legacy_lines, baseline_line_count=500))
+
+        # Strings & raw strings containing // or /* STILL count as code lines
+        str_lines = [
+            'val url = "https://example.com /* not a comment */"',
+            'val raw = """',
+            '  // inside raw string',
+            '  /* also inside raw string */',
+            '"""',
+        ]
+        self.assertEqual(5, fkl.count_code_lines(str_lines))
+
+        # >650 pure code lines STILL triggers [GOD_FILE]
+        big_code = [f"val c{i} = {i}" for i in range(660)]
+        blk, adv = fkl.check_file_size(prod_p, big_code, baseline_line_count=None)
+        self.assertEqual(["GOD_FILE"], [i["type"] for i in blk])
+        self.assertEqual([], adv)
 
 
 if __name__ == "__main__":

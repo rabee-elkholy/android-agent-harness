@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -1385,8 +1386,8 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
         if impacted_patterns:
             test_filters = impacted_patterns
             _emit_human(f"[*] Graph-impacted test filter ({len(test_filters)} class(es)): {', '.join(test_filters[:6])}")
-    if test_filters and (args.capture_red or args.record_start or args.record_unrelated):
-        msg = "[FAIL] --tests cannot be combined with --capture-red, --record-start, or --record-unrelated."
+    if test_filters and (args.record_start or args.record_unrelated):
+        msg = "[FAIL] --tests cannot be combined with --record-start or --record-unrelated."
         _emit_human(msg, err=True)
         _emit_json_summary({"status": "FAIL", "exit_code": 1, "detail": msg})
         return 1
@@ -1426,9 +1427,110 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
             extra_gradle.extend(["--tests", pat.replace("#", ".")])
     task: str | list[str] = tasks[0] if len(tasks) == 1 else tasks
     task_label = " ".join(tasks)
+    identity = execution_identity(REPO) if diagnostic_mode else {}
+
+    # Fail-fast pre-pass on multi-module runs: run impacted test classes (or directly changed module(s))
+    # FIRST so compile errors or broken task tests fail in ~20s instead of waiting for all sibling modules.
+    if (
+        diagnostic_mode
+        and not test_filters
+        and len(tasks) > 1
+        and os.environ.get("HARNESS_FAIL_FAST_TESTS", "1").strip() != "0"
+    ):
+        ff_patterns = resolve_impacted_test_patterns(REPO)
+        ff_tasks: list[str] = []
+        ff_extra = list(extra_gradle)
+        if ff_patterns:
+            ff_tasks = _filter_tasks_for_test_patterns(REPO, tasks, ff_patterns)
+            for pat in ff_patterns:
+                ff_extra.extend(["--tests", pat.replace("#", ".")])
+        else:
+            try:
+                from _repo_files import changed_paths
+                changed_rels = [p.relative_to(REPO).as_posix() for p in changed_paths(repo=REPO)]
+                direct_mods = []
+                for t in tasks:
+                    parts = [seg for seg in t.strip().split(":") if seg]
+                    if len(parts) >= 2:
+                        mod_prefix = "/".join(parts[:-1]) + "/"
+                        if any(rel.startswith(mod_prefix) for rel in changed_rels):
+                            direct_mods.append(t)
+                if direct_mods and len(direct_mods) < len(tasks):
+                    ff_tasks = direct_mods
+            except (ImportError, OSError, ValueError):
+                ff_tasks = []
+        if ff_tasks:
+            ff_task_arg: str | list[str] = ff_tasks[0] if len(ff_tasks) == 1 else ff_tasks
+            ff_label = " ".join(ff_tasks)
+            ff_detail_hint = f" ({len(ff_patterns)} impacted class(es))" if ff_patterns else ""
+            _emit_human(
+                f"[FAIL-FAST] Pre-checking {ff_label}{ff_detail_hint} before full multi-module suite ({len(tasks)} modules)..."
+            )
+            ff_reports_before = report_signatures(REPO, ff_task_arg)
+            ff_code, ff_outcome = run_test_tasks(ff_tasks, ff_extra)
+            if ff_code == EXIT_ENV:
+                env_payload = {
+                    "schema_version": 2,
+                    "producer": "run_tests_gate",
+                    "status": "ENV",
+                    "exit_code": ff_code,
+                    "env_class": "ENV",
+                    "git_sha": current_head_sha(),
+                    "gradle_task": ff_label,
+                    "fail_fast_precheck": True,
+                    "detail": "unit-test fail-fast pre-check failed environmentally; see gradle log",
+                }
+                write_gate_result("unit_tests", env_payload)
+                _emit_human(f"[FAIL] Unit-test gate blocked: gradle exited {ff_code} (ENV).", err=True)
+                _emit_json_summary(env_payload)
+                return ff_code
+            if ff_code != 0:
+                ff_baseline = load_baseline(REPO)
+                ff_task_start = load_task_start_failures(REPO)
+                ff_ok, ff_detail, ff_data = evaluate_unit_test_execution(
+                    REPO,
+                    ff_task_arg,
+                    ff_code,
+                    reports_before=ff_reports_before,
+                    outcome=ff_outcome,
+                    baseline=ff_baseline,
+                    task_start=ff_task_start,
+                    capture_cases=False,
+                )
+                if not ff_ok:
+                    ff_payload = {
+                        "schema_version": 2,
+                        "producer": "run_tests_gate",
+                        "status": "FAIL",
+                        "exit_code": ff_code,
+                        "git_sha": current_head_sha(),
+                        "gradle_task": ff_label,
+                        "full_gradle_tasks": tasks,
+                        "fail_fast_precheck": True,
+                        "detail": f"[FAIL-FAST] {ff_detail}",
+                        **{k: v for k, v in ff_data.items() if k not in {"status", "exit_code"}},
+                        **identity,
+                    }
+                    write_gate_result("unit_tests", ff_payload)
+                    ff_causes = _collect_xml_failure_causes(REPO, ff_task_arg) if ff_data.get("new_regressions") else {}
+                    ff_hints = _scope_hint_lines(REPO, coverage_plan, ff_data.get("new_regressions") or [])
+                    for line, is_err in verdict_lines(
+                        False,
+                        f"[FAIL-FAST] {ff_detail}",
+                        ff_code,
+                        ff_data.get("new_regressions") or [],
+                        ff_data.get("task_start_ignored"),
+                        failure_causes=ff_causes,
+                        extra_hints=ff_hints,
+                    ):
+                        _emit_human(line, err=is_err)
+                    _emit_json_summary(ff_payload)
+                    return 1
+            else:
+                _emit_human("[FAIL-FAST] Targeted pre-check passed; running full required module suite...")
+
     _emit_human(f"[*] Unit-test gate: {task_label}")
     reports_before = report_signatures(REPO, task)
-    identity = execution_identity(REPO) if diagnostic_mode else {}
     code, outcome = run_test_tasks(tasks, extra_gradle)
     if code == EXIT_ENV:
         env_payload = {
@@ -1511,9 +1613,9 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
                 _print_base_moved(plan)
                 return 1
 
-            # Only a run on the untouched tree proves a failure predates the task: an edited shared
-            # test helper could itself break other tests, so any task change records nothing.
-            recorded_start = not pre_red_changes
+            # Only an unfiltered run on the untouched tree proves a failure predates the task: an edited shared
+            # test helper could itself break other tests, and a `--tests` filtered run did not run the full suite.
+            recorded_start = (not pre_red_changes) and (not test_filters)
             start_failures, _known_start, _size = classify_failures(failed, test_baseline)
             if recorded_start:
                 atomic_write_json(task_d / TASK_START_FAILURES, {
@@ -1578,6 +1680,7 @@ def _run_tests_gate_impl(args, *, json_mode: bool, _emit_human, _emit_json_summa
                 "plan_sha256": plan_sha,
                 "captured_at": utc_now(),
                 "producer": "run_tests_gate",
+                **({"filtered_tests": test_filters} if test_filters else {}),
                 "pre_fix_delivery_snapshot_sha256": pre_fix_snapshot,
                 "pre_fix_change_set_sha256": pre_fix_change_set,
                 "pre_fix_task_change_set_sha256": pre_fix_task_change_set,

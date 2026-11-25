@@ -1945,7 +1945,8 @@ class SixEngineOptimizationsSelftest(unittest.TestCase):
         )
         import review_models
         review_models.main(["set", "--repo", str(self.repo), "--task", "t-batch", "--scope", "task", "--preset", "inherit", "--source", "conversation", "--proof-reference", "use inherit"])
-        workflow.main(["prepare-verification", "--repo", str(self.repo), "--task-id", "t-batch", "--host", "antigravity"])
+        with unittest.mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            workflow.main(["prepare-verification", "--repo", str(self.repo), "--task-id", "t-batch", "--host", "antigravity"])
         from review_package import build_package
         pkg_path, _ = build_package(self.repo, "t-batch")
 
@@ -2052,8 +2053,12 @@ class CoreFeatureUpgradesSelftest(unittest.TestCase):
         self.assertIn("COROUTINES", cls_struct["surfaces"])
         self.assertIn("COROUTINE_STRUCTURED_ONLY", cls_struct["details"]["COROUTINES"]["reasons"])
         pol_struct = decide(cls_struct, self.skills_root, project_kind="application")
-        self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_struct["reviewers"])
+        self.assertEqual(["bug-test-reviewer-agent"], pol_struct["reviewers"])
         self.assertNotIn("security-perf-reviewer-agent", pol_struct["reviewers"])
+        with unittest.mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+            pol_struct_std = decide(cls_struct, self.skills_root, project_kind="application")
+            self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol_struct_std["reviewers"])
+            self.assertNotIn("security-perf-reviewer-agent", pol_struct_std["reviewers"])
 
         # Explicit Dispatcher / GlobalScope / blocking hazard -> keeps security-perf-reviewer-agent!
         vm.write_text(
@@ -5296,7 +5301,8 @@ class TestV1316LiveSessionHardening(unittest.TestCase):
                 "package com.example\nclass HomeViewModelTest { fun testLoad() { assert(true) } }\n", encoding="utf-8"
             )
             review_models.main(["set", "--repo", str(repo), "--task", "t-rev-findings", "--scope", "task", "--preset", "inherit", "--source", "conversation", "--proof-reference", "use inherit"])
-            workflow.main(["prepare-verification", "--repo", str(repo), "--task-id", "t-rev-findings", "--host", "antigravity"])
+            with unittest.mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+                workflow.main(["prepare-verification", "--repo", str(repo), "--task-id", "t-rev-findings", "--host", "antigravity"])
             pkg_path, _ = build_package(repo, "t-rev-findings")
 
             tdir = repo / ".agents/state/tasks/t-rev-findings"
@@ -12445,8 +12451,9 @@ class TestV1517CarriedReviewerModelEvidenceAndDraftScope(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-                # Round 1: both arch-regression and bug-test execute on NORMAL (gemini-4-hydrogen-medium)
-                cur1 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="carried-model-fix", host="antigravity"))
+                # Round 1: under standard profile, both arch-regression and bug-test execute on NORMAL (gemini-4-hydrogen-medium)
+                with unittest.mock.patch.dict(os.environ, {"HARNESS_REVIEW_PROFILE": "standard"}):
+                    cur1 = workflow.prepare_verification(argparse.Namespace(repo=str(repo), task_id="carried-model-fix", host="antigravity"))
                 run1_id = cur1["run_id"]
                 pol1 = read_json(Path(cur1["policy"]))
                 self.assertEqual(["arch-regression-reviewer-agent", "bug-test-reviewer-agent"], pol1["reviewers"])

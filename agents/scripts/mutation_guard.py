@@ -1226,7 +1226,7 @@ def _pm_lifecycle_decision(repo: Path | str, command: str) -> tuple[bool, str] |
         name, args = ("pm_discovery" if sub_type == "pm" else "pm_sync"), args[1:]
     if name == "pm_discovery":
         action = args[0] if args else ""
-        if action in {"--help", "-h", "discover", "status"} or args[1:2] in (["--help"], ["-h"]):
+        if action in {"--help", "-h", "discover", "status", "find-item"} or args[1:2] in (["--help"], ["-h"]):
             return True, "pm_discovery read-only discovery/status"
         if action == "authorize":
             return True, "records the developer's explicit PM confirmation as a short-lived PM write grant"
@@ -1388,6 +1388,12 @@ def command_allowed(repo: Path | str, command: str) -> tuple[bool, str]:
         return pm_dec
     if _workflow_action(normalized, repo) in BOOTSTRAP_ACTIONS:
         return True, "task-authority workflow command"
+    if _workflow_action(normalized, repo) == "cancel":
+        if is_help_request or (
+            _opt_value(model_args, "--source").lower() == "conversation"
+            and _opt_value(model_args, "--proof-reference").strip()
+        ):
+            return True, "explicit developer task cancellation; workflow validates target task and proof"
     if _is_read_only(normalized, repo):
         return True, "read-only inspection command"
     if _is_lifecycle_command(normalized, repo):

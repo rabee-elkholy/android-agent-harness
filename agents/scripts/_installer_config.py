@@ -116,9 +116,9 @@ def product_values(repo: Path, answers: dict) -> dict:
         # Installs whose answers predate this key accept a draft without --expected-files.
         "PLAN_SCOPE": answers.get("plan_scope") or "legacy",
         "REVIEW_PROFILE": (
-            "lean"
-            if str(answers.get("review_profile") or "").strip().lower() == "lean"
-            else "standard"
+            "standard"
+            if str(answers.get("review_profile") or "").strip().lower() == "standard"
+            else "lean"
         ),
     }
     return values

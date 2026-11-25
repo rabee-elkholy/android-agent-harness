@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import threading
@@ -193,7 +194,7 @@ def _read_verified_record(path: Path, *, strict: bool = False) -> tuple[dict[str
             raise ValidationError(msg)
         return None, msg
     mode = str(raw.get("mode") or "").strip().lower()
-    if mode not in {"normal", "web", "auto"}:
+    if mode not in {"normal", "web", "auto", "ask"}:
         msg = f"EXECUTION_MODE_INVALID: Unsupported mode '{mode}' in {path.name}."
         if strict:
             raise ValidationError(msg)
@@ -695,8 +696,9 @@ def _resolve_effective_execution_mode_unlocked(
         integrity_errors.append(proj_err)
     raw_proj_mode = str((proj_rec or {}).get("mode") or "")
     legacy_auto_migrated = (raw_proj_mode == "auto")
-    proj_mode = "" if legacy_auto_migrated else raw_proj_mode
-    proj_choice = "" if legacy_auto_migrated else str((proj_rec or {}).get("choice") or "")
+    proj_explicit_ask = (raw_proj_mode == "ask")
+    proj_mode = "" if (legacy_auto_migrated or proj_explicit_ask) else raw_proj_mode
+    proj_choice = "" if (legacy_auto_migrated or proj_explicit_ask) else str((proj_rec or {}).get("choice") or "")
 
     # 1. Task-scoped override on a live task (highest precedence; legacy `auto` falls through to threshold advisor)
     if is_live_task:
@@ -740,8 +742,10 @@ def _resolve_effective_execution_mode_unlocked(
         integrity_errors.append(pend_err)
     if pend_rec is not None and not _is_pending_expired(pend_rec) and str(pend_rec.get("mode") or "") in {"normal", "web"}:
         intended_tid = str(pend_rec.get("intended_task_id") or "").strip()
-        if (not is_live_task and (not tid or not intended_tid or intended_tid == tid)) or (
-            tid and intended_tid == tid
+        if (
+            (not is_live_task and (not tid or not intended_tid or intended_tid == tid))
+            or (tid and intended_tid == tid)
+            or (not intended_tid and (plan_status == "READY_FOR_DELIVERY" or norm_kickoff in {"draft", "quick-start"}))
         ):
             cfg_pm = str(pend_rec.get("mode") or "normal")
             ch = str(pend_rec.get("choice") or f"{cfg_pm}-task")
@@ -882,14 +886,20 @@ def _resolve_effective_execution_mode_unlocked(
             "prompt_contract": None,
         }
 
-    if adv["web_recommended"] or norm_kickoff == "web-pack":
+    prompt_opt_in = bool(
+        proj_explicit_ask
+        or legacy_auto_migrated
+        or os.environ.get("HARNESS_WEB_RELAY_AUTO_PROMPT") == "1"
+        or norm_kickoff == "web-pack"
+    )
+    if (adv["web_recommended"] and prompt_opt_in) or norm_kickoff == "web-pack":
         savings_pct = str(adv["savings_pct_range"] or DEFAULT_ESTIMATED_SAVINGS_PCT)
         scope_sum = str(adv["scope_summary"] or "")
         trig_code = str(adv["trigger"] if adv["web_recommended"] else "EXPLICIT_WEB_PACK_REQUEST")
         return {
             "mode": "unset",
-            "configured_mode": "unset",
-            "choice": "unset",
+            "configured_mode": "ask" if proj_explicit_ask else "unset",
+            "choice": "ask-every-task" if proj_explicit_ask else "unset",
             "effective_scope": "unset",
             "selection_required": True,
             "web_recommended": True,
@@ -900,7 +910,7 @@ def _resolve_effective_execution_mode_unlocked(
             "task_id": tid,
             "task_status": plan_status,
             "project_default": None,
-            "project_choice": None,
+            "project_choice": "ask-every-task" if proj_explicit_ask else None,
             "conflict_auto_local_override": False,
             "conflict_signal": "",
             "integrity_error": "; ".join(integrity_errors),
@@ -919,22 +929,26 @@ def _resolve_effective_execution_mode_unlocked(
 
     return {
         "mode": "normal",
-        "configured_mode": "unset",
-        "choice": "unset",
+        "configured_mode": "ask" if proj_explicit_ask else "unset",
+        "choice": "ask-every-task" if proj_explicit_ask else "unset",
         "effective_scope": "default_local",
         "selection_required": False,
-        "web_recommended": False,
+        "web_recommended": bool(adv["web_recommended"]),
         "web_recommendation_trigger": str(adv["trigger"]),
+        "estimated_quota_savings_pct": str(adv["savings_pct_range"] or ""),
+        "scope_summary": str(adv["scope_summary"] or ""),
         "legacy_auto_migrated": legacy_auto_migrated,
         "task_id": tid,
         "task_status": plan_status,
         "project_default": None,
-        "project_choice": None,
+        "project_choice": "ask-every-task" if proj_explicit_ask else None,
         "conflict_auto_local_override": False,
         "conflict_signal": "",
         "integrity_error": "; ".join(integrity_errors),
         "updated_at": "",
-        "reason": "Compact task scope runs locally in Antigravity by default (prompts for Web-Relay only on heavy tasks).",
+        "reason": (
+            "Task runs locally in Antigravity by default (Web-Relay prompting is opt-in via `execution-mode set --choice ask-every-task` or `web-task`)."
+        ),
         "prompt_contract": None,
     }
 
@@ -1036,7 +1050,6 @@ def set_execution_mode(
             removed: list[str] = []
             p_file = project_mode_file(repo)
             if p_file.is_file():
-                p_file.unlink(missing_ok=True)
                 removed.append(str(p_file.relative_to(repo)))
             pend_file = pending_task_mode_file(repo)
             if pend_file.is_file():
@@ -1047,6 +1060,18 @@ def set_execution_mode(
                 if t_file.is_file():
                     t_file.unlink(missing_ok=True)
                     removed.append(str(t_file.relative_to(repo)))
+            ask_record = _sign_record({
+                "schema_version": SCHEMA_VERSION,
+                "choice": canonical_choice,
+                "mode": "ask",
+                "scope": "project",
+                "source": "conversation",
+                "proof_reference": norm_proof[:240],
+                "updated_at": now_iso,
+                "updated_at_epoch": now_epoch,
+            })
+            p_file.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(p_file, ask_record)
             eff = resolve_effective_execution_mode(repo, task_id=explicit_tid or None)
             return {
                 "status": "RESET_TO_ASK_EVERY_TASK",
@@ -1054,6 +1079,7 @@ def set_execution_mode(
                 "mode": eff["mode"],
                 "scope": "reset",
                 "cleared_files": removed,
+                "persisted_path": str(p_file.relative_to(repo)).replace("\\", "/"),
                 "effective": eff,
             }
 
@@ -1122,7 +1148,11 @@ def set_execution_mode(
                     target_tid = explicit_tid
             else:
                 live_tid, live_plan = _resolve_target_task_and_plan(repo)
-                if live_tid and live_plan and str(live_plan.get("status") or "").upper() not in TERMINAL_TASK_STATES:
+                if (
+                    live_tid
+                    and live_plan
+                    and str(live_plan.get("status") or "").upper() not in (TERMINAL_TASK_STATES | {"READY_FOR_DELIVERY"})
+                ):
                     target_tid = live_tid
 
         if target_tid:

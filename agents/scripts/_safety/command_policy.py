@@ -84,6 +84,9 @@ def _developer_authority_violation(command: str) -> str:
             # The developer asked in chat: the agent runs it with their words as proof, like an approval.
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "cancel"
+        if subcommand == "deliver" and "--accept-committed" in rest:
+            if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
+                return "deliver-accept-committed"
         if subcommand in ("approve", "approve-sensitive", "quick-start"):
             if _engine._flag(rest, "--source").lower() != "conversation" or not _engine._flag(rest, "--proof-reference"):
                 return "approve"

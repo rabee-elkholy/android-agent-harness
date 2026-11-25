@@ -85,10 +85,19 @@ Ordinary bug fixes, implementation details, refactors that preserve these invari
 - Normal phase progression never asks for approval again.
 - In-scope bug fixes after review findings resume implementation under the same approved scope.
 - Material scope expansion requires revised approval.
-- An additional exact support file for the same approved outcome may be reserved
-  through a preview-bound `change-decision` receipt without replacing the plan.
-  File membership alone is not material expansion; new behavior, sensitive
-  surfaces, modules and contracts still require revised approval. See ADR-016.
+- An additional exact non-sensitive support file for the same approved outcome may be reserved
+  through a `change-decision --mode extend-scope` receipt without replacing the plan:
+  during `IMPLEMENTING`, non-sensitive same-module support files may be applied in one step
+  (`--apply --source approved-plan`); `accept-edits`, `review-edits`, and non-`IMPLEMENTING`
+  transitions remain strictly preview-bound (`--expect-preview`). File membership alone is not
+  material expansion; new behavior, sensitive surfaces, modules and contracts still require
+  revised approval. See ADR-016.
+- When a `READY_FOR_DELIVERY` task's verified files are cleanly committed in Git after
+  intentional developer post-verification tweaks, the developer may explicitly authorize one-shot
+  closing via `task deliver --accept-committed --source conversation --proof-reference "<words>"`
+  (enforced by PreToolUse developer-authority guard). This seals `DELIVERED` while recording
+  honest `developer_committed_acceptance` provenance without fabricating or re-claiming AI review
+  on the post-verification diff. The maintainer explicitly approved this amendment.
 - A direct, unambiguous developer request in conversation for a bounded `T0_TRIVIAL`
   or `T1_LOW_RISK` single-module micro-task (`1–2` primary files, zero critical/high,
   persistence, network, permission, device-API, or navigation surfaces) may use
