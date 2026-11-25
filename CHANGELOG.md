@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.18] - 2026-11-25
+
+### Unified Deterministic Auto-Advance Engine & Antigravity v2.35.1 Runtime Guards
+
+- **Unified Deterministic Auto-Advance Engine (`verification_steps.py`, `agents/harness.py`, `_workflow/engine.py`, `mutation_guard.py`, `_safety/command_policy.py`, `_public_commands.py`, `agents/rules/harness-rules.md`, `_public_cli_selftest.py`)**: Replaced ad-hoc single-step chaining with a single fail-closed deterministic pump (`advance_fast_steps()` + unified `run_steps()`) governed by explicit `FAST_AUTO_ADVANCE_CODES` (`BEGIN_IMPLEMENTATION`, `BUILD_PHASE_REVIEW_PACKAGE`, `FINALIZE_PHASE_REVIEW`, `BEGIN_NEXT_PHASE`, `BUILD_REVIEW_PACKAGE`, `INGEST_REVIEW_RESULT` for V2 `review finalize`, `COMPLETE_TASK`, and `DELIVER`) and hard `NEVER_AUTO_ADVANCE_CODES` (`RESUME_IMPLEMENTATION`, `CAPTURE_RED_EVIDENCE`, `RECORD_TASK_START_FAILURES`, `SYNC_ZOHO_*`, `CONTINUE_ON_CURRENT_HOST`, `RECONCILE_HANDOFF`). Non-JSON `harness.py` lifecycle commands now hand off consecutive sub-second local deterministic steps in-process (emitting `AUTO_ADVANCED_STEPS=...` and stopping immediately at any `MODEL_ACTION`, `HOST_ACTION`, `DEVELOPER_ACTION`, error, cycle, or step cap, with `--no-advance` and `HARNESS_AUTO_ADVANCE=0` kill-switches), while `task ship` delegates to the same pump with optional `--with-device` for configured unattended installs.
+- **Antigravity v2.35.1 / CLI 1.5.16 Runtime Metadata, macOS Symlink PWD Guard (#1831) & MCP Image `file://` URI Normalization (#1828) (`antigravity_runtime.py`, `doctor/engine.py`, `_safety/path_and_read_guard.py`, `_antigravity_stability_selftest.py`)**: Bumped `LATEST_KNOWN_ANTIGRAVITY_VERSIONS` to `app_version="2.35.1"` and `cli_version="1.5.16"`; added `inspect_macos_symlink_pwd_risk()` and `HarnessDoctor` warning when macOS `PWD` differs from its resolved realpath (`#1831` Seatbelt `sandbox-exec` `EPERM` guard); and added `_normalize_image_read_target()` so `_check_jpeg_integrity()` and `_enforce_image_read_parallel_cap()` unwrap `file://` URIs and query strings on MCP-offloaded `media_*.webp`/`media_*.png`/`*.jpg` image reads (`#1828`/`#1691`/`#1667`). Zero changes to `policy_vocab.py`.
+
 ## [1.5.17] - 2026-11-23
 
 ### Carried-Over Reviewer Model Evidence & Draft Scope Fixes
