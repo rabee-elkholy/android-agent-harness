@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.21] - 2026-11-26
+
+### Hybrid Host-Auxiliary Subagent Policy, Browser MCP & Companion Bridge Fixes
+
+- **Hybrid Host-Auxiliary Subagent Policy & `send_message` Tracking (`_safety/subagent_guard.py`, `post_tool_reconcile.py`, `_hook_selftest.py`)**: Switched non-harness host-native auxiliary subagents (such as `browser`, `image-generator`, and future IDE/plugin subagents) to a denylist model while keeping harness proof and mutation boundaries fail-closed. Restricted/governed roles (`self`, `harness-worker-agent`, `CORE_ROUTED_REVIEWERS`, `CORE_UTILITY_AGENTS`, `ON_DEMAND_SPECIALIST_AGENTS`, `research`/`explore`, and mixed batches) remain strictly governed, while host auxiliary subagents pass cleanly across `IDLE`, `AWAITING_DEVELOPER_APPROVAL`, `IMPLEMENTING`, and `VERIFYING` with mandatory `TypeName`/`Prompt` validation, Git `Workspace="branch"`/`"share"` blocking, secret-exfiltration screening (`SENSITIVE_SUBAGENT_PROMPT_BLOCKED`), and isolation from `record_specialist_dispatch` (preventing false `read_only_specialist` misclassification). Added `.agents/state/host-auxiliary-subagents.json` tracking and `PostToolUse` binding so `send_message` can safely resume tracked host auxiliary sessions (e.g. interactive `browser` login pauses) while denying rogue child messages, self-messages, secret-carrying payloads, and unauthorized reviewer messages, and fixed `post_tool_reconcile.py` so failed non-reviewer subagent launches during `VERIFYING` never falsely mark active dispatched reviewers `REVIEW_ENV_BLOCKED`.
+- **Browser Automation MCP Support (`_safety/engine.py`, `_safety/mcp_guard.py`, `_hook_selftest.py`)**: Recognized `chrome_devtools`, `chrome-devtools`, and `playwright` MCP servers in `_handle_mcp_tool()` (`BROWSER_AUTOMATION_MCP_ALLOWED`) so browser automation calls (`list_pages`, `navigate_page`, `click`, `fill`, `take_screenshot`, etc.) run cleanly while keeping secret uploads (`SENSITIVE_EXTERNAL_UPLOAD`) and writes to protected harness/repo paths (`PROTECTED_PATH`) strictly denied.
+- **Companion Pass-Through Harness-Command Fix & Read-Only Debug `keytool` (`_safety/command_policy.py`, `mutation_guard.py`, `_hook_selftest.py`)**: Exempted audited primary-repo harness commands (such as `python .agents/harness.py task bridge --save --summary "..."`) from companion pass-through interception when their text flags mention an authorized companion workspace path, and added strictly read-only `_is_read_only_debug_keytool()` allowing `keytool -list` against Android's `debug.keystore` with the default `android` debug password while keeping release keystores and mutating `keytool` operations denied.
+
 ## [1.5.20] - 2026-11-25
 
 ### Developer-Authorized Companion Workspaces for Multi-Root IDE Projects
