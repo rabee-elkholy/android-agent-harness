@@ -792,28 +792,30 @@ def _handle_command(command: str, *, conversation: str = '', transcript_hint: st
         )
         return
     try:
-        from companion_workspaces import evaluate_companion_command
-        comp_ok, comp_root, comp_reason = evaluate_companion_command(_engine.REPO, command, cwd=cwd)
-        if comp_root is not None:
-            if comp_ok:
+        from companion_workspaces import evaluate_companion_command, match_companion_target
+        cwd_is_companion = bool(cwd is not None and match_companion_target(_engine.REPO, str(cwd))[0])
+        if cwd_is_companion or not _engine._audited_harness_command(command):
+            comp_ok, comp_root, comp_reason = evaluate_companion_command(_engine.REPO, command, cwd=cwd)
+            if comp_root is not None:
+                if comp_ok:
+                    _engine.emit(
+                        "allow",
+                        comp_reason,
+                        tool="run_command",
+                        command=command,
+                        reason_code="COMPANION_WORKSPACE_COMMAND_ALLOWED",
+                        task_id=active_tid,
+                    )
+                    return
                 _engine.emit(
-                    "allow",
+                    "deny",
                     comp_reason,
                     tool="run_command",
                     command=command,
-                    reason_code="COMPANION_WORKSPACE_COMMAND_ALLOWED",
+                    reason_code="PROTECTED_PATH",
                     task_id=active_tid,
                 )
                 return
-            _engine.emit(
-                "deny",
-                comp_reason,
-                tool="run_command",
-                command=command,
-                reason_code="PROTECTED_PATH",
-                task_id=active_tid,
-            )
-            return
     except (ImportError, OSError, ValueError):
         pass
     if _engine.RAW_GRADLE.search(command):

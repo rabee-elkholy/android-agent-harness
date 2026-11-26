@@ -768,7 +768,7 @@ def _main() -> None:
         mcp_match = (
             re.match(r"^mcp__([a-zA-Z0-9_-]+?)__(.+)$", name)
             or re.match(
-                r"^mcp_(zoho_sprints|zoho_projects|github_projects|google_workspace|android_studio|play_console|firebase_crashlytics)_(.+)$",
+                r"^mcp_(zoho_sprints|zoho_projects|github_projects|google_workspace|android_studio|play_console|firebase_crashlytics|chrome_devtools|chrome-devtools|playwright)_(.+)$",
                 name,
                 re.I,
             )

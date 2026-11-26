@@ -131,14 +131,14 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
                     sdk_adb = (Path(sdk_root).expanduser() / "platform-tools" / adb_name).resolve()
                     if not sdk_adb.is_relative_to(Path(repo).resolve()):
                         trusted.add(sdk_adb)
-        if executable in {"jar", "jar.exe", "javap", "javap.exe"} and os.environ.get("JAVA_HOME"):
-            for jdk_bin in ("jar.exe", "jar", "javap.exe", "javap"):
+        if executable in {"jar", "jar.exe", "javap", "javap.exe", "keytool", "keytool.exe"} and os.environ.get("JAVA_HOME"):
+            for jdk_bin in ("jar.exe", "jar", "javap.exe", "javap", "keytool.exe", "keytool"):
                 jdk_exe = (Path(os.environ["JAVA_HOME"]).expanduser() / "bin" / jdk_bin).resolve()
                 if not jdk_exe.is_relative_to(Path(repo).resolve()):
                     trusted.add(jdk_exe)
         if candidate not in trusted:
             return "", []
-    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap", "tar"}:
+    if executable.endswith(".exe") and executable[:-4] in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "adb", "jar", "javap", "tar", "keytool"}:
         executable = executable[:-4]
     if re.fullmatch(r"(?:python(?:\d+(?:\.\d+)?)?|py)(?:\.exe)?", executable):
         py_idx = 1
@@ -158,7 +158,7 @@ def _entry(command: str, repo: Path | str = ".") -> tuple[str, list[str]]:
         if name.endswith(".py") and name[:-3] in known:
             return name[:-3], tokens[py_idx + 1:]
         return "", []
-    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap", "tar"}:
+    if executable in {"git", "rg", "grep", "head", "tail", "ls", "pwd", "wc", "cat", "android-harness", "adb", "test", "[", "xcrun", "xcodebuild", "swift", "jar", "javap", "tar", "keytool"}:
         return executable, tokens[1:]
     if executable in POWERSHELL_READ_CMDLETS:
         return "powershell-read", tokens[1:]
@@ -359,6 +359,37 @@ def _is_read_only_tar(args: list[str]) -> bool:
     return saw_list and archive is not None
 
 
+def _is_read_only_debug_keytool(args: list[str]) -> bool:
+    """Allow strictly read-only `keytool -list` against Android's `debug.keystore` with default `android` debug pass only."""
+    if not args:
+        return False
+    bool_flags = {"-list", "-v", "-rfc"}
+    val_flags = {"-keystore", "-alias", "-storepass", "-keypass", "-storetype"}
+    saw_list = False
+    keystore_base = ""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        low = tok.lower()
+        if low in bool_flags:
+            if low == "-list":
+                saw_list = True
+            i += 1
+            continue
+        if low in val_flags and i + 1 < len(args):
+            val = args[i + 1].strip().strip("\"'")
+            if not val:
+                return False
+            if low == "-keystore":
+                keystore_base = val.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            elif low in {"-storepass", "-keypass"} and val != "android":
+                return False
+            i += 2
+            continue
+        return False
+    return saw_list and keystore_base == "debug.keystore"
+
+
 def _is_read_only(command: str, repo: Path | str = ".") -> bool:
     name, args = _entry(command, repo)
     if name == "review_models" and (not args or args[0] == "show"):
@@ -457,6 +488,8 @@ def _is_read_only(command: str, repo: Path | str = ".") -> bool:
         return False
     if name == "tar":
         return _is_read_only_tar(args)
+    if name == "keytool":
+        return _is_read_only_debug_keytool(args)
     if name == "javap":
         return bool(args) and not any(a.startswith("-J") for a in args)
     if name == "run_device" and args[:1] in (["status"], ["ios-status"]) and len(args) == 1:

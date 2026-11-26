@@ -6,6 +6,374 @@ from typing import Any
 
 from . import engine as _engine
 
+_HARD_DENIED_SUBAGENT_ROLES = frozenset({"self", "harness-worker-agent"})
+_SCOUT_REDIRECT_ROLES = frozenset({"research", "explore"})
+_HOST_AUXILIARY_TTL_SECONDS = 24 * 3600
+_HOST_AUXILIARY_UNBOUND_SEND_TTL_SECONDS = 2 * 3600
+_HOST_AUXILIARY_MAX_ENTRIES = 64
+_REVIEW_BRIEF_SPOOF_RE = _engine.re.compile(
+    r"(?:HARNESS_REVIEW_RESULT_V2|brief-(?:bug-test|security-perf|arch-regression|spec-compliance)-reviewer-agent|phase-brief-)",
+    _engine.re.IGNORECASE,
+)
+
+
+def _harness_governed_roles() -> set[str]:
+    return (
+        set(_engine.CORE_ROUTED_REVIEWERS)
+        | set(_engine.CORE_UTILITY_AGENTS)
+        | set(_engine.ON_DEMAND_SPECIALIST_AGENTS)
+    )
+
+
+def _extract_subagent_type_and_role(item: Any) -> tuple[str, str, str, str]:
+    if not isinstance(item, dict):
+        return "", "", "", ""
+    raw_type = str(item.get("TypeName") or item.get("typeName") or "").strip()
+    raw_role = str(item.get("Role") or item.get("role") or "").strip()
+    canon_type = _engine._canonical_subagent_role(raw_type) if raw_type else ""
+    canon_role = _engine._canonical_subagent_role(raw_role) if raw_role else ""
+    return raw_type, raw_role, canon_type, canon_role
+
+
+def _item_touches_harness_or_denied(
+    item: Any,
+    *,
+    extra_reviewer_roles: set[str] | frozenset[str] = frozenset(),
+) -> bool:
+    """Return True if a subagent entry targets any harness-governed, denied, or reviewer-like role."""
+    if not isinstance(item, dict):
+        return True
+    raw_type, raw_role, canon_type, canon_role = _extract_subagent_type_and_role(item)
+    if not raw_type:
+        return True
+    governed = _harness_governed_roles() | set(extra_reviewer_roles)
+    blocked_low = {r.lower() for r in governed} | _HARD_DENIED_SUBAGENT_ROLES | _SCOUT_REDIRECT_ROLES
+    for cand in (raw_type, raw_role, canon_type, canon_role):
+        if cand and (cand in governed or cand.lower() in blocked_low):
+            return True
+    prompt_val = str(item.get("Prompt") or item.get("prompt") or "")
+    if prompt_val and _REVIEW_BRIEF_SPOOF_RE.search(prompt_val):
+        return True
+    return False
+
+
+def _host_auxiliary_ledger_path(repo: Path) -> Path:
+    return _engine.state_root(repo) / "host-auxiliary-subagents.json"
+
+
+def _load_host_auxiliary_ledger(repo: Path) -> dict[str, Any]:
+    path = _host_auxiliary_ledger_path(repo)
+    if not path.is_file():
+        return {"schema_version": 1, "entries": []}
+    try:
+        data = _engine.read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("entries"), list):
+            return data
+    except (OSError, ValueError, _engine.ValidationError):
+        pass
+    return {"schema_version": 1, "entries": []}
+
+
+def _save_host_auxiliary_ledger(repo: Path, data: dict[str, Any]) -> None:
+    from _vnext_common import atomic_write_json
+
+    now = _engine.time.time()
+    kept = [
+        e for e in (data.get("entries") or [])
+        if isinstance(e, dict) and (now - float(e.get("dispatched_epoch") or 0)) <= _HOST_AUXILIARY_TTL_SECONDS
+    ][-_HOST_AUXILIARY_MAX_ENTRIES:]
+    path = _host_auxiliary_ledger_path(repo)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, {"schema_version": 1, "entries": kept})
+
+
+def record_host_auxiliary_dispatch(
+    repo: Path,
+    items: list[dict[str, Any]],
+    *,
+    parent_conversation_id: str = "",
+) -> None:
+    """Persist pending host-auxiliary subagent dispatches so `send_message` can safely resume them."""
+    try:
+        from evidence_store import StateLock
+
+        now = _engine.time.time()
+        parent_cid = str(parent_conversation_id or "").strip()
+        with StateLock(_engine.state_root(repo)):
+            ledger = _load_host_auxiliary_ledger(repo)
+            entries = list(ledger.get("entries") or [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                raw_type = str(item.get("TypeName") or item.get("typeName") or "").strip()
+                raw_role = str(item.get("Role") or item.get("role") or raw_type).strip()
+                if not raw_type:
+                    continue
+                entries.append({
+                    "type_name": raw_type,
+                    "role": raw_role,
+                    "parent_conversation_id": parent_cid,
+                    "execution_id": "",
+                    "dispatched_epoch": now,
+                    "dispatch_failed": False,
+                })
+            ledger["entries"] = entries
+            _save_host_auxiliary_ledger(repo, ledger)
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        pass
+
+
+def _is_known_harness_execution_id(repo: Path, execution_id: str) -> bool:
+    """Return True when `execution_id` belongs to a reviewer, scout, or specialist subagent."""
+    cid = str(execution_id or "").strip()
+    if not cid:
+        return False
+    try:
+        from reviewer_host import _load_ledger, active_reviews
+
+        for run, ledger_path in active_reviews(repo):
+            if not ledger_path.is_file():
+                continue
+            try:
+                ledger = _load_ledger(run, ledger_path)
+            except _engine.ValidationError:
+                continue
+            for entry in (ledger.get("reviewers") or {}).values():
+                if isinstance(entry, dict) and str(entry.get("execution_id") or "").strip() == cid:
+                    return True
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        pass
+    try:
+        u_path = _engine.state_root(repo) / "utility-subagents.json"
+        if u_path.is_file():
+            u_data = _engine.read_json(u_path)
+            for entry in (u_data.get("entries") or []):
+                if isinstance(entry, dict) and str(entry.get("execution_id") or "").strip() == cid:
+                    return True
+    except (OSError, ValueError, _engine.ValidationError):
+        pass
+    return False
+
+
+def bind_host_auxiliary_from_post_tool(
+    repo: Path,
+    payload: dict[str, Any],
+    *,
+    matched_ids: set[str] | None = None,
+    failed: bool = False,
+) -> list[str]:
+    """Bind returned `conversationId`s (or mark `dispatch_failed`) for pending host-auxiliary dispatches."""
+    bound: list[str] = []
+    try:
+        from evidence_store import StateLock
+
+        parent_cid = str(payload.get("conversationId") or payload.get("conversation_id") or "").strip()
+        call = payload.get("toolCall") or payload.get("tool_call") or {}
+        if not isinstance(call, dict):
+            call = {}
+        args = call.get("args") or payload.get("toolArgs") or payload.get("tool_input") or {}
+        if isinstance(args, str):
+            try:
+                args = _engine.json.loads(args)
+            except ValueError:
+                args = {}
+        raw_subs, _ = _normalize_subagent_items(args if isinstance(args, dict) else {})
+        call_types = [
+            str(s.get("TypeName") or s.get("typeName") or "").strip()
+            for s in raw_subs
+            if isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip()
+        ]
+
+        with StateLock(_engine.state_root(repo)):
+            ledger = _load_host_auxiliary_ledger(repo)
+            entries = list(ledger.get("entries") or [])
+            if not entries:
+                return bound
+            changed = False
+            if failed:
+                to_fail = len(call_types) or 1
+                for entry in reversed(entries):
+                    if to_fail <= 0:
+                        break
+                    if not isinstance(entry, dict) or entry.get("execution_id") or entry.get("dispatch_failed"):
+                        continue
+                    if parent_cid and entry.get("parent_conversation_id") and entry.get("parent_conversation_id") != parent_cid:
+                        continue
+                    if call_types and str(entry.get("type_name") or "") not in call_types:
+                        continue
+                    entry["dispatch_failed"] = True
+                    changed = True
+                    to_fail -= 1
+            elif matched_ids:
+                claimed = {
+                    str(e.get("execution_id") or "").strip()
+                    for e in entries
+                    if isinstance(e, dict) and e.get("execution_id")
+                }
+                free_ids = [
+                    cid for cid in sorted(matched_ids)
+                    if cid
+                    and cid != parent_cid
+                    and cid not in claimed
+                    and not _is_known_harness_execution_id(repo, cid)
+                ]
+                for cid in free_ids:
+                    for entry in reversed(entries):
+                        if not isinstance(entry, dict) or entry.get("execution_id") or entry.get("dispatch_failed"):
+                            continue
+                        if parent_cid and entry.get("parent_conversation_id") and entry.get("parent_conversation_id") != parent_cid:
+                            continue
+                        if call_types and str(entry.get("type_name") or "") not in call_types:
+                            continue
+                        entry["execution_id"] = cid
+                        claimed.add(cid)
+                        bound.append(cid)
+                        changed = True
+                        break
+            if changed:
+                ledger["entries"] = entries
+                _save_host_auxiliary_ledger(repo, ledger)
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        return bound
+    return bound
+
+
+def _check_host_auxiliary_send_message(
+    repo: Path,
+    args: dict[str, Any],
+    *,
+    caller_conversation_id: str = "",
+) -> tuple[bool, str, str]:
+    """Return `(allowed, reason, reason_code)` when `send_message` targets a tracked host-auxiliary subagent."""
+    recipient = str(args.get("Recipient") or args.get("recipient") or "").strip()
+    message = str(args.get("Message") or args.get("message") or "").strip()
+    caller_cid = str(caller_conversation_id or "").strip()
+    if not recipient or not message:
+        return (False, "", "")
+    if caller_cid and recipient == caller_cid:
+        return (False, "", "")
+    if _is_known_harness_execution_id(repo, recipient):
+        return (False, "", "")
+
+    try:
+        from evidence_store import StateLock
+
+        now = _engine.time.time()
+        matched_type = ""
+        with StateLock(_engine.state_root(repo)):
+            ledger = _load_host_auxiliary_ledger(repo)
+            entries = list(ledger.get("entries") or [])
+            known_parents = {
+                str(e.get("parent_conversation_id") or "").strip()
+                for e in entries
+                if isinstance(e, dict) and e.get("parent_conversation_id")
+            }
+            # Pass 1: exact bound execution_id match
+            for entry in reversed(entries):
+                if not isinstance(entry, dict) or entry.get("dispatch_failed"):
+                    continue
+                if str(entry.get("execution_id") or "").strip() != recipient:
+                    continue
+                p_cid = str(entry.get("parent_conversation_id") or "").strip()
+                if caller_cid and p_cid and p_cid != caller_cid:
+                    continue
+                matched_type = str(entry.get("type_name") or "host-auxiliary")
+                break
+            # Pass 2: recent unbound fallback when host omitted toolResult in PostToolUse
+            if not matched_type and caller_cid and recipient not in known_parents:
+                for entry in reversed(entries):
+                    if not isinstance(entry, dict) or entry.get("dispatch_failed") or entry.get("execution_id"):
+                        continue
+                    if str(entry.get("parent_conversation_id") or "").strip() != caller_cid:
+                        continue
+                    if (now - float(entry.get("dispatched_epoch") or 0)) > _HOST_AUXILIARY_UNBOUND_SEND_TTL_SECONDS:
+                        continue
+                    entry["execution_id"] = recipient
+                    matched_type = str(entry.get("type_name") or "host-auxiliary")
+                    ledger["entries"] = entries
+                    _save_host_auxiliary_ledger(repo, ledger)
+                    break
+        if not matched_type:
+            return (False, "", "")
+    except (ImportError, OSError, ValueError, _engine.ValidationError):
+        return (False, "", "")
+
+    from integrations.external_write_policy import sensitive_values
+
+    if sensitive_values([message]):
+        return (
+            False,
+            f"SENSITIVE_SUBAGENT_PROMPT_BLOCKED: Denied `send_message` to host auxiliary subagent '{matched_type}' carrying credential, token, or signing file path.",
+            "SENSITIVE_SUBAGENT_PROMPT_BLOCKED",
+        )
+    return (
+        True,
+        f"Resuming tracked host auxiliary subagent '{matched_type}' via send_message.",
+        "HOST_AUXILIARY_SEND_MESSAGE_ALLOWED",
+    )
+
+
+def _validate_and_allow_host_auxiliary(
+    raw_subs: list[Any],
+    tool_name: str,
+    *,
+    parent_conversation_id: str = "",
+) -> None:
+    """Validate and allow a pure batch of non-harness host auxiliary subagents (e.g., `browser`, `image-generator`)."""
+    if not raw_subs:
+        _engine.emit("deny", "No subagent entry specified in invoke_subagent.", tool=tool_name, reason_code="SUBAGENT_ROSTER_EMPTY")
+        return
+    if len(raw_subs) > 5:
+        _engine.emit(
+            "deny",
+            f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.",
+            tool=tool_name,
+            reason_code="SUBAGENT_BATCH_LIMIT_EXCEEDED",
+        )
+        return
+
+    from integrations.external_write_policy import sensitive_values
+
+    type_names: list[str] = []
+    for item in raw_subs:
+        if not isinstance(item, dict):
+            _engine.emit("deny", "Each entry in Subagents array must be an object.", tool=tool_name, reason_code="SUBAGENT_NOT_OBJECT")
+            return
+        raw_type = str(item.get("TypeName") or item.get("typeName") or "").strip()
+        if not raw_type:
+            _engine.emit("deny", "Subagent entry missing mandatory TypeName.", tool=tool_name, reason_code="MISSING_SUBAGENT_TYPENAME")
+            return
+        raw_prompt = str(item.get("Prompt") or item.get("prompt") or "").strip()
+        if not raw_prompt:
+            _engine.emit("deny", "Subagent entry missing mandatory Prompt.", tool=tool_name, reason_code="MISSING_SUBAGENT_PROMPT")
+            return
+        raw_ws = str(item.get("Workspace") or item.get("workspace") or "").strip().lower()
+        if raw_ws and raw_ws != "inherit":
+            _engine.emit(
+                "deny",
+                f"SUBAGENT_WORKSPACE_MUTATION_FORBIDDEN: Host auxiliary subagent '{raw_type}' cannot create isolated Git branches/worktrees (`Workspace='{raw_ws}'`). Omit `Workspace` or pass `Workspace='inherit'`.",
+                tool=tool_name,
+                reason_code="SUBAGENT_WORKSPACE_MUTATION_FORBIDDEN",
+            )
+            return
+        if sensitive_values([item]):
+            _engine.emit(
+                "deny",
+                f"SENSITIVE_SUBAGENT_PROMPT_BLOCKED: Denied host auxiliary subagent '{raw_type}' carrying credential, token, or signing file path.",
+                tool=tool_name,
+                reason_code="SENSITIVE_SUBAGENT_PROMPT_BLOCKED",
+            )
+            return
+        type_names.append(raw_type)
+
+    record_host_auxiliary_dispatch(_engine.REPO, raw_subs, parent_conversation_id=parent_conversation_id)
+    _engine.emit(
+        "allow",
+        f"Host auxiliary subagent ({', '.join(sorted(set(type_names)))}) is allowed outside harness-restricted roles.",
+        tool=tool_name,
+        reason_code="HOST_AUXILIARY_SUBAGENT_ALLOWED",
+    )
+
 
 def _normalize_subagent_items(args: dict) -> tuple[list[Any], bool]:
     if not isinstance(args, dict):
@@ -499,9 +867,18 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             return
 
     if name == "send_message" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
+        ok_aux_msg, reason_aux_msg, code_aux_msg = _check_host_auxiliary_send_message(
+            _engine.REPO, args, caller_conversation_id=parent_conversation_id,
+        )
+        if ok_aux_msg:
+            _engine.emit("allow", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+            return
+        if code_aux_msg == "SENSITIVE_SUBAGENT_PROMPT_BLOCKED":
+            _engine.emit("deny", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+            return
         _engine.emit(
             "deny",
-            "SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is reserved exclusively for router-authorized reviewer protocol retries. "
+            "SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is reserved exclusively for router-authorized reviewer protocol retries or resuming tracked host auxiliary subagents. "
             "If you are a subagent, output your final report directly as plain assistant text and end your turn.",
             tool=name,
             reason_code="SUBAGENT_SEND_MESSAGE_FORBIDDEN",
@@ -510,7 +887,10 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
 
     if name == "invoke_subagent" and (plan is None or str(plan.get("status") or "") not in {"IMPLEMENTING", "VERIFYING"}):
         raw_subs, _ = _engine._normalize_subagent_items(args)
-        if raw_subs and any(
+        if not raw_subs:
+            _engine.emit("deny", "No subagent entry specified in invoke_subagent.", tool=name, reason_code="SUBAGENT_ROSTER_EMPTY")
+            return
+        if any(
             isinstance(s, dict) and _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in _engine.CORE_UTILITY_AGENTS
             for s in raw_subs
         ):
@@ -520,11 +900,50 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             )
             _engine.emit("allow" if ok_u else "deny", reason_u, tool=name, reason_code=code_u)
             return
-        if raw_subs and all(
+        if any(
+            isinstance(s, dict)
+            and (
+                _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or "").strip()) in _engine.CORE_ROUTED_REVIEWERS
+                or _engine._canonical_subagent_role(str(s.get("Role") or s.get("role") or "").strip()) in _engine.CORE_ROUTED_REVIEWERS
+            )
+            for s in raw_subs
+        ):
+            _engine.emit(
+                "deny",
+                f"PREMATURE_REVIEWER_DISPATCH_FORBIDDEN: Reviewer subagents cannot be dispatched while task status is {str((plan or {}).get('status') or 'IDLE')}.",
+                tool=name,
+                reason_code="PREMATURE_REVIEWER_DISPATCH_FORBIDDEN",
+            )
+            return
+        if any(
+            isinstance(s, dict)
+            and (
+                str(s.get("TypeName") or s.get("typeName") or "").strip().lower() == "self"
+                or str(s.get("Role") or s.get("role") or "").strip().lower() == "self"
+            )
+            for s in raw_subs
+        ):
+            _engine.emit(
+                "deny",
+                "SELF_SUBAGENT_FORBIDDEN: Built-in `TypeName='self'` inherits full parent write/shell tools and cannot bypass approval or inline-lead boundaries.",
+                tool=name,
+                reason_code="SELF_SUBAGENT_FORBIDDEN",
+            )
+            return
+        spec_flags = [
             isinstance(s, dict)
             and _engine._canonical_subagent_role(str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip()) in _engine.ON_DEMAND_SPECIALIST_AGENTS
             for s in raw_subs
-        ):
+        ]
+        if any(spec_flags):
+            if not all(spec_flags):
+                _engine.emit(
+                    "deny",
+                    "MIXED_SUBAGENT_ROSTER_FORBIDDEN: Do not mix harness specialists with other subagent types in a single `invoke_subagent` call.",
+                    tool=name,
+                    reason_code="MIXED_SUBAGENT_ROSTER_FORBIDDEN",
+                )
+                return
             if len(raw_subs) > 5:
                 _engine.emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
@@ -566,10 +985,11 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 pass
             _engine.emit("allow", "Read-only specialist subagent is allowed for bounded consultation.", tool=name)
             return
-        if raw_subs and all(
-            isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in {"research", "explore"}
+        research_flags = [
+            isinstance(s, dict) and str(s.get("TypeName") or s.get("typeName") or "").strip().lower() in _SCOUT_REDIRECT_ROLES
             for s in raw_subs
-        ):
+        ]
+        if any(research_flags):
             if len(raw_subs) > 5:
                 _engine.emit("deny", f"Subagent batch size {len(raw_subs)} exceeds the safety limit of 5.", tool=name)
                 return
@@ -584,8 +1004,18 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     reason_code="USE_HARNESS_SCOUT_AGENT",
                 )
                 return
+            if not all(research_flags):
+                _engine.emit(
+                    "deny",
+                    "MIXED_SUBAGENT_ROSTER_FORBIDDEN: Do not mix `research`/`explore` with other subagent types in a single `invoke_subagent` call.",
+                    tool=name,
+                    reason_code="MIXED_SUBAGENT_ROSTER_FORBIDDEN",
+                )
+                return
             _engine.emit("allow", "Read-only research subagent is allowed for bounded codebase exploration.", tool=name)
             return
+        _validate_and_allow_host_auxiliary(raw_subs, name, parent_conversation_id=parent_conversation_id)
+        return
 
     try:
         plan = _engine.active_plan(_engine.REPO)
@@ -679,9 +1109,18 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                 return
 
             if name == "send_message":
+                ok_aux_msg, reason_aux_msg, code_aux_msg = _check_host_auxiliary_send_message(
+                    _engine.REPO, args, caller_conversation_id=parent_conversation_id,
+                )
+                if ok_aux_msg:
+                    _engine.emit("allow", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+                    return
+                if code_aux_msg == "SENSITIVE_SUBAGENT_PROMPT_BLOCKED":
+                    _engine.emit("deny", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+                    return
                 _engine.emit(
                     "deny",
-                    f"SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is not permitted during IMPLEMENTING unless retrying phase review protocol (current router action: {act_code}). "
+                    f"SUBAGENT_SEND_MESSAGE_FORBIDDEN: `send_message` is not permitted during IMPLEMENTING unless retrying phase review protocol or resuming a tracked host auxiliary subagent (current router action: {act_code}). "
                     "Advance directly on the warm Lead session with `python .agents/harness.py task checkpoint-phase --advance-all-ready` "
                     "or `python .agents/harness.py verify-steps --task-id " + task_id + " --host antigravity`.",
                     tool=name,
@@ -760,13 +1199,19 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                     )
                 except (ImportError, OSError, ValueError, KeyError, TypeError, _engine.ValidationError):
                     frontier_offload_spec = False
+                specialist_items: list[dict[str, Any]] = []
+                auxiliary_items: list[dict[str, Any]] = []
                 for s in norm_subs:
                     if not isinstance(s, dict):
                         _engine.emit("deny", "Each entry in Subagents array must be an object.", tool=name, reason_code="SUBAGENT_NOT_OBJECT")
                         return
-                    raw_t = str(s.get("TypeName") or s.get("typeName") or s.get("Role") or s.get("role") or "").strip()
-                    canon_t = _engine._canonical_subagent_role(raw_t)
-                    if canon_t.lower() in blocked_impl_clones or raw_t.lower() in blocked_impl_clones:
+                    raw_type_s, raw_role_s, canon_type_s, canon_role_s = _extract_subagent_type_and_role(s)
+                    raw_t = raw_type_s or raw_role_s
+                    canon_t = canon_type_s or canon_role_s
+                    if any(
+                        cand and cand.lower() in blocked_impl_clones
+                        for cand in (raw_type_s, raw_role_s, canon_type_s, canon_role_s)
+                    ):
                         _engine.emit(
                             "deny",
                             f"WORKER_SUBAGENT_FORBIDDEN_INLINE_LEAD_ONLY: Subagent '{raw_t}' is forbidden during IMPLEMENTING. Implement code inline on the warm Lead session (`INLINE_LEAD_DIRECT`), or use `harness-scout-agent` / read-only specialists.",
@@ -793,9 +1238,23 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
                                 reason_code="SPECIALIST_MODEL_OVERRIDE_FORBIDDEN",
                             )
                             return
+                        specialist_items.append(s)
+                    else:
+                        auxiliary_items.append(s)
+                if specialist_items and auxiliary_items:
+                    _engine.emit(
+                        "deny",
+                        "MIXED_SUBAGENT_ROSTER_FORBIDDEN: Do not mix harness specialists with host auxiliary subagents in a single `invoke_subagent` call.",
+                        tool=name,
+                        reason_code="MIXED_SUBAGENT_ROSTER_FORBIDDEN",
+                    )
+                    return
+                if auxiliary_items:
+                    _validate_and_allow_host_auxiliary(auxiliary_items, name, parent_conversation_id=parent_conversation_id)
+                    return
                 try:
                     from delegation_policy import record_specialist_dispatch
-                    record_specialist_dispatch(_engine.REPO, plan, norm_subs, parent_conversation_id=parent_conversation_id)
+                    record_specialist_dispatch(_engine.REPO, plan, specialist_items, parent_conversation_id=parent_conversation_id)
                 except (ImportError, OSError, ValueError, _engine.ValidationError):
                     pass
             _engine.emit("allow", "On-demand specialist action is inside the approved implementation.", tool=name)
@@ -809,9 +1268,18 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
             from workflow import resolve_next_action
             act = resolve_next_action(_engine.REPO, str(active["task_id"]), plan)
             if act.get("code") != "RETRY_REVIEW_PROTOCOL":
+                ok_aux_msg, reason_aux_msg, code_aux_msg = _check_host_auxiliary_send_message(
+                    _engine.REPO, args, caller_conversation_id=parent_conversation_id,
+                )
+                if ok_aux_msg:
+                    _engine.emit("allow", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+                    return
+                if code_aux_msg == "SENSITIVE_SUBAGENT_PROMPT_BLOCKED":
+                    _engine.emit("deny", reason_aux_msg, tool=name, reason_code=code_aux_msg)
+                    return
                 _engine.emit(
                     "deny",
-                    f"send_message is not permitted during VERIFYING unless retrying review protocol (current router action: {act.get('code')}).",
+                    f"send_message is not permitted during VERIFYING unless retrying review protocol or resuming a tracked host auxiliary subagent (current router action: {act.get('code')}).",
                     tool=name,
                     reason_code="REVIEW_VERIFY_SEND_MESSAGE_FORBIDDEN",
                 )
@@ -842,6 +1310,21 @@ def _handle_subagent(name: str, args: dict, *, parent_conversation_id: str = "")
         if name != "invoke_subagent":
             _engine.emit("allow", "Reviewer management is allowed during verification.", tool=name)
             return
+
+        ver_raw_subs, _ = _engine._normalize_subagent_items(args)
+        if ver_raw_subs:
+            policy_reviewers_peek: set[str] = set()
+            try:
+                _st_peek = _engine.REPO / ".agents/state" if (_engine.REPO / ".agents").is_dir() else _engine.REPO / "agents/state"
+                _act_peek = _engine.read_json(_st_peek / "active-task.json")
+                _cur_peek = _engine.read_json(_st_peek / "tasks" / str(_act_peek["task_id"]) / "current-run.json")
+                _pol_peek = _engine.read_json(Path(_cur_peek["policy"]))
+                policy_reviewers_peek = {str(r).strip() for r in (_pol_peek.get("reviewers") or []) if str(r).strip()}
+            except Exception:
+                policy_reviewers_peek = set()
+            if not any(_item_touches_harness_or_denied(item, extra_reviewer_roles=policy_reviewers_peek) for item in ver_raw_subs):
+                _validate_and_allow_host_auxiliary(ver_raw_subs, name, parent_conversation_id=parent_conversation_id)
+                return
 
         ver_tid = str(plan.get("task_id") or "").strip()
         busy_pid = _engine._detect_live_verification_or_build_owner(_engine.REPO, ver_tid)

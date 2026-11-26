@@ -144,6 +144,12 @@ def main() -> int:
                     inspect_and_record_post_tool_subagent_bypass(repo, payload, matched_ids=matched_ids)
                 except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
                     pass
+                if call_name_low in {"invoke_subagent", ""}:
+                    try:
+                        from _safety.subagent_guard import bind_host_auxiliary_from_post_tool
+                        bind_host_auxiliary_from_post_tool(repo, payload, matched_ids=matched_ids, failed=False)
+                    except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                        pass
             if not matched_ids and call_name_low in {"invoke_subagent", ""}:
                 _bind_candidates_from_brain(repo, payload)
             print(json.dumps({}))
@@ -216,6 +222,11 @@ def main() -> int:
                                 record_unloaded_utility_agent(repo, "global", r)
             except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
                 logger_noop = None
+            try:
+                from _safety.subagent_guard import bind_host_auxiliary_from_post_tool
+                bind_host_auxiliary_from_post_tool(repo, payload, failed=True)
+            except (ImportError, OSError, ValueError, KeyError, _ExpectedArtifactError):
+                pass
 
         st_root = state_root(repo)
         active_task_file = st_root / "active-task.json"
@@ -338,7 +349,7 @@ def main() -> int:
                         else:
                             to_transition.append(r_name)
 
-                if not to_transition:
+                if not to_transition and not target_roles:
                     to_transition = [
                         r_name
                         for r_name, r_data in reviewers.items()

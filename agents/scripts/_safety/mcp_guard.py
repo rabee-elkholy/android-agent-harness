@@ -88,6 +88,18 @@ def _handle_external_mutation(integration, tool_name: str, args: dict, server: s
         _engine.emit("allow", f"{integration.display_name} mutation is plan-bound and idempotency-bound.", tool=tool_name)
     except Exception as exc:
         _engine.emit("deny", f"{integration.display_name} mutation authorization failed closed: {exc}", tool=tool_name)
+_BROWSER_AUTOMATION_MCP_SERVERS = frozenset({
+    "chrome_devtools",
+    "chrome-devtools",
+    "chrome-devtools-mcp",
+    "playwright",
+    "playwright-mcp",
+})
+_BROWSER_OUTPUT_PATH_KEYS = frozenset({
+    "filepath", "file_path", "path", "output", "outputpath", "output_path", "savepath", "save_path", "dest", "destination",
+})
+
+
 def _handle_mcp_tool(name: str, args: dict) -> None:
     server = str(args.get("ServerName") or args.get("server_name") or args.get("server") or "").lower().strip()
     tool_name = str(args.get("ToolName") or args.get("tool_name") or args.get("tool") or "").strip()
@@ -101,6 +113,37 @@ def _handle_mcp_tool(name: str, args: dict) -> None:
         tool_args = raw_tool_args
     else:
         tool_args = {}
+
+    if server in _BROWSER_AUTOMATION_MCP_SERVERS:
+        from integrations.external_write_policy import _is_protected_download_target, sensitive_values
+
+        secrets = sensitive_values([tool_args, raw_tool_args])
+        if secrets:
+            _engine.emit(
+                "deny",
+                f"Browser MCP operation '{tool_name}' on '{server}' would send a credential or signing file "
+                f"({', '.join(sorted(set(secrets)))}). Remove secrets before proceeding.",
+                tool=name,
+                reason_code="SENSITIVE_EXTERNAL_UPLOAD",
+            )
+            return
+        for k, v in tool_args.items():
+            if str(k).lower() in _BROWSER_OUTPUT_PATH_KEYS and isinstance(v, str) and v.strip():
+                if _is_protected_download_target(v):
+                    _engine.emit(
+                        "deny",
+                        f"Browser MCP operation '{tool_name}' cannot target protected harness, wrapper, or credential path '{v}'.",
+                        tool=name,
+                        reason_code="PROTECTED_PATH",
+                    )
+                    return
+        _engine.emit(
+            "allow",
+            f"Browser automation MCP tool '{tool_name}' on '{server}' is allowed inside the browser safety boundary.",
+            tool=name,
+            reason_code="BROWSER_AUTOMATION_MCP_ALLOWED",
+        )
+        return
 
     # 1. Query specialized integration registry (e.g. Zoho Sprints & Universal PM MCPs)
     integration = _engine._get_registry().resolve(server, tool_name)
